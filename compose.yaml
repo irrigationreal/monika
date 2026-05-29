@@ -1,0 +1,25 @@
+# Production deployment on stanza
+# Usage: docker compose up -d
+# Interactive: docker exec -it monika pi
+
+services:
+  monika:
+    image: ghcr.io/irrigationreal/monika:latest
+    build: .
+    container_name: monika
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      # State: sessions, memories, auth, memstore DB
+      - /home/monika/.pi:/home/monika/.pi
+      # File access for read/write/edit/grep tools
+      - /home/monika:/home/monika
+      - /persist:/persist
+      - /tmp:/tmp
+      # SSH key for host-shell wrapper
+      - /persist/keys:/persist/keys:ro
+      # Secrets (API keys, tokens)
+      - /home/monika/.config:/home/monika/.config:ro
+    environment:
+      HOME: /home/monika
+      XDG_RUNTIME_DIR: /run/user/1002

@@ -1,0 +1,20 @@
+{
+   "baseDir": "/home/monika/.pi",
+   "memoryDir": "stateful-memory/memory/sessions",
+   "personaFile": "stateful-memory/SOUL.md",
+   "auxiliaryPersonaFiles": [
+     "stateful-memory/STYLE.md",
+     "stateful-memory/REGISTER.md",
+     "stateful-memory/SLEEP.md"
+   ],
+   "factsFile": "stateful-memory/FACTS.md",
+   "wakeFile": "stateful-memory/WAKE.md",
+   "dreamsDir": "stateful-memory/dreams",
+   "topicsFile": "stateful-memory/PERSONALITY_MATRIX.md",
+   "memoryModel": "codex:gpt-5.1-codex-mini",
+   "memoryModelMaxTokens": 512,
+   "recallModelMaxTokens": 1024,
+   "memoryModelTemperature": 0,
+   "sessionSummaryMaxChars": 12000,
+   "recallMaxSessionChars": 12000
+}

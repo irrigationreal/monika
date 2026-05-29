@@ -1,0 +1,21 @@
+# Test mode — fully isolated, no host access
+# Usage: docker compose -f compose.test.yaml run --rm monika-test pi
+#    or: docker compose -f compose.test.yaml up -d
+#        docker exec -it monika-test pi
+
+services:
+  monika-test:
+    build: .
+    container_name: monika-test
+    volumes:
+      - monika-test-data:/data
+    environment:
+      HOME: /app
+      # Pool config URL — downloads models.json on first start if not present
+      POOL_CONFIG_URL: ${POOL_CONFIG_URL:-}
+      # Or mount models.json directly:
+      # volumes:
+      #   - ./models.json:/app/.pi/agent/models.json:ro
+
+volumes:
+  monika-test-data:
