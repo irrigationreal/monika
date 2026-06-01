@@ -31,3 +31,5 @@ services:
       MONIKA_HOST_MODE: "1"
       RELOCATE_TARGET: monika@127.0.0.1:/home/monika
       GNUPGHOME: /root/.gnupg
+      GIT_USER_NAME: Monika
+      GIT_USER_EMAIL: monika@neosynth.net
