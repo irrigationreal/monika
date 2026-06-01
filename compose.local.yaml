@@ -1,4 +1,8 @@
-# Persistent container-only mode for local Monika runtime.
+# Standalone mode with runtime persistence for Monika.
+#
+# This keeps the standalone security model, but optionally mounts gitignored
+# host-owned state from ./runtime so identity, sessions, memstore, and secrets
+# survive rebuilds without being baked into the image.
 #
 # Security model:
 # - no host network
@@ -7,7 +11,7 @@
 # - manual relocate remains available via the ssh extension when keys permit it
 # - only explicit runtime/workspace mounts are visible inside the container
 #
-# macOS/OrbStack usage:
+# Local usage, including macOS/OrbStack:
 #   cd ~/Repos/monika
 #   docker compose -f compose.local.yaml up -d --build
 #   docker exec -it monika pi
@@ -21,7 +25,7 @@ services:
     container_name: monika
     restart: unless-stopped
     volumes:
-      # Persistent memstore DB/socket and other runtime data.
+      # Persistent memstore DB and other runtime data. The socket stays in /tmp.
       - ./runtime/data:/data
 
       # Canonical persona/stateful-memory files. The container owns pi + extensions;
@@ -35,8 +39,10 @@ services:
       - ./runtime/import:/import:ro
 
       # Secrets staged by the user on the host. auth.json/models.json/secrets.env are
-      # linked into place by entrypoint.sh when present.
+      # linked into place by entrypoint.sh when present. gitconfig is mounted to
+      # /app/.gitconfig for local identity/signing config.
       - ./runtime/secrets:/runtime/secrets:ro
+      - ./runtime/secrets/gitconfig:/app/.gitconfig:ro
 
       # SSH keys/config for git/remote operations and manual relocate from inside
       # the container. /root/.ssh is the effective OpenSSH home because the
