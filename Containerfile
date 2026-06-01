@@ -37,6 +37,19 @@ COPY --from=memstore-build /memstore /usr/local/bin/memstore
 COPY host-shell /usr/local/bin/host-shell
 RUN chmod +x /usr/local/bin/host-shell
 
+# SSH config for container root user — all SSH connections (relocate, git,
+# --ssh remote) use the deploy key and accept new host keys automatically.
+# The key itself is bind-mounted at /persist/keys/ssh-local at runtime.
+RUN mkdir -p /root/.ssh && \
+    printf '%s\n' \
+      'Host *' \
+      '    IdentityFile /persist/keys/ssh-local' \
+      '    UserKnownHostsFile /home/monika/.ssh/known_hosts' \
+      '    StrictHostKeyChecking accept-new' \
+    > /root/.ssh/config && \
+    chmod 700 /root/.ssh && \
+    chmod 600 /root/.ssh/config
+
 # Bundled .pi directory for standalone/test mode.
 # In production, /home/monika/.pi is bind-mounted over this.
 RUN mkdir -p /app/.pi/agent/extensions /app/.pi/stateful-memory/persona_topics \

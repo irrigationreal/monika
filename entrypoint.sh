@@ -24,23 +24,7 @@ fi
 
 export MEMSTORE_SOCKET
 
-# ── SSH config ────────────────────────────────────────────
-# The container runs as root but host keys live in monika's paths.
-# Create an SSH config so all SSH connections (relocate, git, --ssh)
-# use the right identity and known_hosts without per-command flags.
-if [ -f "/persist/keys/ssh-local" ]; then
-  mkdir -p /root/.ssh
-  cat > /root/.ssh/config <<'SSHCONF'
-Host *
-    IdentityFile /persist/keys/ssh-local
-    UserKnownHostsFile /home/monika/.ssh/known_hosts
-    StrictHostKeyChecking accept-new
-SSHCONF
-  chmod 700 /root/.ssh
-  chmod 600 /root/.ssh/config
-fi
-
-# Git config (host /etc/gitconfig isn't available in container)
+# ── Git config (host /etc/gitconfig isn't available in container) ──
 git config --global user.name "Monika" 2>/dev/null
 git config --global user.email "monika@neosynth.net" 2>/dev/null
 git config --global safe.directory "*" 2>/dev/null
