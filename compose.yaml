@@ -5,7 +5,9 @@
 services:
   monika:
     image: ghcr.io/irrigationreal/monika:latest
-    build: .
+    build:
+      context: .
+      dockerfile: Containerfile
     container_name: monika
     restart: unless-stopped
     network_mode: host

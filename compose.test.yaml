@@ -5,7 +5,9 @@
 
 services:
   monika-test:
-    build: .
+    build:
+      context: .
+      dockerfile: Containerfile
     container_name: monika-test
     volumes:
       - monika-test-data:/data
