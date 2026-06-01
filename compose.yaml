@@ -27,3 +27,4 @@ services:
       XDG_RUNTIME_DIR: /run/user/1002
       MEMSTORE_SOCKET: /home/monika/.pi/memstore/memstore.sock
       MONIKA_HOST_MODE: "1"
+      RELOCATE_TARGET: monika@127.0.0.1:/home/monika
