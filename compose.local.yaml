@@ -1,0 +1,63 @@
+# Persistent container-only mode for local Monika runtime.
+#
+# Security model:
+# - no host network
+# - no MONIKA_HOST_MODE
+# - no auto-relocate / host-shell SSH bridge into the host
+# - manual relocate remains available via the ssh extension when keys permit it
+# - only explicit runtime/workspace mounts are visible inside the container
+#
+# macOS/OrbStack usage:
+#   cd ~/Repos/monika
+#   docker compose -f compose.local.yaml up -d --build
+#   docker exec -it monika pi
+
+services:
+  monika:
+    image: monika:local
+    build:
+      context: .
+      dockerfile: Containerfile
+    container_name: monika
+    restart: unless-stopped
+    volumes:
+      # Persistent memstore DB/socket and other runtime data.
+      - ./runtime/data:/data
+
+      # Canonical persona/stateful-memory files. The container owns pi + extensions;
+      # this mount only provides durable identity/state files.
+      - ./runtime/persona:/app/.pi/stateful-memory
+
+      # Persistent Pi session logs so sessions can be resumed across rebuilds.
+      - ./runtime/pi-agent/sessions:/app/.pi/agent/sessions
+
+      # Historical session import source. Read-only; import script writes to memstore.
+      - ./runtime/import:/import:ro
+
+      # Secrets staged by the user on the host. auth.json/models.json/secrets.env are
+      # linked into place by entrypoint.sh when present.
+      - ./runtime/secrets:/runtime/secrets:ro
+
+      # SSH keys/config for git/remote operations and manual relocate from inside
+      # the container. /root/.ssh is the effective OpenSSH home because the
+      # container runs as root; /app/.ssh is also mounted for tools that honor $HOME.
+      - ./runtime/secrets/ssh:/root/.ssh:ro
+      - ./runtime/secrets/ssh:/app/.ssh:ro
+
+      # GPG keyring is available under /runtime/secrets/gnupg via the secrets
+      # mount above. entrypoint.sh copies it to /tmp/gnupg so gpg-agent can create
+      # Unix sockets on the container filesystem rather than a macOS/Parallels bind mount.
+
+      # Explicit workspace mount. On macOS this defaults to ~/Repos.
+      - ${MONIKA_WORKSPACE:-${HOME}/Repos}:/workspace
+    working_dir: /workspace/monika
+    environment:
+      HOME: /app
+      PI_CODING_AGENT_DIR: /app/.pi/agent
+      # Keep the Unix socket off the host bind mount; Parallels/macOS shared
+      # folders may not support AF_UNIX socket creation. The DB still lives in /data.
+      MEMSTORE_SOCKET: /tmp/memstore.sock
+      GNUPGHOME: /tmp/gnupg
+      MONIKA_WORKSPACE: /workspace
+      # Optional: set this in your shell if you want first-start model download.
+      POOL_CONFIG_URL: ${POOL_CONFIG_URL:-}

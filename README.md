@@ -9,9 +9,13 @@ and persona files, packaged as a single OCI image.
 # Build
 docker build -f Containerfile -t monika:dev .
 
-# Test mode (isolated, no host access)
+# Test mode (isolated, no host access, ephemeral Docker volume)
 docker compose -f compose.test.yaml up -d
 docker exec -it monika-test pi
+
+# Local persistent mode (container-only, explicit mounts, no host shell)
+docker compose -f compose.local.yaml up -d --build
+docker exec -it monika pi
 
 # Production mode (stanza — bind-mounted host, SSH host shell)
 docker compose up -d
@@ -38,7 +42,13 @@ nixos-rebuild all work through the SSH tunnel.
 memstore runs with a fresh database. No host access. Used for testing new versions,
 extension changes, or persona updates before promoting to production.
 
-The same image serves both modes — runtime configuration (bind mounts, env vars)
+**Local persistent**: Container keeps the test-mode security model — no host shell,
+no host network, no auto-relocate into the host — but mounts selected host-owned
+state from `runtime/`: persona files, memstore data, Pi session logs, import
+sessions, secrets, and an explicit workspace. Manual `relocate` via the SSH extension remains available
+when keys/config permit it. This is the recommended local macOS/OrbStack mode.
+
+The same image serves all modes — runtime configuration (bind mounts, env vars)
 determines the behavior.
 
 ### Host shell mechanism
@@ -62,11 +72,41 @@ entrypoint.sh          Starts memstore, detects mode, runs command
 host-shell             SSH wrapper for host bash execution
 compose.yaml           Production deployment (stanza)
 compose.test.yaml      Isolated test mode
+compose.local.yaml     Persistent container-only local mode
 services/memstore/     memstore Go source
 config/extensions/     Pi extensions (stateful-memory, delegate, ssh, etc.)
 config/persona/        Persona files (SOUL, STYLE, REGISTER, topics)
 config/settings.json   Pi settings with shellPath configured
 config/stateful-memory.json  Memory extension config
+runtime/               Gitignored host-owned state for local persistent mode
+```
+
+## Local persistent mode
+
+Create/populate `runtime/` on the host, then run:
+
+```bash
+docker compose -f compose.local.yaml up -d --build
+docker exec -it monika pi
+```
+
+For macOS/OrbStack, the default workspace mount is `${HOME}/Repos:/workspace`. Override
+it with `MONIKA_WORKSPACE=/path/to/workspace` if needed.
+
+Secrets are not committed. Place them under `runtime/secrets/`:
+
+```text
+runtime/secrets/auth.json        # optional Pi auth
+runtime/secrets/models.json      # optional model definitions
+runtime/secrets/secrets.env      # optional provider/API env vars
+runtime/secrets/ssh/             # mounted read-only to /root/.ssh and /app/.ssh
+runtime/secrets/gnupg/           # copied at startup to /tmp/gnupg for gpg-agent
+```
+
+Historical sessions can be imported after the container starts:
+
+```bash
+docker exec monika node /workspace/monika/scripts/import-sessions.mjs
 ```
 
 ## Upgrading pi
