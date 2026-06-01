@@ -55,15 +55,53 @@ if [ -d "/runtime/secrets/gnupg" ]; then
 fi
 
 # ── Git config (host /etc/gitconfig isn't available in container) ──
-git config --global user.name "Monika" 2>/dev/null
-git config --global user.email "monika@neosynth.net" 2>/dev/null
-git config --global safe.directory "*" 2>/dev/null
+# Identity is runtime-owned, not baked into the image. Configure it with env vars
+# or an env-style file containing GIT_USER_NAME/GIT_USER_EMAIL (or
+# GIT_AUTHOR_NAME/GIT_AUTHOR_EMAIL) in one of:
+#   /runtime/secrets/git-identity.env
+#   ~/.pi/git-identity.env
+#   ~/.config/monika/git-identity.env
+load_git_identity_file() {
+  local file="$1"
+  if [ -f "$file" ]; then
+    set +e
+    # shellcheck source=/dev/null
+    source "$file"
+    local source_status=$?
+    set -e
+    if [ "$source_status" -ne 0 ]; then
+      echo "[monika] WARNING: sourcing $file returned $source_status; continuing"
+    fi
+  fi
+}
+
+load_git_identity_file "/runtime/secrets/git-identity.env"
+load_git_identity_file "$(dirname "$PI_CODING_AGENT_DIR")/git-identity.env"
+load_git_identity_file "$HOME/.pi/git-identity.env"
+load_git_identity_file "$HOME/.config/monika/git-identity.env"
+
+GIT_USER_NAME="${GIT_USER_NAME:-${GIT_AUTHOR_NAME:-}}"
+GIT_USER_EMAIL="${GIT_USER_EMAIL:-${GIT_AUTHOR_EMAIL:-}}"
+
+if [ -n "$GIT_USER_NAME" ]; then
+  git config --global user.name "$GIT_USER_NAME" 2>/dev/null || true
+fi
+if [ -n "$GIT_USER_EMAIL" ]; then
+  git config --global user.email "$GIT_USER_EMAIL" 2>/dev/null || true
+fi
+git config --global safe.directory "*" 2>/dev/null || true
 
 # ── Source secrets if available ──────────────────────────
 for secrets_file in "/home/monika/.config/secrets.env" "/app/.config/secrets.env" "/runtime/secrets/secrets.env"; do
   if [ -f "$secrets_file" ]; then
     # shellcheck source=/dev/null
+    set +e
     source "$secrets_file"
+    source_status=$?
+    set -e
+    if [ "$source_status" -ne 0 ]; then
+      echo "[monika] WARNING: sourcing $secrets_file returned $source_status; continuing"
+    fi
   fi
 done
 
