@@ -19,19 +19,13 @@ const { slugifyKeywords } = await import(
 const importRoot = process.argv[2] || process.env.MONIKA_IMPORT_SESSIONS || "/import/sessions";
 const maxChars = Number(process.env.MONIKA_IMPORT_MAX_CHARS || 200000);
 const dryRun = process.argv.includes("--dry-run");
+const importTags = (process.env.MONIKA_IMPORT_TAGS || "historical-import")
+  .split(",")
+  .map((tag) => tag.trim())
+  .filter(Boolean);
 
-function determineSessionTags(text) {
-  const tags = new Set();
-  const lc = text.toLowerCase();
-  if (lc.includes("zeta") || lc.includes("novel") || lc.includes("fiir") || lc.includes("kalte")) tags.add("zeta-directive");
-  if (lc.includes("vesper") || lc.includes("mls") || lc.includes("e2ee")) tags.add("vesper");
-  if (lc.includes("nixos") || lc.includes("stanza") || lc.includes("shadowsea") || lc.includes("hetzner")) tags.add("infrastructure");
-  if (lc.includes("monika-core") || lc.includes("gateway") || lc.includes("aroz") || lc.includes("monika")) tags.add("monika");
-  if (lc.includes("music") || lc.includes("demucs") || lc.includes("midi") || lc.includes("piano")) tags.add("creative");
-  if (lc.includes("security") || lc.includes("cve") || lc.includes("vulnerability") || lc.includes("exploit") || lc.includes("xss")) tags.add("security");
-  if (tags.size === 0) tags.add("general");
-  tags.add("historical-import");
-  return [...tags];
+function determineSessionTags() {
+  return importTags.length > 0 ? importTags : ["historical-import"];
 }
 
 async function* walk(dir) {
