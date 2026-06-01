@@ -685,16 +685,28 @@ export default function (pi: ExtensionAPI) {
 	// relocate. Validates connectivity BEFORE switching — if validation fails,
 	// the current context is preserved and a detailed error is returned.
 	const relocateSchema = Type.Object({
-		target: Type.String({ description: 'SSH target: "user@host", "user@host:/path", or "local" to return to container-local execution.' }),
+		target: Type.Optional(Type.String({ description: 'SSH target: "user@host", "user@host:/path", or "local" to return to container-local execution. Omit to check current status.' })),
 	});
 
 	pi.registerTool({
 		name: "relocate",
-		description: "Switch execution context to a different host via SSH. All tools (bash, read, write, edit, grep, find, ls) will route to the new target after a successful relocate.",
+		description: "Switch execution context to a different host via SSH. All tools (bash, read, write, edit, grep, find, ls) will route to the new target after a successful relocate. Call with no target to check current context.",
 		label: "Relocate",
 		parameters: relocateSchema,
 		async execute(_id, params, _signal, _onUpdate, ctx) {
-			const { target } = params as { target: string };
+			const { target } = params as { target?: string };
+
+			// ── Status check (no target) ──
+			if (!target) {
+				if (resolvedSsh) {
+					return {
+						content: [{ type: "text" as const, text: `Current context: ${resolvedSsh.remote}:${resolvedSsh.remoteCwd}${remoteHost ? ` (hostname: ${remoteHost})` : ""}\nAll tools are routing to this target via SSH.` }],
+					};
+				}
+				return {
+					content: [{ type: "text" as const, text: "Current context: local (container-local execution).\nAll tools operate on the container filesystem." }],
+				};
+			}
 
 			// ── Return to local ──
 			if (target === "local") {
