@@ -1,4 +1,4 @@
-# Production deployment on stanza
+# Host mode deployment on stanza
 # Usage: docker compose up -d
 # Interactive: docker exec -it monika pi
 

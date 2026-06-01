@@ -2,8 +2,8 @@
 set -e
 
 # ── Mode detection ───────────────────────────────────────
-# Production: /home/monika/.pi/agent exists (bind-mounted from host)
-# Test/standalone: no host mounts, use bundled /app/.pi
+# Host mode: /home/monika/.pi/agent exists (bind-mounted from host)
+# Standalone mode: no host mounts, use bundled /app/.pi
 
 if [ -d "/home/monika/.pi/agent" ]; then
   export PI_CODING_AGENT_DIR="/home/monika/.pi/agent"
@@ -11,14 +11,14 @@ if [ -d "/home/monika/.pi/agent" ]; then
   MEMSTORE_SOCKET="/home/monika/.pi/memstore/memstore.sock"
   export MONIKA_HOST_MODE=1
   export HOME=/home/monika
-  echo "[monika] Production mode: host .pi mounted, SSH host shell enabled"
+  echo "[monika] Host mode: .pi mounted, SSH host shell enabled"
 else
   export PI_CODING_AGENT_DIR="/app/.pi/agent"
   MEMSTORE_DATA_DIR="/data/memstore"
   MEMSTORE_SOCKET="/data/memstore.sock"
   unset MONIKA_HOST_MODE
   export HOME=/app
-  echo "[monika] Test/standalone mode: bundled .pi, container shell"
+  echo "[monika] Standalone mode: bundled .pi, container shell"
   mkdir -p "$MEMSTORE_DATA_DIR" /data/sessions
 fi
 
@@ -37,8 +37,8 @@ fi
 
 # ── Pool models config ───────────────────────────────────
 # The pool provides a models.json with provider endpoints and auth.
-# In production this is already at ~/.pi/agent/models.json (bind-mounted).
-# For test/standalone, download it if not present and POOL_CONFIG_URL is set.
+# In host mode this is already at ~/.pi/agent/models.json (bind-mounted).
+# For standalone mode, download it if not present and POOL_CONFIG_URL is set.
 MODELS_JSON="$PI_CODING_AGENT_DIR/models.json"
 if [ ! -f "$MODELS_JSON" ] && [ -n "$POOL_CONFIG_URL" ]; then
   echo "[monika] Downloading pool models config..."

@@ -9,11 +9,11 @@ and persona files, packaged as a single OCI image.
 # Build
 docker build -f Containerfile -t monika:dev .
 
-# Test mode (isolated, no host access)
+# Standalone mode (isolated, no host access)
 docker compose -f compose.test.yaml up -d
 docker exec -it monika-test pi
 
-# Production mode (stanza — bind-mounted host, SSH host shell)
+# Host mode (stanza — SSH host shell, bind-mounted state)
 docker compose up -d
 docker exec -it monika pi
 ```
@@ -28,15 +28,16 @@ The container bundles:
 
 ### Two modes
 
-**Production**: Container runs with host filesystem bind-mounted. Pi's bash tool
-executes commands on the host via SSH to localhost with ControlMaster multiplexing
-(~11ms per command). Read/write/edit/grep tools operate on host files directly through
-bind mounts. memstore runs inside the container. Full host access: nix-shell, sudo,
-nixos-rebuild all work through the SSH tunnel.
+**Host mode**: Container runs attached to the host. Pi's bash tool executes commands
+on the host via SSH to localhost with ControlMaster multiplexing (~11ms per command).
+Read/write/edit/grep tools operate on host files through bind mounts. Memstore runs
+inside the container. The `relocate` tool can switch context to other SSH targets
+mid-session.
 
-**Test**: Container runs fully isolated. Pi's tools operate on the container filesystem.
-memstore runs with a fresh database. No host access. Used for testing new versions,
-extension changes, or persona updates before promoting to production.
+**Standalone mode**: Container runs fully isolated. Pi's tools operate on the
+container's own filesystem. Memstore runs with a fresh database. No host access.
+Used for testing new versions, extension changes, or running on systems without
+host shell requirements.
 
 The same image serves both modes — runtime configuration (bind mounts, env vars)
 determines the behavior.
@@ -44,15 +45,57 @@ determines the behavior.
 ### Host shell mechanism
 
 Pi's `shellPath` setting points to `/usr/local/bin/host-shell`, a wrapper script that:
-- In production (`MONIKA_HOST_MODE=1`): SSHes to `monika@127.0.0.1` with ControlMaster
-- In test mode: falls back to `/bin/bash` directly
+- In host mode (`MONIKA_HOST_MODE=1`): SSHes to `monika@127.0.0.1` with ControlMaster
+- In standalone mode: falls back to `/bin/bash` directly
 
 The SSH tunnel is over loopback only — no network, no DNS, no TLS. sshd on the host
 is `Restart=always`. ControlMaster auto-reconnects if the master process dies.
 
 The `--ssh user@remote` pi extension works independently — it spawns its own SSH
 connections via `child_process.spawn("ssh", ...)`, completely separate from the
-host-shell wrapper.
+host-shell wrapper. The `relocate` tool switches context mid-session.
+
+## Minimal requirements
+
+### Standalone mode — just needs LLM credentials
+
+Everything else (pi, memstore, extensions, persona) is bundled in the image.
+
+```bash
+# Option A: Pool config URL (downloads models.json at startup)
+docker run -e POOL_CONFIG_URL=https://your-pool/config/pi/token monika:dev
+
+# Option B: Mount a models.json directly
+docker run -v ./models.json:/app/.pi/agent/models.json:ro monika:dev
+
+# Option C: API key env vars (provider-specific)
+docker run -e ANTHROPIC_API_KEY=sk-... monika:dev
+```
+
+Add `-v mydata:/data` for persistent memstore and sessions across container restarts.
+
+### Host mode — needs SSH key + host mounts
+
+| Mount | Purpose | Required? |
+|---|---|---|
+| `~/.pi` | State: sessions, memories, auth, memstore DB | Yes |
+| `~/` (or working dirs) | File access for read/write/edit/grep tools | Yes |
+| `/persist/keys` (or `~/.ssh`) | SSH key for host-shell wrapper | Yes |
+| `~/.config` | secrets.env (API keys), GPG config | Recommended |
+| `~/.config/gnupg` → `/root/.gnupg` | Git commit signing inside container | Optional |
+
+Environment variables for host mode:
+| Variable | Value | Purpose |
+|---|---|---|
+| `HOME` | `/home/monika` | Working directory context |
+| `MEMSTORE_SOCKET` | `~/.pi/memstore/memstore.sock` | Tell extensions where memstore is |
+| `MONIKA_HOST_MODE` | `1` | Enables SSH host shell wrapper |
+| `RELOCATE_TARGET` | `monika@127.0.0.1:/home/monika` | Auto-relocate on session start |
+
+Host prerequisites:
+- sshd running on the host
+- Container's SSH key in the host user's `authorized_keys`
+- `network_mode: host` in compose (for SSH + network transparency)
 
 ## Files
 
@@ -60,8 +103,8 @@ host-shell wrapper.
 Containerfile          Multi-stage build (Go memstore + Debian slim + Node.js + pi)
 entrypoint.sh          Starts memstore, detects mode, runs command
 host-shell             SSH wrapper for host bash execution
-compose.yaml           Production deployment (stanza)
-compose.test.yaml      Isolated test mode
+compose.yaml           Host mode deployment (stanza)
+compose.test.yaml      Standalone mode (isolated)
 services/memstore/     memstore Go source
 config/extensions/     Pi extensions (stateful-memory, delegate, ssh, etc.)
 config/persona/        Persona files (SOUL, STYLE, REGISTER, topics)
@@ -79,11 +122,12 @@ RUN npm install -g @earendil-works/pi-coding-agent@X.Y.Z
 Build, test, deploy:
 ```bash
 docker build -f Containerfile -t monika:dev .
+
+# Test in standalone mode first
 docker compose -f compose.test.yaml up -d
 docker exec -it monika-test pi   # verify it works
 docker compose -f compose.test.yaml down
 
-# Promote to production
-docker tag monika:dev monika:latest
+# Promote to host mode (from HOST shell, never inside pi)
 docker compose up -d
 ```
