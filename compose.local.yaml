@@ -32,8 +32,9 @@ services:
       # this mount only provides durable identity/state files.
       - ./runtime/persona:/app/.pi/stateful-memory
 
-      # Persistent Pi session logs so sessions can be resumed across rebuilds.
+      # Persistent Pi session logs and local skills.
       - ./runtime/pi-agent/sessions:/app/.pi/agent/sessions
+      - ./runtime/pi-agent/skills:/app/.pi/agent/skills
 
       # Historical session import source. Read-only; import script writes to memstore.
       - ./runtime/import:/import:ro
@@ -65,5 +66,7 @@ services:
       MEMSTORE_SOCKET: /tmp/memstore.sock
       GNUPGHOME: /tmp/gnupg
       MONIKA_WORKSPACE: /workspace
+      GIT_USER_NAME: ${GIT_USER_NAME:-Monika}
+      GIT_USER_EMAIL: ${GIT_USER_EMAIL:-monika@neosynth.net}
       # Optional: set this in your shell if you want first-start model download.
       POOL_CONFIG_URL: ${POOL_CONFIG_URL:-}
