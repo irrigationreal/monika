@@ -23,3 +23,5 @@ services:
     environment:
       HOME: /home/monika
       XDG_RUNTIME_DIR: /run/user/1002
+      MEMSTORE_SOCKET: /home/monika/.pi/memstore/memstore.sock
+      MONIKA_HOST_MODE: "1"
