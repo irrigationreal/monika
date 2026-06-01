@@ -17,6 +17,7 @@
 
 import { spawn } from "node:child_process";
 import path from "node:path";
+import { Type } from "typebox";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import {
 	type BashOperations,
@@ -683,26 +684,15 @@ export default function (pi: ExtensionAPI) {
 	// edit, grep, find, ls) will route to the new target after a successful
 	// relocate. Validates connectivity BEFORE switching — if validation fails,
 	// the current context is preserved and a detailed error is returned.
-	const relocateSchema = {
-		type: "object" as const,
-		properties: {
-			target: {
-				type: "string" as const,
-				description: 'SSH target: "user@host", "user@host:/path", or "local" to return to container-local execution.',
-			},
-		},
-		required: ["target"] as const,
-	};
+	const relocateSchema = Type.Object({
+		target: Type.String({ description: 'SSH target: "user@host", "user@host:/path", or "local" to return to container-local execution.' }),
+	});
 
 	pi.registerTool({
 		name: "relocate",
-		async description() {
-			const current = resolvedSsh ? `${resolvedSsh.remote}:${resolvedSsh.remoteCwd}` : "local";
-			return `Switch execution context to a different host via SSH. Current context: ${current}`;
-		},
-		userFacingName() { return "Relocate"; },
-		schema: relocateSchema,
-		noStream: true,
+		description: "Switch execution context to a different host via SSH. All tools (bash, read, write, edit, grep, find, ls) will route to the new target after a successful relocate.",
+		label: "Relocate",
+		parameters: relocateSchema,
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const { target } = params as { target: string };
 
