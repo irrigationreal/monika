@@ -105,6 +105,7 @@ runtime/
     auth.json          optional Pi auth file
     models.json        optional model definitions
     secrets.env        optional provider/API env vars sourced at startup
+    git-identity.env   optional git identity (GIT_USER_NAME/GIT_USER_EMAIL)
     ssh/               optional SSH config/keys for git and manual relocate
     gnupg/             optional GPG keyring copied to /tmp/gnupg for gpg-agent
 ```
@@ -171,8 +172,18 @@ Secrets are not committed. Place them under `runtime/secrets/`:
 runtime/secrets/auth.json        # optional Pi auth
 runtime/secrets/models.json      # optional model definitions
 runtime/secrets/secrets.env      # optional provider/API env vars
+runtime/secrets/git-identity.env # optional git identity (GIT_USER_NAME/GIT_USER_EMAIL)
 runtime/secrets/ssh/             # mounted read-only to /root/.ssh and /app/.ssh
 runtime/secrets/gnupg/           # copied at startup to /tmp/gnupg for gpg-agent
+```
+
+Git identity is runtime-owned rather than hardcoded into the image. You can provide it
+with environment variables, `runtime/secrets/git-identity.env`, `~/.pi/git-identity.env`,
+or `~/.config/monika/git-identity.env`:
+
+```bash
+GIT_USER_NAME="Monika"
+GIT_USER_EMAIL="monika@example.com"
 ```
 
 Historical sessions can be imported after the container starts:
