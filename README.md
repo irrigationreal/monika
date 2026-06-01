@@ -9,9 +9,13 @@ and persona files, packaged as a single OCI image.
 # Build
 docker build -f Containerfile -t monika:dev .
 
-# Standalone mode (isolated, no host access)
+# Standalone mode (isolated, no host access, ephemeral Docker volume)
 docker compose -f compose.test.yaml up -d
 docker exec -it monika-test pi
+
+# Standalone mode with runtime persistence (container-only, explicit mounts, no host shell)
+docker compose -f compose.local.yaml up -d --build
+docker exec -it monika pi
 
 # Host mode (stanza — SSH host shell, bind-mounted state)
 docker compose up -d
@@ -26,7 +30,7 @@ The container bundles:
 - **Extensions** — stateful-memory, delegate, SSH, web-search, etc.
 - **Persona files** — SOUL.md, STYLE.md, REGISTER.md, topic addenda
 
-### Two modes
+### Modes
 
 **Host mode**: Container runs attached to the host. Pi's bash tool executes commands
 on the host via SSH to localhost with ControlMaster multiplexing (~11ms per command).
@@ -39,7 +43,13 @@ container's own filesystem. Memstore runs with a fresh database. No host access.
 Used for testing new versions, extension changes, or running on systems without
 host shell requirements.
 
-The same image serves both modes — runtime configuration (bind mounts, env vars)
+Standalone can also be run with explicit persistence using `compose.local.yaml`.
+This keeps the same security model — no host shell, no host network, no auto-relocate
+into the host — but mounts selected host-owned state from `runtime/`: persona files,
+memstore data, Pi session logs, import sessions, secrets, and an explicit workspace.
+Manual `relocate` via the SSH extension remains available when keys/config permit it.
+
+The same image serves these configurations — runtime configuration (bind mounts, env vars)
 determines the behavior.
 
 ### Host shell mechanism
@@ -74,6 +84,35 @@ docker run -e ANTHROPIC_API_KEY=sk-... monika:dev
 
 Add `-v mydata:/data` for persistent memstore and sessions across container restarts.
 
+### Optional persistence with `runtime/`
+
+Ephemeral standalone mode is still useful for smoke tests and clean-room validation.
+For day-to-day local use, `compose.local.yaml` keeps the standalone security model
+but adds explicit persistence through a gitignored `runtime/` directory next to the
+repo.
+
+The image should own code: pi, extensions, memstore, and bundled default persona files.
+The host should own private or durable state. The `runtime/` layout standardizes that
+boundary without baking local state into the image:
+
+```text
+runtime/
+  data/                memstore database state; socket stays container-local at /tmp/memstore.sock
+  persona/             mounted to /app/.pi/stateful-memory
+  pi-agent/sessions/   mounted to /app/.pi/agent/sessions for resume/reopen
+  import/sessions/     historical Pi JSONL sessions for one-time memstore import
+  secrets/
+    auth.json          optional Pi auth file
+    models.json        optional model definitions
+    secrets.env        optional provider/API env vars sourced at startup
+    ssh/               optional SSH config/keys for git and manual relocate
+    gnupg/             optional GPG keyring copied to /tmp/gnupg for gpg-agent
+```
+
+`runtime/` is intentionally ignored by git and excluded from Docker build context.
+This keeps secrets and memories out of the image while still making the local runtime
+reproducible: rebuild the image from git, keep optional state in `runtime/`.
+
 ### Host mode — needs SSH key + host mounts
 
 | Mount | Purpose | Required? |
@@ -105,11 +144,49 @@ entrypoint.sh          Starts memstore, detects mode, runs command
 host-shell             SSH wrapper for host bash execution
 compose.yaml           Host mode deployment (stanza)
 compose.test.yaml      Standalone mode (isolated)
+compose.local.yaml     Standalone mode with runtime persistence
 services/memstore/     memstore Go source
 config/extensions/     Pi extensions (stateful-memory, delegate, ssh, etc.)
 config/persona/        Persona files (SOUL, STYLE, REGISTER, topics)
 config/settings.json   Pi settings with shellPath configured
 config/stateful-memory.json  Memory extension config
+runtime/               Gitignored host-owned state for standalone persistence
+```
+
+## Standalone mode with runtime persistence
+
+Create/populate `runtime/` on the host, then run:
+
+```bash
+docker compose -f compose.local.yaml up -d --build
+docker exec -it monika pi
+```
+
+For macOS/OrbStack, the default workspace mount is `${HOME}/Repos:/workspace`. Override
+it with `MONIKA_WORKSPACE=/path/to/workspace` if needed.
+
+Secrets are not committed. Place them under `runtime/secrets/`:
+
+```text
+runtime/secrets/auth.json        # optional Pi auth
+runtime/secrets/models.json      # optional model definitions
+runtime/secrets/secrets.env      # optional provider/API env vars
+runtime/secrets/ssh/             # mounted read-only to /root/.ssh and /app/.ssh
+runtime/secrets/gnupg/           # copied at startup to /tmp/gnupg for gpg-agent
+```
+
+Historical sessions can be imported after the container starts:
+
+```bash
+docker exec monika node /workspace/monika/scripts/import-sessions.mjs
+```
+
+By default, imported entries are tagged `historical-import`. Override tags with a
+comma-separated `MONIKA_IMPORT_TAGS` value:
+
+```bash
+docker exec -e MONIKA_IMPORT_TAGS=historical-import,archive monika \
+  node /workspace/monika/scripts/import-sessions.mjs
 ```
 
 ## Upgrading pi

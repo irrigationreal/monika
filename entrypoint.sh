@@ -7,22 +7,52 @@ set -e
 
 if [ -d "/home/monika/.pi/agent" ]; then
   export PI_CODING_AGENT_DIR="/home/monika/.pi/agent"
-  MEMSTORE_DATA_DIR="/home/monika/.pi/memstore"
-  MEMSTORE_SOCKET="/home/monika/.pi/memstore/memstore.sock"
+  MEMSTORE_DATA_DIR="${MEMSTORE_DATA_DIR:-/home/monika/.pi/memstore}"
+  MEMSTORE_SOCKET="${MEMSTORE_SOCKET:-/home/monika/.pi/memstore/memstore.sock}"
   export MONIKA_HOST_MODE=1
   export HOME=/home/monika
   echo "[monika] Host mode: .pi mounted, SSH host shell enabled"
 else
   export PI_CODING_AGENT_DIR="/app/.pi/agent"
-  MEMSTORE_DATA_DIR="/data/memstore"
-  MEMSTORE_SOCKET="/data/memstore.sock"
+  MEMSTORE_DATA_DIR="${MEMSTORE_DATA_DIR:-/data/memstore}"
+  MEMSTORE_SOCKET="${MEMSTORE_SOCKET:-/tmp/memstore.sock}"
   unset MONIKA_HOST_MODE
   export HOME=/app
   echo "[monika] Standalone mode: bundled .pi, container shell"
-  mkdir -p "$MEMSTORE_DATA_DIR" /data/sessions
+  mkdir -p "$MEMSTORE_DATA_DIR" /data/sessions /app/.config /app/.ssh /app/.gnupg
 fi
 
 export MEMSTORE_SOCKET
+
+# ── Runtime secrets (container-only persistent mode) ──────
+# compose.local.yaml mounts host-owned private state at /runtime/secrets.
+# Keep the image canonical for code/extensions, and link only host-owned auth/model
+# files into Pi's agent dir when they exist.
+link_secret_file() {
+  local src="$1"
+  local dest="$2"
+  if [ -f "$src" ]; then
+    mkdir -p "$(dirname "$dest")"
+    ln -sf "$src" "$dest"
+  fi
+}
+
+link_secret_file "/runtime/secrets/pi-agent/auth.json" "$PI_CODING_AGENT_DIR/auth.json"
+link_secret_file "/runtime/secrets/pi-agent/models.json" "$PI_CODING_AGENT_DIR/models.json"
+link_secret_file "/runtime/secrets/pi-agent/keybindings.json" "$PI_CODING_AGENT_DIR/keybindings.json"
+link_secret_file "/runtime/secrets/auth.json" "$PI_CODING_AGENT_DIR/auth.json"
+link_secret_file "/runtime/secrets/models.json" "$PI_CODING_AGENT_DIR/models.json"
+
+# GPG keyrings on macOS/Parallels bind mounts cannot reliably host gpg-agent's
+# Unix sockets. Copy the mounted keyring into a container-local GNUPGHOME.
+if [ -d "/runtime/secrets/gnupg" ]; then
+  export GNUPGHOME="${GNUPGHOME:-/tmp/gnupg}"
+  rm -rf "$GNUPGHOME"
+  mkdir -p "$GNUPGHOME"
+  cp -a /runtime/secrets/gnupg/. "$GNUPGHOME"/ 2>/dev/null || true
+  chmod 700 "$GNUPGHOME" 2>/dev/null || true
+  find "$GNUPGHOME" -type f -exec chmod 600 {} + 2>/dev/null || true
+fi
 
 # ── Git config (host /etc/gitconfig isn't available in container) ──
 git config --global user.name "Monika" 2>/dev/null
@@ -30,10 +60,12 @@ git config --global user.email "monika@neosynth.net" 2>/dev/null
 git config --global safe.directory "*" 2>/dev/null
 
 # ── Source secrets if available ──────────────────────────
-if [ -f "/home/monika/.config/secrets.env" ]; then
-  # shellcheck source=/dev/null
-  source /home/monika/.config/secrets.env
-fi
+for secrets_file in "/home/monika/.config/secrets.env" "/app/.config/secrets.env" "/runtime/secrets/secrets.env"; do
+  if [ -f "$secrets_file" ]; then
+    # shellcheck source=/dev/null
+    source "$secrets_file"
+  fi
+done
 
 # ── Pool models config ───────────────────────────────────
 # The pool provides a models.json with provider endpoints and auth.
