@@ -18,7 +18,7 @@ if [ -n "$MONIKA_HOST_MODE" ]; then
            -o ControlPath=/tmp/ssh-monika-host \
            -o ControlPersist=600 \
            -o LogLevel=ERROR \
-           monika@127.0.0.1 -- /bin/bash "$@"
+           monika@127.0.0.1 -- /bin/bash -l "$@"
 else
   exec /bin/bash "$@"
 fi
