@@ -44,6 +44,8 @@ RUN mkdir -p /root/.ssh && \
     printf '%s\n' \
       'Host *' \
       '    IdentityFile /persist/keys/ssh-local' \
+      '    IdentityFile /home/monika/.ssh/id_ed25519' \
+      '    IdentityFile /home/monika/.ssh/id_rsa' \
       '    UserKnownHostsFile /home/monika/.ssh/known_hosts' \
       '    StrictHostKeyChecking accept-new' \
     > /root/.ssh/config && \
