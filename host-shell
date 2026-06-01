@@ -10,19 +10,14 @@
 # In test mode (MONIKA_HOST_MODE unset): commands execute locally in
 # the container using /bin/bash directly.
 #
-# The SSH connection is to 127.0.0.1 (loopback only — never touches
-# a real network). ControlPersist keeps the master alive for 10 minutes
-# between commands. Auto-reconnect if the master dies (~109ms).
+# SSH identity and known_hosts are configured in /root/.ssh/config
+# by the entrypoint, so no per-command key flags needed here.
 
 if [ -n "$MONIKA_HOST_MODE" ]; then
   exec ssh -o ControlMaster=auto \
            -o ControlPath=/tmp/ssh-monika-host \
            -o ControlPersist=600 \
-           -o BatchMode=yes \
-           -o StrictHostKeyChecking=no \
-           -o UserKnownHostsFile=/dev/null \
            -o LogLevel=ERROR \
-           -i /persist/keys/ssh-local \
            monika@127.0.0.1 -- /bin/bash "$@"
 else
   exec /bin/bash "$@"
