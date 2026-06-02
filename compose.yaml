@@ -33,3 +33,5 @@ services:
       GNUPGHOME: /root/.gnupg
       GIT_USER_NAME: Monika
       GIT_USER_EMAIL: monika@neosynth.net
+    env_file:
+      - /home/monika/.config/secrets.env
