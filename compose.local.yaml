@@ -58,6 +58,8 @@ services:
       # Explicit workspace mount. On macOS this defaults to ~/Repos.
       - ${MONIKA_WORKSPACE:-${HOME}/Repos}:/workspace
     working_dir: /workspace/monika
+    env_file:
+      - ./runtime/secrets/secrets.env
     environment:
       HOME: /app
       PI_CODING_AGENT_DIR: /app/.pi/agent

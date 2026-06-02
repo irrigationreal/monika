@@ -104,8 +104,10 @@ for secrets_file in "/home/monika/.config/secrets.env" "/app/.config/secrets.env
   if [ -f "$secrets_file" ]; then
     # shellcheck source=/dev/null
     set +e
+    set -a
     source "$secrets_file"
     source_status=$?
+    set +a
     set -e
     if [ "$source_status" -ne 0 ]; then
       echo "[monika] WARNING: sourcing $secrets_file returned $source_status; continuing"
