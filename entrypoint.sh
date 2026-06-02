@@ -11,6 +11,14 @@ if [ -d "/home/monika/.pi/agent" ]; then
   MEMSTORE_SOCKET="${MEMSTORE_SOCKET:-/home/monika/.pi/memstore/memstore.sock}"
   export MONIKA_HOST_MODE=1
   export HOME=/home/monika
+  # SSH config for host-mode auto-relocate: root's user config doesn't exist by
+  # default (container runs as root, but SSH keys live in /home/monika/.ssh).
+  # Create /root/.ssh/config pointing to the identity file if it doesn't exist.
+  mkdir -p /root/.ssh
+  if [ ! -f /root/.ssh/config ]; then
+    echo "Host *\n    IdentityFile /persist/keys/ssh-local" > /root/.ssh/config
+    chmod 600 /root/.ssh/config
+  fi
   echo "[monika] Host mode: .pi mounted, SSH host shell enabled"
 else
   export PI_CODING_AGENT_DIR="/app/.pi/agent"
