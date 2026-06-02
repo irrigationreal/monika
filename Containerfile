@@ -37,15 +37,23 @@ ENV AGENT_BROWSER_EXECUTABLE_PATH=/opt/agent-browser/chrome
 RUN npm install -g @earendil-works/pi-coding-agent@0.75.5
 
 # Agent browser CLI + Chromium
-# agent-browser install uses HOME for its managed Chrome download location.
-# Install with a temporary image-owned HOME, then expose the browser via a
-# stable executable path that runtime sessions use explicitly.
+# agent-browser install uses HOME for its managed Chrome download location on
+# platforms where Chrome for Testing is available. Linux ARM64 is not published
+# by Chrome for Testing, so use Debian's Chromium package there instead. Expose
+# either browser via a stable executable path that runtime sessions use explicitly.
 RUN mkdir -p "$AGENT_BROWSER_INSTALL_HOME" && \
     npm install -g agent-browser && \
-    HOME="$AGENT_BROWSER_INSTALL_HOME" agent-browser install && \
-    chrome_path="$(find "$AGENT_BROWSER_INSTALL_HOME/.agent-browser/browsers" -type f -name chrome | sort -V | tail -n 1)" && \
-    test -n "$chrome_path" && \
-    ln -sf "$chrome_path" "$AGENT_BROWSER_EXECUTABLE_PATH" && \
+    if [ "$(dpkg --print-architecture)" = "arm64" ]; then \
+      apt-get update && \
+      apt-get install -y --no-install-recommends chromium && \
+      rm -rf /var/lib/apt/lists/* && \
+      ln -sf /usr/bin/chromium "$AGENT_BROWSER_EXECUTABLE_PATH"; \
+    else \
+      HOME="$AGENT_BROWSER_INSTALL_HOME" agent-browser install && \
+      chrome_path="$(find "$AGENT_BROWSER_INSTALL_HOME/.agent-browser/browsers" -type f -name chrome | sort -V | tail -n 1)" && \
+      test -n "$chrome_path" && \
+      ln -sf "$chrome_path" "$AGENT_BROWSER_EXECUTABLE_PATH"; \
+    fi && \
     "$AGENT_BROWSER_EXECUTABLE_PATH" --version
 
 # Pre-install pi's declared packages so first run isn't slow.
