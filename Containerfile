@@ -7,9 +7,17 @@ RUN CGO_ENABLED=1 go build -tags fts5 -o /memstore .
 # ── Stage 2: Runtime ─────────────────────────────────────
 FROM debian:bookworm-slim
 
-# System deps
+# System deps — base + Chromium headless requirements
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates git curl bash openssh-client \
+    libxcb-shm0 libx11-xcb1 libx11-6 libxcb1 libxext6 libxrandr2 \
+    libxcomposite1 libxcursor1 libxdamage1 libxfixes3 libxi6 \
+    libgtk-3-0 libpangocairo-1.0-0 libpango-1.0-0 libatk1.0-0 \
+    libcairo-gobject2 libcairo2 libgdk-pixbuf-2.0-0 libxrender1 \
+    libasound2 libfreetype6 libfontconfig1 libdbus-1-3 libnss3 libglib2.0-0 \
+    libnspr4 libatk-bridge2.0-0 libdrm2 libxkbcommon0 libatspi2.0-0 \
+    libcups2 libxshmfence1 libgbm1 \
+    fonts-noto-color-emoji fonts-noto-cjk fonts-freefont-ttf \
     && rm -rf /var/lib/apt/lists/*
 
 # Node.js 22.x (matches stanza's system node)
@@ -17,8 +25,28 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
+# Force npm global installs to /usr/local/bin (in PATH)
+ENV NPM_CONFIG_PREFIX=/usr/local
+
+# Use the image-owned Chrome installed below, rather than a browser under
+# /home/monika, which is bind-mounted from the host in production.
+ENV AGENT_BROWSER_INSTALL_HOME=/opt/agent-browser
+ENV AGENT_BROWSER_EXECUTABLE_PATH=/opt/agent-browser/chrome
+
 # Pi coding agent — pinned version
 RUN npm install -g @earendil-works/pi-coding-agent@0.75.5
+
+# Agent browser CLI + Chromium
+# agent-browser install uses HOME for its managed Chrome download location.
+# Install with a temporary image-owned HOME, then expose the browser via a
+# stable executable path that runtime sessions use explicitly.
+RUN mkdir -p "$AGENT_BROWSER_INSTALL_HOME" && \
+    npm install -g agent-browser && \
+    HOME="$AGENT_BROWSER_INSTALL_HOME" agent-browser install && \
+    chrome_path="$(find "$AGENT_BROWSER_INSTALL_HOME/.agent-browser/browsers" -type f -name chrome | sort -V | tail -n 1)" && \
+    test -n "$chrome_path" && \
+    ln -sf "$chrome_path" "$AGENT_BROWSER_EXECUTABLE_PATH" && \
+    "$AGENT_BROWSER_EXECUTABLE_PATH" --version
 
 # Pre-install pi's declared packages so first run isn't slow.
 # This requires a settings.json with the packages list.
