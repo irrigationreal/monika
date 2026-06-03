@@ -1,0 +1,194 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+agent-runner - run a disposable pi task container
+
+Usage:
+  scripts/agent-runner run --task PATH [options]
+
+Options:
+  --task PATH              Prompt file to mount at /task/<name> (required)
+  --system PATH            Optional system prompt addendum file
+  --workspace PATH         Workspace/repo to mount at /workspace (default: current directory)
+  --workspace-writable     Mount workspace read-write instead of read-only
+  --env-file PATH          Docker env-file containing model/search credentials
+  --models-json PATH       Mount a pi models.json as /runtime/secrets/models.json
+  --memory-dir PATH        Mount isolated memstore data at /data
+  --output-dir PATH        Use/preserve explicit output directory
+  --keep-output            Preserve generated output directory on success
+  --cleanup MODE           on-success (default), always, or never
+  --expect MODE            text (default) or json
+  --image IMAGE            Runner image (default: monika:dev)
+  --extra-docker-arg ARG   Pass an extra argument to docker run; can be repeated
+  -h, --help               Show this help
+
+The container's stdout is the canonical automation result. A fresh per-run output
+folder is created for stdout/stderr copies, runner metadata, artifacts, and sessions.
+Generated output folders are deleted on success by default and kept on failure.
+USAGE
+}
+
+abs_path() {
+  if command -v realpath >/dev/null 2>&1; then
+    realpath "$1"
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$1"
+  else
+    case "$1" in
+      /*) printf '%s\n' "$1" ;;
+      *) printf '%s/%s\n' "$(pwd)" "$1" ;;
+    esac
+  fi
+}
+
+if [[ $# -eq 0 || "$1" == "--help" || "$1" == "-h" || "$1" == "help" ]]; then
+  usage
+  exit 0
+fi
+
+cmd="$1"
+shift
+if [[ "$cmd" != "run" ]]; then
+  echo "Unknown command: $cmd" >&2
+  usage >&2
+  exit 2
+fi
+
+image="${AGENT_RUNNER_IMAGE:-monika:dev}"
+task=""
+system_file=""
+workspace="$(pwd)"
+workspace_mode="ro"
+env_file=""
+models_json=""
+memory_dir=""
+output_dir=""
+explicit_output=0
+keep_output=0
+cleanup="on-success"
+expect="text"
+extra_docker_args=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --task) task="${2:-}"; shift 2 ;;
+    --system) system_file="${2:-}"; shift 2 ;;
+    --workspace) workspace="${2:-}"; shift 2 ;;
+    --workspace-writable) workspace_mode="rw"; shift ;;
+    --env-file) env_file="${2:-}"; shift 2 ;;
+    --models-json) models_json="${2:-}"; shift 2 ;;
+    --memory-dir) memory_dir="${2:-}"; shift 2 ;;
+    --output-dir) output_dir="${2:-}"; explicit_output=1; shift 2 ;;
+    --keep-output) keep_output=1; shift ;;
+    --cleanup) cleanup="${2:-}"; shift 2 ;;
+    --expect) expect="${2:-}"; shift 2 ;;
+    --image) image="${2:-}"; shift 2 ;;
+    --extra-docker-arg) extra_docker_args+=("${2:-}"); shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+if [[ -z "$task" ]]; then
+  echo "--task is required" >&2
+  exit 2
+fi
+if [[ ! -f "$task" ]]; then
+  echo "Task file not found: $task" >&2
+  exit 2
+fi
+if [[ -n "$system_file" && ! -f "$system_file" ]]; then
+  echo "System prompt file not found: $system_file" >&2
+  exit 2
+fi
+if [[ "$cleanup" != "on-success" && "$cleanup" != "always" && "$cleanup" != "never" ]]; then
+  echo "--cleanup must be on-success, always, or never" >&2
+  exit 2
+fi
+if [[ "$expect" != "text" && "$expect" != "json" ]]; then
+  echo "--expect must be text or json" >&2
+  exit 2
+fi
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+if [[ -z "$output_dir" ]]; then
+  output_dir="$repo_root/runner-runtime/runs/$run_id"
+fi
+scratch_dir="$repo_root/runner-runtime/scratch/$run_id"
+mkdir -p "$output_dir" "$scratch_dir"
+
+abs_task="$(abs_path "$task")"
+task_dir="$(dirname "$abs_task")"
+task_name="$(basename "$abs_task")"
+abs_workspace="$(abs_path "$workspace")"
+abs_output="$(abs_path "$output_dir")"
+abs_scratch="$(abs_path "$scratch_dir")"
+
+docker_args=(
+  run --rm
+  -e AGENT_RUNNER_MODE=1
+  -e MONIKA_LOG_TO_STDERR=1
+  -e RUNNER_TASK_FILE="/task/$task_name"
+  -e RUNNER_OUTPUT_DIR=/outputs
+  -e RUNNER_WORKSPACE=/workspace
+  -e RUNNER_SCRATCH_DIR=/scratch
+  -e RUNNER_EXPECT="$expect"
+  -v "$task_dir:/task:ro"
+  -v "$abs_workspace:/workspace:$workspace_mode"
+  -v "$abs_output:/outputs"
+  -v "$abs_scratch:/scratch"
+)
+
+if [[ -n "$system_file" ]]; then
+  abs_system="$(abs_path "$system_file")"
+  system_dir="$(dirname "$abs_system")"
+  system_name="$(basename "$abs_system")"
+  if [[ "$system_dir" == "$task_dir" ]]; then
+    docker_args+=( -e RUNNER_SYSTEM_PROMPT_FILE="/task/$system_name" )
+  else
+    docker_args+=( -e RUNNER_SYSTEM_PROMPT_FILE="/task-system/$system_name" -v "$system_dir:/task-system:ro" )
+  fi
+fi
+if [[ -n "$env_file" ]]; then
+  docker_args+=( --env-file "$(abs_path "$env_file")" )
+fi
+if [[ -n "$models_json" ]]; then
+  docker_args+=( -v "$(abs_path "$models_json"):/runtime/secrets/models.json:ro" )
+fi
+if [[ -n "$memory_dir" ]]; then
+  mkdir -p "$memory_dir"
+  docker_args+=( -v "$(abs_path "$memory_dir"):/data" )
+fi
+if [[ ${#extra_docker_args[@]} -gt 0 ]]; then
+  docker_args+=( "${extra_docker_args[@]}" )
+fi
+
+docker_args+=( "$image" /app/bin/agent-runner.mjs run )
+
+set +e
+docker "${docker_args[@]}"
+status=$?
+set -e
+
+should_delete=0
+case "$cleanup" in
+  always) should_delete=1 ;;
+  never) should_delete=0 ;;
+  on-success)
+    if [[ "$status" -eq 0 && "$keep_output" -eq 0 && "$explicit_output" -eq 0 ]]; then
+      should_delete=1
+    fi
+    ;;
+esac
+
+if [[ "$should_delete" -eq 1 ]]; then
+  rm -rf "$abs_output" "$abs_scratch"
+else
+  echo "agent-runner output: $abs_output" >&2
+  echo "agent-runner scratch: $abs_scratch" >&2
+fi
+
+exit "$status"
