@@ -1,6 +1,14 @@
 #!/bin/bash
 set -e
 
+monika_log() {
+  if [ "${MONIKA_LOG_TO_STDERR:-}" = "1" ] || [ "${AGENT_RUNNER_MODE:-}" = "1" ]; then
+    echo "$@" >&2
+  else
+    echo "$@"
+  fi
+}
+
 # ── Mode detection ───────────────────────────────────────
 # Host mode: /home/monika/.pi/agent exists (bind-mounted from host)
 # Standalone mode: no host mounts, use bundled /app/.pi
@@ -19,14 +27,14 @@ if [ -d "/home/monika/.pi/agent" ]; then
     echo "Host *\n    IdentityFile /persist/keys/ssh-local" > /root/.ssh/config
     chmod 600 /root/.ssh/config
   fi
-  echo "[monika] Host mode: .pi mounted, SSH host shell enabled"
+  monika_log "[monika] Host mode: .pi mounted, SSH host shell enabled"
 else
   export PI_CODING_AGENT_DIR="/app/.pi/agent"
   MEMSTORE_DATA_DIR="${MEMSTORE_DATA_DIR:-/data/memstore}"
   MEMSTORE_SOCKET="${MEMSTORE_SOCKET:-/tmp/memstore.sock}"
   unset MONIKA_HOST_MODE
   export HOME=/app
-  echo "[monika] Standalone mode: bundled .pi, container shell"
+  monika_log "[monika] Standalone mode: bundled .pi, container shell"
   mkdir -p "$MEMSTORE_DATA_DIR" /data/sessions /app/.config /app/.ssh /app/.gnupg
 fi
 
@@ -83,8 +91,9 @@ load_git_identity_file() {
     source "$file"
     local source_status=$?
     set -e
+
     if [ "$source_status" -ne 0 ]; then
-      echo "[monika] WARNING: sourcing $file returned $source_status; continuing"
+      monika_log "[monika] WARNING: sourcing $file returned $source_status; continuing"
     fi
   fi
 }
@@ -115,8 +124,9 @@ for secrets_file in "/home/monika/.config/secrets.env" "/app/.config/secrets.env
     source_status=$?
     set +a
     set -e
+
     if [ "$source_status" -ne 0 ]; then
-      echo "[monika] WARNING: sourcing $secrets_file returned $source_status; continuing"
+      monika_log "[monika] WARNING: sourcing $secrets_file returned $source_status; continuing"
     fi
   fi
 done
@@ -127,13 +137,13 @@ done
 # For standalone mode, download it if not present and POOL_CONFIG_URL is set.
 MODELS_JSON="$PI_CODING_AGENT_DIR/models.json"
 if [ ! -f "$MODELS_JSON" ] && [ -n "$POOL_CONFIG_URL" ]; then
-  echo "[monika] Downloading pool models config..."
+  monika_log "[monika] Downloading pool models config..."
   curl -sL "$POOL_CONFIG_URL" -o "$MODELS_JSON"
   chmod 600 "$MODELS_JSON"
 fi
 
 # ── Start memstore ───────────────────────────────────────
-echo "[monika] Starting memstore (socket=$MEMSTORE_SOCKET)..."
+monika_log "[monika] Starting memstore (socket=$MEMSTORE_SOCKET)..."
 memstore --socket="$MEMSTORE_SOCKET" --data-dir="$MEMSTORE_DATA_DIR" &
 MEMSTORE_PID=$!
 
@@ -144,22 +154,22 @@ for i in $(seq 1 60); do
 done
 
 if [ ! -S "$MEMSTORE_SOCKET" ]; then
-  echo "[monika] ERROR: memstore socket not ready after 6s"
+  monika_log "[monika] ERROR: memstore socket not ready after 6s"
   exit 1
 fi
-echo "[monika] memstore ready (PID $MEMSTORE_PID)"
+monika_log "[monika] memstore ready (PID $MEMSTORE_PID)"
 
 # ── Monika agent daemon ──────────────────────────────────
 AGENTD_PID=""
 if [ "${MONIKA_AGENTD_ENABLED:-1}" != "0" ]; then
-  echo "[monika] Starting agentd (port=${MONIKA_AGENTD_PORT:-7724})..."
+  monika_log "[monika] Starting agentd (port=${MONIKA_AGENTD_PORT:-7724})..."
   node /opt/agentd/src/server.mjs &
   AGENTD_PID=$!
 fi
 
 # ── Signal handling ──────────────────────────────────────
 cleanup() {
-  echo "[monika] Shutting down..."
+  monika_log "[monika] Shutting down..."
   if [ -n "$AGENTD_PID" ]; then
     kill "$AGENTD_PID" 2>/dev/null || true
     wait "$AGENTD_PID" 2>/dev/null || true
@@ -174,6 +184,6 @@ trap cleanup SIGTERM SIGINT
 if [ $# -gt 0 ]; then
   exec "$@"
 else
-  echo "[monika] Running. Use 'docker exec -it monika pi' for interactive session."
+  monika_log "[monika] Running. Use 'docker exec -it monika pi' for interactive session."
   wait "$MEMSTORE_PID"
 fi
