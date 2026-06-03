@@ -1,0 +1,7 @@
+{
+  "name": "default",
+  "description": "Default generic one-off runner profile",
+  "expect": "text",
+  "workspaceReadOnly": true,
+  "cleanup": "on-success"
+}
