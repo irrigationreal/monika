@@ -23,6 +23,9 @@ Options:
   --expect MODE            text (default) or json
   --image IMAGE            Runner image (default: monika:dev)
   --extra-docker-arg ARG   Pass an extra argument to docker run; can be repeated
+
+Environment:
+  AGENT_RUNNER_DOCKER      Docker command to use, e.g. "sudo docker" (default: docker)
   -h, --help               Show this help
 
 The container's stdout is the canonical automation result. A fresh per-run output
@@ -58,6 +61,7 @@ if [[ "$cmd" != "run" ]]; then
 fi
 
 image="${AGENT_RUNNER_IMAGE:-monika:dev}"
+read -r -a docker_cmd <<< "${AGENT_RUNNER_DOCKER:-docker}"
 task=""
 system_file=""
 workspace="$(pwd)"
@@ -175,7 +179,7 @@ fi
 docker_args+=( "$image" /app/bin/agent-runner.mjs run )
 
 set +e
-docker "${docker_args[@]}"
+"${docker_cmd[@]}" "${docker_args[@]}"
 status=$?
 set -e
 
