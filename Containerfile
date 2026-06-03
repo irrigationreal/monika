@@ -130,6 +130,9 @@ RUN node -e "\
 
 VOLUME /data
 
+COPY bin/ /app/bin/
+RUN chmod +x /app/bin/agent-runner.mjs
+
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
