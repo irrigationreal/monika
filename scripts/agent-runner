@@ -15,6 +15,7 @@ Options:
   --workspace-writable     Mount workspace read-write instead of read-only
   --env-file PATH          Docker env-file containing model/search credentials
   --models-json PATH       Mount a pi models.json as /runtime/secrets/models.json
+  --auth-json PATH         Mount a pi auth.json as /runtime/secrets/auth.json
   --memory-dir PATH        Mount isolated memstore data at /data
   --output-dir PATH        Use/preserve explicit output directory
   --keep-output            Preserve generated output directory on success
@@ -63,6 +64,7 @@ workspace="$(pwd)"
 workspace_mode="ro"
 env_file=""
 models_json=""
+auth_json=""
 memory_dir=""
 output_dir=""
 explicit_output=0
@@ -79,6 +81,7 @@ while [[ $# -gt 0 ]]; do
     --workspace-writable) workspace_mode="rw"; shift ;;
     --env-file) env_file="${2:-}"; shift 2 ;;
     --models-json) models_json="${2:-}"; shift 2 ;;
+    --auth-json) auth_json="${2:-}"; shift 2 ;;
     --memory-dir) memory_dir="${2:-}"; shift 2 ;;
     --output-dir) output_dir="${2:-}"; explicit_output=1; shift 2 ;;
     --keep-output) keep_output=1; shift ;;
@@ -157,6 +160,9 @@ if [[ -n "$env_file" ]]; then
 fi
 if [[ -n "$models_json" ]]; then
   docker_args+=( -v "$(abs_path "$models_json"):/runtime/secrets/models.json:ro" )
+fi
+if [[ -n "$auth_json" ]]; then
+  docker_args+=( -v "$(abs_path "$auth_json"):/runtime/secrets/auth.json:ro" )
 fi
 if [[ -n "$memory_dir" ]]; then
   mkdir -p "$memory_dir"
