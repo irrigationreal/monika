@@ -32,6 +32,12 @@ fi
 
 export MEMSTORE_SOCKET
 
+# ── AgentLogs runtime state ──────────────────────────────
+# AgentLogs writes auth/config to ~/.config/agentlogs. Keep that state separate
+# from Monika's HOME so host-mode read-only .config mounts do not block login.
+export AGENTLOGS_HOME="${AGENTLOGS_HOME:-/agentlogs-home}"
+mkdir -p "$AGENTLOGS_HOME/.config/agentlogs"
+
 # ── Runtime secrets (container-only persistent mode) ──────
 # compose.local.yaml mounts host-owned private state at /runtime/secrets.
 # Keep the image canonical for code/extensions, and link only host-owned auth/model

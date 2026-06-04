@@ -27,7 +27,8 @@ docker exec -it monika pi
 The container bundles:
 - **Pi coding agent** at a pinned version (reproducible, atomic upgrades)
 - **memstore** — SQLite FTS5 memory store (Go binary, runs as a background process)
-- **Extensions** — stateful-memory, delegate, SSH, web-search, etc.
+- **Extensions** — stateful-memory, delegate, SSH, web-search, AgentLogs upload, etc.
+- **AgentLogs CLI** — manual sharing of selected Pi sessions
 - **Persona files** — SOUL.md, STYLE.md, REGISTER.md, topic addenda
 
 ### Modes
@@ -46,8 +47,9 @@ host shell requirements.
 Standalone can also be run with explicit persistence using `compose.local.yaml`.
 This keeps the same security model — no host shell, no host network, no auto-relocate
 into the host — but mounts selected host-owned state from `runtime/`: persona files,
-memstore data, Pi session logs, import sessions, secrets, and an explicit workspace.
-Manual `relocate` via the SSH extension remains available when keys/config permit it.
+memstore data, Pi session logs, import sessions, AgentLogs auth/config, secrets, and
+an explicit workspace. Manual `relocate` via the SSH extension remains available when
+keys/config permit it.
 
 The same image serves these configurations — runtime configuration (bind mounts, env vars)
 determines the behavior.
@@ -101,6 +103,7 @@ runtime/
   persona/             mounted to /app/.pi/stateful-memory
   pi-agent/sessions/   mounted to /app/.pi/agent/sessions for resume/reopen
   import/sessions/     historical Pi JSONL sessions for one-time memstore import
+  agentlogs-home/      AgentLogs auth/config state for manual session uploads
   secrets/
     auth.json          optional Pi auth file
     models.json        optional model definitions
@@ -122,6 +125,7 @@ reproducible: rebuild the image from git, keep optional state in `runtime/`.
 | `~/` (or working dirs) | File access for read/write/edit/grep tools | Yes |
 | `/persist/keys` (or `~/.ssh`) | SSH key for host-shell wrapper | Yes |
 | `~/.config` | secrets.env (API keys), GPG config | Recommended |
+| `~/.agentlogs` → `/agentlogs-home` | AgentLogs auth/config for manual session uploads | Optional |
 | `~/.config/gnupg` → `/root/.gnupg` | Git commit signing inside container | Optional |
 
 Environment variables for host mode:
@@ -131,6 +135,7 @@ Environment variables for host mode:
 | `MEMSTORE_SOCKET` | `~/.pi/memstore/memstore.sock` | Tell extensions where memstore is |
 | `MONIKA_HOST_MODE` | `1` | Enables SSH host shell wrapper |
 | `RELOCATE_TARGET` | `monika@127.0.0.1:/home/monika` | Auto-relocate on session start |
+| `AGENTLOGS_HOME` | `/agentlogs-home` | Dedicated writable home for AgentLogs CLI state |
 
 Host prerequisites:
 - sshd running on the host
@@ -143,11 +148,12 @@ Host prerequisites:
 Containerfile          Multi-stage build (Go memstore + Debian slim + Node.js + pi)
 entrypoint.sh          Starts memstore, detects mode, runs command
 host-shell             SSH wrapper for host bash execution
+scripts/agentlogs-monika  AgentLogs wrapper with dedicated writable HOME
 compose.yaml           Host mode deployment (stanza)
 compose.test.yaml      Standalone mode (isolated)
 compose.local.yaml     Standalone mode with runtime persistence
 services/memstore/     memstore Go source
-config/extensions/     Pi extensions (stateful-memory, delegate, ssh, etc.)
+config/extensions/     Pi extensions (stateful-memory, delegate, ssh, AgentLogs upload, etc.)
 config/persona/        Persona files (SOUL, STYLE, REGISTER, topics)
 config/settings.json   Pi settings with shellPath configured
 config/stateful-memory.json  Memory extension config
@@ -175,6 +181,7 @@ runtime/secrets/secrets.env      # optional provider/API env vars
 runtime/secrets/git-identity.env # optional git identity (GIT_USER_NAME/GIT_USER_EMAIL)
 runtime/secrets/ssh/             # mounted read-only to /root/.ssh and /app/.ssh
 runtime/secrets/gnupg/           # copied at startup to /tmp/gnupg for gpg-agent
+runtime/agentlogs-home/          # AgentLogs login/config state
 ```
 
 Git identity is runtime-owned rather than hardcoded into the image. You can provide it
@@ -184,6 +191,42 @@ or `~/.config/monika/git-identity.env`:
 ```bash
 GIT_USER_NAME="Monika"
 GIT_USER_EMAIL="monika@example.com"
+```
+
+## AgentLogs manual session sharing
+
+The image includes a pinned AgentLogs CLI and a Pi `/upload` command. Sessions are
+not uploaded automatically. Run `/upload` inside Pi when a session is ready to share.
+
+AgentLogs auth/config is stored in a dedicated writable home at `/agentlogs-home`
+(`runtime/agentlogs-home/` in local mode, `/home/monika/.agentlogs` in host mode),
+not in Monika's normal `~/.config` mount. The wrapper also exposes Pi's real
+session directory under that home, so AgentLogs can resolve session IDs.
+
+Authenticate once from outside Pi:
+
+```bash
+docker exec -it monika agentlogs-monika login <agentlogs-hostname>
+docker exec -it monika agentlogs-monika status
+```
+
+For non-interactive auth, provide runtime-owned secrets instead:
+
+```bash
+AGENTLOGS_SERVER_URL=https://your-agentlogs-host
+AGENTLOGS_AUTH_TOKEN=...
+```
+
+Then work normally in Pi and run:
+
+```text
+/upload
+```
+
+You can also upload a specific Pi session file or ID:
+
+```text
+/upload <session-id-or-path>
 ```
 
 Historical sessions can be imported after the container starts:

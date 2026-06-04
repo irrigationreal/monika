@@ -36,6 +36,11 @@ ENV AGENT_BROWSER_EXECUTABLE_PATH=/opt/agent-browser/chrome
 # Pi coding agent — pinned version
 RUN npm install -g @earendil-works/pi-coding-agent@0.75.5
 
+# AgentLogs CLI — pinned version. Authentication/config is runtime-owned and
+# stored under /agentlogs-home by scripts/agentlogs-monika.
+RUN npm install -g agentlogs@0.1.7
+ENV AGENTLOGS_CLI_PATH=/usr/local/bin/agentlogs
+
 # Agent browser CLI + Chromium
 # agent-browser install uses HOME for its managed Chrome download location on
 # platforms where Chrome for Testing is available. Linux ARM64 is not published
@@ -69,9 +74,10 @@ RUN mkdir -p /tmp/pi-prebuild/.pi/agent && \
 # memstore binary
 COPY --from=memstore-build /memstore /usr/local/bin/memstore
 
-# Host shell wrapper
+# Host shell wrapper and AgentLogs runtime wrapper
 COPY host-shell /usr/local/bin/host-shell
-RUN chmod +x /usr/local/bin/host-shell
+COPY scripts/agentlogs-monika /usr/local/bin/agentlogs-monika
+RUN chmod +x /usr/local/bin/host-shell /usr/local/bin/agentlogs-monika
 
 # SSH config for container root user — all SSH connections (relocate, git,
 # --ssh remote) use the deploy key and accept new host keys automatically.

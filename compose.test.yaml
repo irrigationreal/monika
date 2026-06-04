@@ -11,13 +11,16 @@ services:
     container_name: monika-test
     volumes:
       - monika-test-data:/data
+      - monika-test-agentlogs:/agentlogs-home
     environment:
       HOME: /app
       # Pool config URL — downloads models.json on first start if not present
       POOL_CONFIG_URL: ${POOL_CONFIG_URL:-}
+      AGENTLOGS_HOME: /agentlogs-home
       # Or mount models.json directly:
       # volumes:
       #   - ./models.json:/app/.pi/agent/models.json:ro
 
 volumes:
+  monika-test-agentlogs:
   monika-test-data:
