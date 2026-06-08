@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# AgentLogs stores auth/config in ~/.config/agentlogs. Monika's normal HOME may
+# have a read-only .config mount, so run AgentLogs with a dedicated writable home.
+AGENTLOGS_HOME="${AGENTLOGS_HOME:-/agentlogs-home}"
+export HOME="$AGENTLOGS_HOME"
+
+mkdir -p "$HOME/.config/agentlogs"
+
+# AgentLogs resolves Pi session IDs from ~/.pi/agent/sessions using HOME. Since
+# HOME is redirected for writable AgentLogs config, expose the real Pi sessions
+# there as a symlink when available. Full session paths work either way.
+if [ -n "${PI_CODING_AGENT_DIR:-}" ] && [ -d "$PI_CODING_AGENT_DIR/sessions" ]; then
+  mkdir -p "$HOME/.pi/agent"
+  if [ ! -e "$HOME/.pi/agent/sessions" ] || [ -L "$HOME/.pi/agent/sessions" ]; then
+    ln -sfn "$PI_CODING_AGENT_DIR/sessions" "$HOME/.pi/agent/sessions"
+  fi
+fi
+
+exec agentlogs "$@"

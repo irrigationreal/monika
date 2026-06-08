@@ -32,15 +32,22 @@ services:
       # this mount only provides durable identity/state files.
       - ./runtime/persona:/app/.pi/stateful-memory
 
-      # Persistent Pi session logs so sessions can be resumed across rebuilds.
+      # Persistent Pi session logs and local skills.
       - ./runtime/pi-agent/sessions:/app/.pi/agent/sessions
+      - ./runtime/pi-agent/skills:/app/.pi/agent/skills
 
       # Historical session import source. Read-only; import script writes to memstore.
       - ./runtime/import:/import:ro
 
+      # AgentLogs auth/config state. Kept outside /app/.config so login works
+      # without making the general secrets/config mount writable.
+      - ./runtime/agentlogs-home:/agentlogs-home
+
       # Secrets staged by the user on the host. auth.json/models.json/secrets.env are
-      # linked into place by entrypoint.sh when present.
+      # linked into place by entrypoint.sh when present. gitconfig is mounted to
+      # /app/.gitconfig for local identity/signing config.
       - ./runtime/secrets:/runtime/secrets:ro
+      - ./runtime/secrets/gitconfig:/app/.gitconfig:ro
 
       # SSH keys/config for git/remote operations and manual relocate from inside
       # the container. /root/.ssh is the effective OpenSSH home because the
@@ -55,6 +62,9 @@ services:
       # Explicit workspace mount. On macOS this defaults to ~/Repos.
       - ${MONIKA_WORKSPACE:-${HOME}/Repos}:/workspace
     working_dir: /workspace/monika
+    env_file:
+      - path: ./runtime/secrets/secrets.env
+        required: false
     environment:
       HOME: /app
       PI_CODING_AGENT_DIR: /app/.pi/agent
@@ -63,5 +73,8 @@ services:
       MEMSTORE_SOCKET: /tmp/memstore.sock
       GNUPGHOME: /tmp/gnupg
       MONIKA_WORKSPACE: /workspace
+      AGENTLOGS_HOME: /agentlogs-home
+      GIT_USER_NAME: ${GIT_USER_NAME:-Monika}
+      GIT_USER_EMAIL: ${GIT_USER_EMAIL:-monika@neosynth.net}
       # Optional: set this in your shell if you want first-start model download.
       POOL_CONFIG_URL: ${POOL_CONFIG_URL:-}
