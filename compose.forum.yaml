@@ -24,7 +24,7 @@ services:
       CODEX_FORUM_PORT: "4310"
       CODEX_FORUM_DB: /home/monika/.pi/forum/data.db
       CODEX_FORUM_UPLOADS_DIR: /home/monika/.pi/forum/uploads
-      CODEX_FORUM_BASE_URL: http://localhost:4310
+      CODEX_FORUM_BASE_URL: http://monika.shadowsea.org:4310
       CODEX_FORUM_API_PREFIX: /api
       CODEX_FORUM_AGENT_BACKEND: monika-pi
       MONIKA_AGENTD_BASE_URL: http://127.0.0.1:7724
