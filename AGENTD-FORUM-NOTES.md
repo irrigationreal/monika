@@ -205,3 +205,47 @@ curl -fsS http://127.0.0.1:4310/api/models | head
 - Fork/delegate/sleep sessions are imported and routed to system areas. New delegate/sleep/handoff extension paths append `monika.lineage` custom JSONL entries for future imports/sync.
 - Forum never talks directly to memstore and never invents memory origins.
   Memory dedupe must use canonical Pi session path/id.
+
+## Forum attachments and artifacts (current bridge implementation)
+
+Attachment support is implemented as a hybrid reference model rather than treating Pi
+JSONL as a blob store:
+
+- Forum uploads remain in forum-owned upload storage.
+- Forum attachment rows now store optional `sha256` for verification.
+- When dispatching a post to agentd, the forum sends internal attachment descriptors
+  (ID, filename, MIME, size, SHA-256, storage path, URL) alongside the normal text
+  envelope. Raw paths are not exposed to browser clients.
+- agentd only reads attachment files from allowlisted upload roots
+  (`MONIKA_AGENTD_ATTACHMENT_ALLOWED_ROOTS`, default `/home/monika/.pi/forum/uploads`).
+- agentd appends `customType: "monika.forum.attachment"` entries to the canonical Pi
+  JSONL session recording attachment metadata, hash, storage reference, and
+  presentation mode.
+- Small supported images are passed to Pi as image input when the active model supports
+  images and the file is below `MONIKA_AGENTD_ATTACHMENT_IMAGE_INLINE_MAX_BYTES`
+  (default 5 MiB).
+- Small UTF-8 text-like files below `MONIKA_AGENTD_ATTACHMENT_TEXT_EXTRACT_MAX_BYTES`
+  (default 64 KiB) are inserted into the prompt as bounded phpBB-style
+  `[attachment ...]...[/attachment]` blocks. These blocks explicitly mark extracted
+  attachment text as quoted content, not direct instructions.
+- Larger or binary attachments are represented as metadata-only attachment blocks.
+
+Outbound agent artifacts currently use a bridge/fallback marker:
+
+```text
+[artifact path="/home/monika/out.zip" filename="out.zip" mime="application/zip"]
+```
+
+The forum strips artifact markers from persisted robot post bodies, resolves the file
+through agentd when the forum container cannot see the path directly, copies it into
+normal forum upload storage, and creates a regular forum attachment row. agentd exposes
+`POST /v1/artifacts/resolve` for this, constrained by `MONIKA_AGENTD_ARTIFACT_ALLOWED_ROOTS`
+(default `/home/monika:/tmp`) and `MONIKA_AGENTD_ARTIFACT_EXPORT_MAX_BYTES` (default 50 MiB).
+Pi session sync strips artifact markers from assistant text before reconciliation/import
+so raw marker posts are not duplicated.
+
+Known next step: replace the path-marker artifact flow with a tool-first forum upload
+flow. The intended model is a Pi/forum tool such as `forum_upload_attachment(path, ...)`
+that uploads an artifact into forum storage before the final answer and returns a stable
+`[forum-attachment id="..."]` reference for the final post. The marker path should remain
+as a fallback until the tool flow is proven.

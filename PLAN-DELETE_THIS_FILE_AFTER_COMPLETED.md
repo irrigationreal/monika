@@ -164,3 +164,22 @@ ssh -L 14310:127.0.0.1:4310 monika@stanza
 
 Never restart the Monika container from inside an active Pi session unless the
 user is prepared to reconnect.
+
+### Attachment/artifact bridge status (Jun 14)
+
+Implemented and live-tested after rebuild:
+
+- Inbound user attachments are forwarded from forum to agentd as structured descriptors.
+- agentd records `monika.forum.attachment` custom JSONL entries and presents files to Pi
+  according to type/size: small images as image input, small text-like files as bounded
+  `[attachment ...]...[/attachment]` text, large/binary files as metadata-only.
+- Forum attachment rows now include optional SHA-256.
+- Outbound `[artifact path="..." filename="..." mime="..."]` markers are stripped from
+  robot post bodies and imported into forum upload storage as normal post attachments.
+- `POST /v1/artifacts/resolve` bridges Monika-container paths to forum storage when the
+  forum container cannot read the file directly.
+- Pi session sync strips artifact markers before importing/reconciling assistant posts.
+
+A text-file inbound test and outbound artifact attachment test succeeded. The next pass is
+to implement the cleaner tool-first attachment upload model so Monika can upload artifacts
+to forum storage before final response and link them by stable forum attachment reference.
