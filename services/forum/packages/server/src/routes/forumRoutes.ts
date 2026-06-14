@@ -1,0 +1,1089 @@
+import type { FastifyInstance } from 'fastify';
+import type { FeatureFlags } from '../config';
+import type { AgentBridge } from '../agentBridge';
+import type { ForumStore } from '../store';
+import type { WebhookService } from '../services/webhookService';
+import type { StreamBusInterface } from '../streamBus';
+import type { AccessHelpers } from '../utils/access';
+import { ROBOT_STALE_MS } from '../runtimeConfig';
+import { serializePost, serializeTopic } from '../utils/serializers';
+
+export function registerForumRoutes({
+  app,
+  store,
+  featureFlags,
+  codex,
+  webhookService,
+  bus,
+  access,
+  webIdentityId
+}: {
+  app: FastifyInstance;
+  store: ForumStore;
+  featureFlags: FeatureFlags;
+  codex: AgentBridge;
+  webhookService: WebhookService;
+  bus: StreamBusInterface;
+  access: AccessHelpers;
+  webIdentityId: string;
+}): void {
+  const {
+    getCurrentUser,
+    requireScope,
+    requireAdmin,
+    getIdentityFromRequest,
+    canViewForum,
+    canViewTopic,
+    canCreateTopic,
+    canPostTopic,
+    requireForumVisible,
+    requireTopicVisible,
+    requirePostVisible,
+    requireModerator
+  } = access;
+
+  function resolveRobotMode(value?: string | null): 'auto' | 'mention' | 'off' {
+    if (value === 'mention' || value === 'off' || value === 'auto') {
+      return value;
+    }
+    return 'auto';
+  }
+
+  function serializeTopicWithPiLineage(topic: Parameters<typeof serializeTopic>[0]): ReturnType<typeof serializeTopic> & { piSession?: Record<string, unknown> } {
+    const dto = serializeTopic(topic) as ReturnType<typeof serializeTopic> & { piSession?: Record<string, unknown> };
+    const link = store.getPiSessionLinkByTopic(topic.id);
+    const parentLink = link?.parent_pi_session_id
+      ? store.getPiSessionLinkByPiSessionId(link.parent_pi_session_id)
+      : link?.parent_pi_session_path
+        ? store.getPiSessionLinkByPiSessionPath(link.parent_pi_session_path)
+        : null;
+    if (link) {
+      dto.piSession = {
+        id: link.pi_session_id,
+        path: link.pi_session_path,
+        cwd: link.cwd,
+        parentId: link.parent_pi_session_id,
+        parentPath: link.parent_pi_session_path,
+        parentTopicId: parentLink?.topic_id ?? null,
+        lineageKind: link.lineage_kind,
+        lineageSource: link.lineage_source,
+        importedAt: link.imported_at,
+        lastImportRunId: link.last_import_run_id,
+      };
+    }
+    return dto;
+  }
+
+  function escapeRegExp(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  function normalizeMentionToken(raw?: string | null): string | null {
+    const trimmed = raw?.trim();
+    if (!trimmed) return null;
+    return /^[a-z0-9_-]+$/i.test(trimmed) ? trimmed : null;
+  }
+
+  function hasRobotMention(body: string): boolean {
+    const robotIdentity = store.getIdentityByKind('robot');
+    const tokens = new Set<string>(['robot']);
+    if (robotIdentity?.username) {
+      tokens.add(robotIdentity.username);
+    }
+    const displayToken = normalizeMentionToken(robotIdentity?.display_name);
+    if (displayToken) {
+      tokens.add(displayToken);
+    }
+    for (const token of tokens) {
+      // Allow common punctuation before @mentions (e.g. "(@robot)" or "hello,@robot"),
+      // while avoiding matching inside email addresses / words.
+      const pattern = new RegExp(`(^|[^\\w])@${escapeRegExp(token)}(\\b|$)`, 'i');
+      if (pattern.test(body)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function emitNotification(identityId: string, payload: unknown) {
+    bus.emit(`notify:${identityId}`, { type: 'notification', data: payload });
+  }
+
+  app.get('/forums', async (request) => {
+    const identity = getIdentityFromRequest(request);
+    const query = request.query as {
+      parentForumId?: string;
+      status?: 'active' | 'archived';
+      includeArchived?: string;
+    };
+    const includeArchived =
+      query?.includeArchived === 'true' || query?.includeArchived === '1';
+    const parentForumId =
+      query?.parentForumId !== undefined
+        ? query.parentForumId === '' || query.parentForumId === 'null'
+          ? null
+          : query.parentForumId
+        : undefined;
+    const listOptions: { parentForumId?: string | null; status?: 'active' | 'archived'; includeArchived?: boolean } = {};
+    if (parentForumId !== undefined) listOptions.parentForumId = parentForumId;
+    if (query?.status !== undefined) listOptions.status = query.status;
+    listOptions.includeArchived = includeArchived;
+    const forums = store.listForums(listOptions);
+    const visibleForums = forums.filter((row) => canViewForum(row, identity));
+    const forumStatsById = store.getForumStatsForForums(visibleForums.map((row) => row.id));
+    return visibleForums.map((row) => {
+      const stats = forumStatsById.get(row.id) ?? {
+        threadCount: 0,
+        postCount: 0,
+        lastPost: null
+      };
+      return {
+        id: row.id,
+        tenantId: row.tenant_id,
+        parentForumId: row.parent_forum_id,
+        category: row.category,
+        name: row.name,
+        description: row.description,
+        status: row.status,
+        visibility: row.visibility,
+        archivedAt: row.archived_at,
+        threadCount: stats.threadCount,
+        postCount: stats.postCount,
+        lastPost: stats.lastPost,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at
+      };
+    });
+  });
+
+  app.get('/posts/recent', async (request) => {
+    const identity = getIdentityFromRequest(request);
+    const query = request.query as { limit?: string };
+    const requestedLimit = Number(query?.limit ?? 3);
+    const safeLimit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(10, Math.trunc(requestedLimit))) : 3;
+    const fetchLimit = Math.min(50, safeLimit * 5);
+    const rows = store.listRecentPosts(fetchLimit);
+    const visible = rows.filter((row) =>
+      canViewForum({ visibility: row.forum_visibility, tenant_id: row.forum_tenant_id }, identity)
+    );
+    return visible.slice(0, safeLimit).map((row) => ({
+      postId: row.post_id,
+      topicId: row.topic_id,
+      topicTitle: row.topic_title,
+      forumId: row.forum_id,
+      forumName: row.forum_name,
+      authorId: row.author_id,
+      authorName: row.author_name,
+      body: row.body,
+      createdAt: row.created_at
+    }));
+  });
+
+  app.get('/leaders', async (request) => {
+    const identity = getIdentityFromRequest(request);
+    const query = request.query as { limit?: string };
+    const requestedLimit = Number(query?.limit ?? 5);
+    const safeLimit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(10, Math.trunc(requestedLimit))) : 5;
+
+    const includeMembersForums = Boolean(identity);
+    const includeAdminForums = Boolean(
+      identity &&
+        (identity.kind === 'admin' ||
+          store.hasPermission(identity.id, 'admin.all', identity.tenant_id) ||
+          store.hasPermission(identity.id, 'admin.read', identity.tenant_id) ||
+          store.hasPermission(identity.id, '*', identity.tenant_id))
+    );
+
+    const leaders = store.listForumLeaders({
+      limit: safeLimit,
+      includeMembersForums,
+      includeAdminForums
+    });
+
+    return {
+      leaders: leaders.map(({ identity, postCount }) => ({
+        identityId: identity.id,
+        displayName: identity.display_name,
+        kind: identity.kind,
+        avatarUrl: identity.avatar_url,
+        postCount
+      }))
+    };
+  });
+
+  app.post('/forums', async (request) => {
+    requireAdmin(request);
+    const body = request.body as { name?: string; description?: string | null; parentForumId?: string | null; category?: string | null; visibility?: 'public' | 'members' | 'admin' };
+    if (!body?.name) {
+      throw app.httpErrors.badRequest('name is required');
+    }
+    const forum = store.createForum(
+      body.name,
+      body.description ?? null,
+      null,
+      body.parentForumId ?? null,
+      body.category ?? null,
+      'active',
+      body.visibility ?? 'public',
+      null
+    );
+    return {
+      id: forum.id,
+      tenantId: forum.tenant_id,
+      parentForumId: forum.parent_forum_id,
+      category: forum.category,
+      name: forum.name,
+      description: forum.description,
+      status: forum.status,
+      visibility: forum.visibility,
+      archivedAt: forum.archived_at,
+      threadCount: 0,
+      postCount: 0,
+      lastPost: null,
+      createdAt: forum.created_at,
+      updatedAt: forum.updated_at
+    };
+  });
+
+  app.get('/forums/:forumId/topics', async (request) => {
+    const { forumId } = request.params as { forumId: string };
+    const identity = getIdentityFromRequest(request);
+    const forum = store.getForum(forumId);
+    if (!forum) {
+      throw app.httpErrors.notFound('Forum not found');
+    }
+    requireForumVisible(forum, identity);
+    const page = Number((request.query as { page?: string }).page ?? 1);
+    const pageSize = Number((request.query as { pageSize?: string }).pageSize ?? 50);
+    const topics = store.listTopics(forumId, page, pageSize);
+    const topicStatsById = store.getTopicStatsForTopics(topics.map((row) => row.id));
+    const authorIds = topics.map((row) => row.created_by).filter((id): id is string => Boolean(id));
+    const authorsById = store.getIdentitiesByIds(authorIds);
+    return {
+      page,
+      pageSize,
+      total: topics.length,
+      items: topics.map((row) => {
+        const stats = topicStatsById.get(row.id) ?? {
+          postCount: 0,
+          lastPostAuthorId: null,
+          lastPostAuthorName: null,
+          lastPostAt: null
+        };
+        const author = authorsById.get(row.created_by);
+        return {
+          id: row.id,
+          forumId: row.forum_id,
+          tenantId: row.tenant_id,
+          title: row.title,
+          status: row.status,
+          tags: JSON.parse(row.tags_json),
+          robotMode: row.robot_mode,
+          createdBy: row.created_by,
+          createdByName: author?.display_name ?? null,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+          postCount: stats.postCount,
+          lastPostAuthorId: stats.lastPostAuthorId,
+          lastPostAuthorName: stats.lastPostAuthorName,
+          lastPostAt: stats.lastPostAt
+        };
+      })
+    };
+  });
+
+  app.post(
+    '/forums/:forumId/topics',
+    {
+      config: {
+        rateLimit: featureFlags.enableRateLimiting ? { max: 2, timeWindow: '1 minute' } : false
+      }
+    },
+    async (request) => {
+      // Require authentication for creating topics
+      const user = requireScope(getCurrentUser(request), 'write');
+
+      const { forumId } = request.params as { forumId: string };
+      const forum = store.getForum(forumId);
+      if (!forum) {
+        throw app.httpErrors.notFound('Forum not found');
+      }
+      const identity = store.getIdentity(user.identityId);
+      if (!canCreateTopic(forum, identity)) {
+        throw app.httpErrors.forbidden('Posting not allowed in this forum');
+      }
+      const body = request.body as {
+        title?: string;
+        body?: string;
+        model?: string | null;
+        reasoningEffort?: string | null;
+        robotMode?: string | null;
+        attachmentsPending?: boolean;
+        silent?: boolean;
+      };
+      if (!body?.title || !body?.body) {
+        throw app.httpErrors.badRequest('title and body are required');
+      }
+
+      const robotMode = resolveRobotMode(body.robotMode ?? null);
+      const deferRobot = Boolean(body.attachmentsPending) && !body.silent;
+      const { topic, post } = store.createTopic({
+        forumId,
+        title: body.title,
+        body: body.body,
+        authorId: user.identityId,
+        silent: Boolean(body.silent) || deferRobot,
+        robotMode
+      });
+      store.upsertTopicSubscription({ identityId: user.identityId, topicId: topic.id, mode: 'watching' });
+      store.upsertTopicRead({ identityId: user.identityId, topicId: topic.id, lastReadPostId: post.id, lastReadAt: post.created_at });
+
+      const session = store.ensureSession({ topicId: topic.id });
+      store.createSessionMessage(session.id, 'user', body.body, 'public');
+
+      const shouldDispatchRobot =
+        !body.silent && !deferRobot && robotMode !== 'off' && (robotMode !== 'mention' || hasRobotMention(body.body));
+
+      if (!shouldDispatchRobot) {
+        // Dispatch webhook for topic creation
+        webhookService.dispatch('topic.created', {
+          topic: {
+            id: topic.id,
+            forumId: topic.forum_id,
+            title: topic.title,
+            status: topic.status,
+            createdBy: topic.created_by,
+            createdAt: topic.created_at
+          },
+          post: {
+            id: post.id,
+            topicId: post.topic_id,
+            authorId: post.author_id,
+            body: post.body,
+            createdAt: post.created_at
+          }
+        });
+
+        return serializeTopicWithPiLineage(topic);
+      }
+
+      const topicRobotState = store.getRobotState(topic.id);
+      const shouldSteer = topicRobotState && topicRobotState.activity !== 'idle';
+      if (shouldSteer) {
+        await codex.steerUserMessage(topic.id, body.body, post.id, {
+          model: body.model?.trim() || null,
+          reasoningEffort: body.reasoningEffort?.trim() || null
+        });
+      } else {
+        await codex.sendUserMessage(topic.id, body.body, post.id, {
+          model: body.model?.trim() || null,
+          reasoningEffort: body.reasoningEffort?.trim() || null
+        });
+      }
+
+      // Dispatch webhook for topic creation
+      webhookService.dispatch('topic.created', {
+        topic: {
+          id: topic.id,
+          forumId: topic.forum_id,
+          title: topic.title,
+          status: topic.status,
+          createdBy: topic.created_by,
+          createdAt: topic.created_at
+        },
+        post: {
+          id: post.id,
+          topicId: post.topic_id,
+          authorId: post.author_id,
+          body: post.body,
+          createdAt: post.created_at
+        }
+      });
+
+      return serializeTopicWithPiLineage(topic);
+    }
+  );
+
+  app.get('/topics/:topicId', async (request) => {
+    const { topicId } = request.params as { topicId: string };
+    const topic = store.getTopic(topicId);
+    if (!topic) {
+      throw app.httpErrors.notFound('topic not found');
+    }
+    const forum = store.getForum(topic.forum_id);
+    if (!forum) {
+      throw app.httpErrors.notFound('forum not found');
+    }
+    const identity = getIdentityFromRequest(request);
+    if (!canViewTopic(topic, forum, identity)) {
+      throw app.httpErrors.notFound('topic not found');
+    }
+    return serializeTopicWithPiLineage(topic);
+  });
+
+  app.post('/topics/:topicId/handoff/draft', async (request) => {
+    const user = requireScope(getCurrentUser(request), 'write');
+    const { topicId } = request.params as { topicId: string };
+    const topic = store.getTopic(topicId);
+    if (!topic) throw app.httpErrors.notFound('topic not found');
+    const forum = store.getForum(topic.forum_id);
+    if (!forum) throw app.httpErrors.notFound('forum not found');
+    const identity = store.getIdentity(user.identityId);
+    if (!canViewTopic(topic, forum, identity)) throw app.httpErrors.notFound('topic not found');
+
+    const body = request.body as { goal?: string; model?: string | null; reasoningEffort?: string | null; systemPrompt?: string | null };
+    const goal = body.goal?.trim();
+    if (!goal) throw app.httpErrors.badRequest('goal is required');
+    if (body.systemPrompt && body.systemPrompt.length > 20000) throw app.httpErrors.badRequest('system prompt is too long');
+
+    return codex.generateHandoffDraft(topicId, {
+      goal,
+      model: body.model?.trim() || null,
+      reasoningEffort: body.reasoningEffort?.trim() || null,
+      systemPrompt: body.systemPrompt?.trim() || null,
+    });
+  });
+
+  app.post('/topics/:topicId/handoff', async (request) => {
+    const user = requireScope(getCurrentUser(request), 'write');
+    const { topicId } = request.params as { topicId: string };
+    const sourceTopic = store.getTopic(topicId);
+    if (!sourceTopic) throw app.httpErrors.notFound('topic not found');
+    const sourceForum = store.getForum(sourceTopic.forum_id);
+    if (!sourceForum) throw app.httpErrors.notFound('forum not found');
+    const identity = store.getIdentity(user.identityId);
+    if (!canViewTopic(sourceTopic, sourceForum, identity)) throw app.httpErrors.notFound('topic not found');
+
+    const body = request.body as {
+      title?: string;
+      draft?: string;
+      forumId?: string;
+      cwd?: string | null;
+      model?: string | null;
+      reasoningEffort?: string | null;
+    };
+    const title = body.title?.trim();
+    const draft = body.draft?.trim();
+    if (!title || title.length < 3) throw app.httpErrors.badRequest('title is required');
+    if (!draft || draft.length < 10) throw app.httpErrors.badRequest('draft is required');
+
+    const destinationForumId = body.forumId?.trim() || sourceTopic.forum_id;
+    const destinationForum = store.getForum(destinationForumId);
+    if (!destinationForum) throw app.httpErrors.notFound('destination forum not found');
+    if (!canCreateTopic(destinationForum, identity)) throw app.httpErrors.forbidden('Posting not allowed in destination forum');
+
+    const sourceLink = store.getPiSessionLinkByTopic(topicId);
+    if (!sourceLink) throw app.httpErrors.badRequest('Source topic is not linked to a canonical Pi session yet. Generate a draft first, then retry.');
+
+    const { topic, post } = store.createTopic({
+      forumId: destinationForumId,
+      title,
+      body: draft,
+      authorId: user.identityId,
+      silent: false,
+      robotMode: 'auto',
+    });
+    store.upsertTopicSubscription({ identityId: user.identityId, topicId: topic.id, mode: 'watching' });
+    store.upsertTopicRead({ identityId: user.identityId, topicId: topic.id, lastReadPostId: post.id, lastReadAt: post.created_at });
+    const session = store.ensureSession({ topicId: topic.id });
+    store.createSessionMessage(session.id, 'user', draft, 'public');
+
+    const cwd = body.cwd?.trim() || destinationForum.cwd || sourceLink.cwd || sourceForum.cwd || undefined;
+    await codex.createLinkedHandoffConversation(topic.id, {
+      parentPiSessionId: sourceLink.pi_session_id,
+      parentPiSessionPath: sourceLink.pi_session_path,
+      cwd: cwd ?? '',
+      model: body.model?.trim() || null,
+      reasoningEffort: body.reasoningEffort?.trim() || null,
+    });
+
+    await codex.sendUserMessage(topic.id, draft, post.id, {
+      model: body.model?.trim() || null,
+      reasoningEffort: body.reasoningEffort?.trim() || null,
+    });
+
+    webhookService.dispatch('topic.created', {
+      topic: { id: topic.id, forumId: topic.forum_id, title: topic.title, status: topic.status, createdBy: topic.created_by, createdAt: topic.created_at },
+      post: { id: post.id, topicId: post.topic_id, authorId: post.author_id, body: post.body, createdAt: post.created_at }
+    });
+
+    return { topic: serializeTopicWithPiLineage(topic), post: serializePost(post) };
+  });
+
+  app.patch('/topics/:topicId/status', async (request) => {
+    const { topicId } = request.params as { topicId: string };
+    const body = request.body as { status?: string };
+    if (!body?.status) {
+      throw app.httpErrors.badRequest('status is required');
+    }
+    if (!['open', 'locked', 'archived'].includes(body.status)) {
+      throw app.httpErrors.badRequest('status must be one of: open, locked, archived');
+    }
+    const existing = store.getTopic(topicId);
+    if (!existing) {
+      throw app.httpErrors.notFound('topic not found');
+    }
+    const forum = store.getForum(existing.forum_id);
+    if (!forum) {
+      throw app.httpErrors.notFound('forum not found');
+    }
+    const identity = getIdentityFromRequest(request);
+    if (!canViewTopic(existing, forum, identity)) {
+      throw app.httpErrors.notFound('topic not found');
+    }
+    requireModerator(request, existing.tenant_id);
+
+    try {
+      const topic = store.updateTopicStatus(topicId, body.status as 'open' | 'locked' | 'archived');
+      return serializeTopicWithPiLineage(topic);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'update failed';
+      if (message === 'topic not found') {
+        throw app.httpErrors.notFound(message);
+      }
+      throw app.httpErrors.badRequest(message);
+    }
+  });
+
+  app.patch('/topics/:topicId', async (request) => {
+    const { topicId } = request.params as { topicId: string };
+    const body = request.body as { title?: string };
+    if (!body?.title) {
+      throw app.httpErrors.badRequest('title is required');
+    }
+    const existing = store.getTopic(topicId);
+    if (!existing) {
+      throw app.httpErrors.notFound('topic not found');
+    }
+    const forum = store.getForum(existing.forum_id);
+    if (!forum) {
+      throw app.httpErrors.notFound('forum not found');
+    }
+    const identity = getIdentityFromRequest(request);
+    if (!canViewTopic(existing, forum, identity)) {
+      throw app.httpErrors.notFound('topic not found');
+    }
+    requireModerator(request, existing.tenant_id);
+
+    try {
+      const topic = store.updateTopicTitle(topicId, body.title);
+      return serializeTopicWithPiLineage(topic);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'update failed';
+      if (message === 'topic not found') {
+        throw app.httpErrors.notFound(message);
+      }
+      throw app.httpErrors.badRequest(message);
+    }
+  });
+
+  app.patch('/topics/:topicId/tags', async (request) => {
+    const { topicId } = request.params as { topicId: string };
+    const body = request.body as { sticky?: boolean; tags?: string[] };
+    const topic = store.getTopic(topicId);
+    if (!topic) {
+      throw app.httpErrors.notFound('topic not found');
+    }
+    const forum = store.getForum(topic.forum_id);
+    if (!forum) {
+      throw app.httpErrors.notFound('forum not found');
+    }
+    const identity = getIdentityFromRequest(request);
+    if (!canViewTopic(topic, forum, identity)) {
+      throw app.httpErrors.notFound('topic not found');
+    }
+    requireModerator(request, topic.tenant_id);
+
+    if (body?.sticky === undefined && !Array.isArray(body?.tags)) {
+      throw app.httpErrors.badRequest('sticky or tags is required');
+    }
+
+    const existingTags = JSON.parse(topic.tags_json) as string[];
+    let nextTags = Array.isArray(body.tags)
+      ? body.tags.filter((tag) => typeof tag === 'string' && tag.trim().length > 0)
+      : existingTags;
+
+    if (typeof body.sticky === 'boolean') {
+      const tagSet = new Set(nextTags);
+      if (body.sticky) {
+        tagSet.add('sticky');
+      } else {
+        tagSet.delete('sticky');
+      }
+      nextTags = Array.from(tagSet);
+    }
+
+    const updated = store.updateTopicTags(topicId, nextTags);
+    return serializeTopicWithPiLineage(updated);
+  });
+
+  app.delete('/topics/:topicId', async (request) => {
+    const { topicId } = request.params as { topicId: string };
+
+    try {
+      const topic = store.getTopic(topicId);
+      if (!topic) {
+        throw new Error('topic not found');
+      }
+      const forum = store.getForum(topic.forum_id);
+      if (!forum) {
+        throw new Error('forum not found');
+      }
+      const identity = getIdentityFromRequest(request);
+      if (!canViewTopic(topic, forum, identity)) {
+        throw new Error('topic not found');
+      }
+      requireModerator(request, topic.tenant_id);
+      store.deleteTopic(topicId);
+      return { ok: true };
+    } catch (err) {
+      // Preserve Fastify HTTP errors (e.g. forbidden/unauthorized) as-is.
+      const maybeHttpError = err as { statusCode?: number } | null;
+      if (maybeHttpError?.statusCode) {
+        throw err;
+      }
+      const message = err instanceof Error ? err.message : 'delete failed';
+      if (message === 'topic not found') {
+        throw app.httpErrors.notFound(message);
+      }
+      if (message === 'forum not found') {
+        throw app.httpErrors.notFound(message);
+      }
+      throw app.httpErrors.badRequest(message);
+    }
+  });
+
+  app.get('/topics/:topicId/posts', async (request) => {
+    const { topicId } = request.params as { topicId: string };
+    const page = Number((request.query as { page?: string }).page ?? 1);
+    const pageSize = Number((request.query as { pageSize?: string }).pageSize ?? 200);
+    const include = ((request.query as { include?: string }).include ?? '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+    const includeReactions = include.includes('reactions');
+    const topic = store.getTopic(topicId);
+    if (!topic) {
+      throw app.httpErrors.notFound('topic not found');
+    }
+    const forum = store.getForum(topic.forum_id);
+    if (!forum) {
+      throw app.httpErrors.notFound('forum not found');
+    }
+    const identity = getIdentityFromRequest(request);
+    if (!canViewTopic(topic, forum, identity)) {
+      throw app.httpErrors.notFound('topic not found');
+    }
+    const posts = store.listPosts(topicId, page, pageSize);
+    const total = store.countPostsByTopic(topicId);
+
+    const reactionCountsMap = includeReactions
+      ? store.getReactionCountsForPosts(posts.map((p) => p.id))
+      : new Map<string, { emoji: string; count: number }[]>();
+
+    return {
+      page,
+      pageSize,
+      total,
+      items: posts.map((row) => ({
+        ...serializePost(row),
+        reactionCounts: includeReactions ? reactionCountsMap.get(row.id) ?? [] : undefined
+      }))
+    };
+  });
+
+  app.post(
+    '/topics/:topicId/posts',
+    {
+      config: {
+        rateLimit: featureFlags.enableRateLimiting ? { max: 10, timeWindow: '1 minute' } : false
+      }
+    },
+    async (request) => {
+      // Require authentication for posting
+      const user = requireScope(getCurrentUser(request), 'write');
+
+      const { topicId } = request.params as { topicId: string };
+      const body = request.body as {
+        body?: string;
+        parentPostId?: string | null;
+        model?: string | null;
+        reasoningEffort?: string | null;
+        attachmentsPending?: boolean;
+        silent?: boolean;
+      };
+      if (!body?.body) {
+        throw app.httpErrors.badRequest('body is required');
+      }
+
+      const topic = store.getTopic(topicId);
+      if (!topic) {
+        throw app.httpErrors.notFound('topic not found');
+      }
+      const forum = store.getForum(topic.forum_id);
+      if (!forum) {
+        throw app.httpErrors.notFound('forum not found');
+      }
+      const identity = store.getIdentity(user.identityId);
+      if (!canPostTopic(topic, forum, identity)) {
+        throw app.httpErrors.forbidden('Posting not allowed in this topic');
+      }
+      if (topic.status === 'locked' || topic.status === 'archived') {
+        throw app.httpErrors.forbidden('topic is locked or archived');
+      }
+      const robotMode = resolveRobotMode(topic.robot_mode);
+      const deferRobot = Boolean(body.attachmentsPending) && !body.silent;
+      const shouldDispatchRobot =
+        !body.silent && !deferRobot && robotMode !== 'off' && (robotMode !== 'mention' || hasRobotMention(body.body ?? ''));
+
+      if (shouldDispatchRobot) {
+        const robotState = store.getRobotState(topicId);
+        if (robotState && robotState.activity !== 'idle') {
+          // Auto-recover stale robot states (configurable timeout), but allow steering.
+          const lastUpdated = new Date(robotState.last_updated_at).getTime();
+          const isStale = Date.now() - lastUpdated > ROBOT_STALE_MS;
+          if (isStale) {
+            const session = store.getSessionByTopic(topicId);
+            const threadId = session?.agent_thread_id ?? null;
+            if (threadId) {
+              try {
+                const loaded = await codex.isThreadLoaded(threadId);
+                if (loaded) {
+                  store.setRobotActivity(topicId, robotState.activity);
+                } else {
+                  store.setRobotActivity(topicId, 'idle');
+                }
+              } catch {
+                store.setRobotActivity(topicId, robotState.activity);
+              }
+            } else {
+              store.setRobotActivity(topicId, 'idle');
+            }
+          }
+        }
+      }
+
+      const post = store.createPost({
+        topicId,
+        body: body.body,
+        parentPostId: body.parentPostId ?? null,
+        authorId: user.identityId,
+        silent: Boolean(body.silent) || deferRobot
+      });
+      if (!store.getTopicSubscription(user.identityId, topicId)) {
+        store.upsertTopicSubscription({ identityId: user.identityId, topicId, mode: 'watching' });
+      }
+      store.upsertTopicRead({ identityId: user.identityId, topicId, lastReadPostId: post.id, lastReadAt: post.created_at });
+
+      const session = store.ensureSession({ topicId });
+      store.createSessionMessage(session.id, 'user', body.body, 'public');
+
+      if (!shouldDispatchRobot) {
+        // Dispatch webhook for post creation
+        webhookService.dispatch('post.created', {
+          post: {
+            id: post.id,
+            topicId: post.topic_id,
+            parentPostId: post.parent_post_id,
+            authorId: post.author_id,
+            body: post.body,
+            createdAt: post.created_at
+          }
+        });
+        return serializePost(post);
+      }
+
+      const replyRobotState = store.getRobotState(topicId);
+      const shouldSteerReply = replyRobotState && replyRobotState.activity !== 'idle';
+      try {
+        if (shouldSteerReply) {
+          await codex.steerUserMessage(topicId, body.body, post.id, {
+            model: body.model?.trim() || null,
+            reasoningEffort: body.reasoningEffort?.trim() || null
+          });
+        } else {
+          await codex.sendUserMessage(topicId, body.body, post.id, {
+            model: body.model?.trim() || null,
+            reasoningEffort: body.reasoningEffort?.trim() || null
+          });
+        }
+      } catch (dispatchErr) {
+        // Log but don't fail the post — the post is already created.
+        // The robot dispatch can be retried via "continue" or the health check.
+        request.log.error(
+          { err: dispatchErr },
+          `Robot dispatch failed for topic ${topicId}, post created but robot not started`
+        );
+      }
+
+      // Dispatch webhook for post creation
+      webhookService.dispatch('post.created', {
+        post: {
+          id: post.id,
+          topicId: post.topic_id,
+          parentPostId: post.parent_post_id,
+          authorId: post.author_id,
+          body: post.body,
+          createdAt: post.created_at
+        }
+      });
+
+      const subscriptions = store.listTopicSubscriptions(topicId, 'watching');
+      for (const subscription of subscriptions) {
+        if (subscription.identity_id === user.identityId) continue;
+        const notification = store.createNotification({
+          identityId: subscription.identity_id,
+          type: 'post.created',
+          actorId: user.identityId,
+          topicId,
+          postId: post.id,
+          payload: { topicId, postId: post.id }
+        });
+        emitNotification(subscription.identity_id, notification);
+      }
+
+      return serializePost(post);
+    }
+  );
+
+  app.post('/posts/:postId/dispatch', async (request) => {
+    const user = requireScope(getCurrentUser(request), 'write');
+    const { postId } = request.params as { postId: string };
+    const body = request.body as { model?: string | null; reasoningEffort?: string | null };
+
+    const post = store.getPost(postId);
+    if (!post) {
+      throw app.httpErrors.notFound('post not found');
+    }
+    requireTopicVisible(post.topic_id, request);
+
+    if (post.author_id !== user.identityId) {
+      throw app.httpErrors.forbidden('Only the post author can dispatch this post');
+    }
+    if (post.deleted_at) {
+      throw app.httpErrors.badRequest('post has been deleted');
+    }
+
+    const topic = store.getTopic(post.topic_id);
+    if (!topic) {
+      throw app.httpErrors.notFound('topic not found');
+    }
+    const forum = store.getForum(topic.forum_id);
+    if (!forum) {
+      throw app.httpErrors.notFound('forum not found');
+    }
+    const identity = store.getIdentity(user.identityId);
+    if (!canPostTopic(topic, forum, identity)) {
+      throw app.httpErrors.forbidden('Posting not allowed in this topic');
+    }
+    if (topic.status === 'locked' || topic.status === 'archived') {
+      throw app.httpErrors.forbidden('topic is locked or archived');
+    }
+
+    const robotMode = resolveRobotMode(topic.robot_mode);
+    const shouldDispatchRobot =
+      robotMode !== 'off' && (robotMode !== 'mention' || hasRobotMention(post.body ?? ''));
+
+    if (!shouldDispatchRobot) {
+      if (post.silent) {
+        store.setPostSilent(postId, false);
+      }
+      return { ok: true, dispatched: false, post: serializePost(store.getPost(postId)!) };
+    }
+
+    const robotState = store.getRobotState(topic.id);
+    if (robotState && robotState.activity !== 'idle') {
+      // Auto-recover stale robot states (configurable timeout).
+      const lastUpdated = new Date(robotState.last_updated_at).getTime();
+      const isStale = Date.now() - lastUpdated > ROBOT_STALE_MS;
+      if (isStale) {
+        const session = store.getSessionByTopic(topic.id);
+        const threadId = session?.agent_thread_id ?? null;
+        if (threadId) {
+          try {
+            const loaded = await codex.isThreadLoaded(threadId);
+            if (loaded) {
+              store.setRobotActivity(topic.id, robotState.activity);
+              throw app.httpErrors.badRequest('Robot is busy; interrupt or wait before continuing.');
+            }
+          } catch {
+            store.setRobotActivity(topic.id, robotState.activity);
+            throw app.httpErrors.badRequest('Robot is busy; interrupt or wait before continuing.');
+          }
+        }
+        store.setRobotActivity(topic.id, 'idle');
+      } else {
+        throw app.httpErrors.badRequest('Robot is busy; interrupt or wait before continuing.');
+      }
+    }
+
+    if (post.silent) {
+      store.setPostSilent(postId, false);
+    }
+
+    const replyRobotState = store.getRobotState(topic.id);
+    const shouldSteerReply = replyRobotState && replyRobotState.activity !== 'idle';
+    if (shouldSteerReply) {
+      await codex.steerUserMessage(topic.id, post.body, post.id, {
+        model: body.model?.trim() || null,
+        reasoningEffort: body.reasoningEffort?.trim() || null
+      });
+    } else {
+      await codex.sendUserMessage(topic.id, post.body, post.id, {
+        model: body.model?.trim() || null,
+        reasoningEffort: body.reasoningEffort?.trim() || null
+      });
+    }
+
+    return { ok: true, dispatched: true, post: serializePost(store.getPost(postId)!) };
+  });
+
+  app.patch('/posts/:postId', async (request) => {
+    const user = requireScope(getCurrentUser(request), 'write');
+    const { postId } = request.params as { postId: string };
+    const body = request.body as { body?: string };
+    if (!body?.body) {
+      throw app.httpErrors.badRequest('body is required');
+    }
+
+    const existingPost = store.getPost(postId);
+    if (!existingPost) {
+      throw app.httpErrors.notFound('post not found');
+    }
+    requireTopicVisible(existingPost.topic_id, request);
+    if (existingPost.author_id !== user.identityId) {
+      // Intentionally do not allow admins/moderators to edit other users' posts.
+      throw app.httpErrors.forbidden('Only the post author can edit this post');
+    }
+
+    const topic = store.getTopic(existingPost.topic_id);
+    if (topic && (topic.status === 'locked' || topic.status === 'archived')) {
+      throw app.httpErrors.forbidden('topic is locked or archived');
+    }
+
+    try {
+      const post = store.updatePost(postId, { body: body.body });
+
+      // Dispatch webhook for post update
+      webhookService.dispatch('post.updated', {
+        post: {
+          id: post.id,
+          topicId: post.topic_id,
+          parentPostId: post.parent_post_id,
+          authorId: post.author_id,
+          body: post.body,
+          createdAt: post.created_at,
+          editedAt: post.edited_at
+        }
+      });
+
+      return serializePost(post);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'update failed';
+      throw app.httpErrors.badRequest(message);
+    }
+  });
+
+  app.delete('/posts/:postId', async (request) => {
+    const user = requireScope(getCurrentUser(request), 'write');
+    const { postId } = request.params as { postId: string };
+
+    const existingPost = store.getPost(postId);
+    if (!existingPost) {
+      throw app.httpErrors.notFound('post not found');
+    }
+    requireTopicVisible(existingPost.topic_id, request);
+    if (existingPost.author_id !== user.identityId) {
+      // Deleting someone else's post is restricted to admins.
+      requireAdmin(request);
+    }
+
+    const topic = store.getTopic(existingPost.topic_id);
+    if (topic && (topic.status === 'locked' || topic.status === 'archived')) {
+      throw app.httpErrors.forbidden('topic is locked or archived');
+    }
+
+    try {
+      const post = store.softDeletePost(postId);
+
+      // Dispatch webhook for post deletion
+      webhookService.dispatch('post.deleted', {
+        post: {
+          id: post.id,
+          topicId: post.topic_id,
+          parentPostId: post.parent_post_id,
+          authorId: post.author_id,
+          deletedAt: post.deleted_at
+        }
+      });
+
+      return serializePost(post);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'delete failed';
+      throw app.httpErrors.badRequest(message);
+    }
+  });
+
+  // Reaction endpoints
+  app.post('/posts/:postId/reactions', async (request) => {
+    const { postId } = request.params as { postId: string };
+    const body = request.body as { emoji?: string };
+
+    if (!body?.emoji) {
+      throw app.httpErrors.badRequest('emoji is required');
+    }
+
+    requirePostVisible(postId, request);
+
+    // Use current user or fall back to web identity
+    const user = getCurrentUser(request);
+    const identityId = user?.identityId ?? webIdentityId;
+
+    const reaction = store.addReaction(postId, identityId, body.emoji);
+
+    return {
+      id: reaction.id,
+      postId: reaction.post_id,
+      identityId: reaction.identity_id,
+      emoji: reaction.emoji,
+      createdAt: reaction.created_at
+    };
+  });
+
+  app.delete('/posts/:postId/reactions/:emoji', async (request) => {
+    const { postId, emoji } = request.params as { postId: string; emoji: string };
+
+    requirePostVisible(postId, request);
+
+    // Use current user or fall back to web identity
+    const user = getCurrentUser(request);
+    const identityId = user?.identityId ?? webIdentityId;
+
+    store.removeReaction(postId, identityId, emoji);
+
+    return { ok: true };
+  });
+
+  app.get('/posts/:postId/reactions', async (request) => {
+    const { postId } = request.params as { postId: string };
+    requirePostVisible(postId, request);
+
+    const reactions = store.listReactionsByPost(postId);
+    return reactions.map((reaction) => ({
+      id: reaction.id,
+      postId: reaction.post_id,
+      identityId: reaction.identity_id,
+      emoji: reaction.emoji,
+      createdAt: reaction.created_at
+    }));
+  });
+
+  app.get('/posts/:postId/reactions/counts', async (request) => {
+    const { postId } = request.params as { postId: string };
+    requirePostVisible(postId, request);
+
+    const counts = store.getReactionCounts(postId);
+    return counts;
+  });
+}
+

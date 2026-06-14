@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "isolatedDeclarations": false,
+    "noEmit": true,
+    "rootDir": "${configDir}",
+    "tsBuildInfoFile": "${configDir}/dist/configs.tsbuildinfo"
+  },
+  "extends": "./settings.json",
+  "include": [
+    "${configDir}/*.config.ts",
+    "${configDir}/*.config.mts",
+    "${configDir}/env.d.ts",
+    "${configDir}/vite-env.d.ts",
+    "${configDir}/vitest.shims.d.ts"
+  ]
+}

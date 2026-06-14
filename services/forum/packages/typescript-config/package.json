@@ -1,0 +1,21 @@
+{
+  "author": "Kevin Hallmark <dollarwise@littleblackhat.com>",
+  "description": "Shared TypeScript configurations for Magus Mark",
+  "devDependencies": {
+    "@vue/tsconfig": "^0.8.1"
+  },
+  "exports": {
+    "./config/*.json": "./config/*.json"
+  },
+  "files": [
+    "config/**/*.json",
+    "README.md"
+  ],
+  "license": "MIT",
+  "name": "@irrigationreal/typescript-config",
+  "private": true,
+  "scripts": {
+    "clean": "rm -rf node_modules && rm -rf dist && rm -f .eslintcache"
+  },
+  "version": "0.1.0"
+}

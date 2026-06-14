@@ -1,0 +1,18 @@
+{
+  "extends": "@irrigationreal/typescript-config/config/app.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "src/**/*.vue",
+    "src/**/*.d.ts",
+    "env.d.ts",
+    "vite-env.d.ts",
+    "vitest.shims.d.ts"
+  ]
+}

@@ -1,0 +1,123 @@
+# =============================================================================
+# Codex Forum - Multi-stage Docker Build
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Stage 1: Base image with pnpm
+# -----------------------------------------------------------------------------
+FROM node:20-slim AS base
+
+# Install pnpm
+RUN corepack enable && corepack prepare pnpm@10.26.2 --activate
+
+# Install build dependencies for native modules (better-sqlite3)
+RUN apt-get update && apt-get install -y \
+    python3 \
+    make \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy workspace configuration
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+
+# Copy all package.json files to enable pnpm to resolve workspace dependencies
+COPY packages/typescript-config/package.json ./packages/typescript-config/
+COPY packages/eslint-config/package.json ./packages/eslint-config/
+COPY packages/contracts/package.json ./packages/contracts/
+COPY packages/core/package.json ./packages/core/
+COPY packages/adapters/package.json ./packages/adapters/
+COPY packages/server/package.json ./packages/server/
+COPY packages/cli/package.json ./packages/cli/
+COPY apps/codex-forum/package.json ./apps/codex-forum/
+
+# Install all dependencies
+RUN pnpm install --frozen-lockfile
+
+# -----------------------------------------------------------------------------
+# Stage 2: Build packages
+# -----------------------------------------------------------------------------
+FROM base AS builder
+
+# Copy source files
+COPY packages/ ./packages/
+COPY apps/ ./apps/
+COPY tsconfig.json ./
+
+# Build packages first (dependencies for apps)
+RUN pnpm run build:packages
+
+# Build frontend application
+RUN pnpm run build:apps
+
+# -----------------------------------------------------------------------------
+# Stage 3: Production runtime
+# -----------------------------------------------------------------------------
+FROM node:20-slim AS runtime
+
+# Install pnpm for running the server
+RUN corepack enable && corepack prepare pnpm@10.26.2 --activate
+
+# Install runtime dependencies for better-sqlite3
+RUN apt-get update && apt-get install -y \
+    python3 \
+    make \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user for security
+RUN groupadd --gid 1001 codex && \
+    useradd --uid 1001 --gid 1001 -m codex
+
+WORKDIR /app
+
+# Copy workspace configuration
+COPY --from=builder /app/package.json /app/pnpm-lock.yaml /app/pnpm-workspace.yaml ./
+COPY --from=builder /app/packages/typescript-config/package.json ./packages/typescript-config/
+COPY --from=builder /app/packages/eslint-config/package.json ./packages/eslint-config/
+COPY --from=builder /app/packages/contracts/package.json ./packages/contracts/
+COPY --from=builder /app/packages/core/package.json ./packages/core/
+COPY --from=builder /app/packages/adapters/package.json ./packages/adapters/
+COPY --from=builder /app/packages/server/package.json ./packages/server/
+COPY --from=builder /app/apps/codex-forum/package.json ./apps/codex-forum/
+
+# Install production dependencies only
+RUN pnpm install --frozen-lockfile
+
+# Copy built packages
+COPY --from=builder /app/packages/typescript-config/ ./packages/typescript-config/
+COPY --from=builder /app/packages/eslint-config/ ./packages/eslint-config/
+COPY --from=builder /app/packages/contracts/ ./packages/contracts/
+COPY --from=builder /app/packages/core/ ./packages/core/
+COPY --from=builder /app/packages/adapters/ ./packages/adapters/
+COPY --from=builder /app/packages/server/ ./packages/server/
+
+# Copy built frontend to be served as static files
+COPY --from=builder /app/apps/codex-forum/dist/ ./public/
+
+# Create data directories with proper ownership
+RUN mkdir -p /var/lib/codex-forum/uploads && \
+    chown -R codex:codex /var/lib/codex-forum && \
+    chown -R codex:codex /app
+
+# Switch to non-root user
+USER codex
+
+# Environment variables with defaults
+ENV NODE_ENV=production
+ENV CODEX_FORUM_PORT=4310
+ENV CODEX_FORUM_DB=/var/lib/codex-forum/data.db
+ENV CODEX_FORUM_UPLOADS_DIR=/var/lib/codex-forum/uploads
+ENV CODEX_FORUM_BASE_URL=http://localhost:4310
+
+# Expose the server port
+EXPOSE 4310
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD node -e "fetch('http://localhost:4310/healthz').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"
+
+# Start the server
+WORKDIR /app/packages/server
+CMD ["pnpm", "start"]

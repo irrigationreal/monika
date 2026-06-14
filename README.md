@@ -31,6 +31,9 @@ The container bundles:
 - **AgentLogs CLI** — manual sharing of selected Pi sessions
 - **Persona files** — SOUL.md, STYLE.md, REGISTER.md, topic addenda
 
+Optional companion service:
+- **Forum frontend** — `services/forum`, run through `compose.forum.yaml`, talks to Monika through `agentd` while keeping Pi JSONL as canonical state
+
 ### Modes
 
 **Host mode**: Container runs attached to the host. Pi's bash tool executes commands
@@ -152,7 +155,11 @@ scripts/agentlogs-monika  AgentLogs wrapper with dedicated writable HOME
 compose.yaml           Host mode deployment (stanza)
 compose.test.yaml      Standalone mode (isolated)
 compose.local.yaml     Standalone mode with runtime persistence
+compose.forum.yaml     Optional forum frontend overlay
 services/memstore/     memstore Go source
+services/agentd/       Pi-backed HTTP/SSE daemon for alternate frontends
+services/forum/        Monika forum frontend
+docs/forum.md          Forum/agentd architecture notes
 config/extensions/     Pi extensions (stateful-memory, delegate, ssh, AgentLogs upload, etc.)
 config/persona/        Persona files (SOUL, STYLE, REGISTER, topics)
 config/settings.json   Pi settings with shellPath configured

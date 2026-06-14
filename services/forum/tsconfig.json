@@ -1,0 +1,41 @@
+{
+  "extends": "@irrigationreal/typescript-config/config/base.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "outDir": "./dist",
+    "rootDir": "./",
+    "tsBuildInfoFile": "./dist/tsconfig.tsbuildinfo"
+  },
+  "include": [
+    "./scripts/**/*.ts",
+    "eslint.config.ts",
+    "prettier.config.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "**/node_modules/**/*",
+    "**/dist/**/*",
+    "**/node_modules/.pnpm/**/*"
+  ],
+  "references": [
+    {
+      "path": "./apps/codex-forum/tsconfig.json"
+    },
+    {
+      "path": "./packages/core/tsconfig.json"
+    },
+    {
+      "path": "./packages/contracts/tsconfig.json"
+    },
+    {
+      "path": "./packages/adapters/tsconfig.json"
+    },
+    {
+      "path": "./packages/server/tsconfig.json"
+    },
+    {
+      "path": "./packages/cli/tsconfig.json"
+    }
+  ]
+}

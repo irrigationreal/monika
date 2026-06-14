@@ -1,0 +1,145 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "description": "Renovate configuration for DollarWise monorepo",
+  "schedule": ["after 10pm on saturday", "before 10pm on sunday"],
+  "timezone": "America/New_York",
+  "labels": ["dependencies", "renovate"],
+  "prHourlyLimit": 5,
+  "prConcurrentLimit": 10,
+  "commitMessagePrefix": "chore(deps):",
+  "commitMessageAction": "update",
+  "commitMessageTopic": "{{depName}}",
+  "commitMessageExtra": "to {{#if isPinDigest}}{{{newDigestShort}}}{{else}}{{#if isMajor}}v{{{newMajor}}}{{else}}{{#if isSingleVersion}}v{{{newVersion}}}{{else}}{{{newValue}}}{{/if}}{{/if}}{{/if}}",
+  "packageRules": [
+    {
+      "description": "Group all non-major dependency updates",
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "all non-major dependencies",
+      "groupSlug": "all-minor-patch",
+      "excludePackagePatterns": [
+        "vitest",
+        "playwright",
+        "@testing-library",
+        "eslint",
+        "prettier",
+        "vue",
+        "vue-router",
+        "pinia",
+        "@vitejs",
+        "vite-plugin",
+        "react",
+        "react-dom",
+        "react-router",
+        "typescript",
+        "@types/"
+      ]
+    },
+    {
+      "description": "Group testing libraries",
+      "matchPackagePatterns": [
+        "vitest",
+        "@vitest/",
+        "playwright",
+        "@playwright/",
+        "@testing-library/"
+      ],
+      "groupName": "testing libraries",
+      "groupSlug": "testing",
+      "labels": ["dependencies", "renovate", "testing"]
+    },
+    {
+      "description": "Group linting tools",
+      "matchPackagePatterns": [
+        "eslint",
+        "@eslint/",
+        "eslint-plugin-",
+        "eslint-config-",
+        "@typescript-eslint/",
+        "prettier",
+        "prettier-plugin-",
+        "@prettier/"
+      ],
+      "groupName": "linting tools",
+      "groupSlug": "linting",
+      "labels": ["dependencies", "renovate", "linting"]
+    },
+    {
+      "description": "Group Vue ecosystem packages",
+      "matchPackagePatterns": [
+        "^vue$",
+        "^vue-",
+        "@vue/",
+        "vue-router",
+        "^pinia",
+        "@pinia/",
+        "@vitejs/plugin-vue",
+        "vite-plugin-vue-",
+        "unplugin-vue-"
+      ],
+      "groupName": "Vue ecosystem",
+      "groupSlug": "vue",
+      "labels": ["dependencies", "renovate", "vue"]
+    },
+    {
+      "description": "Group React ecosystem packages",
+      "matchPackagePatterns": [
+        "^react$",
+        "^react-dom$",
+        "^react-router",
+        "@types/react",
+        "@vitejs/plugin-react"
+      ],
+      "groupName": "React ecosystem",
+      "groupSlug": "react",
+      "labels": ["dependencies", "renovate", "react"]
+    },
+    {
+      "description": "Group TypeScript and type definitions",
+      "matchPackagePatterns": ["^typescript$", "^@types/"],
+      "groupName": "TypeScript and types",
+      "groupSlug": "typescript",
+      "labels": ["dependencies", "renovate", "typescript"]
+    },
+    {
+      "description": "Pin devDependencies",
+      "matchDepTypes": ["devDependencies"],
+      "rangeStrategy": "pin"
+    },
+    {
+      "description": "Use ranges for production dependencies",
+      "matchDepTypes": ["dependencies"],
+      "rangeStrategy": "replace"
+    },
+    {
+      "description": "Auto-merge minor and patch updates with passing CI",
+      "matchUpdateTypes": ["minor", "patch"],
+      "automerge": true,
+      "automergeType": "pr",
+      "automergeStrategy": "squash",
+      "platformAutomerge": true
+    },
+    {
+      "description": "Do not auto-merge major updates",
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "labels": ["dependencies", "renovate", "major"]
+    },
+    {
+      "description": "Ignore problematic packages",
+      "matchPackageNames": [],
+      "enabled": false
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "labels": ["dependencies", "security"],
+    "schedule": ["at any time"]
+  },
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 5am on monday"],
+    "commitMessageAction": "maintain",
+    "commitMessageTopic": "lock files"
+  }
+}

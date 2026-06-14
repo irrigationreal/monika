@@ -1,7 +1,6 @@
-# Monika agentd + forum integration notes
+# Monika forum frontend
 
-This branch uses `codex-forum` as an alternate web frontend for Monika/Pi
-sessions while keeping all agent execution inside the Monika runtime container.
+Monika includes a forum frontend for Monika/Pi sessions while keeping all agent execution inside the Monika runtime container.
 
 ## Architecture
 
@@ -17,10 +16,17 @@ Pi JSONL sessions remain canonical for agent conversation state. Forum SQLite is
 a projection/metadata layer: topics/posts, identities, uploads, mapping tables,
 reactions, sync state, and UI metadata.
 
-## Branches
+## Provenance
 
-- `~/repos/monika`: `experiment/agentd-forum-backend`
-- `~/repos/monika-forum`: `experiment/pi-agentd-backend`
+The forum service lives at `services/forum`. It was imported from the archived
+Monika-specific forum repository after PR https://github.com/irrigationreal/monika-forum/pull/1,
+merge commit `bba058013b1a59d295373f949f4d4f25100e174b`.
+
+That repository repurposed the Irrigate Collective Codex Forum project as the
+Monika frontend. Upstream project: https://github.com/irrigationreal/codex-forum
+
+Future development should happen in this repository. The old `monika-forum`
+repository is retained as historical provenance.
 
 ## agentd
 
@@ -88,13 +94,13 @@ maps Pi SDK events into ECHS-like events consumed by the forum bridge:
 The live forum DB is `/home/monika/.pi/forum/data.db`; uploads are under
 `/home/monika/.pi/forum/uploads`.
 
-Implemented in monika-forum:
+Implemented in `services/forum`:
 
 - `pi_import_runs`, `pi_session_links`, and `pi_message_links` tables.
 - CLI historical importer:
 
   ```bash
-  cd ~/repos/monika-forum
+  cd ~/repos/monika/services/forum
   corepack pnpm import:pi-sessions -- \
     --agentd http://127.0.0.1:7724 \
     --db /home/monika/.pi/forum/data.db

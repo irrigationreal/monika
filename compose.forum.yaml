@@ -10,8 +10,9 @@
 
 services:
   forum:
+    image: ghcr.io/irrigationreal/monika-forum:latest
     build:
-      context: ../monika-forum
+      context: ./services/forum
       dockerfile: Dockerfile
     container_name: monika-forum
     restart: unless-stopped

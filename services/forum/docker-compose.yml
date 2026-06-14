@@ -1,0 +1,142 @@
+# =============================================================================
+# Codex Forum - Docker Compose Configuration
+# =============================================================================
+#
+# Usage:
+#   Development:  docker compose up
+#   Production:   docker compose --profile production up -d
+#   With Redis:   docker compose --profile redis up -d
+#
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # Codex Forum Server
+  # ---------------------------------------------------------------------------
+  codex-forum:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: codex-forum
+    restart: unless-stopped
+    ports:
+      - "${CODEX_FORUM_PORT:-4310}:4310"
+    environment:
+      # Server configuration
+      - NODE_ENV=${NODE_ENV:-production}
+      - CODEX_FORUM_PORT=4310
+      - CODEX_FORUM_DB=/var/lib/codex-forum/data.db
+      - CODEX_FORUM_BASE_URL=${CODEX_FORUM_BASE_URL:-http://localhost:4310}
+      - CODEX_FORUM_API_PREFIX=${CODEX_FORUM_API_PREFIX:-/api}
+      - CODEX_FORUM_UPLOADS_DIR=/mnt/storage/forum-attachments
+
+      # OIDC / SSO (optional)
+      - CODEX_FORUM_OIDC_ENABLED=${CODEX_FORUM_OIDC_ENABLED:-0}
+      - CODEX_FORUM_OIDC_PROVIDER_KEY=${CODEX_FORUM_OIDC_PROVIDER_KEY:-oidc}
+      - CODEX_FORUM_OIDC_ISSUER_URL=${CODEX_FORUM_OIDC_ISSUER_URL:-}
+      - CODEX_FORUM_OIDC_CLIENT_ID=${CODEX_FORUM_OIDC_CLIENT_ID:-}
+      - CODEX_FORUM_OIDC_CLIENT_SECRET=${CODEX_FORUM_OIDC_CLIENT_SECRET:-}
+      - CODEX_FORUM_OIDC_SCOPES=${CODEX_FORUM_OIDC_SCOPES:-openid profile email}
+      - CODEX_FORUM_OIDC_PROMPT=${CODEX_FORUM_OIDC_PROMPT:-}
+      - CODEX_FORUM_OIDC_REDIRECT_URL=${CODEX_FORUM_OIDC_REDIRECT_URL:-}
+
+      # ECHS configuration
+      - CODEX_FORUM_ECHS_BASE_URL=${CODEX_FORUM_ECHS_BASE_URL:-}
+      - CODEX_FORUM_ECHS_API_TOKEN=${CODEX_FORUM_ECHS_API_TOKEN:-}
+      - CODEX_FORUM_ECHS_MODEL=${CODEX_FORUM_ECHS_MODEL:-gpt-5.2}
+      - CODEX_FORUM_ECHS_REASONING_EFFORT=${CODEX_FORUM_ECHS_REASONING_EFFORT:-medium}
+      - CODEX_WORK_DIR=${CODEX_WORK_DIR:-/root/work}
+      - CODEX_FORUM_BASE_INSTRUCTIONS=${CODEX_FORUM_BASE_INSTRUCTIONS:-}
+      - CODEX_FORUM_DEVELOPER_INSTRUCTIONS=${CODEX_FORUM_DEVELOPER_INSTRUCTIONS:-}
+      - CODEX_FORUM_MAX_CONCURRENT_TURNS=${CODEX_FORUM_MAX_CONCURRENT_TURNS:-10}
+
+
+      # Feature flags
+      - CODEX_FORUM_REDIS_STREAM_BUS=${CODEX_FORUM_REDIS_STREAM_BUS:-0}
+      - CODEX_FORUM_ENABLE_AUTH=${CODEX_FORUM_ENABLE_AUTH:-0}
+      - CODEX_FORUM_ENABLE_RATE_LIMITING=${CODEX_FORUM_ENABLE_RATE_LIMITING:-0}
+      - CODEX_FORUM_ENABLE_SEARCH=${CODEX_FORUM_ENABLE_SEARCH:-0}
+      - CODEX_FORUM_CORS_ORIGINS=${CODEX_FORUM_CORS_ORIGINS:-}
+      - CODEX_FORUM_CORS_CREDENTIALS=${CODEX_FORUM_CORS_CREDENTIALS:-0}
+
+      # Discord adapter (optional)
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:-}
+      - DISCORD_GUILD_ID=${DISCORD_GUILD_ID:-}
+
+      # Matrix adapter (optional)
+      - MATRIX_HOMESERVER_URL=${MATRIX_HOMESERVER_URL:-}
+      - MATRIX_ACCESS_TOKEN=${MATRIX_ACCESS_TOKEN:-}
+      - MATRIX_USER_ID=${MATRIX_USER_ID:-}
+
+      # Redis connection (when using Redis StreamBus)
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+
+      # SMTP configuration (for auth verification emails)
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_SECURE=${SMTP_SECURE:-false}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASS=${SMTP_PASS:-}
+      - SMTP_FROM=${SMTP_FROM:-noreply@codex-forum.local}
+    volumes:
+      # Persist SQLite database
+      - codex-forum-data:/var/lib/codex-forum
+      # Persist uploads on host filesystem
+      - /mnt/storage/forum-attachments:/mnt/storage/forum-attachments
+      # Mount work directory for robot operations (optional)
+      - ${CODEX_WORK_DIR_HOST:-./work}:/root/work
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:4310/healthz').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      redis:
+        condition: service_healthy
+        required: false
+    networks:
+      - codex-forum-network
+
+  # ---------------------------------------------------------------------------
+  # Redis (Optional - for production StreamBus)
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: codex-forum-redis
+    restart: unless-stopped
+    profiles:
+      - redis
+      - production
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - codex-forum-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    networks:
+      - codex-forum-network
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  codex-forum-data:
+    driver: local
+    name: codex-forum-data
+  codex-forum-redis:
+    driver: local
+    name: codex-forum-redis
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  codex-forum-network:
+    driver: bridge
+    name: codex-forum-network

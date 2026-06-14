@@ -1,0 +1,32 @@
+{
+  "name": "@irrigationreal/codex-forum-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "module": "./src/index.ts",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./src/index.ts",
+      "require": "./src/index.ts"
+    }
+  },
+  "dependencies": {
+    "@irrigationreal/codex-forum-contracts": "workspace:*"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf node_modules dist .eslintcache",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@irrigationreal/typescript-config": "workspace:*",
+    "@types/node": "^24.10.4",
+    "typescript": "~5.9.3",
+    "vitest": "^4.0.16"
+  }
+}

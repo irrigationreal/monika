@@ -1,0 +1,449 @@
+{
+  "extensions": {
+    "recommendations": [
+      "antfu.vite",
+      "austenc.tailwind-docs",
+      "bradlc.vscode-tailwindcss",
+      "dbaeumer.vscode-eslint",
+      "esbenp.prettier-vscode",
+      "redhat.vscode-yaml",
+      "vue.volar",
+      "vitest.explorer",
+      "vscjava.vscode-java-dependency",
+      "yoavbls.pretty-ts-errors",
+      "csstools.postcss",
+      "davidanson.vscode-markdownlint",
+      "bierner.markdown-mermaid",
+      "redhat.java",
+      "wix.vscode-import-cost",
+      "ms-vscode.hexeditor",
+      "vscjava.vscode-gradle",
+      "vscjava.vscode-java-pack",
+      "pomdtr.excalidraw-editor",
+      "editorconfig.editorconfig"
+    ]
+  },
+  "folders": [
+    {
+      "path": "."
+    }
+  ],
+  "settings": {
+    "[json]": {
+      "editor.defaultFormatter": "esbenp.prettier-vscode"
+    },
+    "[vue]": {
+      "editor.defaultFormatter": "esbenp.prettier-vscode"
+    },
+    "css.lint.unknownAtRules": "ignore",
+    "editor.bracketPairColorization.enabled": true,
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "editor.formatOnSave": true,
+    "editor.guides.bracketPairs": "active",
+    "editor.linkedEditing": true,
+    "eslint.codeActionsOnSave.mode": "problems",
+    "eslint.debug": false,
+    "eslint.lintTask.enable": true,
+    "eslint.timeBudget.onValidation": {
+      "error": 20000,
+      "warn": 10000
+    },
+    "eslint.useESLintClass": true,
+    "eslint.useFlatConfig": true,
+    "eslint.workingDirectories": ["${workspaceFolder}/apps/*", "${workspaceFolder}/packages/*"],
+    "explorer.fileNesting.enabled": true,
+    "explorer.fileNesting.expand": false,
+    "explorer.fileNesting.patterns": {
+      "*.js": "${capture}.test.js, ${capture}.spec.js, ${capture}.js.map",
+      "*.mjs": "${capture}.test.mjs, ${capture}.spec.mjs, ${capture}.mjs.map, ${capture}.d.ts",
+      "*.ts": "${capture}.test.ts, ${capture}.spec.ts, ${capture}.d.ts, ${capture}.ts.map",
+      "*.tsx": "${capture}.test.tsx, ${capture}.spec.tsx, ${capture}.tsx.map",
+      "*.vue": "${capture}.test.ts, ${capture}.spec.ts, ${capture}.stories.ts, ${capture}.docs.mdx, ${capture}.types.ts",
+      "package.json": "package-lock.json, yarn.lock, pnpm-lock.yaml, .npmrc",
+      "tsconfig.json": "tsconfig.*.json"
+    },
+    "files.eol": "\n",
+    "files.exclude": {
+      "**/.DS_Store": true,
+      "**/.git": true,
+      "**/.hg": true,
+      "**/.svn": true,
+      "**/CVS": true,
+      "**/Thumbs.db": true
+    },
+    "files.watcherExclude": {
+      "**/.gradle/**": true,
+      "**/.pnpm/**": true,
+      "**/android/.gradle/**": true,
+      "**/build/**": true,
+      "**/coverage/**": true,
+      "**/dist/**": true,
+      "**/documentation/**": true,
+      "**/epic-reference/**": true,
+      "**/ios/Pods/**": true,
+      "**/lcov-report/**": true,
+      "**/node_modules/**": true,
+      "**/out/**": true,
+      "**/public/build/**": true,
+      "**/reference-code/**": true,
+      "**/vendor/**": true
+    },
+    "gradle.nestedProjects": false,
+    "java.autobuild.enabled": false,
+    "java.configuration.updateBuildConfiguration": "disabled",
+    "java.import.exclusions": ["**/.metadata/**", "**/archetype-resources/**", "**/META-INF/maven/**", "**/.pnpm/**"],
+    "java.import.gradle.enabled": true,
+    "java.import.gradle.offline.enabled": false,
+    "java.import.generatesMetadataFilesAtProjectRoot": false,
+    "java.project.resourceFilters": [".git", ".pnpm"],
+    "java.project.sourcePaths": ["apps/{{APP_NAME}}/android/app/src/main/java"],
+    "java.server.launchMode": "Standard",
+    "javascript.preferences.importModuleSpecifier": "relative",
+    "js/ts.implicitProjectConfig.checkJs": true,
+    "js/ts.implicitProjectConfig.experimentalDecorators": false,
+    "js/ts.implicitProjectConfig.module": "ESNext",
+    "js/ts.implicitProjectConfig.target": "ESNext",
+    "json.format.keepLines": true,
+    "json.schemaDownload.enable": true,
+    "json.schemas": [
+      {
+        "fileMatch": ["./nx.json"],
+        "url": "node_modules/nx/schemas/nx-schema.json"
+      },
+      {
+        "fileMatch": ["**/project.json"],
+        "url": "node_modules/nx/schemas/project-schema.json"
+      },
+      {
+        "fileMatch": ["**/tsconfig.*.json"],
+        "url": "https://json.schemastore.org/tsconfig"
+      }
+    ],
+    "peacock.color": "#192b57",
+    "prettier.configPath": "./prettier.config.js",
+    "prettier.enableDebugLogs": false,
+    "prettier.requireConfig": true,
+    "prettier.resolveGlobalModules": false,
+    "search.exclude": {
+      "**/.*": true,
+      "**/.gradle": true,
+      "**/.pnpm": true,
+      "**/bower_components": true,
+      "**/build": true,
+      "**/code-search": true,
+      "**/coverage": true,
+      "**/dist": true,
+      "**/documentation": true,
+      "**/node_modules": true,
+      "**/postgres-data": true,
+      "**/redis-data": true,
+      "**/storybook-static": true,
+      "**/temp": true,
+      "**/vendor": true
+    },
+    "search.smartCase": true,
+    "sqltools.connections": [],
+    "tailwindCSS.emmetCompletions": true,
+    "tailwindCSS.experimental.classRegex": [["c\\(([^)]*)\\)", "([^\"]+)"]],
+    "tailwindCSS.includeLanguages": {
+      "vue": "html",
+      "vue-html": "html"
+    },
+    "typescript.check.npmIsInstalled": false,
+    "typescript.disableAutomaticTypeAcquisition": true,
+    "typescript.enablePromptUseWorkspaceTsdk": true,
+    "typescript.format.insertSpaceAfterOpeningAndBeforeClosingNonemptyParenthesis": false,
+    "typescript.preferences.autoImportFileExcludePatterns": [
+      "@radix-ui/**",
+      "@react-email/**",
+      "express",
+      "node:console",
+      "node:stream/consumers",
+      "node:test",
+      "react-router-dom"
+    ],
+    "typescript.preferences.importModuleSpecifier": "relative",
+    "typescript.preferences.preferTypeOnlyAutoImports": true,
+    "typescript.tsdk": "node_modules/typescript/lib",
+    "typescript.tsserver.experimental.enableProjectDiagnostics": true,
+    "typescript.tsserver.maxTsServerMemory": 8192,
+    "typescript.tsserver.nodePath": "node",
+    "typescript.tsserver.watchOptions": {
+      "excludeDirectories": [
+        "**/node_modules/**/*",
+        "**/build/**/*",
+        "**/dist/**/*",
+        "**/out/**/*",
+        "**/coverage/**/*",
+        "**/lcov-report/**/*",
+        "**/documentation/**/*",
+        "**/reference-code/**/*",
+        "**/public/build/**/*",
+        "**/epic-reference/**/*",
+        "**/context/**/*",
+        "**/.gradle/**/*",
+        "**/android/.gradle/**/*"
+      ],
+      "watchDirectory": "useFsEvents",
+      "watchFile": "useFsEvents"
+    },
+    "typescript.tsserver.web.typeAcquisition.enabled": false,
+    "typescript.workspaceSymbols.excludeLibrarySymbols": false,
+    "typescript.workspaceSymbols.scope": "allOpenProjects",
+    "vitest.disableWorkspaceWarning": true,
+    "vue.autoInsert.bracketSpacing": true,
+    "vue.autoInsert.dotValue": true,
+    "vue.inlayHints.inlineHandlerLeading": true,
+    "vue.inlayHints.missingProps": true,
+    "workbench.colorCustomizations": {
+      "activityBar.activeBackground": "#243f7f",
+      "activityBar.background": "#243f7f",
+      "activityBar.foreground": "#e7e7e7",
+      "activityBar.inactiveForeground": "#e7e7e799",
+      "activityBarBadge.background": "#000000",
+      "activityBarBadge.foreground": "#e7e7e7",
+      "commandCenter.border": "#e7e7e799",
+      "sash.hoverBorder": "#243f7f",
+      "statusBar.background": "#192b57",
+      "statusBar.foreground": "#e7e7e7",
+      "statusBarItem.hoverBackground": "#243f7f",
+      "statusBarItem.remoteBackground": "#192b57",
+      "statusBarItem.remoteForeground": "#e7e7e7",
+      "titleBar.activeBackground": "#192b57",
+      "titleBar.activeForeground": "#e7e7e7",
+      "titleBar.inactiveBackground": "#192b5799",
+      "titleBar.inactiveForeground": "#e7e7e799",
+      "statusBar.debuggingBackground": "#574519",
+      "statusBar.debuggingForeground": "#e7e7e7"
+    },
+    "prettier.useEditorConfig": false,
+    "Laravel.basePath": "apps/backend",
+    "Laravel.phpEnvironment": "herd"
+  },
+  "tasks": {
+    "tasks": [
+      {
+        "command": "pnpm dev",
+        "group": "build",
+        "label": "App: Dev (Vite)",
+        "options": {
+          "cwd": "${workspaceFolder}"
+        },
+        "presentation": {
+          "panel": "dedicated",
+          "reveal": "always"
+        },
+        "type": "shell"
+      },
+      {
+        "command": "pnpm build",
+        "group": "build",
+        "label": "App: Build (Vite)",
+        "options": {
+          "cwd": "${workspaceFolder}"
+        },
+        "presentation": {
+          "panel": "dedicated",
+          "reveal": "always"
+        },
+        "type": "shell"
+      },
+      {
+        "command": "pnpm preview",
+        "group": "build",
+        "label": "App: Preview (Vite)",
+        "options": {
+          "cwd": "${workspaceFolder}"
+        },
+        "presentation": {
+          "panel": "dedicated",
+          "reveal": "always"
+        },
+        "type": "shell"
+      },
+      {
+        "command": "pnpm typecheck",
+        "group": "build",
+        "label": "App: Typecheck",
+        "options": {
+          "cwd": "${workspaceFolder}"
+        },
+        "presentation": {
+          "panel": "dedicated",
+          "reveal": "always"
+        },
+        "type": "shell"
+      },
+      {
+        "command": "pnpm --filter @irrigationreal/app storybook",
+        "group": "build",
+        "label": "Storybook: Dev",
+        "options": {
+          "cwd": "${workspaceFolder}"
+        },
+        "presentation": {
+          "panel": "dedicated",
+          "reveal": "always"
+        },
+        "type": "shell"
+      },
+      {
+        "command": "pnpm --filter @irrigationreal/app build-storybook",
+        "group": "build",
+        "label": "Storybook: Build",
+        "options": {
+          "cwd": "${workspaceFolder}"
+        },
+        "presentation": {
+          "panel": "dedicated",
+          "reveal": "always"
+        },
+        "type": "shell"
+      },
+      {
+        "command": "pnpm cap:sync",
+        "group": "build",
+        "label": "Mobile: Sync Capacitor",
+        "options": {
+          "cwd": "${workspaceFolder}"
+        },
+        "presentation": {
+          "panel": "dedicated",
+          "reveal": "always"
+        },
+        "type": "shell"
+      },
+      {
+        "command": "pnpm cap:android",
+        "group": "build",
+        "label": "Mobile: Open Android Studio",
+        "options": {
+          "cwd": "${workspaceFolder}"
+        },
+        "presentation": {
+          "panel": "dedicated",
+          "reveal": "always"
+        },
+        "type": "shell"
+      },
+      {
+        "command": "pnpm cap:ios",
+        "group": "build",
+        "label": "Mobile: Open Xcode",
+        "options": {
+          "cwd": "${workspaceFolder}"
+        },
+        "presentation": {
+          "panel": "dedicated",
+          "reveal": "always"
+        },
+        "type": "shell"
+      },
+      {
+        "command": "pnpm cap:run:android",
+        "group": "build",
+        "label": "Mobile: Run on Android",
+        "options": {
+          "cwd": "${workspaceFolder}"
+        },
+        "presentation": {
+          "panel": "dedicated",
+          "reveal": "always"
+        },
+        "type": "shell"
+      },
+      {
+        "command": "pnpm cap:run:ios",
+        "group": "build",
+        "label": "Mobile: Run on iOS",
+        "options": {
+          "cwd": "${workspaceFolder}"
+        },
+        "presentation": {
+          "panel": "dedicated",
+          "reveal": "always"
+        },
+        "type": "shell"
+      },
+      {
+        "command": "pnpm dev:android",
+        "group": "build",
+        "label": "Mobile: Dev on Android",
+        "options": {
+          "cwd": "${workspaceFolder}"
+        },
+        "presentation": {
+          "panel": "dedicated",
+          "reveal": "always"
+        },
+        "type": "shell"
+      },
+      {
+        "command": "pnpm dev:ios",
+        "group": "build",
+        "label": "Mobile: Dev on iOS",
+        "options": {
+          "cwd": "${workspaceFolder}"
+        },
+        "presentation": {
+          "panel": "dedicated",
+          "reveal": "always"
+        },
+        "type": "shell"
+      },
+      {
+        "command": "pnpm build:android",
+        "group": "build",
+        "label": "Mobile: Build Android",
+        "options": {
+          "cwd": "${workspaceFolder}"
+        },
+        "presentation": {
+          "panel": "dedicated",
+          "reveal": "always"
+        },
+        "type": "shell"
+      },
+      {
+        "command": "pnpm build:ios",
+        "group": "build",
+        "label": "Mobile: Build iOS",
+        "options": {
+          "cwd": "${workspaceFolder}"
+        },
+        "presentation": {
+          "panel": "dedicated",
+          "reveal": "always"
+        },
+        "type": "shell"
+      },
+      {
+        "command": "pnpm clean",
+        "group": "build",
+        "label": "Repo: Clean",
+        "options": {
+          "cwd": "${workspaceFolder}"
+        },
+        "presentation": {
+          "panel": "dedicated",
+          "reveal": "always"
+        },
+        "type": "shell"
+      },
+      {
+        "command": "pnpm clean:install",
+        "group": "build",
+        "label": "Repo: Clean + Install",
+        "options": {
+          "cwd": "${workspaceFolder}"
+        },
+        "presentation": {
+          "panel": "dedicated",
+          "reveal": "always"
+        },
+        "type": "shell"
+      }
+    ],
+    "version": "2.0.0"
+  }
+}
