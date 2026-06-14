@@ -265,6 +265,115 @@ async function scanSessions() {
   return out;
 }
 
+function visibleTextFromContent(content) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .filter((part) => part?.type === 'text' && typeof part.text === 'string')
+    .map((part) => part.text)
+    .join('');
+}
+
+function contentTypes(content) {
+  if (typeof content === 'string') return ['text'];
+  if (!Array.isArray(content)) return [];
+  return [...new Set(content.map((part) => part?.type ?? typeof part))];
+}
+
+function parseSessionLine(line) {
+  const entry = JSON.parse(line);
+  if (entry.type === 'session') {
+    return {
+      type: 'session',
+      id: entry.id,
+      timestamp: entry.timestamp,
+      cwd: entry.cwd,
+      version: entry.version ?? null,
+    };
+  }
+  if (entry.type === 'message') {
+    const msg = entry.message ?? {};
+    const text = visibleTextFromContent(msg.content);
+    return {
+      type: 'message',
+      id: entry.id,
+      parentId: entry.parentId ?? null,
+      timestamp: entry.timestamp ?? msg.timestamp ?? null,
+      role: msg.role ?? null,
+      text,
+      hasVisibleText: text.trim().length > 0,
+      contentTypes: contentTypes(msg.content),
+      api: msg.api ?? null,
+      provider: msg.provider ?? null,
+      model: msg.model ?? null,
+      stopReason: msg.stopReason ?? null,
+      errorMessage: msg.errorMessage ?? null,
+      usage: msg.usage ?? null,
+    };
+  }
+  if (entry.type === 'model_change') {
+    return {
+      type: 'model_change',
+      id: entry.id,
+      parentId: entry.parentId ?? null,
+      timestamp: entry.timestamp ?? null,
+      provider: entry.provider ?? null,
+      modelId: entry.modelId ?? null,
+    };
+  }
+  if (entry.type === 'thinking_level_change') {
+    return {
+      type: 'thinking_level_change',
+      id: entry.id,
+      parentId: entry.parentId ?? null,
+      timestamp: entry.timestamp ?? null,
+      thinkingLevel: entry.thinkingLevel ?? null,
+    };
+  }
+  if (entry.type === 'custom') {
+    return {
+      type: 'custom',
+      id: entry.id,
+      parentId: entry.parentId ?? null,
+      timestamp: entry.timestamp ?? null,
+      customType: entry.customType ?? null,
+      data: entry.data ?? null,
+    };
+  }
+  return {
+    type: entry.type ?? 'unknown',
+    id: entry.id ?? null,
+    parentId: entry.parentId ?? null,
+    timestamp: entry.timestamp ?? null,
+  };
+}
+
+async function exportSession(sessionId) {
+  const sessions = await scanSessions();
+  const session = sessions.find((candidate) => candidate.id === sessionId || candidate.path === sessionId);
+  if (!session) return null;
+
+  const raw = await fs.readFile(session.path, 'utf8');
+  const entries = [];
+  const parseErrors = [];
+  let lineNo = 0;
+  for (const line of raw.split('\n')) {
+    lineNo += 1;
+    if (!line.trim()) continue;
+    try {
+      entries.push(parseSessionLine(line));
+    } catch (err) {
+      parseErrors.push({ line: lineNo, message: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  return {
+    session,
+    entries,
+    parse_errors: parseErrors,
+  };
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? `${HOST}:${PORT}`}`);
@@ -275,6 +384,13 @@ const server = http.createServer(async (req, res) => {
     }
     if (method === 'GET' && url.pathname === '/v1/models') return json(res, 200, await listModels());
     if (method === 'GET' && url.pathname === '/v1/pi/sessions') return json(res, 200, { sessions: await scanSessions() });
+
+    const piExportMatch = url.pathname.match(/^\/v1\/pi\/sessions\/([^/]+)\/export$/);
+    if (method === 'GET' && piExportMatch) {
+      const exported = await exportSession(decodeURIComponent(piExportMatch[1]));
+      if (!exported) return notFound(res);
+      return json(res, 200, exported);
+    }
 
     if (method === 'POST' && url.pathname === '/v1/conversations') {
       const body = await readBody(req);

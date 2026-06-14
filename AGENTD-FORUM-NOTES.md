@@ -152,3 +152,15 @@ curl -fsS http://127.0.0.1:4310/api/models | head
   system forums should prevent the main project forums from becoming noisy.
 - Fork/delegate/sleep sessions should be imported but routed to system areas and
   linked back to parents where possible.
+
+## Historical import implementation notes
+
+This branch now exposes one-session-at-a-time Pi JSONL export for the forum import
+CLI:
+
+- `GET /v1/pi/sessions` lists session headers.
+- `GET /v1/pi/sessions/:id/export` returns parsed entries for a single session.
+
+The forum still does **not** read Pi files directly and still does **not** talk to
+memstore. Import remains a projection from canonical Pi sessions into forum
+SQLite.
