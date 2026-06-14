@@ -15,11 +15,51 @@ This repo builds Monika's runtime containers and supporting services.
 ## Operating rules
 
 - Do not restart the live `monika` container from inside an active Pi session unless the user is prepared to reconnect.
+- When testing throwaway Monika containers, do **not** mount the live/in-use memstore database. Use ephemeral memstore state so two containers cannot lock or mutate the same SQLite DB.
 - The forum is a UI/projection service only. Pi JSONL sessions remain canonical.
 - Forum SQLite stores metadata/projection state; it must not talk directly to memstore or invent memory origins.
 - One forum topic maps to one canonical Pi session.
 - Agent execution, tools, memory lifecycle, stateful-memory, and memstore stay behind `agentd` in the Monika container.
 - Keep `compose.forum.yaml` as an optional overlay; the normal Monika runtime compose flow should not require the forum.
+
+## Container commands
+
+Run these from the host shell. Restarting the live `monika` container kills active
+Pi sessions; restart it only when the user is prepared to reconnect.
+
+Build the Monika runtime without cache:
+
+```bash
+docker compose build --no-cache monika
+```
+
+Recreate the Monika runtime:
+
+```bash
+docker compose up -d --force-recreate monika
+```
+
+Build the forum frontend without cache:
+
+```bash
+docker compose -f compose.yaml -f compose.forum.yaml build --no-cache forum
+```
+
+Recreate the forum frontend only:
+
+```bash
+docker compose -f compose.yaml -f compose.forum.yaml up -d --force-recreate forum
+```
+
+Build/recreate the forum frontend normally:
+
+```bash
+docker compose -f compose.yaml -f compose.forum.yaml up -d --build forum
+```
+
+For throwaway Monika runtime tests, prefer standalone/test compose files or an
+ephemeral volume. Do not bind-mount `/home/monika/.pi/memstore` or another live
+memstore database into a second container.
 
 ## Forum development
 
