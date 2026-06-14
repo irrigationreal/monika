@@ -14,7 +14,7 @@ This repo builds Monika's runtime containers and supporting services.
 
 ## Operating rules
 
-- Do not restart the live `monika` container from inside an active Pi session unless the user is prepared to reconnect.
+- Your current active session is likely running out of the live `monika` container, so do not restart the live `monika` container from inside an active Pi session. Instead, you should try to make sure everything is ready for the user to restart it.
 - When testing throwaway Monika containers, do **not** mount the live/in-use memstore database. Use ephemeral memstore state so two containers cannot lock or mutate the same SQLite DB.
 - The forum is a UI/projection service only. Pi JSONL sessions remain canonical.
 - Forum SQLite stores metadata/projection state; it must not talk directly to memstore or invent memory origins.
