@@ -10,6 +10,7 @@ import {
   SessionManager,
   AuthStorage,
   ModelRegistry,
+  SettingsManager,
 } from '@earendil-works/pi-coding-agent';
 
 const PORT = Number(process.env.MONIKA_AGENTD_PORT ?? 7724);
@@ -69,7 +70,47 @@ function conversationRecord(conv) {
   };
 }
 
-async function createRuntime(cwd, sessionManager) {
+function splitModelId(modelId) {
+  const raw = String(modelId ?? '').trim();
+  if (!raw) return null;
+  const slash = raw.indexOf('/');
+  if (slash > 0) return { provider: raw.slice(0, slash), modelId: raw.slice(slash + 1) };
+  return { provider: null, modelId: raw };
+}
+
+function resolveModel(modelRegistry, modelId) {
+  const parsed = splitModelId(modelId);
+  if (!parsed) return null;
+  if (parsed.provider) return modelRegistry.find(parsed.provider, parsed.modelId) ?? null;
+  return (modelRegistry.getAvailable().find((model) => model.id === parsed.modelId)
+    ?? modelRegistry.getAll().find((model) => model.id === parsed.modelId)
+    ?? null);
+}
+
+async function applySessionConfig(conv, config = {}) {
+  const modelId = config.model ?? config.provider_model ?? null;
+  const reasoning = config.reasoning ?? config.thinking ?? config.thinking_level ?? null;
+  if (modelId) {
+    const model = resolveModel(conv.runtime.services.modelRegistry, modelId);
+    if (!model) throw new Error('Unknown model: ' + modelId);
+    const current = conv.session.model;
+    if (!current || current.provider !== model.provider || current.id !== model.id) {
+      await conv.session.setModel(model);
+    }
+  }
+  if (reasoning) conv.session.setThinkingLevel(String(reasoning));
+}
+
+function initialSessionOptions(services, opts = {}) {
+  const out = {};
+  const model = resolveModel(services.modelRegistry, opts.model ?? null);
+  if (model) out.model = model;
+  const thinkingLevel = opts.reasoning ?? opts.thinking ?? opts.thinking_level ?? null;
+  if (thinkingLevel) out.thinkingLevel = String(thinkingLevel);
+  return out;
+}
+
+async function createRuntime(cwd, sessionManager, opts = {}) {
   const factory = async ({ cwd: runtimeCwd, sessionManager: runtimeSessionManager, sessionStartEvent }) => {
     const services = await createAgentSessionServices({ cwd: runtimeCwd, agentDir: AGENT_DIR });
     return {
@@ -77,6 +118,7 @@ async function createRuntime(cwd, sessionManager) {
         services,
         sessionManager: runtimeSessionManager,
         sessionStartEvent,
+        ...initialSessionOptions(services, opts),
       })),
       services,
       diagnostics: services.diagnostics,
@@ -121,7 +163,7 @@ async function conversationFromRuntime(runtime, cwd) {
 
 async function createConversation(opts = {}) {
   const cwd = path.resolve(opts.cwd ?? opts.workdir ?? DEFAULT_CWD);
-  const runtime = await createRuntime(cwd, SessionManager.create(cwd));
+  const runtime = await createRuntime(cwd, SessionManager.create(cwd), opts);
   return conversationFromRuntime(runtime, cwd);
 }
 
@@ -136,7 +178,7 @@ async function openConversation(opts = {}) {
   }
 
   const cwd = path.resolve(opts.cwd ?? sessionInfo.cwd ?? DEFAULT_CWD);
-  const runtime = await createRuntime(cwd, SessionManager.open(sessionInfo.path, undefined, cwd));
+  const runtime = await createRuntime(cwd, SessionManager.open(sessionInfo.path, undefined, cwd), opts);
   return conversationFromRuntime(runtime, cwd);
 }
 
@@ -242,26 +284,62 @@ function extractUsage(messages) {
   return null;
 }
 
+function modelInfo(model) {
+  return {
+    id: model.provider + '/' + model.id,
+    name: model.name ?? model.id,
+    label: model.name ?? model.id,
+    family: 'pi',
+    provider: model.provider,
+    model: model.id,
+    supportsReasoning: Boolean(model.reasoning),
+    supportsTools: true,
+    contextWindowTokens: model.contextWindow ?? null,
+    maxTokens: model.maxTokens ?? null,
+    inputModalities: model.input ?? null,
+  };
+}
+
+function getDefaultModelId(registry) {
+  try {
+    const settings = SettingsManager.create(DEFAULT_CWD, AGENT_DIR);
+    const provider = settings.getDefaultProvider?.();
+    const modelId = settings.getDefaultModel?.();
+    if (provider && modelId && registry.find(provider, modelId)) return provider + '/' + modelId;
+  } catch {}
+  const first = registry.getAvailable()[0] ?? registry.getAll()[0];
+  return first ? first.provider + '/' + first.id : null;
+}
+
 async function listModels() {
   try {
     const authStorage = AuthStorage.create();
     const registry = ModelRegistry.create(authStorage);
-    const available = await registry.getAvailable();
-    return { models: available.map((entry) => {
-      const model = entry.model ?? entry;
-      return { id: `${model.provider}/${model.id}`, name: model.name ?? model.id };
-    }) };
+    const available = registry.getAvailable();
+    return { models: available.map(modelInfo), default_model: getDefaultModelId(registry) };
   } catch (err) {
     try {
       const modelsPath = path.join(AGENT_DIR, 'models.json');
       const raw = JSON.parse(await fs.readFile(modelsPath, 'utf8'));
       const models = [];
       for (const [provider, config] of Object.entries(raw.providers ?? {})) {
-        for (const model of config.models ?? []) models.push({ id: `${provider}/${model.id}`, name: model.name ?? model.id });
+        for (const model of config.models ?? []) models.push({
+          id: provider + '/' + model.id,
+          name: model.name ?? model.id,
+          label: model.name ?? model.id,
+          family: 'pi',
+          provider,
+          model: model.id,
+          supportsReasoning: Boolean(model.reasoning),
+          supportsTools: true,
+          contextWindowTokens: model.contextWindow ?? null,
+          maxTokens: model.maxTokens ?? null,
+          inputModalities: model.input ?? null,
+        });
       }
-      return { models };
+      return { models, default_model: models[0]?.id ?? null };
     } catch {
-      return { models: [] };
+      return { models: [], default_model: null };
     }
   }
 }
@@ -336,6 +414,14 @@ function contentTypes(content) {
   return [...new Set(content.map((part) => part?.type ?? typeof part))];
 }
 
+function thinkingTextFromContent(content) {
+  if (!Array.isArray(content)) return '';
+  return content
+    .filter((part) => part?.type === 'thinking' && typeof part.thinking === 'string')
+    .map((part) => part.thinking)
+    .join('\n');
+}
+
 function parseSessionLine(line) {
   const entry = JSON.parse(line);
   if (entry.type === 'session') {
@@ -365,6 +451,10 @@ function parseSessionLine(line) {
       stopReason: msg.stopReason ?? null,
       errorMessage: msg.errorMessage ?? null,
       usage: msg.usage ?? null,
+      thinking: thinkingTextFromContent(msg.content) || null,
+      toolName: msg.toolName ?? null,
+      toolCallId: msg.toolCallId ?? null,
+      isError: msg.isError ?? null,
     };
   }
   if (entry.type === 'model_change') {
@@ -402,6 +492,41 @@ function parseSessionLine(line) {
     parentId: entry.parentId ?? null,
     timestamp: entry.timestamp ?? null,
   };
+}
+
+function usageTokens(usage) {
+  if (!usage || typeof usage !== 'object') return null;
+  const direct = usage.totalTokens ?? usage.total_tokens ?? usage.total;
+  if (typeof direct === 'number' && direct > 0) return direct;
+  const total = (usage.input ?? usage.input_tokens ?? 0) + (usage.output ?? usage.output_tokens ?? 0) + (usage.cacheRead ?? usage.cache_read ?? 0) + (usage.cacheWrite ?? usage.cache_write ?? 0);
+  return total > 0 ? total : null;
+}
+
+function contextFromEntries(entries, registry = null) {
+  let provider = null, modelId = null, thinkingLevel = null, lastUsage = null, lastUsageMessageId = null, lastVisibleMessageId = null;
+  for (const entry of entries) {
+    if (entry.type === 'model_change') { provider = entry.provider ?? provider; modelId = entry.modelId ?? modelId; }
+    if (entry.type === 'thinking_level_change') thinkingLevel = entry.thinkingLevel ?? thinkingLevel;
+    if (entry.type === 'message') {
+      if (entry.hasVisibleText) lastVisibleMessageId = entry.id ?? lastVisibleMessageId;
+      if (entry.role === 'assistant' && entry.usage && entry.stopReason !== 'error' && entry.stopReason !== 'aborted') {
+        const tokens = usageTokens(entry.usage);
+        if (tokens) { lastUsage = { usage: entry.usage, tokens }; lastUsageMessageId = entry.id ?? null; }
+      }
+      if (entry.role === 'assistant' && entry.provider && entry.model) { provider = entry.provider; modelId = entry.model; }
+    }
+  }
+  const modelKey = provider && modelId ? provider + '/' + modelId : null;
+  const model = provider && modelId && registry ? registry.find(provider, modelId) : null;
+  const contextWindow = model?.contextWindow ?? null;
+  const usedTokens = lastUsage?.tokens ?? null;
+  return { model: modelKey, provider, modelId, thinkingLevel, contextWindowTokens: contextWindow, usedTokens, remainingTokens: usedTokens != null && contextWindow != null ? Math.max(0, contextWindow - usedTokens) : null, percent: usedTokens != null && contextWindow ? (usedTokens / contextWindow) * 100 : null, exact: Boolean(usedTokens && lastUsageMessageId && lastUsageMessageId === lastVisibleMessageId), source: usedTokens ? 'pi-usage' : 'unavailable', asOfPiMessageId: lastUsageMessageId };
+}
+
+function liveContext(conv) {
+  const usage = conv.session.getContextUsage?.();
+  const model = conv.session.model;
+  return { model: model ? model.provider + '/' + model.id : null, provider: model?.provider ?? null, modelId: model?.id ?? null, thinkingLevel: conv.session.thinkingLevel ?? null, contextWindowTokens: usage?.contextWindow ?? model?.contextWindow ?? null, usedTokens: usage?.tokens ?? null, remainingTokens: usage?.tokens != null && usage?.contextWindow ? Math.max(0, usage.contextWindow - usage.tokens) : null, percent: usage?.percent ?? null, exact: false, source: usage?.tokens != null ? 'pi-runtime-estimate' : 'unavailable', asOfPiMessageId: null };
 }
 
 async function exportSession(sessionId) {
@@ -447,6 +572,14 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, exported);
     }
 
+    const piContextMatch = url.pathname.match(/^\/v1\/pi\/sessions\/([^/]+)\/context$/);
+    if (method === 'GET' && piContextMatch) {
+      const exported = await exportSession(decodeURIComponent(piContextMatch[1]));
+      if (!exported) return notFound(res);
+      const registry = ModelRegistry.create(AuthStorage.create());
+      return json(res, 200, { session: exported.session, context: contextFromEntries(exported.entries, registry) });
+    }
+
     if (method === 'POST' && url.pathname === '/v1/conversations') {
       const body = await readBody(req);
       const conv = await createConversation(body);
@@ -468,6 +601,12 @@ const server = http.createServer(async (req, res) => {
 
       if (method === 'GET' && tail === '') return json(res, 200, { conversation: conversationRecord(conv) });
       if (method === 'GET' && tail === 'history') return json(res, 200, { conversation_id: conv.id, items: conv.history, total: conv.history.length });
+      if (method === 'GET' && tail === 'context') return json(res, 200, { conversation_id: conv.id, context: liveContext(conv) });
+      if (method === 'PATCH' && tail === '') {
+        const body = await readBody(req);
+        await applySessionConfig(conv, body.config ?? body);
+        return json(res, 200, { conversation: conversationRecord(conv) });
+      }
       if (method === 'GET' && tail === 'events') {
         res.writeHead(200, {
           'content-type': 'text/event-stream; charset=utf-8',
@@ -484,6 +623,8 @@ const server = http.createServer(async (req, res) => {
         const messageId = body.message_id ?? randomUUID();
         const text = textFromContent(body.content);
         const mode = body.mode ?? 'queue';
+        const config = body.configure ?? body.config ?? {};
+        await applySessionConfig(conv, config);
         void (async () => {
           try {
             if (mode === 'steer') await conv.session.prompt(text, { streamingBehavior: 'steer', source: 'api' });

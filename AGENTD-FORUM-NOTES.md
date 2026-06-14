@@ -49,6 +49,9 @@ Implemented endpoints:
   - includes `mtime_ms` and `size_bytes` for cheap sync detection
 - `GET /v1/pi/sessions/:id/export`
   - returns parsed entries for one canonical Pi JSONL session
+  - includes assistant provider/model, thinking text, and tool metadata when present
+- `GET /v1/pi/sessions/:id/context`
+  - returns best Pi-derived session context usage/model metadata for a canonical JSONL session
 - `POST /v1/conversations`
   - creates a new Pi session/runtime
 - `POST /v1/conversations/open`
@@ -56,6 +59,8 @@ Implemented endpoints:
   - returns the existing live conversation if already loaded
 - `GET /v1/conversations/:id`
 - `GET /v1/conversations/:id/history`
+- `GET /v1/conversations/:id/context`
+  - returns live runtime context/model metadata from Pi
 - `GET /v1/conversations/:id/events`
 - `POST /v1/conversations/:id/messages`
 - `POST /v1/conversations/:id/interrupt`
@@ -67,7 +72,7 @@ Implemented endpoints:
     implemented until Pi exposes a safe public hook
 - `POST /v1/conversations/:id/pause` and `/resume` as no-op compatibility
 
-Conversation records include `session_id` and `session_path`. The event stream
+Conversation records include `session_id` and `session_path`. Forum-supplied model/reasoning options are mapped to Pi `setModel()` / `setThinkingLevel()` using Pi model IDs directly (for example `codex/gpt-5.5`). The event stream
 maps Pi SDK events into ECHS-like events consumed by the forum bridge:
 `turn_started`, `turn_delta`, `reasoning_delta`, `item_started`,
 `tool_completed`, `item_completed`, `turn_usage`, `turn_completed`,
@@ -170,9 +175,11 @@ curl -fsS http://127.0.0.1:4310/api/models | head
   cleaned up by either compiling runnable JS or changing package exports.
 - Explicit checkpoint memory save without closing is not implemented. Use close
   for a safe stateful-memory save path, because close emits Pi `session_shutdown`.
-- Model selection/thinking level from the forum are not yet fully mapped onto Pi
-  `setModel()` / `setThinkingLevel()` behavior.
-- Handoff and context meter are not implemented yet.
+- Forum model selection/thinking level is now mapped onto Pi `setModel()` /
+  `setThinkingLevel()` using Pi model IDs directly.
+- A context meter is available in the reply UI using the best Pi-provided usage
+  data; it warns when the value is not exact current context.
+- Handoff is not implemented yet.
 
 ## Do not lose these design decisions
 
