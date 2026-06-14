@@ -89,7 +89,7 @@ container. The forum is a UI/metadata layer, not a second agent runtime.
 
 ### Identity/bootstrap cleanup
 
-- Bootstrap now seeds/renames the default human identity to `Neon` instead of
+- Bootstrap now seeds/renames the default human identity to `neon` instead of
   `pp`.
 - `Pi CLI` system identity is seeded for future Pi CLI-discovered user messages.
 - The old manual smoke-test API key was removed when the forum DB was reset for

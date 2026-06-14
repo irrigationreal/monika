@@ -104,7 +104,7 @@ Implemented in monika-forum:
 - Sync polls agentd list/export endpoints, imports new/changed sessions
   idempotently, and links forum-origin `[FORUM TURN]` Pi user messages back to
   the originating forum post rather than duplicating them.
-- Bootstrap identities are now `Neon`, `Pi CLI`, `robot`, and `Director`.
+- Bootstrap identities are now `neon`, `Pi CLI`, `robot`, and `Director`.
 
 ## Local deployment on stanza
 
