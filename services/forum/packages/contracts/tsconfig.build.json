@@ -1,0 +1,18 @@
+{
+  "extends": "@irrigationreal/typescript-config/config/base.json",
+  "compilerOptions": {
+    "composite": false,
+    "isolatedDeclarations": false,
+    "isolatedModules": false,
+    "exactOptionalPropertyTypes": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "declarationMap": false,
+    "outDir": "./dist",
+    "rootDir": "./src"
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

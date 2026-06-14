@@ -1,0 +1,9 @@
+{
+  "compilerOptions": {
+    "types": [ "node", "vitest/globals", "vitest" ],
+    "tsBuildInfoFile": "${configDir}/dist/test.tsbuildinfo",
+    "rootDir": "${configDir}/src"
+  },
+  "extends": "./settings.json",
+  "include": [ "${configDir}/src/**/*.{test,spec}.{ts,tsx,mts,mtsx}" ]
+}

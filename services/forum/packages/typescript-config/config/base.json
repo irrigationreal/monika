@@ -1,0 +1,17 @@
+{
+  "extends": "./settings.json",
+  "references": [
+    {
+      "path": "./configs.json"
+    },
+    {
+      "path": "./build.json"
+    },
+    {
+      "path": "./test.json"
+    },
+    {
+      "path": "./storybook.json"
+    }
+  ]
+}

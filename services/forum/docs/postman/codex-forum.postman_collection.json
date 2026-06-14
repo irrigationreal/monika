@@ -1,0 +1,287 @@
+{
+  "info": {
+    "_postman_id": "8d64f3a0-8e8a-4e95-9f69-cc76e8e04d8e",
+    "name": "Codex Forum API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Codex Forum REST API collection. Set baseUrl to your deployment root (e.g. https://forum.irrigate.cc). All requests use the /api prefix."
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "https://forum.irrigate.cc" },
+    { "key": "token", "value": "" },
+    { "key": "apiKey", "value": "" },
+    { "key": "impersonationToken", "value": "" },
+    { "key": "forumId", "value": "" },
+    { "key": "topicId", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "Meta",
+      "item": [
+        {
+          "name": "Health",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/healthz"
+          }
+        },
+        {
+          "name": "OpenAPI Spec (JSON)",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/openapi.json"
+          }
+        },
+        {
+          "name": "Postman Collection (JSON)",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/postman/collection.json"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body && body.token) { pm.collectionVariables.set('token', body.token); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"pp\",\n  \"password\": \"pp\"\n}"
+            },
+            "url": "{{baseUrl}}/api/auth/login"
+          }
+        },
+        {
+          "name": "Me",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseUrl}}/api/auth/me"
+          }
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseUrl}}/api/auth/logout"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Forums",
+      "item": [
+        {
+          "name": "List Forums",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/forums"
+          }
+        },
+        {
+          "name": "List Topics in Forum",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/forums/{{forumId}}/topics?page=1&pageSize=50"
+          }
+        },
+        {
+          "name": "Create Topic",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Hello from Postman\",\n  \"body\": \"This topic was created via the API.\"\n}"
+            },
+            "url": "{{baseUrl}}/api/forums/{{forumId}}/topics"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Topics & Posts",
+      "item": [
+        {
+          "name": "Get Topic",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/topics/{{topicId}}"
+          }
+        },
+        {
+          "name": "List Posts",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/topics/{{topicId}}/posts?page=1&pageSize=50"
+          }
+        },
+        {
+          "name": "Create Post (Reply)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"body\": \"Reply from Postman.\"\n}"
+            },
+            "url": "{{baseUrl}}/api/topics/{{topicId}}/posts"
+          }
+        }
+      ]
+    },
+    {
+      "name": "User Files",
+      "item": [
+        {
+          "name": "List User Files",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseUrl}}/api/user-files"
+          }
+        },
+        {
+          "name": "Upload User File",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "file", "type": "file", "src": "" }
+              ]
+            },
+            "url": "{{baseUrl}}/api/user-files"
+          }
+        }
+      ]
+    },
+    {
+      "name": "API Keys",
+      "item": [
+        {
+          "name": "List API Keys",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseUrl}}/api/api-keys"
+          }
+        },
+        {
+          "name": "Create API Key",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body && body.token) { pm.collectionVariables.set('apiKey', body.token); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"label\": \"Postman Key\",\n  \"scopes\": [\"read\", \"write\"]\n}"
+            },
+            "url": "{{baseUrl}}/api/api-keys"
+          }
+        },
+        {
+          "name": "Use API Key (List Forums)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{apiKey}}" }],
+            "url": "{{baseUrl}}/api/forums"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Impersonation (Admin)",
+      "item": [
+        {
+          "name": "List Impersonation Tokens",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseUrl}}/api/impersonation-tokens"
+          }
+        },
+        {
+          "name": "Create Impersonation Token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body && body.token) { pm.collectionVariables.set('impersonationToken', body.token); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"label\": \"Demo Persona\",\n  \"displayName\": \"Atlas\",\n  \"scopes\": [\"read\", \"write\"]\n}"
+            },
+            "url": "{{baseUrl}}/api/impersonation-tokens"
+          }
+        },
+        {
+          "name": "Use Impersonation Token (Create Post)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{impersonationToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"body\": \"Hello from an impersonated persona.\"\n}"
+            },
+            "url": "{{baseUrl}}/api/topics/{{topicId}}/posts"
+          }
+        }
+      ]
+    }
+  ]
+}

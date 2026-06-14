@@ -1,0 +1,738 @@
+<script setup lang="ts">
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { useRouter } from 'vue-router';
+import { api, type AdminDeployStatus, type RobotDashboardDto, type RobotJobDto } from '../lib/apiClient';
+import { useForumState } from '../composables/useForumState';
+
+const router = useRouter();
+const state = useForumState();
+
+const dashboard = ref<RobotDashboardDto | null>(null);
+const deployStatus = ref<AdminDeployStatus | null>(null);
+const loading = ref(false);
+const error = ref<string | null>(null);
+const lastRefreshedAt = ref<string | null>(null);
+let refreshTimer: ReturnType<typeof setInterval> | null = null;
+
+const jobs = computed(() => dashboard.value?.jobs ?? []);
+const queue = computed(() => dashboard.value?.queue ?? []);
+
+const busyJobs = computed(() =>
+  jobs.value.filter((job) => job.activity !== 'idle' && job.activity !== 'waiting')
+);
+const waitingJobs = computed(() => jobs.value.filter((job) => job.activity === 'waiting'));
+const deployOnFinishRequestedAt = computed(() => deployStatus.value?.deployOnFinishRequestedAt ?? null);
+const deployOnFinishPending = computed(() => Boolean(deployOnFinishRequestedAt.value));
+
+function formatDateTime(dateStr: string): string {
+  const date = new Date(dateStr);
+  return date.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  });
+}
+
+function activityLabel(activity: RobotJobDto['activity']): string {
+  switch (activity) {
+    case 'thinking': return 'Thinking';
+    case 'running_tools': return 'Running tools';
+    case 'waiting': return 'Queued';
+    case 'error': return 'Error';
+    case 'idle': return 'Idle';
+    default: return activity;
+  }
+}
+
+function activityClass(activity: RobotJobDto['activity']): string {
+  switch (activity) {
+    case 'thinking': return 'vb-status-pill--running';
+    case 'running_tools': return 'vb-status-pill--running';
+    case 'waiting': return 'vb-status-pill--waiting';
+    case 'error': return 'vb-status-pill--error';
+    default: return 'vb-status-pill--done';
+  }
+}
+
+async function refresh(): Promise<void> {
+  loading.value = true;
+  error.value = null;
+  try {
+    const [dash, deploy] = await Promise.all([api.getRobotDashboard(), api.getDeployStatus()]);
+    dashboard.value = dash;
+    deployStatus.value = deploy;
+    lastRefreshedAt.value = new Date().toISOString();
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : 'Failed to load robot dashboard.';
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function openTopic(topicId: string): Promise<void> {
+  await router.push({ name: 'topic.view', params: { topicId } });
+}
+
+async function interruptTopic(topicId: string): Promise<void> {
+  loading.value = true;
+  error.value = null;
+  try {
+    await api.interruptRobot(topicId);
+    await refresh();
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : 'Failed to interrupt robot.';
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function continueTopic(topicId: string): Promise<void> {
+  loading.value = true;
+  error.value = null;
+  try {
+    await api.continueRobot(topicId);
+    await refresh();
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : 'Failed to continue robot.';
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function triggerDeploy(): Promise<void> {
+  const confirmed = window.confirm(
+    'Deploy now?\n\nThis will restart the service and can interrupt active/waiting jobs.'
+  );
+  if (!confirmed) return;
+  loading.value = true;
+  error.value = null;
+  try {
+    await api.triggerDeploy();
+    await refresh();
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : 'Failed to start deploy.';
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function triggerDeployOnFinish(): Promise<void> {
+  const confirmed = window.confirm(
+    'Deploy on Finish?\n\nThis will wait for all active and waiting robot jobs to finish, then automatically deploy.\n\nDeploying still restarts the service.'
+  );
+  if (!confirmed) return;
+
+  loading.value = true;
+  error.value = null;
+  try {
+    await api.triggerDeployOnFinish();
+    await refresh();
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : 'Failed to schedule deploy.';
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function cancelDeployOnFinish(): Promise<void> {
+  const confirmed = window.confirm('Cancel Deploy on Finish?');
+  if (!confirmed) return;
+
+  loading.value = true;
+  error.value = null;
+  try {
+    await api.cancelDeployOnFinish();
+    await refresh();
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : 'Failed to cancel scheduled deploy.';
+  } finally {
+    loading.value = false;
+  }
+}
+
+onMounted(async () => {
+  if (state.currentUser.value?.kind !== 'admin') {
+    await router.push('/');
+    return;
+  }
+
+  await refresh();
+  refreshTimer = setInterval(() => {
+    void refresh();
+  }, 5000);
+});
+
+onBeforeUnmount(() => {
+  if (refreshTimer) {
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+});
+</script>
+
+<template>
+  <section class="vb-section vb-fade-in">
+    <div class="vb-table-header vb-dashboard-header">
+      <div class="vb-dashboard-title">
+        Robot Dashboard
+        <span class="vb-dashboard-subtitle">Admin only</span>
+      </div>
+      <div class="vb-dashboard-actions">
+        <button class="vb-small-btn" type="button" :disabled="loading" @click="refresh">Refresh</button>
+        <router-link class="vb-small-btn" to="/admin">Admin Panel</router-link>
+      </div>
+    </div>
+
+    <div v-if="error" class="vb-login-error" style="margin-bottom: 10px;">
+      {{ error }}
+    </div>
+
+    <div class="vb-dashboard-grid">
+      <div class="vb-panel">
+        <div class="vb-panel-title">Deploy</div>
+        <div class="vb-panel-body">
+          <div class="vb-kv">
+            <div class="vb-k">Enabled</div>
+            <div class="vb-v">{{ deployStatus?.enabled ? 'Yes' : 'No' }}</div>
+          </div>
+          <div class="vb-kv">
+            <div class="vb-k">Running</div>
+            <div class="vb-v">{{ deployStatus?.running ? 'Yes' : 'No' }}</div>
+          </div>
+          <div class="vb-kv">
+            <div class="vb-k">Last Started</div>
+            <div class="vb-v">{{ deployStatus?.lastStartedAt ? formatDateTime(deployStatus.lastStartedAt) : 'n/a' }}</div>
+          </div>
+          <div class="vb-kv">
+            <div class="vb-k">Commit</div>
+            <div class="vb-v">
+              <code v-if="deployStatus?.commitSha" class="vb-cwd-path" :title="deployStatus.commitSha">
+                {{ deployStatus.commitSha.slice(0, 10) }}
+              </code>
+              <span v-else>n/a</span>
+            </div>
+          </div>
+          <div class="vb-kv">
+            <div class="vb-k">Deploy on Finish</div>
+            <div class="vb-v">
+              <span v-if="deployOnFinishPending">
+                Scheduled ({{ deployOnFinishRequestedAt ? formatDateTime(deployOnFinishRequestedAt) : 'n/a' }})
+              </span>
+              <span v-else>Off</span>
+            </div>
+          </div>
+          <div v-if="deployStatus?.deployOnFinishLastError" class="vb-login-error" style="margin-top: 8px;">
+            Deploy on Finish error: {{ deployStatus.deployOnFinishLastError }}
+          </div>
+          <div class="vb-panel-actions">
+            <div class="vb-panel-actions-row">
+              <button
+                class="vb-btn"
+                type="button"
+                :disabled="loading || !deployStatus?.enabled || deployStatus?.running"
+                @click="triggerDeploy"
+              >
+                {{ deployStatus?.running ? 'Deploying…' : 'Deploy' }}
+              </button>
+              <button
+                class="vb-btn"
+                type="button"
+                :disabled="loading || !deployStatus?.enabled || deployStatus?.running || deployOnFinishPending"
+                @click="triggerDeployOnFinish"
+              >
+                {{ deployOnFinishPending ? 'Deploy on Finish (Scheduled)…' : 'Deploy on Finish' }}
+              </button>
+              <button
+                v-if="deployOnFinishPending"
+                class="vb-btn vb-btn-danger"
+                type="button"
+                :disabled="loading || deployStatus?.running"
+                @click="cancelDeployOnFinish"
+              >
+                Cancel Deploy on Finish
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="vb-panel vb-panel--stats-right">
+        <div class="vb-panel-title">Robot Load</div>
+        <div class="vb-panel-body">
+          <div class="vb-kv">
+            <div class="vb-k">Busy</div>
+            <div class="vb-v">{{ busyJobs.length }}</div>
+          </div>
+          <div class="vb-kv">
+            <div class="vb-k">Queued</div>
+            <div class="vb-v">{{ queue.length }}</div>
+          </div>
+          <div class="vb-kv">
+            <div class="vb-k">Waiting (db)</div>
+            <div class="vb-v">{{ waitingJobs.length }}</div>
+          </div>
+          <div class="vb-kv">
+            <div class="vb-k">Refreshed</div>
+            <div class="vb-v">{{ lastRefreshedAt ? formatDateTime(lastRefreshedAt) : 'n/a' }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="vb-forum-list vb-forum-list--jobs">
+      <div class="vb-category-header">
+        <div class="vb-category-title">Active / Waiting Jobs</div>
+      </div>
+
+      <div class="vb-dashboard-table-scroll" aria-label="Active and waiting jobs">
+        <div class="vb-job-row vb-job-row--header">
+          <div class="vb-job-main">Topic</div>
+          <div class="vb-job-activity">Activity</div>
+          <div class="vb-job-updated">Last Update</div>
+          <div class="vb-job-model">Model</div>
+          <div class="vb-job-actions">Actions</div>
+        </div>
+
+        <div v-if="loading && jobs.length === 0" class="vb-empty-state">
+          <div class="vb-spinner vb-spinner-dark" style="width: 24px; height: 24px;"></div>
+          <div class="vb-empty-state-text" style="margin-top: 12px;">Loading…</div>
+        </div>
+
+        <div v-else-if="jobs.length === 0" class="vb-empty-state">
+          <div class="vb-empty-state-icon">&#129302;</div>
+          <div class="vb-empty-state-text">No active robot jobs right now.</div>
+        </div>
+
+        <div v-else>
+          <div
+            v-for="(job, index) in jobs"
+            :key="job.topicId"
+            class="vb-job-row"
+            :class="index % 2 === 0 ? 'vb-alt-row-1' : 'vb-alt-row-2'"
+          >
+            <div class="vb-job-main">
+              <div class="vb-job-title">
+                <span class="vb-job-topic" @click="openTopic(job.topicId)">
+                  {{ job.topicTitle ?? job.topicId }}
+                </span>
+                <span class="vb-job-meta">
+                  <span v-if="job.forumName">in {{ job.forumName }}</span>
+                  <span v-if="job.topicStatus">· {{ job.topicStatus }}</span>
+                  <span v-if="job.threadLoaded === true">· loaded</span>
+                  <span v-else-if="job.threadLoaded === false">· not loaded</span>
+                  <span v-if="job.activeTurnId">· interruptable</span>
+                </span>
+              </div>
+            </div>
+
+            <div class="vb-job-activity">
+              <span class="vb-status-pill" :class="activityClass(job.activity)">{{ activityLabel(job.activity) }}</span>
+            </div>
+
+            <div class="vb-job-updated">
+              {{ formatDateTime(job.lastUpdatedAt) }}
+            </div>
+
+            <div class="vb-job-model">
+              <div class="vb-job-model-main">{{ job.model ?? 'default' }}</div>
+              <div v-if="job.reasoningEffort" class="vb-job-model-sub">effort: {{ job.reasoningEffort }}</div>
+            </div>
+
+            <div class="vb-job-actions">
+              <button class="vb-btn vb-btn-compact" type="button" :disabled="loading" @click="openTopic(job.topicId)">Open</button>
+              <button class="vb-btn vb-btn-danger vb-btn-compact" type="button" :disabled="loading" @click="interruptTopic(job.topicId)">Interrupt</button>
+              <button class="vb-btn vb-btn-compact" type="button" :disabled="loading" @click="continueTopic(job.topicId)">Continue</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="vb-forum-list vb-forum-list--queue">
+      <div class="vb-category-header">
+        <div class="vb-category-title">Queue (In-Memory)</div>
+      </div>
+
+      <div class="vb-dashboard-table-scroll" aria-label="In-memory queue">
+        <div class="vb-queue-row vb-queue-row--header">
+          <div class="vb-queue-main">Topic</div>
+          <div class="vb-queue-queued">Queued At</div>
+          <div class="vb-queue-actions">Actions</div>
+        </div>
+
+        <div v-if="queue.length === 0" class="vb-empty-state vb-empty-state--notice">
+          <div class="vb-empty-state-text">Queue is empty.</div>
+        </div>
+        <div v-else>
+          <div
+            v-for="(item, index) in queue"
+            :key="`${item.position}:${item.topicId}:${item.queuedAt}`"
+            class="vb-queue-row"
+            :class="index % 2 === 0 ? 'vb-alt-row-1' : 'vb-alt-row-2'"
+          >
+            <div class="vb-queue-main">
+              <div class="vb-queue-title">
+                <span class="vb-queue-pos">{{ item.position }}</span>
+                <span class="vb-queue-topic" @click="openTopic(item.topicId)">
+                  {{ item.topicTitle ?? item.topicId }}
+                </span>
+                <span class="vb-queue-meta">
+                  <span v-if="item.forumName">in {{ item.forumName }}</span>
+                  <span v-if="item.parentPostId">· parent post {{ item.parentPostId }}</span>
+                </span>
+              </div>
+            </div>
+            <div class="vb-queue-queued">
+              {{ formatDateTime(item.queuedAt) }}
+            </div>
+            <div class="vb-queue-actions">
+              <button class="vb-btn vb-btn-compact" type="button" :disabled="loading" @click="openTopic(item.topicId)">Open</button>
+              <button class="vb-btn vb-btn-danger vb-btn-compact" type="button" :disabled="loading" @click="interruptTopic(item.topicId)">Interrupt</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</template>
+
+<style scoped>
+.vb-dashboard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.vb-forum-list {
+  min-width: 0;
+}
+
+.vb-dashboard-table-scroll {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.vb-dashboard-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.vb-dashboard-subtitle {
+  font-size: 11px;
+  font-weight: normal;
+  opacity: 0.9;
+}
+
+.vb-dashboard-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.vb-dashboard-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+@media (max-width: 900px) {
+  .vb-dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.vb-panel {
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface-alt);
+}
+
+.vb-panel-title {
+  padding: 8px 10px;
+  background: linear-gradient(var(--grad-header-start), var(--grad-header-end));
+  color: var(--text-inverse);
+  font-weight: bold;
+  font-size: 12px;
+}
+
+.vb-panel-body {
+  padding: 10px;
+}
+
+.vb-kv {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border-default);
+  font-size: 12px;
+}
+
+.vb-kv:last-child {
+  border-bottom: none;
+}
+
+.vb-k {
+  color: var(--text-secondary);
+}
+
+.vb-v {
+  color: var(--text-default);
+  font-weight: bold;
+}
+
+.vb-panel--stats-right .vb-v {
+  text-align: right;
+  min-width: 70px;
+}
+
+.vb-panel-actions {
+  margin-top: 10px;
+}
+
+.vb-panel-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.vb-job-row,
+.vb-queue-row {
+  display: grid;
+  align-items: stretch;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.vb-job-row {
+  grid-template-columns: minmax(260px, 1fr) 160px 185px 210px 230px;
+}
+
+.vb-queue-row {
+  grid-template-columns: minmax(260px, 1fr) 210px 180px;
+}
+
+.vb-job-row:hover,
+.vb-queue-row:hover {
+  background: var(--bg-surface-hover);
+}
+
+.vb-job-row--header,
+.vb-queue-row--header {
+  background: var(--table-section-bg);
+  font-weight: bold;
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.vb-job-row--header:hover,
+.vb-queue-row--header:hover {
+  background: var(--table-section-bg);
+}
+
+.vb-alt-row-1 {
+  background: var(--bg-surface);
+}
+
+.vb-alt-row-2 {
+  background: var(--bg-surface-alt);
+}
+
+.vb-job-main,
+.vb-queue-main {
+  padding: 10px 12px;
+  min-width: 0;
+}
+
+.vb-job-title,
+.vb-queue-title {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.vb-job-topic,
+.vb-queue-topic {
+  font-weight: bold;
+  color: var(--brand-primary-light);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vb-job-topic:hover,
+.vb-queue-topic:hover {
+  color: var(--brand-primary-hover);
+  text-decoration: underline;
+}
+
+.vb-job-meta,
+.vb-queue-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vb-job-activity,
+.vb-job-updated,
+.vb-job-model,
+.vb-job-actions,
+.vb-queue-queued,
+.vb-queue-actions {
+  padding: 10px;
+  border-left: 1px solid var(--border-default);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+}
+
+.vb-job-activity {
+  align-items: center;
+  text-align: center;
+}
+
+.vb-job-updated {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.vb-job-model {
+  text-align: left;
+}
+
+.vb-job-model-main {
+  font-size: 12px;
+  font-weight: bold;
+  color: var(--text-default);
+}
+
+.vb-job-model-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.vb-job-actions {
+  align-items: center;
+  justify-content: center;
+  flex-direction: row;
+  gap: 6px;
+}
+
+.vb-queue-queued {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.vb-queue-actions {
+  align-items: center;
+  justify-content: center;
+  flex-direction: row;
+  gap: 6px;
+}
+
+.vb-status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 8px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: bold;
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface-alt);
+  color: var(--text-secondary);
+  text-transform: uppercase;
+}
+
+.vb-status-pill--running {
+  background: var(--status-success-bg);
+  border-color: var(--status-success);
+  color: var(--status-success);
+}
+
+.vb-status-pill--waiting {
+  background: var(--status-warning-bg);
+  border-color: var(--status-warning);
+  color: var(--status-warning);
+}
+
+.vb-status-pill--error {
+  background: var(--status-error-bg);
+  border-color: var(--status-error);
+  color: var(--status-error);
+}
+
+.vb-job-activity,
+.vb-job-updated,
+.vb-job-model,
+.vb-job-actions,
+.vb-queue-queued,
+.vb-queue-actions {
+  border-left: 1px solid var(--border-default);
+}
+
+.vb-job-activity,
+.vb-job-updated,
+.vb-job-model,
+.vb-job-actions {
+  border-left: 1px solid var(--border-default);
+}
+
+.vb-job-row--header .vb-job-activity,
+.vb-job-row--header .vb-job-updated,
+.vb-job-row--header .vb-job-model,
+.vb-job-row--header .vb-job-actions,
+.vb-queue-row--header .vb-queue-queued,
+.vb-queue-row--header .vb-queue-actions {
+  background: none;
+  text-align: center;
+}
+
+.vb-job-row--header .vb-job-main,
+.vb-queue-row--header .vb-queue-main {
+  text-align: left;
+}
+
+.vb-btn-compact {
+  padding: 4px 8px;
+  font-size: 10px;
+  border-radius: 3px;
+}
+
+.vb-empty-state--notice {
+  background: var(--notice-bg);
+  border: 1px solid var(--notice-border);
+  color: var(--notice-text);
+}
+
+.vb-forum-list--queue {
+  margin-top: 18px;
+}
+
+@media (max-width: 1100px) {
+  .vb-job-actions {
+    flex-wrap: wrap;
+  }
+
+  .vb-job-row {
+    grid-template-columns: minmax(220px, 1fr) 150px 170px 190px 210px;
+  }
+}
+
+@media (max-width: 1000px) {
+  .vb-queue-row {
+    grid-template-columns: minmax(220px, 1fr) 190px 160px;
+  }
+}
+</style>

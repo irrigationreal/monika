@@ -1,0 +1,15 @@
+export type ForumId = string;
+export type TopicId = string;
+export type PostId = string;
+export type IdentityId = string;
+export type EventId = string;
+export type ExternalId = string;
+export type ExternalRefId = string;
+export type SurfaceId = string;
+export type SessionId = string;
+export type ToolRunId = string;
+export type PlanId = string;
+export type EventCursor = string;
+export type EventSequence = number;
+export type SurfaceCursor = string;
+export type TenantId = string;

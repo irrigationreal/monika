@@ -1,0 +1,35 @@
+# Optional local monika-forum frontend. This keeps the forum as a separate
+# container while all agent execution stays inside the monika container via
+# monika-agentd (http://127.0.0.1:7724 in host-network mode).
+#
+# Usage from ~/repos/monika after rebuilding the monika image:
+#   docker compose -f compose.yaml -f compose.forum.yaml up -d forum
+#
+# Do not run this from inside an active Pi session if it would restart the
+# monika service; restarting the monika container terminates the session.
+
+services:
+  forum:
+    image: ghcr.io/irrigationreal/monika-forum:latest
+    build:
+      context: ./services/forum
+      dockerfile: Dockerfile
+    container_name: monika-forum
+    restart: unless-stopped
+    network_mode: host
+    user: "0:0"
+    volumes:
+      - /home/monika/.pi/forum:/home/monika/.pi/forum
+    environment:
+      NODE_ENV: production
+      CODEX_FORUM_PORT: "4310"
+      CODEX_FORUM_DB: /home/monika/.pi/forum/data.db
+      CODEX_FORUM_UPLOADS_DIR: /home/monika/.pi/forum/uploads
+      CODEX_FORUM_BASE_URL: http://monika.shadowsea.org:4310
+      CODEX_FORUM_API_PREFIX: /api
+      CODEX_FORUM_AGENT_BACKEND: monika-pi
+      MONIKA_AGENTD_BASE_URL: http://127.0.0.1:7724
+      CODEX_WORK_DIR: /home/monika
+      CODEX_FORUM_ENABLE_AUTH: "1"
+      CODEX_FORUM_ENABLE_RATE_LIMITING: "0"
+      CODEX_FORUM_REDIS_STREAM_BUS: "0"

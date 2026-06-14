@@ -1,0 +1,3 @@
+{
+  "extends": "@irrigationreal/typescript-config/config/base.json"
+}

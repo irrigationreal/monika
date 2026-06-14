@@ -1,0 +1,13 @@
+{
+  "name": "@irrigationreal/monika-agentd",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@earendil-works/pi-ai": "0.75.5",
+    "@earendil-works/pi-coding-agent": "0.75.5"
+  },
+  "scripts": {
+    "start": "node src/server.mjs"
+  }
+}

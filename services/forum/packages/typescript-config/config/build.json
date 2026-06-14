@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "${configDir}/dist/build.tsbuildinfo",
+    "rootDir": "${configDir}/src"
+  },
+  "extends": "./settings.json",
+  "include": [
+    "${configDir}/src/**/!(*.test|*.spec|*.stories).{ts,tsx,mts,mtsx}",
+    "${configDir}/src/**/*.vue",
+    "${configDir}/test/**/*.ts",
+    "${configDir}/rules/**/*.ts",
+    "${configDir}/config/**/*.ts"
+  ]
+}

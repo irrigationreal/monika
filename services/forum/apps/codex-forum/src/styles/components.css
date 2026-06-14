@@ -1,0 +1,711 @@
+/**
+ * Component Styles
+ * Forum-specific components and UI elements
+ */
+
+/* Layout */
+.vb-body {
+  min-height: 100vh;
+  padding-bottom: 40px;
+}
+
+.vb-topbar {
+  height: 12px;
+  background: var(--topbar-bg);
+  border-bottom: 1px solid var(--bg-surface);
+}
+
+.vb-shell {
+  width: 95%;
+  max-width: 980px;
+  margin: 0 auto;
+  background: var(--bg-surface);
+  border-left: 1px solid var(--text-muted);
+  border-right: 1px solid var(--text-muted);
+  box-shadow: 0 8px 20px var(--shadow-color);
+  padding: 10px 12px 20px;
+}
+
+/* Header */
+.vb-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+  height: 45px;
+}
+
+.vb-logo {
+  font-size: 20px;
+  font-weight: bold;
+  font-style: italic;
+  font-family: var(--font-heading);
+  color: var(--brand-primary);
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+}
+
+.vb-logo span {
+  font-size: 11px;
+  color: var(--text-subtle);
+  margin-left: 6px;
+}
+
+.vb-welcome {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg-surface-alt);
+  border: 1px solid var(--brand-primary);
+  padding: 0 10px;
+  font-size: 11px;
+  height: 32px;
+  flex: 1;
+  min-width: 0;
+}
+
+.vb-welcome-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vb-welcome-main {
+  flex-shrink: 0;
+}
+
+.vb-welcome-divider {
+  color: var(--text-subtle);
+  flex-shrink: 0;
+}
+
+.vb-welcome-sub {
+  font-size: 10px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vb-welcome-links {
+  border-left: 1px solid var(--text-subtle);
+  padding-left: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  white-space: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.vb-welcome-links::-webkit-scrollbar {
+  display: none;
+}
+
+/* Theme Toggle */
+.vb-theme-toggle {
+  background: linear-gradient(var(--grad-btn-start), var(--grad-btn-end));
+  border: 1px solid var(--border-primary);
+  color: var(--text-inverse);
+  font-size: 14px;
+  padding: 4px 8px;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: all var(--transition-fast);
+  line-height: 1;
+}
+
+.vb-theme-toggle:hover {
+  background: linear-gradient(var(--grad-btn-hover-start), var(--grad-btn-hover-end));
+  transform: translateY(-1px);
+}
+
+/* Navigation */
+.vb-nav {
+  display: flex;
+  align-items: center;
+  background: linear-gradient(var(--grad-nav-start), var(--grad-nav-end));
+  border: 1px solid var(--brand-primary);
+  color: var(--text-inverse);
+  font-size: 11px;
+  font-weight: bold;
+  margin-bottom: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  position: relative;
+}
+
+.vb-nav-hamburger {
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  width: 36px;
+  height: 32px;
+  padding: 6px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.vb-hamburger-line {
+  display: block;
+  width: 100%;
+  height: 2px;
+  background: var(--text-inverse);
+  border-radius: 1px;
+  transition: all var(--transition-fast);
+}
+
+.vb-nav-items {
+  display: flex;
+  align-items: center;
+}
+
+.vb-nav-item {
+  padding: 6px 10px;
+  border-right: 1px solid var(--border-nav-item);
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+  color: var(--text-inverse);
+  text-decoration: none;
+  background: transparent;
+  border: none;
+  font: inherit;
+  line-height: 1.2;
+  display: inline-flex;
+  align-items: center;
+}
+
+.vb-nav-item:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.vb-nav-item:visited {
+  color: var(--text-inverse);
+}
+
+.vb-nav-item:last-child {
+  border-right: none;
+}
+
+/* Breadcrumb */
+.vb-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 10px;
+  font-size: 11px;
+  padding: 6px 0;
+}
+
+.vb-breadcrumb-icon {
+  color: var(--brand-primary-light);
+  font-size: 8px;
+  margin-right: 4px;
+}
+
+.vb-breadcrumb-item {
+  display: inline;
+}
+
+.vb-breadcrumb-sep {
+  color: var(--text-muted);
+  margin: 0 4px;
+}
+
+.vb-breadcrumb-link {
+  color: var(--brand-primary-light);
+  text-decoration: none;
+}
+
+.vb-breadcrumb-link:hover {
+  color: var(--brand-primary-hover);
+  text-decoration: underline;
+}
+
+.vb-breadcrumb-current {
+  color: var(--text-secondary);
+  font-weight: bold;
+}
+
+/* Buttons */
+.vb-btn {
+  background: linear-gradient(var(--grad-btn-start), var(--grad-btn-end));
+  border: 1px solid var(--brand-accent);
+  color: var(--text-inverse);
+  font-weight: bold;
+  font-size: 11px;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  position: relative;
+}
+
+.vb-btn:hover:not(:disabled) {
+  background: linear-gradient(var(--grad-btn-hover-start), var(--grad-btn-hover-end));
+  box-shadow: 0 2px 4px var(--shadow-color);
+  transform: translateY(-1px);
+}
+
+.vb-btn:active:not(:disabled) {
+  background: linear-gradient(var(--grad-btn-end), var(--grad-btn-start));
+  transform: translateY(0);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.vb-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.vb-btn:focus-visible {
+  outline: 2px solid var(--status-info);
+  outline-offset: 2px;
+}
+
+.vb-btn-secondary {
+  background: linear-gradient(var(--grad-secondary-start), var(--grad-secondary-end));
+  border: 1px solid var(--text-muted);
+  color: var(--text-secondary);
+}
+
+.vb-btn-danger {
+  background: linear-gradient(var(--grad-danger-start), var(--grad-danger-end));
+  border: 1px solid var(--status-error);
+}
+
+.vb-small-btn {
+  /* vb-small-btn is used on both <button> and link elements (e.g. <router-link>). */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--brand-secondary);
+  color: var(--text-inverse);
+  border: 1px solid var(--brand-primary);
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 6px;
+  cursor: pointer;
+  text-decoration: none;
+  transition: all var(--transition-fast);
+}
+
+.vb-small-btn:visited {
+  color: var(--text-inverse);
+}
+
+.vb-small-btn:hover:not(:disabled) {
+  background: var(--brand-accent);
+  /* Override global `a:hover` so link-buttons don't change text color on hover. */
+  color: var(--text-inverse);
+}
+
+.vb-small-btn:active:not(:disabled) {
+  background: var(--grad-nav-end);
+}
+
+.vb-small-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.vb-danger-btn {
+  background: linear-gradient(var(--grad-danger-start), var(--grad-danger-end));
+  border: 1px solid var(--status-error);
+}
+
+.vb-link-btn {
+  background: none;
+  border: none;
+  color: var(--brand-primary-light);
+  font-size: 10px;
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 0;
+}
+
+.vb-link-btn:hover {
+  color: var(--brand-primary);
+}
+
+.vb-control-btn {
+  border: 1px solid var(--border-strong);
+  background: linear-gradient(var(--bg-surface), var(--border-default));
+  /* Buttons do not inherit text color by default in many browsers. */
+  color: var(--text-primary);
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: bold;
+}
+
+.vb-control-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Tables */
+.vb-table-wrapper {
+  border: 1px solid var(--brand-primary);
+  background: var(--brand-primary);
+  padding: 1px;
+}
+
+.vb-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--bg-surface-alt);
+}
+
+.vb-table th {
+  background: linear-gradient(var(--grad-header-start), var(--grad-header-end));
+  color: var(--text-inverse);
+  font-weight: bold;
+  font-size: 11px;
+  padding: 4px;
+  text-align: left;
+}
+
+.vb-table th:nth-child(n+4) {
+  text-align: center;
+}
+
+.vb-table-section td {
+  background: var(--table-section-bg);
+  color: var(--brand-primary-light);
+  font-weight: bold;
+  padding: 4px 6px;
+  border-top: 1px solid var(--bg-surface);
+  border-bottom: 1px solid var(--bg-surface);
+}
+
+.vb-table-row {
+  border-bottom: 1px solid var(--border-default);
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+
+.vb-table-row:hover {
+  background-color: var(--bg-surface-hover);
+}
+
+.vb-table-row:hover .vb-icon-cell {
+  background-color: var(--bg-surface-hover);
+}
+
+.vb-table-row:hover .vb-lastpost {
+  background-color: var(--bg-surface-muted);
+}
+
+.vb-icon-col {
+  width: 24px;
+}
+
+.vb-icon-cell {
+  text-align: center;
+  background: var(--bg-surface-alt);
+  border-right: 1px solid var(--bg-surface);
+  padding: 4px;
+}
+
+.vb-thread-cell {
+  padding: 6px;
+  border-right: 1px solid var(--bg-surface);
+}
+
+.vb-thread-title {
+  font-weight: bold;
+  color: var(--brand-primary-light);
+  font-size: 13px;
+}
+
+.vb-thread-meta {
+  color: var(--text-subtle);
+  font-size: 10px;
+}
+
+.vb-thread-date {
+  color: var(--text-disabled);
+}
+
+.vb-lastpost-time {
+  font-weight: bold;
+  color: var(--text-secondary);
+}
+
+.vb-lastpost {
+  background: var(--bg-surface-muted);
+  border-right: 1px solid var(--bg-surface);
+  font-size: 10px;
+  text-align: right;
+  padding: 6px 4px;
+}
+
+.vb-lastpost span {
+  color: var(--brand-primary-light);
+}
+
+.vb-number {
+  text-align: center;
+  font-size: 12px;
+  padding: 6px;
+  border-right: 1px solid var(--bg-surface);
+}
+
+.vb-empty {
+  padding: 10px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+/* Tools bar */
+.vb-tools {
+  background: linear-gradient(var(--grad-tools-start), var(--grad-tools-end));
+  border: 1px solid var(--brand-primary);
+  padding: 4px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.vb-menu {
+  background: linear-gradient(var(--grad-tools-start), var(--grad-tools-end));
+  border: 1px solid var(--brand-primary);
+  color: var(--text-inverse);
+  font-size: 11px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+/* Table header */
+.vb-table-header {
+  background: linear-gradient(var(--grad-tools-start), var(--grad-tools-end));
+  color: var(--text-inverse);
+  font-weight: bold;
+  font-family: var(--font-heading);
+  padding: 6px 8px;
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+}
+
+/* Section */
+.vb-section {
+  font-size: 11px;
+}
+
+/* Controls */
+.vb-controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  padding: 0 4px;
+  margin-bottom: 6px;
+}
+
+.vb-controls-bottom {
+  align-items: flex-start;
+  margin-top: 8px;
+}
+
+.vb-control-group {
+  display: flex;
+  gap: 8px;
+}
+
+/* Pagination */
+.vb-pagination {
+  font-size: 11px;
+  color: var(--text-primary);
+}
+
+.vb-pagination-controls {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+}
+
+.vb-page-btn {
+  background: linear-gradient(var(--bg-surface), var(--bg-surface-muted));
+  border: 1px solid var(--border-strong);
+  /* Buttons do not inherit text color by default in many browsers. */
+  color: var(--text-primary);
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  min-width: 28px;
+}
+
+.vb-page-btn:hover:not(:disabled) {
+  background: linear-gradient(var(--bg-surface-muted), var(--border-default));
+}
+
+.vb-page-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.vb-page-active {
+  background: linear-gradient(var(--grad-nav-start), var(--grad-nav-end));
+  color: var(--text-inverse);
+  border-color: var(--brand-primary);
+  font-weight: bold;
+}
+
+.vb-page-ellipsis {
+  padding: 0 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Filters */
+.vb-filters {
+  border: 1px solid var(--border-strong);
+  background: var(--bg-surface);
+  padding: 4px;
+  font-size: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Legend */
+.vb-legend {
+  display: flex;
+  gap: 16px;
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 8px;
+}
+
+/* Banner */
+.vb-banner {
+  background: var(--status-error-bg);
+  border: 1px solid var(--status-error);
+  padding: 8px;
+  font-size: 12px;
+  color: var(--status-error);
+  margin-bottom: 8px;
+}
+
+/* Footer */
+.vb-footer {
+  margin-top: 20px;
+  text-align: center;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.vb-footer-bar {
+  height: 4px;
+  background: var(--brand-secondary);
+  margin-bottom: 6px;
+}
+
+.vb-footer-links {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  color: var(--brand-primary-light);
+  margin-bottom: 4px;
+}
+
+.vb-footer-links a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.vb-footer-links a:hover {
+  text-decoration: underline;
+}
+
+.vb-footer-copy {
+  color: var(--text-muted);
+}
+
+/* Scroll to top button */
+.vb-scroll-top {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  width: 40px;
+  height: 40px;
+  background: linear-gradient(var(--grad-nav-start), var(--grad-nav-end));
+  border: 1px solid var(--brand-primary);
+  border-radius: 4px;
+  color: var(--text-inverse);
+  font-size: 18px;
+  cursor: pointer;
+  opacity: 0;
+  visibility: hidden;
+  transition: all var(--transition-normal);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px var(--shadow-color);
+}
+
+.vb-scroll-top.visible {
+  opacity: 1;
+  visibility: visible;
+}
+
+.vb-scroll-top:hover {
+  background: linear-gradient(var(--grad-btn-hover-start), var(--grad-btn-hover-end));
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px var(--shadow-color);
+}
+
+.vb-handoff-inline {
+  margin: 12px 0;
+}
+
+.vb-handoff-panel .vb-table-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.vb-handoff-textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.vb-lineage-banner {
+  margin: 10px 0 14px;
+  width: 100%;
+  box-sizing: border-box;
+  align-items: stretch;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.vb-lineage-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.vb-lineage-link {
+  font-weight: bold;
+}
+
+.vb-lineage-banner details {
+  margin-top: 2px;
+}
+
+.vb-lineage-banner summary {
+  cursor: pointer;
+}

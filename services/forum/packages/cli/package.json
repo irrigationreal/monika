@@ -1,0 +1,33 @@
+{
+  "name": "@irrigationreal/codex-forum-cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf node_modules dist .eslintcache",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@irrigationreal/codex-forum-core": "workspace:*",
+    "@irrigationreal/codex-forum-contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@irrigationreal/typescript-config": "workspace:*",
+    "@types/node": "^24.10.4",
+    "typescript": "~5.9.3",
+    "vitest": "^4.0.16"
+  }
+}

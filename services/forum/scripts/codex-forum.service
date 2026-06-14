@@ -1,0 +1,62 @@
+# =============================================================================
+# Codex Forum - Systemd Service File
+# =============================================================================
+#
+# Installation:
+#   sudo cp scripts/codex-forum.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable codex-forum
+#   sudo systemctl start codex-forum
+#
+# Usage:
+#   sudo systemctl status codex-forum
+#   sudo systemctl restart codex-forum
+#   sudo journalctl -u codex-forum -f
+#
+# =============================================================================
+
+[Unit]
+Description=Codex Forum Server
+Documentation=https://github.com/your-org/codex-forum
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=codex
+Group=codex
+
+# Working directory (adjust to your installation path)
+WorkingDirectory=/opt/codex-forum/packages/server
+
+# Environment
+Environment=NODE_ENV=production
+EnvironmentFile=/opt/codex-forum/.env
+
+# Start command
+ExecStart=/usr/bin/pnpm start
+
+# Restart configuration
+Restart=always
+RestartSec=10
+StartLimitInterval=60
+StartLimitBurst=3
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/codex-forum
+
+# Resource limits (adjust as needed)
+MemoryMax=2G
+CPUQuota=200%
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=codex-forum
+
+[Install]
+WantedBy=multi-user.target

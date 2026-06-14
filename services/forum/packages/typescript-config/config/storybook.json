@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "isolatedDeclarations": false,
+    "outDir": "${configDir}/dist/storybook",
+    "tsBuildInfoFile": "${configDir}/dist/storybook.tsbuildinfo",
+    "types": [ "node", "vitest/globals" ]
+  },
+  "extends": "./settings.json",
+  "include": [
+    "${configDir}/.storybook/**/*.ts",
+    "${configDir}/src/**/*.stories.{ts,mts}"
+  ]
+}

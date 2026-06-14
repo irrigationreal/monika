@@ -1,0 +1,26 @@
+{
+  "extends": "./base.json",
+  "compilerOptions": {
+    "isolatedDeclarations": false
+  },
+  "exclude": [
+    "${configDir}/**/.cursor/**",
+    "${configDir}/**/.storybook/**",
+    "${configDir}/**/build",
+    "${configDir}/**/build/**/*",
+    "${configDir}/**/dist",
+    "${configDir}/**/dist/**/*",
+    "${configDir}/**/documentation",
+    "${configDir}/**/e2e",
+    "${configDir}/**/e2e/**/*",
+    "${configDir}/**/examples/**/*",
+    "${configDir}/**/playwright.config.*",
+    "${configDir}/**/eslint.config.*",
+    "${configDir}/**/prettier.config.*",
+    "${configDir}/**/*.config.ts",
+    "${configDir}/**/*.config.mts",
+    "${configDir}/**/node_modules",
+    "${configDir}/**/node_modules/.pnpm/**/*",
+    "${configDir}/**/node_modules/**/*"
+  ]
+}

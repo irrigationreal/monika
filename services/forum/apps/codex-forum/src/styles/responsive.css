@@ -1,0 +1,291 @@
+/**
+ * Responsive Styles
+ * Mobile and tablet adaptations
+ */
+
+@media (max-width: 900px) {
+  .vb-header {
+    flex-direction: column;
+    align-items: flex-start;
+    height: auto;
+  }
+
+  .vb-post-body {
+    flex-direction: column;
+  }
+
+  /* Multipost layout: on narrow screens, avoid reserving a fixed user-sidebar column
+     for the topic title / trace header area. Let it flow naturally. */
+  .vb-post-content--multipost {
+    display: block;
+  }
+
+  .vb-post-user {
+    width: 100%;
+  }
+}
+
+@media (max-width: 600px) {
+  body {
+    font-size: 14px;
+  }
+
+  .vb-shell {
+    width: 100%;
+    max-width: none;
+    border-left: none;
+    border-right: none;
+    box-shadow: none;
+    padding: 8px 10px 16px;
+  }
+
+  .vb-logo {
+    font-size: 22px;
+  }
+
+  .vb-welcome {
+    font-size: 12px;
+  }
+
+  .vb-welcome-links {
+    font-size: 11px;
+  }
+
+  .vb-nav {
+    flex-wrap: wrap;
+  }
+
+  .vb-nav-hamburger {
+    display: flex;
+  }
+
+  .vb-nav-items {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    flex-direction: column;
+    background: linear-gradient(var(--grad-nav-start), var(--grad-nav-end));
+    border: 1px solid var(--brand-primary);
+    border-top: none;
+    z-index: 100;
+    box-shadow: 0 4px 8px var(--shadow-color);
+  }
+
+  .vb-nav-items.vb-nav-open {
+    display: flex;
+  }
+
+  .vb-nav-item {
+    border-right: none;
+    border-bottom: 1px solid var(--border-nav-item);
+    text-align: center;
+    padding: 10px;
+  }
+
+  .vb-nav-item:last-child {
+    border-bottom: none;
+  }
+
+  .vb-breadcrumb {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .vb-btn,
+  .vb-small-btn,
+  .vb-menu,
+  .vb-control-btn,
+  .vb-page-btn {
+    font-size: 12px;
+    padding: 6px 10px;
+  }
+
+  .vb-welcome {
+    flex-direction: column;
+    gap: 6px;
+    height: auto;
+    align-items: flex-start;
+  }
+
+  .vb-welcome-summary {
+    flex-wrap: wrap;
+    white-space: normal;
+  }
+
+  .vb-welcome-divider {
+    display: none;
+  }
+
+  .vb-welcome-links {
+    border-left: none;
+    padding-left: 0;
+    border-top: 1px solid var(--text-subtle);
+    padding-top: 6px;
+    width: 100%;
+    overflow-x: auto;
+  }
+
+  .vb-controls {
+    flex-direction: column;
+    gap: 8px;
+    align-items: stretch;
+  }
+
+  .vb-tools {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .vb-search-box {
+    flex-wrap: wrap;
+    width: 100%;
+  }
+
+  .vb-search-input {
+    width: 100%;
+    font-size: 12px;
+  }
+
+  .vb-new-body input,
+  .vb-new-body textarea,
+  .vb-modal-textarea,
+  .vb-option-select,
+  .vb-option-input,
+  .vb-search-input {
+    font-size: 14px;
+  }
+
+  .vb-pagination-controls {
+    justify-content: center;
+  }
+
+  .vb-scroll-top {
+    bottom: 15px;
+    right: 15px;
+    width: 36px;
+    height: 36px;
+    font-size: 16px;
+  }
+
+  .vb-post-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    font-size: 12px;
+  }
+
+  .vb-post-user {
+    padding: 10px;
+  }
+
+  .vb-avatar {
+    width: 64px;
+    height: 64px;
+  }
+
+  .vb-post-content {
+    padding: 10px;
+  }
+
+  .vb-post-text {
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  .vb-post-heading {
+    font-size: 14px;
+  }
+
+  .vb-footer-links {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .vb-legend {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .vb-forum-title-bar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .vb-forum-icon-large {
+    font-size: 28px;
+  }
+}
+
+@media (max-width: 640px) {
+  .vb-table-wrapper {
+    background: none;
+    border: none;
+  }
+
+  .vb-table {
+    display: block;
+    border: none;
+  }
+
+  .vb-table thead {
+    display: none;
+  }
+
+  .vb-table tbody,
+  .vb-table tr,
+  .vb-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .vb-table-row {
+    margin-bottom: 10px;
+    border: 1px solid var(--border-default);
+    background: var(--bg-surface-alt);
+  }
+
+  .vb-table-row td {
+    border-right: none;
+    border-bottom: 1px solid var(--bg-surface-muted);
+    padding: 8px 10px;
+    text-align: left;
+  }
+
+  .vb-table-row td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 4px;
+    font-size: 10px;
+    font-weight: bold;
+    text-transform: uppercase;
+    color: var(--brand-accent);
+    letter-spacing: 0.02em;
+  }
+
+  .vb-table-row td:last-child {
+    border-bottom: none;
+  }
+
+  .vb-table-section td {
+    border: none;
+    background: var(--table-section-bg);
+  }
+
+  .vb-icon-cell {
+    display: none;
+  }
+
+  .vb-thread-cell {
+    padding: 8px 10px 4px;
+  }
+
+  .vb-lastpost,
+  .vb-number {
+    background: transparent;
+    text-align: left;
+    font-size: 12px;
+  }
+}
