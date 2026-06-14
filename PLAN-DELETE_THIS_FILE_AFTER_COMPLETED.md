@@ -14,7 +14,20 @@ container. The forum is a UI/metadata layer, not a second agent runtime.
 - `~/repos/monika`: `experiment/agentd-forum-backend`
 - `~/repos/monika-forum`: `experiment/pi-agentd-backend`
 
+## Current verified state on stanza
+
+- `monika` container runs memstore + agentd.
+- `agentd`: `http://127.0.0.1:7724/healthz`
+- `monika-forum` container runs on port `4310`.
+- Forum health: `http://127.0.0.1:4310/healthz`
+- Forum API health: `http://127.0.0.1:4310/api/healthz`
+- Browser via SOCKS tunnel: `http://stanza:4310`
+- Forum SQLite DB: `/home/monika/.pi/forum/data.db`
+- Uploads: `/home/monika/.pi/forum/uploads`
+
 ## Completed so far
+
+### Runtime split
 
 - Added `services/agentd` to the Monika repo.
 - Built agentd into the Monika container and start it from `entrypoint.sh` after
@@ -24,158 +37,75 @@ container. The forum is a UI/metadata layer, not a second agent runtime.
   pointing it at `http://127.0.0.1:7724`.
 - Updated monika-forum runtime config to accept `MONIKA_AGENTD_BASE_URL` while
   keeping `CODEX_FORUM_ECHS_BASE_URL` as a compatibility alias.
-- Added monika-forum docs at `docs/MONIKA_AGENTD.md`.
 - Fixed forum Docker runtime enough for the experiment: runtime has needed deps,
   workspace source files, Vue static serving, and SPA fallback.
-- Verified live deployment on stanza:
-  - `agentd`: `http://127.0.0.1:7724/healthz`
-  - forum: `http://127.0.0.1:4310/healthz`
-  - browser via SOCKS: `http://stanza:4310`
-- Verified forum -> agentd -> Pi -> forum smoke test with reply `agentd-ok`.
+- Verified basic forum -> agentd -> Pi -> forum roundtrip.
 
-## Next major tasks
+### Historical import
 
-### 1. Historical Pi session import
+- Implemented agentd Pi session archive endpoints:
+  - `GET /v1/pi/sessions`
+  - `GET /v1/pi/sessions/:id/export`
+- Implemented forum import schema:
+  - `pi_import_runs`
+  - `pi_session_links`
+  - `pi_message_links`
+- Implemented CLI importer:
+  - `corepack pnpm import:pi-sessions -- --agentd http://127.0.0.1:7724 --db /home/monika/.pi/forum/data.db`
+  - supports `--reset-db`, `--dry-run`, and `--limit N`
+- Live import completed into a clean DB:
+  - 598 Pi sessions
+  - 13,691 initial visible posts
+  - 51,225 initial Pi message links
+- Curated cwd routing and system routing are implemented.
 
-Implement idempotent import of existing Pi sessions into forum topics.
+### Session continuity and catch-up
 
-Requirements:
+- agentd supports `POST /v1/conversations/open` to load an existing canonical Pi
+  JSONL session by `pi_session_id` or `pi_session_path`.
+- agentd conversation records include `session_id` and `session_path`.
+- forum replies in linked/imported topics continue the linked Pi session instead
+  of creating a parallel session.
+- forum-created Pi conversations are immediately written to `pi_session_links`.
+- forum has a background sync worker enabled by default:
+  - `MONIKA_PI_SYNC_ENABLED=1` by default
+  - `MONIKA_PI_SYNC_INTERVAL_MS=5000` by default
+- sync polls agentd list/export endpoints, detects changed sessions via
+  `mtime_ms`/`size_bytes`, and imports missing messages idempotently.
+- forum-originated Pi user messages containing `[FORUM TURN]` metadata are linked
+  back to the originating forum post instead of duplicated.
 
-- scan `~/.pi/agent/sessions/**/*.jsonl`
-- parse session headers (`type=session`, `id`, `cwd`, `timestamp`)
-- parse message entries into forum posts
-- map Pi session file/session id to forum topic id
-- map Pi message ids to forum post ids
-- rerunning import must not duplicate topics/posts
-- imported assistant posts should use robot identity
-- historical user posts should be attributed to Neon
-- new sessions discovered from Pi CLI should be attributed to `Pi CLI` unless
-  better metadata exists
+### Memory lifecycle safety
 
-Likely add forum DB tables or system settings for:
+- Forum still does **not** talk to memstore directly.
+- Memory origin/dedupe remains the canonical Pi session path/id.
+- agentd `POST /v1/conversations/:id/close` disposes the live runtime and emits
+  Pi `session_shutdown`, allowing stateful-memory to save the canonical session.
+- forum exposes `POST /topics/:topicId/robot/close` to close a live linked Pi
+  session through agentd.
+- Explicit checkpoint save without closing is **not implemented**: agentd returns
+  501 for `/v1/conversations/:id/memory/save` because no safe public Pi hook has
+  been identified yet.
 
-- `pi_session_links`
-- `pi_message_links`
-- import state/checkpoints
+### Identity/bootstrap cleanup
 
-### 2. Workspace/forum mapping
+- Bootstrap now seeds/renames the default human identity to `Neon` instead of
+  `pp`.
+- `Pi CLI` system identity is seeded for future Pi CLI-discovered user messages.
+- The old manual smoke-test API key was removed when the forum DB was reset for
+  the live historical import.
 
-Add curated cwd-prefix mappings with longest-prefix-wins behavior.
+## Remaining work
 
-Initial suggested project forums:
-
-- The Zeta Directive: `/home/monika/repos/TheZetaDirective`
-- Monika Runtime: `/home/monika/repos/monika`, `/home/monika/.pi`
-- Shadowsea: `/persist/shadowsea`
-- Vesper: `/home/monika/repos/vesper`
-- OpenStarbound: `/home/monika/repos/OpenStarbound`
-- neosynth-arise: `/home/monika/repos/neosynth-arise`
-- General: fallback
-
-Add system forums:
-
-- System / Forks
-- System / Delegates
-- System / Sleep
-
-Eventually add UI to edit mappings and reclassify existing imported sessions.
-
-### 3. Fork/delegate/sleep classification
-
-During import classify sessions:
-
-- path under `sessions/forks/` => fork
-- first user message contains `FOCUSED TASK MODE` => delegate
-- sleep-cycle prompts/output => sleep
-- otherwise normal
-
-Route fork/delegate/sleep sessions to system forums and preserve parent/child
-links where possible.
-
-### 4. Identity/bootstrap cleanup
-
-Current seeded human identity is `pp`; replace with proper local identities:
-
-- Neon: historical imported user posts and forum user
-- Pi CLI: new CLI-created user messages
-- robot/Monika: assistant posts
-
-Remove or replace the manual smoke-test API key. Add a proper local bootstrap or
-admin/dev auth flow before any durable deployment.
-
-### 5. agentd improvements
-
-Current agentd is minimal. Needed improvements:
-
-- open/resume an existing Pi session by file/path
-- create forum-visible session records for sessions created outside forum
-- expose richer model metadata from Pi models.json/model registry:
-  context window, max tokens, input modalities, reasoning support
-- map forum model selection to Pi `setModel()`
-- map forum reasoning/thinking selection to Pi `setThinkingLevel()`
-- support follow-up mode explicitly, not just queue/steer-ish behavior
-- expose command catalog eventually, probably via a Pi extension using
-  `pi.getCommands()`
-- expose context usage estimate/current model context window
-- add endpoints for memory save and forum-native handoff
-
-### 6. Forum-native handoff
-
-Do not rely on `/handoff` directly from the forum; current `/handoff` is
-TUI-interactive. Implement a forum-native equivalent:
-
-1. user clicks Handoff on a topic
-2. user enters goal
-3. agentd serializes current session branch and asks the model to generate a
-   focused handoff prompt
-4. forum shows editable draft
-5. forum creates a linked new topic/Pi session
-6. user submits edited prompt
-
-This preserves Neon's workflow: no compaction; handoff instead.
-
-### 7. Context meter
-
-Add per-topic/session context visibility:
-
-- current model
-- context window size
-- estimated or actual context usage
-- warning thresholds, e.g. 60/80/90 percent
-- suggested handoff action when high
-
-Use actual usage from Pi JSONL entries when available, otherwise estimate from
-branch transcript size.
-
-### 8. Memory lifecycle
-
-Verify forum-created Pi sessions bind Pi extensions and get stateful-memory
-behavior:
-
-- memory enrichment on first prompt/resumed prompt
-- persona/facts/wake/observations injection
-- topic addenda selection
-
-Add explicit forum actions/endpoints:
-
-- Save to memory now
-- Close session
-- maybe idle autosave later
-
-Repeated memstore saves should use session path as origin so dedup/replacement
-works as it does today.
-
-### 9. Production-ish cleanup
-
-Before exposing beyond local tunnel/Tailscale-only testing:
-
-- run forum container as non-root with sane ownership or use a named volume
-- remove manual API key
-- configure auth/admin account or confirm Tailscale-only trust boundary
-- decide route: probably `https://stanza.tawny-stork.ts.net/forum`
-- update CORS/base URL/router base if serving under a subpath
-- consider NixOS/Tailscale Serve config in `/persist/shadowsea`
-- improve Dockerfile so runtime does not need dev dependencies/tsx
+1. Validate a real browser/API continuation of an imported topic end-to-end.
+2. Add sync/link/session status UI and a visible close action.
+3. Improve sync/projection quality: better titles, fork/delegate parent links,
+   visible Pi session id/path/cwd metadata, optional dedicated sync columns.
+4. Map forum model/thinking controls to Pi model/thinking behavior.
+5. Implement forum-native handoff.
+6. Implement a context meter.
+7. Production-ish cleanup: non-root container or named volume, auth/exposure
+   decision, Tailscale Serve route, CORS/base path, runtime without dev deps/tsx.
 
 ## Useful commands
 
@@ -187,11 +117,20 @@ curl -fsS http://127.0.0.1:4310/healthz && echo
 curl -fsS http://127.0.0.1:4310/api/healthz && echo
 ```
 
-Run forum locally on stanza:
+Run/rebuild forum locally on stanza:
 
 ```bash
 cd ~/repos/monika
 docker compose -f compose.yaml -f compose.forum.yaml up -d --build forum
+```
+
+Historical import / recovery:
+
+```bash
+cd ~/repos/monika-forum
+corepack pnpm import:pi-sessions -- \
+  --agentd http://127.0.0.1:7724 \
+  --db /home/monika/.pi/forum/data.db
 ```
 
 Browser access through SOCKS tunnel:
