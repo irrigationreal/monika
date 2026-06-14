@@ -60,6 +60,17 @@ import type {
 
 const ACCESS_TOKEN_TTL_DAYS = 7;
 const REFRESH_TOKEN_TTL_DAYS = 30;
+const RECENT_DUPLICATE_WINDOW_MS = 5 * 60 * 1000;
+
+function normalizePostBodyForDuplicateCheck(text: string): string {
+  return text
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
 
 type CacheEntry<V> = {
   value: V;
@@ -1485,6 +1496,31 @@ export class ForumStore {
   getPost(postId: string): PostRow | null {
     const row = this.db.prepare('select * from posts where id = ?').get(postId) as PostRow | undefined;
     return row ?? null;
+  }
+
+  findRecentDuplicatePost(input: {
+    topicId: string;
+    authorId: string;
+    body: string;
+    createdNear?: string | null;
+  }): PostRow | null {
+    const center = input.createdNear ? Date.parse(input.createdNear) : Date.now();
+    const effectiveCenter = Number.isFinite(center) ? center : Date.now();
+    const start = new Date(effectiveCenter - RECENT_DUPLICATE_WINDOW_MS).toISOString();
+    const end = new Date(effectiveCenter + RECENT_DUPLICATE_WINDOW_MS).toISOString();
+    const normalizedBody = normalizePostBodyForDuplicateCheck(input.body);
+    const rows = this.db
+      .prepare(
+        `select * from posts
+         where topic_id = ?
+           and author_id = ?
+           and deleted_at is null
+           and created_at between ? and ?
+         order by created_at desc
+         limit 20`
+      )
+      .all(input.topicId, input.authorId, start, end) as PostRow[];
+    return rows.find((row) => normalizePostBodyForDuplicateCheck(row.body) === normalizedBody) ?? null;
   }
 
   createPost(input: CreatePostInput): PostRow {

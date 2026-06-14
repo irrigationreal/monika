@@ -49,8 +49,17 @@ type ExportedSession = {
   parse_errors?: Array<{ line: number; message: string }>;
 };
 
+type SyncTarget = {
+  topicId: string;
+  sessionId: string;
+  liveForumSession: boolean;
+};
+
+type ExistingPost = { id: string; body: string; created_at: string };
+
 const nowIso = () => new Date().toISOString();
 const json = (value: unknown): string => JSON.stringify(value ?? null);
+const LIVE_DUPLICATE_WINDOW_MS = 5 * 60 * 1000;
 
 function stripArtifactMarkers(text: string): string {
   return text
@@ -68,6 +77,25 @@ function parseJsonObject(input: string | null): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+function parseTags(input: string | null): string[] {
+  try {
+    const parsed = input ? (JSON.parse(input) as unknown) : [];
+    return Array.isArray(parsed) ? parsed.filter((tag): tag is string => typeof tag === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function normalizePostBodyForDuplicateCheck(text: string): string {
+  return text
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 function firstUserText(entries: PiEntry[]): string {
@@ -205,7 +233,7 @@ export class PiSessionSyncService {
     return this.db.transaction(() => {
       const kind = classify(exported.session, exported.entries);
       const target = this.ensureSession(exported, summary, kind);
-      return this.importMessages(exported, target.topicId, target.sessionId, summary);
+      return this.importMessages(exported, target, summary);
     })();
   }
 
@@ -259,22 +287,31 @@ export class PiSessionSyncService {
     return this.ensureForum(target.name, null);
   }
 
-  private ensureSession(
-    exported: ExportedSession,
-    summary: PiSessionSummary,
-    kind: string
-  ): { topicId: string; sessionId: string } {
+  private ensureSession(exported: ExportedSession, summary: PiSessionSummary, kind: string): SyncTarget {
     const existing = this.db
       .prepare(
-        'select topic_id as topicId, session_id as sessionId from pi_session_links where pi_session_id = ? limit 1'
+        `select l.topic_id as topicId,
+                l.session_id as sessionId,
+                l.metadata_json as metadataJson,
+                t.tags_json as tagsJson
+         from pi_session_links l
+         left join topics t on t.id = l.topic_id
+         where l.pi_session_id = ?
+         limit 1`
       )
-      .get(exported.session.id) as { topicId: string; sessionId: string } | undefined;
+      .get(exported.session.id) as
+      | { topicId: string; sessionId: string; metadataJson: string | null; tagsJson: string | null }
+      | undefined;
+    const previousMeta = existing ? parseJsonObject(existing.metadataJson) : {};
     const meta = {
+      ...previousMeta,
       mtimeMs: summary.mtime_ms ?? null,
       sizeBytes: summary.size_bytes ?? null,
       parseErrors: exported.parse_errors ?? [],
     };
     if (existing) {
+      const tags = parseTags(existing.tagsJson);
+      const liveForumSession = !tags.includes('pi-sync');
       this.db
         .prepare(
           `update pi_session_links
@@ -297,7 +334,7 @@ export class PiSessionSyncService {
           summary.parent_session_path ?? null,
           exported.session.id
         );
-      return existing;
+      return { topicId: existing.topicId, sessionId: existing.sessionId, liveForumSession };
     }
     const neonId = this.ensureIdentity('Pi CLI', 'system', '/avatars/pi-cli.gif');
     const forumId = this.targetForum(kind, exported.session.cwd);
@@ -347,15 +384,70 @@ export class PiSessionSyncService {
         summary.parent_session_id || summary.parent_session_path ? 'parent' : null,
         summary.parent_session_id || summary.parent_session_path ? 'pi-jsonl-header' : null
       );
-    return { topicId, sessionId };
+    return { topicId, sessionId, liveForumSession: false };
   }
 
-  private importMessages(
-    exported: ExportedSession,
+  private findUnlinkedMatchingPost(
     topicId: string,
-    sessionId: string,
-    summary: PiSessionSummary
-  ): number {
+    authorId: string,
+    text: string,
+    createdNear: string | null | undefined
+  ): ExistingPost | null {
+    const exact = this.db
+      .prepare(
+        'select p.id, p.body, p.created_at from posts p left join pi_message_links l on l.post_id = p.id where p.topic_id = ? and p.author_id = ? and p.body = ? and p.deleted_at is null and l.id is null order by p.created_at desc limit 1'
+      )
+      .get(topicId, authorId, text) as ExistingPost | undefined;
+    if (exact) return exact;
+
+    const center = createdNear ? Date.parse(createdNear) : Date.now();
+    const effectiveCenter = Number.isFinite(center) ? center : Date.now();
+    const start = new Date(effectiveCenter - LIVE_DUPLICATE_WINDOW_MS).toISOString();
+    const end = new Date(effectiveCenter + LIVE_DUPLICATE_WINDOW_MS).toISOString();
+    const normalized = normalizePostBodyForDuplicateCheck(text);
+    const candidates = this.db
+      .prepare(
+        `select p.id, p.body, p.created_at
+         from posts p
+         left join pi_message_links l on l.post_id = p.id
+         where p.topic_id = ?
+           and p.author_id = ?
+           and p.deleted_at is null
+           and l.id is null
+           and p.created_at between ? and ?
+         order by p.created_at desc
+         limit 20`
+      )
+      .all(topicId, authorId, start, end) as ExistingPost[];
+    return candidates.find((post) => normalizePostBodyForDuplicateCheck(post.body) === normalized) ?? null;
+  }
+
+  private insertMessageLink(opts: {
+    piSessionId: string;
+    piMessageId: string;
+    postId: string | null;
+    sessionMessageId: string | null;
+    role: string | null | undefined;
+    metadata: unknown;
+  }): void {
+    this.db
+      .prepare(
+        'insert or ignore into pi_message_links (id, pi_session_id, pi_message_id, post_id, session_message_id, role, imported_at, metadata_json) values (?, ?, ?, ?, ?, ?, ?, ?)'
+      )
+      .run(
+        randomUUID(),
+        opts.piSessionId,
+        opts.piMessageId,
+        opts.postId,
+        opts.sessionMessageId,
+        opts.role ?? null,
+        nowIso(),
+        json(opts.metadata)
+      );
+  }
+
+  private importMessages(exported: ExportedSession, target: SyncTarget, summary: PiSessionSummary): number {
+    const { topicId, sessionId, liveForumSession } = target;
     const neonId = this.ensureIdentity('Pi CLI', 'system', '/avatars/pi-cli.gif');
     const robotId = this.ensureIdentity('Monika', 'robot', '/avatars/monika.png');
     let count = 0;
@@ -403,28 +495,31 @@ export class PiSessionSyncService {
       }
       if (entry.hasVisibleText && (entry.role === 'user' || entry.role === 'assistant')) {
         const authorId = entry.role === 'user' ? neonId : robotId;
-        const existingPost = this.db
-          .prepare(
-            'select p.* from posts p left join pi_message_links l on l.post_id = p.id where p.topic_id = ? and p.author_id = ? and p.body = ? and l.id is null order by p.created_at desc limit 1'
-          )
-          .get(topicId, authorId, text) as { id: string } | undefined;
+        const existingPost = this.findUnlinkedMatchingPost(topicId, authorId, text, entry.timestamp ?? null);
         if (existingPost) {
-          this.db
-            .prepare(
-              'insert or ignore into pi_message_links (id, pi_session_id, pi_message_id, post_id, session_message_id, role, imported_at, metadata_json) values (?, ?, ?, ?, ?, ?, ?, ?)'
-            )
-            .run(
-              randomUUID(),
-              exported.session.id,
-              entry.id,
-              existingPost.id,
-              null,
-              entry.role ?? null,
-              nowIso(),
-              json({ ...metadata, reconciledExistingPost: true })
-            );
+          this.insertMessageLink({
+            piSessionId: exported.session.id,
+            piMessageId: entry.id,
+            postId: existingPost.id,
+            sessionMessageId: null,
+            role: entry.role,
+            metadata: { ...metadata, reconciledExistingPost: true },
+          });
           continue;
         }
+
+        if (liveForumSession) {
+          this.insertMessageLink({
+            piSessionId: exported.session.id,
+            piMessageId: entry.id,
+            postId: null,
+            sessionMessageId: null,
+            role: entry.role,
+            metadata: { ...metadata, skippedLiveForumPost: true },
+          });
+          continue;
+        }
+
         const postId = randomUUID();
         const sessionMessageId = randomUUID();
         const at = entry.timestamp ?? lastPostAt;
@@ -439,36 +534,24 @@ export class PiSessionSyncService {
             'insert into session_messages (id, session_id, role, content, created_at, visibility) values (?, ?, ?, ?, ?, ?)'
           )
           .run(sessionMessageId, sessionId, entry.role, text, at, 'public');
-        this.db
-          .prepare(
-            'insert or ignore into pi_message_links (id, pi_session_id, pi_message_id, post_id, session_message_id, role, imported_at, metadata_json) values (?, ?, ?, ?, ?, ?, ?, ?)'
-          )
-          .run(
-            randomUUID(),
-            exported.session.id,
-            entry.id,
-            postId,
-            sessionMessageId,
-            entry.role,
-            nowIso(),
-            json(metadata)
-          );
+        this.insertMessageLink({
+          piSessionId: exported.session.id,
+          piMessageId: entry.id,
+          postId,
+          sessionMessageId,
+          role: entry.role,
+          metadata,
+        });
         count += 1;
       } else {
-        this.db
-          .prepare(
-            'insert or ignore into pi_message_links (id, pi_session_id, pi_message_id, post_id, session_message_id, role, imported_at, metadata_json) values (?, ?, ?, ?, ?, ?, ?, ?)'
-          )
-          .run(
-            randomUUID(),
-            exported.session.id,
-            entry.id,
-            null,
-            null,
-            entry.role ?? null,
-            nowIso(),
-            json({ ...metadata, skippedVisiblePost: true })
-          );
+        this.insertMessageLink({
+          piSessionId: exported.session.id,
+          piMessageId: entry.id,
+          postId: null,
+          sessionMessageId: null,
+          role: entry.role,
+          metadata: { ...metadata, skippedVisiblePost: true },
+        });
       }
     }
     this.db.prepare('update topics set updated_at = ? where id = ?').run(lastPostAt, topicId);

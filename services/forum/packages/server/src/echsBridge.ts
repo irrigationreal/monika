@@ -1686,7 +1686,7 @@ export class EchsBridge {
         if (item?.type === 'message' && item?.role === 'assistant') {
           const text = extractAssistantText(item);
           if (text?.trim()) {
-            this.persistAssistantMessage(threadId, ctx, text).catch(() => {});
+            this.persistAssistantMessage(threadId, ctx, text).catch(() => undefined);
             void this.syncReasoningFromHistory(threadId, ctx);
             void this.forceReasoningBackfill(threadId);
             setTimeout(() => {
@@ -2093,10 +2093,33 @@ export class EchsBridge {
     if (!robotIdentity) {
       return;
     }
-    const sessionMessage = this.store.createSessionMessage(ctx.sessionId, 'assistant', finalText, 'public');
     const { cleanedText: withoutArtifacts, artifacts } = extractArtifactMarkers(finalText);
     const { cleanedText: withoutForumRefs, ids: pendingAttachmentIds } = extractForumAttachmentRefs(withoutArtifacts);
     const { cleanedText, requested } = extractRobotTtsMarker(withoutForumRefs);
+    const duplicatePost = this.store.findRecentDuplicatePost({
+      topicId: ctx.topicId,
+      authorId: robotIdentity.id,
+      body: cleanedText,
+    });
+    if (duplicatePost) {
+      if (requested) {
+        this.attachTtsToPost(duplicatePost.id, cleanedText).catch(() => undefined);
+      }
+      if (pendingAttachmentIds.length > 0) {
+        this.attachPendingAttachmentsToPost(duplicatePost.id, ctx.topicId, pendingAttachmentIds).catch((err: unknown) => {
+          console.warn('Pending attachment link failed for post ' + duplicatePost.id + ': ' + (err instanceof Error ? err.message : String(err)));
+        });
+      }
+      if (artifacts.length > 0) {
+        this.attachArtifactsToPost(duplicatePost.id, artifacts).catch((err: unknown) => {
+          console.warn('Artifact attachment failed for post ' + duplicatePost.id + ': ' + (err instanceof Error ? err.message : String(err)));
+        });
+      }
+      ctx.lastAssistantAt = Date.now();
+      return;
+    }
+
+    const sessionMessage = this.store.createSessionMessage(ctx.sessionId, 'assistant', finalText, 'public');
     const post = this.store.createPost({
       topicId: ctx.topicId,
       body: cleanedText,
@@ -2105,10 +2128,10 @@ export class EchsBridge {
       sourceMessageId: sessionMessage.id,
     });
     if (requested) {
-      this.attachTtsToPost(post.id, cleanedText).catch(() => {});
+      this.attachTtsToPost(post.id, cleanedText).catch(() => undefined);
     }
     if (pendingAttachmentIds.length > 0) {
-      this.attachPendingAttachmentsToPost(post.id, ctx.topicId, pendingAttachmentIds).catch((err) => {
+      this.attachPendingAttachmentsToPost(post.id, ctx.topicId, pendingAttachmentIds).catch((err: unknown) => {
         console.warn('Pending attachment link failed for post ' + post.id + ': ' + (err instanceof Error ? err.message : String(err)));
       });
     }
