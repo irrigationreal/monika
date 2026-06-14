@@ -1,11 +1,14 @@
 import http from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { completeSimple } from '@earendil-works/pi-ai';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import {
   createAgentSessionFromServices,
   createAgentSessionRuntime,
   createAgentSessionServices,
+  convertToLlm,
+  serializeConversation,
   getAgentDir,
   SessionManager,
   AuthStorage,
@@ -17,6 +20,31 @@ const PORT = Number(process.env.MONIKA_AGENTD_PORT ?? 7724);
 const HOST = process.env.MONIKA_AGENTD_HOST ?? '127.0.0.1';
 const AGENT_DIR = process.env.PI_CODING_AGENT_DIR ?? path.join(process.env.HOME ?? '/home/monika', '.pi/agent');
 const DEFAULT_CWD = process.env.MONIKA_AGENTD_DEFAULT_CWD ?? process.env.HOME ?? '/home/monika';
+const IDLE_REAP_ENABLED = process.env.MONIKA_AGENTD_IDLE_REAP_ENABLED !== '0';
+const IDLE_REAP_MS = Number(process.env.MONIKA_AGENTD_IDLE_REAP_MS ?? 30 * 60 * 1000);
+const IDLE_REAP_INTERVAL_MS = Number(process.env.MONIKA_AGENTD_IDLE_REAP_INTERVAL_MS ?? 60 * 1000);
+
+const DEFAULT_HANDOFF_SYSTEM_PROMPT = `You are a context transfer assistant. Given a conversation history and the user's goal for a new thread, generate a focused prompt that:
+
+1. Summarizes relevant context from the conversation (decisions made, approaches taken, key findings)
+2. Lists any relevant files that were discussed or modified
+3. Clearly states the next task based on the user's goal
+4. Is self-contained - the new thread should be able to proceed without the old conversation
+
+Format your response as a prompt the user can send to start the new thread. Be concise but include all necessary context. Do not include any preamble like "Here's the prompt" - just output the prompt itself.
+
+Example output format:
+## Context
+We've been working on X. Key decisions:
+- Decision 1
+- Decision 2
+
+Files involved:
+- path/to/file1.ts
+- path/to/file2.ts
+
+## Task
+[Clear description of what to do next based on user's goal]`;
 
 const conversations = new Map();
 
@@ -163,8 +191,20 @@ async function conversationFromRuntime(runtime, cwd) {
 
 async function createConversation(opts = {}) {
   const cwd = path.resolve(opts.cwd ?? opts.workdir ?? DEFAULT_CWD);
-  const runtime = await createRuntime(cwd, SessionManager.create(cwd), opts);
-  return conversationFromRuntime(runtime, cwd);
+  const sessionManager = SessionManager.create(cwd);
+  const parentSession = await resolveParentSessionPath(opts);
+  if (parentSession) sessionManager.newSession({ parentSession });
+  const runtime = await createRuntime(cwd, sessionManager, opts);
+  const conv = await conversationFromRuntime(runtime, cwd);
+  if (parentSession || opts.lineage_kind || opts.lineage_source) {
+    appendLineage(conv, {
+      kind: opts.lineage_kind ?? (parentSession ? 'parent' : 'unknown'),
+      parentSession,
+      source: opts.lineage_source ?? 'agentd',
+      metadata: opts.lineage_metadata ?? null,
+    });
+  }
+  return conv;
 }
 
 async function openConversation(opts = {}) {
@@ -366,6 +406,8 @@ async function sessionSummaryFromPath(p) {
     cwd: header.cwd,
     timestamp: header.timestamp,
     kind: p.includes('/forks/') ? 'fork' : 'normal',
+    parent_session_path: header.parentSession ?? null,
+    parent_session_id: header.parentSession ? path.basename(header.parentSession, '.jsonl').split('_').pop() : null,
     mtime_ms: stat.mtimeMs,
     size_bytes: stat.size,
   };
@@ -431,6 +473,7 @@ function parseSessionLine(line) {
       timestamp: entry.timestamp,
       cwd: entry.cwd,
       version: entry.version ?? null,
+      parentSession: entry.parentSession ?? null,
     };
   }
   if (entry.type === 'message') {
@@ -529,6 +572,86 @@ function liveContext(conv) {
   return { model: model ? model.provider + '/' + model.id : null, provider: model?.provider ?? null, modelId: model?.id ?? null, thinkingLevel: conv.session.thinkingLevel ?? null, contextWindowTokens: usage?.contextWindow ?? model?.contextWindow ?? null, usedTokens: usage?.tokens ?? null, remainingTokens: usage?.tokens != null && usage?.contextWindow ? Math.max(0, usage.contextWindow - usage.tokens) : null, percent: usage?.percent ?? null, exact: false, source: usage?.tokens != null ? 'pi-runtime-estimate' : 'unavailable', asOfPiMessageId: null };
 }
 
+async function resolveParentSessionPath(opts = {}) {
+  const ref = opts.parent_pi_session_path ?? opts.parent_session_path ?? opts.parentSession ?? opts.parent_pi_session_id ?? opts.parent_session_id ?? null;
+  if (!ref) return null;
+  const session = await findSession(ref);
+  return session?.path ?? String(ref);
+}
+
+function appendLineage(conv, data) {
+  try {
+    const payload = {
+      kind: data.kind ?? 'unknown',
+      parentSession: data.parentSession ?? null,
+      source: data.source ?? 'agentd',
+      createdAt: new Date().toISOString(),
+      ...(data.metadata && typeof data.metadata === 'object' ? { metadata: data.metadata } : {}),
+    };
+    conv.session.sessionManager.appendCustomEntry('monika.lineage', payload);
+  } catch (err) {
+    console.warn('[agentd] failed to append lineage custom entry:', err instanceof Error ? err.message : String(err));
+  }
+}
+
+function extractLineage(entries) {
+  const lineages = entries
+    .filter((entry) => entry.type === 'custom' && entry.customType === 'monika.lineage' && entry.data && typeof entry.data === 'object')
+    .map((entry) => ({ id: entry.id, timestamp: entry.timestamp, ...entry.data }));
+  return lineages.length > 0 ? lineages[lineages.length - 1] : null;
+}
+
+async function generateHandoffDraft(conv, opts = {}) {
+  if (conv.current) throw new Error('Cannot generate handoff while a turn is active');
+  const goal = String(opts.goal ?? '').trim();
+  if (!goal) throw new Error('goal is required');
+  const branch = conv.session.sessionManager.getBranch();
+  const messages = branch.filter((entry) => entry.type === 'message').map((entry) => entry.message);
+  if (messages.length === 0) throw new Error('No conversation to hand off');
+  const conversationText = serializeConversation(convertToLlm(messages));
+  const systemPrompt = String(opts.system_prompt ?? opts.systemPrompt ?? '').trim() || DEFAULT_HANDOFF_SYSTEM_PROMPT;
+  if (systemPrompt.length > 20000) throw new Error('system prompt is too long');
+  const model = resolveModel(conv.runtime.services.modelRegistry, opts.model ?? opts.provider_model ?? null) ?? conv.session.model;
+  if (!model) throw new Error('No model selected');
+  const auth = await conv.runtime.services.modelRegistry.getApiKeyAndHeaders(model);
+  if (!auth.ok) throw new Error(auth.error);
+  const response = await completeSimple(
+    model,
+    {
+      systemPrompt,
+      messages: [{
+        role: 'user',
+        content: [{ type: 'text', text: `## Conversation History\n\n${conversationText}\n\n## User's Goal for New Thread\n\n${goal}` }],
+        timestamp: Date.now(),
+      }],
+    },
+    {
+      apiKey: auth.apiKey,
+      headers: auth.headers,
+      reasoning: opts.reasoning ?? opts.thinking ?? conv.session.thinkingLevel ?? undefined,
+    }
+  );
+  const draft = (response.content ?? [])
+    .filter((part) => part?.type === 'text')
+    .map((part) => part.text ?? '')
+    .join('\n')
+    .trim();
+  return {
+    source: { conversation_id: conv.id, pi_session_id: conv.piSessionId, pi_session_path: conv.sessionPath, cwd: conv.cwd },
+    goal,
+    draft,
+    model: model.provider + '/' + model.id,
+    reasoning: opts.reasoning ?? opts.thinking ?? conv.session.thinkingLevel ?? null,
+  };
+}
+
+async function closeConversation(conv, reason = 'api') {
+  conv.unsubscribe?.();
+  await conv.runtime.dispose();
+  conversations.delete(conv.id);
+  emit(conv, 'turn_completed', { thread_id: conv.id, closed: true, reason });
+}
+
 async function exportSession(sessionId) {
   const session = await findSession(sessionId);
   if (!session) return null;
@@ -550,6 +673,7 @@ async function exportSession(sessionId) {
   return {
     session,
     entries,
+    lineage: extractLineage(entries),
     parse_errors: parseErrors,
   };
 }
@@ -560,7 +684,7 @@ const server = http.createServer(async (req, res) => {
     const method = req.method ?? 'GET';
 
     if (method === 'GET' && url.pathname === '/healthz') {
-      return json(res, 200, { ok: true, status: 'healthy', active_threads: [...conversations.values()].filter((c) => c.current).length, queue_depth: 0 });
+      return json(res, 200, { ok: true, status: 'healthy', active_threads: [...conversations.values()].filter((c) => c.current).length, loaded_conversations: conversations.size, idle_reap_enabled: IDLE_REAP_ENABLED, queue_depth: 0 });
     }
     if (method === 'GET' && url.pathname === '/v1/models') return json(res, 200, await listModels());
     if (method === 'GET' && url.pathname === '/v1/pi/sessions') return json(res, 200, { sessions: await scanSessions() });
@@ -607,6 +731,10 @@ const server = http.createServer(async (req, res) => {
         await applySessionConfig(conv, body.config ?? body);
         return json(res, 200, { conversation: conversationRecord(conv) });
       }
+      if (method === 'POST' && tail === 'handoff/draft') {
+        const body = await readBody(req);
+        return json(res, 200, await generateHandoffDraft(conv, body));
+      }
       if (method === 'GET' && tail === 'events') {
         res.writeHead(200, {
           'content-type': 'text/event-stream; charset=utf-8',
@@ -642,10 +770,7 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, { ok: true });
       }
       if (method === 'POST' && tail === 'close') {
-        conv.unsubscribe?.();
-        await conv.runtime.dispose();
-        conversations.delete(conv.id);
-        emit(conv, 'turn_completed', { thread_id: conv.id, closed: true });
+        await closeConversation(conv, 'api');
         return json(res, 200, { ok: true, memory_saved: true });
       }
       if (method === 'POST' && tail === 'memory/save') {
@@ -665,13 +790,28 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+function startIdleReaper() {
+  if (!IDLE_REAP_ENABLED || !Number.isFinite(IDLE_REAP_MS) || IDLE_REAP_MS <= 0) return;
+  const interval = setInterval(() => {
+    const now = Date.now();
+    for (const conv of [...conversations.values()]) {
+      if (conv.current) continue;
+      if (now - conv.lastActivityAt < IDLE_REAP_MS) continue;
+      closeConversation(conv, 'idle-reap').catch((err) => console.warn('[agentd] idle reap failed:', err instanceof Error ? err.message : String(err)));
+    }
+  }, Math.max(5000, IDLE_REAP_INTERVAL_MS));
+  interval.unref?.();
+}
+
+startIdleReaper();
+
 server.listen(PORT, HOST, () => {
   console.log(`[agentd] listening on http://${HOST}:${PORT} (agentDir=${AGENT_DIR})`);
 });
 
 process.on('SIGTERM', async () => {
   for (const conv of conversations.values()) {
-    try { conv.unsubscribe?.(); await conv.runtime.dispose(); } catch {}
+    try { await closeConversation(conv, 'sigterm'); } catch {} 
   }
   server.close(() => process.exit(0));
 });

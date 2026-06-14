@@ -53,10 +53,11 @@ container. The forum is a UI/metadata layer, not a second agent runtime.
 - Implemented CLI importer:
   - `corepack pnpm import:pi-sessions -- --agentd http://127.0.0.1:7724 --db /home/monika/.pi/forum/data.db`
   - supports `--reset-db`, `--dry-run`, and `--limit N`
-- Live import completed into a clean DB:
-  - 598 Pi sessions
-  - 13,691 initial visible posts
-  - 51,225 initial Pi message links
+- Live import completed into a clean DB, followed by sync, classification cleanup, handoff testing, and parent-lineage backfill. Current snapshot:
+  - 604 Pi-linked topics/sessions
+  - 13,793 visible posts
+  - 52,860 Pi message links
+  - 66 sessions with parent lineage; 23 resolve to an imported parent forum topic
 - Curated cwd routing and system routing are implemented.
 
 ### Session continuity and catch-up
@@ -87,6 +88,24 @@ container. The forum is a UI/metadata layer, not a second agent runtime.
   501 for `/v1/conversations/:id/memory/save` because no safe public Pi hook has
   been identified yet.
 
+
+### Model/context parity and handoff
+
+- Forum model/reasoning controls use Pi model IDs directly and are applied in agentd through Pi's native model/thinking APIs.
+- Reply UI has a context meter sourced from Pi usage/context data, with an explicit warning when the value is not exact current context.
+- Implemented forum-native handoff:
+  - `POST /v1/conversations/:id/handoff/draft` in agentd generates a disposable draft from the canonical Pi session branch.
+  - Forum exposes `POST /topics/:topicId/handoff/draft` and `POST /topics/:topicId/handoff`.
+  - The Topic UI has an inline two-stage handoff panel above Quick Reply.
+  - Final confirmation creates the destination forum topic, creates a parented Pi session, writes lineage metadata, posts the edited draft, and dispatches immediately.
+  - Destination forum, optional cwd override, separate draft/launch model settings, and editable generation prompt are available.
+- Implemented Pi-native lineage metadata:
+  - New parented agentd sessions use Pi's `parentSession` JSONL header.
+  - New handoff/delegate/sleep extension paths append `customType: "monika.lineage"` entries.
+  - Forum DB stores `parent_pi_session_id`, `parent_pi_session_path`, `lineage_kind`, and `lineage_source` in `pi_session_links`.
+  - A Jun 14 backfill populated parent links for historical imported sessions where Pi JSONL headers already had `parentSession`.
+- Implemented agentd idle reaping so abandoned live runtimes can be closed through the same memory-safe close path rather than making handoff special-case source-session closure.
+
 ### Identity/bootstrap cleanup
 
 - Bootstrap now seeds/renames the default human identity to `neon` instead of
@@ -97,15 +116,12 @@ container. The forum is a UI/metadata layer, not a second agent runtime.
 
 ## Remaining work
 
-1. Validate a real browser/API continuation of an imported topic end-to-end.
+1. Validate more real browser/API continuations of imported topics end-to-end now that the basic path has been exercised.
 2. Add sync/link/session status UI and a visible close action.
-3. Improve sync/projection quality: better titles, fork/delegate parent links,
-   visible Pi session id/path/cwd metadata, optional dedicated sync columns.
-4. Map forum model/thinking controls to Pi model/thinking behavior.
-5. Implement forum-native handoff.
-6. Implement a context meter.
-7. Production-ish cleanup: non-root container or named volume, auth/exposure
-   decision, Tailscale Serve route, CORS/base path, runtime without dev deps/tsx.
+3. Improve projection quality: better imported titles, richer Pi session metadata display, and optional admin tools for reclassification/backfill.
+4. Add on-demand per-post historical trace UI for imported thinking/tool calls.
+5. Production-ish cleanup: non-root container or named volume, auth/exposure decision, Tailscale Serve route, CORS/base path, runtime without dev deps/tsx.
+6. Decide whether this experiment has graduated enough to replace/delete this plan file and move the stable architecture into permanent docs.
 
 ## Useful commands
 

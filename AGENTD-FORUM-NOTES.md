@@ -47,6 +47,7 @@ Implemented endpoints:
 - `GET /v1/pi/sessions`
   - lists Pi JSONL sessions
   - includes `mtime_ms` and `size_bytes` for cheap sync detection
+  - includes `parent_session_path` / `parent_session_id` when the Pi JSONL header has `parentSession`
 - `GET /v1/pi/sessions/:id/export`
   - returns parsed entries for one canonical Pi JSONL session
   - includes assistant provider/model, thinking text, and tool metadata when present
@@ -54,6 +55,7 @@ Implemented endpoints:
   - returns best Pi-derived session context usage/model metadata for a canonical JSONL session
 - `POST /v1/conversations`
   - creates a new Pi session/runtime
+  - accepts `parent_pi_session_id` / `parent_pi_session_path`, writes Pi's native `parentSession` header, and appends a `monika.lineage` custom JSONL entry when lineage metadata is supplied
 - `POST /v1/conversations/open`
   - opens an existing Pi session by `pi_session_id` or `pi_session_path`
   - returns the existing live conversation if already loaded
@@ -67,6 +69,9 @@ Implemented endpoints:
 - `POST /v1/conversations/:id/close`
   - disposes the live runtime and emits Pi `session_shutdown`
   - stateful-memory saves using canonical Pi session path/origin
+- `POST /v1/conversations/:id/handoff/draft`
+  - generates a disposable handoff prompt from the canonical Pi session branch using the same `getBranch()` / `convertToLlm()` / `serializeConversation()` pattern as the Pi TUI handoff extension
+  - does not create a new Pi session, forum topic, or lineage row until the forum confirms the handoff
 - `POST /v1/conversations/:id/memory/save`
   - currently returns 501; explicit checkpoint save without closing is not
     implemented until Pi exposes a safe public hook
@@ -95,10 +100,11 @@ Implemented in monika-forum:
     --db /home/monika/.pi/forum/data.db
   ```
 
-- Live historical import completed from a clean DB:
-  - 598 sessions
-  - 13,691 initial visible posts
-  - 51,225 initial Pi message links
+- Live historical import completed from a clean DB, followed by sync, classification cleanup, handoff testing, and parent-lineage backfill. Current snapshot after the Jun 14 handoff work:
+  - 604 Pi-linked topics/sessions
+  - 13,793 visible posts
+  - 52,860 Pi message links
+  - 66 sessions with parent lineage; 23 resolve to an imported parent forum topic
 - Forum replies in linked/imported topics call `POST /v1/conversations/open` and
   continue the canonical Pi session instead of creating a parallel session.
 - Forum-created Pi conversations immediately write a `pi_session_links` row using
@@ -110,6 +116,13 @@ Implemented in monika-forum:
   idempotently, and links forum-origin `[FORUM TURN]` Pi user messages back to
   the originating forum post rather than duplicating them.
 - Bootstrap identities are now `neon`, `Pi CLI`, `robot`, and `Director`.
+- Forum-native handoff is implemented:
+  - The UI exposes a two-stage inline handoff panel above Quick Reply.
+  - Draft generation is disposable UI state; no Pi/forum state is created until final confirmation.
+  - Final confirmation creates the destination topic, creates a parented Pi session through agentd, writes lineage metadata, posts the edited draft, and dispatches the first robot turn.
+  - Destination forum, workspace override, draft-generation model/reasoning, launch model/reasoning, and editable generation prompt are exposed.
+- `pi_session_links` stores `parent_pi_session_id`, `parent_pi_session_path`, `lineage_kind`, and `lineage_source`. Parent backlinks are shown when the parent session maps to an imported forum topic.
+- Historical sessions with Pi JSONL `parentSession` headers were retroactively backfilled as `lineage_kind='parent'` / `lineage_source='pi-jsonl-header'`; older sessions without Pi header lineage cannot be inferred reliably.
 
 ## Local deployment on stanza
 
@@ -179,7 +192,7 @@ curl -fsS http://127.0.0.1:4310/api/models | head
   `setThinkingLevel()` using Pi model IDs directly.
 - A context meter is available in the reply UI using the best Pi-provided usage
   data; it warns when the value is not exact current context.
-- Handoff is not implemented yet.
+- Forum-native handoff is implemented. Exact lineage kind is available for new forum handoffs and newly patched Pi extensions; older imported parented sessions are shown honestly as `parent` when only the Pi `parentSession` header exists.
 
 ## Do not lose these design decisions
 
@@ -189,6 +202,6 @@ curl -fsS http://127.0.0.1:4310/api/models | head
 - Historical import and ongoing sync should include all sessions, but curated cwd
   mappings and system forums should prevent the main project forums from
   becoming noisy.
-- Fork/delegate/sleep sessions are imported and routed to system areas.
+- Fork/delegate/sleep sessions are imported and routed to system areas. New delegate/sleep/handoff extension paths append `monika.lineage` custom JSONL entries for future imports/sync.
 - Forum never talks directly to memstore and never invents memory origins.
   Memory dedupe must use canonical Pi session path/id.
