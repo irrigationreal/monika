@@ -149,9 +149,21 @@ if [ ! -S "$MEMSTORE_SOCKET" ]; then
 fi
 echo "[monika] memstore ready (PID $MEMSTORE_PID)"
 
+# ── Monika agent daemon ──────────────────────────────────
+AGENTD_PID=""
+if [ "${MONIKA_AGENTD_ENABLED:-1}" != "0" ]; then
+  echo "[monika] Starting agentd (port=${MONIKA_AGENTD_PORT:-7724})..."
+  node /opt/agentd/src/server.mjs &
+  AGENTD_PID=$!
+fi
+
 # ── Signal handling ──────────────────────────────────────
 cleanup() {
   echo "[monika] Shutting down..."
+  if [ -n "$AGENTD_PID" ]; then
+    kill "$AGENTD_PID" 2>/dev/null || true
+    wait "$AGENTD_PID" 2>/dev/null || true
+  fi
   kill "$MEMSTORE_PID" 2>/dev/null
   wait "$MEMSTORE_PID" 2>/dev/null
   exit 0

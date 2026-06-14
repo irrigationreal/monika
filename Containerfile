@@ -74,6 +74,15 @@ RUN mkdir -p /tmp/pi-prebuild/.pi/agent && \
 # memstore binary
 COPY --from=memstore-build /memstore /usr/local/bin/memstore
 
+# Monika agent daemon: a small Pi-backed HTTP/SSE service used by alternate
+# frontends such as monika-forum. It runs in the same container as Pi/memstore
+# so there is a single owner for agent sessions and memory integration.
+WORKDIR /opt/agentd
+COPY services/agentd/package.json /opt/agentd/package.json
+RUN npm install --omit=dev
+COPY services/agentd/src/ /opt/agentd/src/
+WORKDIR /
+
 # Host shell wrapper and AgentLogs runtime wrapper
 COPY host-shell /usr/local/bin/host-shell
 COPY scripts/agentlogs-monika /usr/local/bin/agentlogs-monika
