@@ -60,6 +60,8 @@ function conversationRecord(conv) {
     model: conv.session.model ? `${conv.session.model.provider}/${conv.session.model.id}` : null,
     reasoning: conv.session.thinkingLevel ?? null,
     cwd: conv.cwd,
+    session_id: conv.piSessionId ?? conv.id,
+    session_path: conv.sessionPath ?? conv.session?.sessionManager?.getSessionFile?.() ?? null,
     instructions: null,
     coordination_mode: 'pi',
     created_at_ms: conv.createdAt,
@@ -95,11 +97,12 @@ async function bindConversation(conv) {
   conv.unsubscribe = session.subscribe((event) => handlePiEvent(conv, event));
 }
 
-async function createConversation(opts = {}) {
-  const cwd = path.resolve(opts.cwd ?? opts.workdir ?? DEFAULT_CWD);
-  const runtime = await createRuntime(cwd, SessionManager.create(cwd));
+async function conversationFromRuntime(runtime, cwd) {
+  const sessionManager = runtime.session.sessionManager;
   const conv = {
     id: runtime.session.sessionId,
+    piSessionId: sessionManager?.getSessionId?.() ?? runtime.session.sessionId,
+    sessionPath: sessionManager?.getSessionFile?.() ?? null,
     cwd,
     runtime,
     session: runtime.session,
@@ -114,6 +117,27 @@ async function createConversation(opts = {}) {
   await bindConversation(conv);
   conversations.set(conv.id, conv);
   return conv;
+}
+
+async function createConversation(opts = {}) {
+  const cwd = path.resolve(opts.cwd ?? opts.workdir ?? DEFAULT_CWD);
+  const runtime = await createRuntime(cwd, SessionManager.create(cwd));
+  return conversationFromRuntime(runtime, cwd);
+}
+
+async function openConversation(opts = {}) {
+  const sessionRef = opts.pi_session_id ?? opts.session_id ?? opts.id ?? opts.pi_session_path ?? opts.path;
+  if (!sessionRef) throw new Error('pi_session_id or pi_session_path is required');
+  const sessionInfo = await findSession(sessionRef);
+  if (!sessionInfo) return null;
+
+  for (const conv of conversations.values()) {
+    if (conv.piSessionId === sessionInfo.id || conv.sessionPath === sessionInfo.path) return conv;
+  }
+
+  const cwd = path.resolve(opts.cwd ?? sessionInfo.cwd ?? DEFAULT_CWD);
+  const runtime = await createRuntime(cwd, SessionManager.open(sessionInfo.path, undefined, cwd));
+  return conversationFromRuntime(runtime, cwd);
 }
 
 function emit(conv, event, data) {
@@ -242,6 +266,33 @@ async function listModels() {
   }
 }
 
+async function readFirstLine(p) {
+  const handle = await fs.open(p, 'r');
+  try {
+    const buffer = Buffer.alloc(8192);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    const chunk = buffer.subarray(0, bytesRead).toString('utf8');
+    return chunk.split('\n')[0] ?? '';
+  } finally {
+    await handle.close();
+  }
+}
+
+async function sessionSummaryFromPath(p) {
+  const [firstLine, stat] = await Promise.all([readFirstLine(p), fs.stat(p)]);
+  const header = JSON.parse(firstLine || '{}');
+  if (header.type !== 'session') return null;
+  return {
+    id: header.id,
+    path: p,
+    cwd: header.cwd,
+    timestamp: header.timestamp,
+    kind: p.includes('/forks/') ? 'fork' : 'normal',
+    mtime_ms: stat.mtimeMs,
+    size_bytes: stat.size,
+  };
+}
+
 async function scanSessions() {
   const root = path.join(AGENT_DIR, 'sessions');
   const out = [];
@@ -253,9 +304,8 @@ async function scanSessions() {
       if (entry.isDirectory()) await walk(p);
       else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
         try {
-          const first = (await fs.readFile(p, 'utf8')).split('\n')[0];
-          const header = JSON.parse(first);
-          if (header.type === 'session') out.push({ id: header.id, path: p, cwd: header.cwd, timestamp: header.timestamp, kind: p.includes('/forks/') ? 'fork' : 'normal' });
+          const summary = await sessionSummaryFromPath(p);
+          if (summary) out.push(summary);
         } catch {}
       }
     }
@@ -263,6 +313,12 @@ async function scanSessions() {
   await walk(root);
   out.sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
   return out;
+}
+
+async function findSession(sessionRef) {
+  const decoded = String(sessionRef);
+  const sessions = await scanSessions();
+  return sessions.find((candidate) => candidate.id === decoded || candidate.path === decoded) ?? null;
 }
 
 function visibleTextFromContent(content) {
@@ -349,8 +405,7 @@ function parseSessionLine(line) {
 }
 
 async function exportSession(sessionId) {
-  const sessions = await scanSessions();
-  const session = sessions.find((candidate) => candidate.id === sessionId || candidate.path === sessionId);
+  const session = await findSession(sessionId);
   if (!session) return null;
 
   const raw = await fs.readFile(session.path, 'utf8');
@@ -398,6 +453,13 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { conversation: conversationRecord(conv) });
     }
 
+    if (method === 'POST' && url.pathname === '/v1/conversations/open') {
+      const body = await readBody(req);
+      const conv = await openConversation(body);
+      if (!conv) return notFound(res);
+      return json(res, 200, { conversation: conversationRecord(conv) });
+    }
+
     const convMatch = url.pathname.match(/^\/v1\/conversations\/([^/]+)(?:\/(.*))?$/);
     if (convMatch) {
       const conv = conversations.get(decodeURIComponent(convMatch[1]));
@@ -437,6 +499,19 @@ const server = http.createServer(async (req, res) => {
         await conv.session.abort();
         emit(conv, 'turn_interrupted', { thread_id: conv.id });
         return json(res, 200, { ok: true });
+      }
+      if (method === 'POST' && tail === 'close') {
+        conv.unsubscribe?.();
+        await conv.runtime.dispose();
+        conversations.delete(conv.id);
+        emit(conv, 'turn_completed', { thread_id: conv.id, closed: true });
+        return json(res, 200, { ok: true, memory_saved: true });
+      }
+      if (method === 'POST' && tail === 'memory/save') {
+        return json(res, 501, {
+          error: 'not_implemented',
+          message: 'Explicit save without closing is not exposed safely yet. Use /close to trigger Pi session_shutdown memory save.',
+        });
       }
       if (method === 'POST' && (tail === 'pause' || tail === 'resume')) return json(res, 200, { ok: true });
     }

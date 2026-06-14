@@ -164,3 +164,21 @@ CLI:
 The forum still does **not** read Pi files directly and still does **not** talk to
 memstore. Import remains a projection from canonical Pi sessions into forum
 SQLite.
+
+### Session continuity endpoints
+
+For forum session continuity, agentd now exposes:
+
+- `POST /v1/conversations/open` with `pi_session_id` or `pi_session_path` to load
+  an existing Pi JSONL session into a live agent runtime. If the session is
+  already loaded, agentd returns the existing conversation.
+- `POST /v1/conversations/:id/close` to dispose the live runtime. This emits Pi's
+  normal `session_shutdown` lifecycle and therefore lets stateful-memory save
+  using the canonical Pi session path/origin.
+- `POST /v1/conversations/:id/memory/save` currently returns 501. Explicit
+  checkpoint-save without closing is intentionally not faked; implement only if
+  Pi exposes a safe public lifecycle hook for it.
+
+`GET /v1/pi/sessions` includes `mtime_ms` and `size_bytes` so the forum can poll
+for changed canonical session files without reading session contents on every
+sync tick.
