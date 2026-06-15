@@ -160,6 +160,12 @@ fi
 monika_log "[monika] memstore ready (PID $MEMSTORE_PID)"
 
 # ── Monika agent daemon ──────────────────────────────────
+# Runner mode is a short-lived foreground job; keep agentd disabled unless a
+# caller explicitly opts in.
+if [ "${AGENT_RUNNER_MODE:-}" = "1" ]; then
+  MONIKA_AGENTD_ENABLED="${MONIKA_AGENTD_ENABLED:-0}"
+fi
+
 AGENTD_PID=""
 if [ "${MONIKA_AGENTD_ENABLED:-1}" != "0" ]; then
   monika_log "[monika] Starting agentd (port=${MONIKA_AGENTD_PORT:-7724})..."

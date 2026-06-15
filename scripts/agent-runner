@@ -10,7 +10,7 @@ Usage:
 
 Options:
   --task PATH              Prompt file to mount at /task/<name> (required)
-  --system PATH            Optional system prompt addendum file
+  --system PATH            Optional system prompt/persona addendum file
   --workspace PATH         Workspace/repo to mount at /workspace (default: current directory)
   --workspace-writable     Mount workspace read-write instead of read-only
   --env-file PATH          Docker env-file containing model/search credentials
@@ -21,16 +21,22 @@ Options:
   --keep-output            Preserve generated output directory on success
   --cleanup MODE           on-success (default), always, or never
   --expect MODE            text (default) or json
+  --timeout SECONDS        Max pi runtime; 0 disables timeout (default: 1800)
+  --save-session           Save a pi session under /outputs/sessions (default: off)
+  --no-tools               Disable all pi tools
+  --tools LIST             Comma-separated pi tool allowlist, e.g. read,grep,find,ls
   --image IMAGE            Runner image (default: monika:dev)
   --extra-docker-arg ARG   Pass an extra argument to docker run; can be repeated
 
 Environment:
   AGENT_RUNNER_DOCKER      Docker command to use, e.g. "sudo docker" (default: docker)
+  AGENT_RUNNER_IMAGE       Runner image override (default: monika:dev)
   -h, --help               Show this help
 
 The container's stdout is the canonical automation result. A fresh per-run output
-folder is created for stdout/stderr copies, runner metadata, artifacts, and sessions.
-Generated output folders are deleted on success by default and kept on failure.
+folder is created for stdout/stderr copies, runner metadata, artifacts, and optional
+sessions. Generated output folders are deleted on success by default and kept on
+failure.
 USAGE
 }
 
@@ -75,6 +81,10 @@ explicit_output=0
 keep_output=0
 cleanup="on-success"
 expect="text"
+timeout_seconds="1800"
+save_session=0
+no_tools=0
+tools=""
 extra_docker_args=()
 
 while [[ $# -gt 0 ]]; do
@@ -91,6 +101,10 @@ while [[ $# -gt 0 ]]; do
     --keep-output) keep_output=1; shift ;;
     --cleanup) cleanup="${2:-}"; shift 2 ;;
     --expect) expect="${2:-}"; shift 2 ;;
+    --timeout) timeout_seconds="${2:-}"; shift 2 ;;
+    --save-session) save_session=1; shift ;;
+    --no-tools) no_tools=1; shift ;;
+    --tools) tools="${2:-}"; shift 2 ;;
     --image) image="${2:-}"; shift 2 ;;
     --extra-docker-arg) extra_docker_args+=("${2:-}"); shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -118,6 +132,14 @@ if [[ "$expect" != "text" && "$expect" != "json" ]]; then
   echo "--expect must be text or json" >&2
   exit 2
 fi
+if [[ ! "$timeout_seconds" =~ ^[0-9]+$ ]]; then
+  echo "--timeout must be a non-negative integer number of seconds" >&2
+  exit 2
+fi
+if [[ "$no_tools" -eq 1 && -n "$tools" ]]; then
+  echo "--no-tools and --tools cannot be used together" >&2
+  exit 2
+fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
@@ -137,18 +159,29 @@ abs_scratch="$(abs_path "$scratch_dir")"
 docker_args=(
   run --rm
   -e AGENT_RUNNER_MODE=1
+  -e MONIKA_AGENTD_ENABLED=0
   -e MONIKA_LOG_TO_STDERR=1
   -e RUNNER_TASK_FILE="/task/$task_name"
   -e RUNNER_OUTPUT_DIR=/outputs
   -e RUNNER_WORKSPACE=/workspace
   -e RUNNER_SCRATCH_DIR=/scratch
   -e RUNNER_EXPECT="$expect"
+  -e RUNNER_TIMEOUT_SECONDS="$timeout_seconds"
   -v "$task_dir:/task:ro"
   -v "$abs_workspace:/workspace:$workspace_mode"
   -v "$abs_output:/outputs"
   -v "$abs_scratch:/scratch"
 )
 
+if [[ "$save_session" -eq 1 ]]; then
+  docker_args+=( -e RUNNER_SAVE_SESSION=1 )
+fi
+if [[ "$no_tools" -eq 1 ]]; then
+  docker_args+=( -e RUNNER_NO_TOOLS=1 )
+fi
+if [[ -n "$tools" ]]; then
+  docker_args+=( -e PI_TOOLS="$tools" )
+fi
 if [[ -n "$system_file" ]]; then
   abs_system="$(abs_path "$system_file")"
   system_dir="$(dirname "$abs_system")"

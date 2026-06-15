@@ -11,6 +11,9 @@ const DEFAULT_SYSTEM_PROMPT_FILE = "/task/system.md";
 const DEFAULT_OUTPUT_DIR = "/outputs";
 const DEFAULT_WORKSPACE = "/workspace";
 const DEFAULT_SCRATCH = "/scratch";
+const DEFAULT_TIMEOUT_SECONDS = 1800;
+const TIMEOUT_EXIT_CODE = 124;
+const TERMINATION_GRACE_MS = 5000;
 
 function usage() {
   console.log(`agent-runner
@@ -26,16 +29,33 @@ Environment:
   RUNNER_WORKSPACE             Working directory for pi (default: ${DEFAULT_WORKSPACE})
   RUNNER_SCRATCH_DIR           Scratch root (default: ${DEFAULT_SCRATCH})
   RUNNER_EXPECT                Output validation: text or json (default: text)
+  RUNNER_TIMEOUT_SECONDS       Max pi runtime in seconds; 0 disables timeout (default: ${DEFAULT_TIMEOUT_SECONDS})
+  RUNNER_SAVE_SESSION          Save a pi session under <output>/sessions when true (default: false)
+  RUNNER_NO_TOOLS              Disable all pi tools when true (default: false)
   PI_MODEL                     Optional pi model selector
   PI_TOOLS                     Optional comma-separated pi tool allowlist
-  PI_SESSION_DIR               Session directory (default: <output>/sessions)
+  PI_SESSION_DIR               Session directory when RUNNER_SAVE_SESSION=true (default: <output>/sessions)
 `);
+}
+
+function envFlag(name, defaultValue = false) {
+  const value = process.env[name];
+  if (value == null || value === "") return defaultValue;
+  return ["1", "true", "yes", "on"].includes(value.toLowerCase());
+}
+
+function parseTimeoutSeconds(value) {
+  if (value == null || value === "") return DEFAULT_TIMEOUT_SECONDS;
+  if (!/^\d+$/.test(value)) {
+    throw new Error("RUNNER_TIMEOUT_SECONDS must be a non-negative integer number of seconds");
+  }
+  return Number(value);
 }
 
 async function ensureDirs({ outputDir, scratchDir, sessionDir }) {
   await mkdir(outputDir, { recursive: true });
   await mkdir(path.join(outputDir, "artifacts"), { recursive: true });
-  await mkdir(sessionDir, { recursive: true });
+  if (sessionDir) await mkdir(sessionDir, { recursive: true });
   await mkdir(scratchDir, { recursive: true });
   await mkdir(path.join(scratchDir, "home"), { recursive: true });
   await mkdir(path.join(scratchDir, "tmp"), { recursive: true });
@@ -53,11 +73,62 @@ async function maybeRead(file) {
   return readFile(file, "utf8");
 }
 
+function signalChild(child, signal) {
+  if (!child.pid) return;
+  try {
+    process.kill(-child.pid, signal);
+  } catch {
+    try {
+      child.kill(signal);
+    } catch {
+      // Process already exited.
+    }
+  }
+}
+
 function spawnAndCapture(command, args, options = {}) {
+  const timeoutSeconds = options.timeoutSeconds ?? 0;
+  let child;
+  let timedOut = false;
+  let settled = false;
+  let timeoutTimer;
+  let killTimer;
+
+  const cleanupSignalHandlers = [];
+
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { ...options, stdio: ["ignore", "pipe", "pipe"] });
+    child = spawn(command, args, {
+      ...options,
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     let stdout = "";
     let stderr = "";
+
+    const terminate = (signal = "SIGTERM") => {
+      if (settled) return;
+      signalChild(child, signal);
+      if (!killTimer) {
+        killTimer = setTimeout(() => signalChild(child, "SIGKILL"), TERMINATION_GRACE_MS);
+      }
+    };
+
+    const forwardSignal = (signal) => {
+      terminate(signal);
+    };
+
+    for (const signal of ["SIGTERM", "SIGINT"]) {
+      const handler = () => forwardSignal(signal);
+      process.on(signal, handler);
+      cleanupSignalHandlers.push(() => process.off(signal, handler));
+    }
+
+    if (timeoutSeconds > 0) {
+      timeoutTimer = setTimeout(() => {
+        timedOut = true;
+        terminate("SIGTERM");
+      }, timeoutSeconds * 1000);
+    }
 
     child.stdout?.on("data", (chunk) => {
       const text = chunk.toString();
@@ -71,8 +142,21 @@ function spawnAndCapture(command, args, options = {}) {
       process.stderr.write(text);
     });
 
-    child.on("error", reject);
-    child.on("close", (code, signal) => resolve({ code, signal, stdout, stderr }));
+    child.on("error", (error) => {
+      settled = true;
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      if (killTimer) clearTimeout(killTimer);
+      cleanupSignalHandlers.forEach((cleanup) => cleanup());
+      reject(error);
+    });
+
+    child.on("close", (code, signal) => {
+      settled = true;
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      if (killTimer) clearTimeout(killTimer);
+      cleanupSignalHandlers.forEach((cleanup) => cleanup());
+      resolve({ code: timedOut ? TIMEOUT_EXIT_CODE : code, signal, stdout, stderr, timedOut });
+    });
   });
 }
 
@@ -90,8 +174,18 @@ async function runTask(cliArgs) {
   const outputDir = process.env.RUNNER_OUTPUT_DIR || DEFAULT_OUTPUT_DIR;
   const workspace = process.env.RUNNER_WORKSPACE || DEFAULT_WORKSPACE;
   const scratchDir = process.env.RUNNER_SCRATCH_DIR || DEFAULT_SCRATCH;
-  const sessionDir = process.env.PI_SESSION_DIR || path.join(outputDir, "sessions");
   const expect = (process.env.RUNNER_EXPECT || "text").toLowerCase();
+  const timeoutSeconds = parseTimeoutSeconds(process.env.RUNNER_TIMEOUT_SECONDS);
+  const saveSession = envFlag("RUNNER_SAVE_SESSION", false);
+  const sessionDir = saveSession
+    ? process.env.PI_SESSION_DIR || path.join(outputDir, "sessions")
+    : null;
+  const noTools = envFlag("RUNNER_NO_TOOLS", false);
+  const tools = process.env.PI_TOOLS?.trim() || "";
+
+  if (noTools && tools) {
+    throw new Error("RUNNER_NO_TOOLS and PI_TOOLS cannot both be set");
+  }
 
   await ensureDirs({ outputDir, scratchDir, sessionDir });
 
@@ -107,17 +201,23 @@ async function runTask(cliArgs) {
     XDG_CACHE_HOME: path.join(scratchDir, "cache"),
   };
 
-  const args = ["--print", "--session-dir", sessionDir];
+  const args = ["--print"];
+  if (saveSession) {
+    args.push("--session-dir", sessionDir);
+  } else {
+    args.push("--no-session");
+  }
 
   if (process.env.PI_MODEL?.trim()) args.push("--model", process.env.PI_MODEL.trim());
-  if (process.env.PI_TOOLS?.trim()) args.push("--tools", process.env.PI_TOOLS.trim());
+  if (noTools) args.push("--no-tools");
+  if (tools) args.push("--tools", tools);
 
   const systemPrompt = (await maybeRead(systemPromptFile)).trim();
   if (systemPrompt) args.push("--append-system-prompt", systemPrompt);
 
   args.push(task);
 
-  const result = await spawnAndCapture("pi", args, { cwd: workspace, env });
+  const result = await spawnAndCapture("pi", args, { cwd: workspace, env, timeoutSeconds });
   const finishedAt = new Date();
 
   await writeFile(path.join(outputDir, "stdout.txt"), result.stdout, "utf8");
@@ -146,6 +246,8 @@ async function runTask(cliArgs) {
         ok,
         exitCode: result.code,
         signal: result.signal,
+        timedOut: result.timedOut,
+        timeoutSeconds,
         startedAt: startedAt.toISOString(),
         finishedAt: finishedAt.toISOString(),
         durationMs: finishedAt.getTime() - startedAt.getTime(),
@@ -157,6 +259,7 @@ async function runTask(cliArgs) {
         stderrPath: path.join(outputDir, "stderr.txt"),
         artifactDir: path.join(outputDir, "artifacts"),
         sessionDir,
+        tools: noTools ? "none" : tools || null,
         validation,
       },
       null,
