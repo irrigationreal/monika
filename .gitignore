@@ -5,3 +5,7 @@ node_modules/
 .env
 /data/
 /runtime/
+
+# Local forum taxonomy/runtime configuration. Commit docs/examples/*.json instead.
+/runtime/forum/taxonomy*.json
+/runtime/secrets/forum-taxonomy*.json

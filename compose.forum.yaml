@@ -30,6 +30,8 @@ services:
       CODEX_FORUM_AGENT_BACKEND: monika-pi
       CODEX_FORUM_AGENT_MODEL: codex/gpt-5.5
       MONIKA_AGENTD_BASE_URL: http://127.0.0.1:7724
+      MONIKA_PI_SESSION_TAXONOMY_CONFIG: /home/monika/.pi/forum/taxonomy.local.json
+      MONIKA_FORUM_DEFAULT_CWD: /home/monika
       CODEX_WORK_DIR: /home/monika
       CODEX_FORUM_ENABLE_AUTH: "1"
       CODEX_FORUM_ENABLE_RATE_LIMITING: "0"
