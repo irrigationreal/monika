@@ -222,7 +222,6 @@ docker compose -f compose.local.yaml --profile forum exec monika curl -fsS http:
 docker compose -f compose.local.yaml --profile forum exec monika curl -fsS http://forum:4310/api/models
 ```
 
-
 ## Local deployment on stanza
 
 The live Monika container runs in host network mode. Do **not** restart it from
