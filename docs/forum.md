@@ -130,6 +130,44 @@ Implemented in `services/forum`:
 - `pi_session_links` stores `parent_pi_session_id`, `parent_pi_session_path`, `lineage_kind`, and `lineage_source`. Parent backlinks are shown when the parent session maps to an imported forum topic.
 - Historical sessions with Pi JSONL `parentSession` headers were retroactively backfilled as `lineage_kind='parent'` / `lineage_source='pi-jsonl-header'`; older sessions without Pi header lineage cannot be inferred reliably.
 
+## Pi session taxonomy configuration
+
+The historical importer and background Pi sync use the same configurable taxonomy
+classifier. The classifier decides where imported Pi sessions are filed in the
+forum and what cwd should be assigned when it creates a new imported forum.
+
+Configuration is optional. If `MONIKA_PI_SESSION_TAXONOMY_CONFIG` is unset, the
+forum uses a generic standalone default: `General`, `System / ...`, and
+`Monika Runtime` for `/workspace/monika` or matching home-keyword sessions.
+For deployments with host-specific project paths, set:
+
+```bash
+MONIKA_PI_SESSION_TAXONOMY_CONFIG=/path/to/taxonomy.local.json
+```
+
+The config file is JSON. See:
+
+- `docs/examples/forum-taxonomy.example.json` for generic local runtime defaults
+- `docs/examples/forum-taxonomy.stanza.example.json` for a host-mode deployment template
+
+A taxonomy config has three parts:
+
+- `defaults`: fallback forum target and fallback cwd for unmapped sessions
+- `system`: parent/targets/cwd for sleep, delegate, and fork sessions
+- `rules`: cwd-prefix and home-keyword mappings to project forums
+
+Matching is deterministic: system sessions are classified first, then cwd prefixes
+are matched by longest prefix, then configured home/default cwd sessions can match
+keywords in the first user message, then the default target is used.
+
+Cwd values must be paths visible inside the Monika/agentd container, not merely
+host paths. Existing forums are not mutated when the classifier finds a cwd; the
+classifier cwd is only used when creating a new imported forum. This avoids
+poisoning existing host-mode forums with standalone paths such as `/workspace`.
+If `MONIKA_PI_SESSION_TAXONOMY_CONFIG` is set and the file is missing or invalid,
+forum startup/sync should fail loudly rather than silently falling back to unsafe
+defaults.
+
 ## Local deployment on stanza
 
 The live Monika container runs in host network mode. Do **not** restart it from

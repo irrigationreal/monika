@@ -6,6 +6,9 @@ import { dirname, resolve } from 'node:path';
 import Database from 'better-sqlite3';
 
 import { bootstrap, migrate } from '../db';
+import { classifyPiSession } from '../services/piSessionClassifier';
+
+import type { ForumTarget, SessionClassification } from '../services/piSessionClassifier';
 
 const DEFAULT_AGENTD = process.env['MONIKA_AGENTD_BASE_URL'] ?? 'http://127.0.0.1:7724';
 const DEFAULT_DB = process.env['CODEX_FORUM_DB'] ?? '/home/monika/.pi/forum/data.db';
@@ -46,7 +49,6 @@ type ExportedSession = {
   parse_errors?: Array<{ line: number; message: string }>;
 };
 type Args = { agentdBaseUrl: string; dbPath: string; resetDb: boolean; dryRun: boolean; limit: number | null };
-type SessionClassification = { kind: string; target: { parent?: string; name: string }; reason: string };
 
 const nowIso = () => new Date().toISOString();
 
@@ -104,98 +106,6 @@ function titleFromText(text: string, fallback: string): string {
     .find((line) => line && !line.startsWith('==='));
   return (firstMeaningful ?? fallback).replace(/\s+/g, ' ').slice(0, 96).trim() || fallback;
 }
-function isSleepSession(entries: PiEntry[]): boolean {
-  const first = firstUserText(entries);
-  const sample = first.slice(0, 5000).toLowerCase();
-  return (
-    /^=== sleep phase:/i.test(first) ||
-    sample.includes('you are running as a focused sleep fork') ||
-    /(^|\n)\s*\/sleep(?:\s|$)/i.test(first)
-  );
-}
-function isDelegateSession(entries: PiEntry[]): boolean {
-  return firstUserText(entries).includes('=== FOCUSED TASK MODE ===');
-}
-function classifyKind(session: PiSessionSummary, entries: PiEntry[]): string {
-  if (isDelegateSession(entries)) return 'delegate';
-  if (isSleepSession(entries)) return 'sleep';
-  if (session.kind === 'fork' || session.path.includes('/forks/')) return 'fork';
-  return 'normal';
-}
-
-const cwdMappings = [
-  { name: 'The Zeta Directive', paths: ['/home/monika/repos/TheZetaDirective'] },
-  {
-    name: 'Monika Runtime',
-    paths: [
-      '/home/monika/repos/monika',
-      '/home/monika/repos/monika-mono',
-      '/home/monika/repos/memory',
-      '/home/monika/repos/monika-aroz',
-      '/home/monika/repos/monika-voice',
-      '/persist/monika-core',
-      '/home/monika/.pi',
-    ],
-  },
-  { name: 'Codex Forum', paths: ['/home/monika/repos/monika-forum', '/home/monika/repos/forum-echs'] },
-  { name: 'Shadowsea', paths: ['/persist/shadowsea', '/home/monika/repos/shadowsea'] },
-  { name: 'Vesper', paths: ['/home/monika/repos/vesper'] },
-  { name: 'OpenStarbound', paths: ['/home/monika/repos/OpenStarbound'] },
-  { name: 'neosynth-arise', paths: ['/home/monika/repos/neosynth-arise'] },
-];
-const monikaRuntimeHomeKeywords = [
-  '.pi',
-  'pi upgrade',
-  'pi config',
-  'pi system prompt',
-  'model config',
-  'models.json',
-  'extension',
-  'handoff',
-  'stateful-memory',
-  'memory system',
-  'memory upgrade',
-  'memstore',
-  'neotoma',
-  'tagmem',
-  'wake.md',
-  'facts.md',
-  'sleep cycle',
-  'agent browser',
-  'monika container',
-  'container runtime',
-];
-function forumNameForNormalSession(
-  cwd: string | null | undefined,
-  entries: PiEntry[]
-): { target: { parent?: string; name: string }; reason: string } {
-  const normalized = cwd ?? '';
-  let best: { name: string; prefix: string } | null = null;
-  for (const mapping of cwdMappings)
-    for (const prefix of mapping.paths) {
-      if (normalized === prefix || normalized.startsWith(`${prefix}/`)) {
-        if (!best || prefix.length > best.prefix.length) best = { name: mapping.name, prefix };
-      }
-    }
-  if (best) return { target: { name: best.name }, reason: `cwd:${best.prefix}` };
-
-  if (normalized === '/home/monika') {
-    const sample = firstUserText(entries).slice(0, 5000).toLowerCase();
-    const keyword = monikaRuntimeHomeKeywords.find((value) => sample.includes(value));
-    if (keyword) return { target: { name: 'Monika Runtime' }, reason: `home-keyword:${keyword}` };
-  }
-
-  return { target: { name: 'General' }, reason: normalized ? 'unmapped-cwd' : 'missing-cwd' };
-}
-function classify(session: PiSessionSummary, entries: PiEntry[]): SessionClassification {
-  const kind = classifyKind(session, entries);
-  if (kind === 'sleep') return { kind, target: { parent: 'System', name: 'Sleep' }, reason: 'sleep-marker' };
-  if (kind === 'delegate') return { kind, target: { parent: 'System', name: 'Delegates' }, reason: 'delegate-marker' };
-  if (kind === 'fork') return { kind, target: { parent: 'System', name: 'Forks' }, reason: 'fork-path' };
-  const { target, reason } = forumNameForNormalSession(session.cwd, entries);
-  return { kind, target, reason };
-}
-
 function getOrCreateIdentity(
   db: Database.Database,
   displayName: string,
@@ -213,7 +123,12 @@ function getOrCreateIdentity(
   ).run(id, null, displayName, kind, null, avatarUrl, now, now);
   return id;
 }
-function getOrCreateForum(db: Database.Database, name: string, parentForumId: string | null = null): string {
+function getOrCreateForum(
+  db: Database.Database,
+  name: string,
+  parentForumId: string | null = null,
+  cwd: string | null = null
+): string {
   const existing = db
     .prepare('select id from forums where name = ? and parent_forum_id is ? order by created_at asc limit 1')
     .get(name, parentForumId) as { id: string } | undefined;
@@ -229,7 +144,7 @@ function getOrCreateForum(db: Database.Database, name: string, parentForumId: st
     null,
     name,
     name === 'System' ? 'System/imported Pi sessions' : `Imported Pi sessions: ${name}`,
-    null,
+    cwd,
     null,
     'active',
     'public',
@@ -239,12 +154,12 @@ function getOrCreateForum(db: Database.Database, name: string, parentForumId: st
   );
   return id;
 }
-function getTargetForum(db: Database.Database, target: { parent?: string; name: string }): string {
-  if (target.parent) return getOrCreateForum(db, target.name, getOrCreateForum(db, target.parent, null));
-  return getOrCreateForum(db, target.name, null);
+function getTargetForum(db: Database.Database, target: ForumTarget, cwd: string | null): string {
+  if (target.parent) return getOrCreateForum(db, target.name, getOrCreateForum(db, target.parent, null, cwd), cwd);
+  return getOrCreateForum(db, target.name, null, cwd);
 }
 
-function targetLabel(target: { parent?: string; name: string }): string {
+function targetLabel(target: ForumTarget): string {
   return target.parent ? `${target.parent} / ${target.name}` : target.name;
 }
 
@@ -265,13 +180,17 @@ function ensureImportedSession(
     ).run(
       runId,
       nowIso(),
-      json({ parseErrors: exported.parse_errors ?? [], classificationReason: classification.reason }),
+      json({
+        parseErrors: exported.parse_errors ?? [],
+        classificationReason: classification.reason,
+        classificationForumCwd: classification.forumCwd,
+      }),
       exported.session.id
     );
     return { ...existing, created: false };
   }
   const neonId = getOrCreateIdentity(db, 'neon', 'human', '/avatars/user.svg');
-  const forumId = getTargetForum(db, classification.target);
+  const forumId = getTargetForum(db, classification.target, classification.forumCwd);
   const topicId = randomUUID();
   const forumSessionId = randomUUID();
   const createdAt = exported.session.timestamp ?? nowIso();
@@ -306,7 +225,11 @@ function ensureImportedSession(
     exported.session.timestamp ?? null,
     nowIso(),
     runId,
-    json({ parseErrors: exported.parse_errors ?? [], classificationReason: classification.reason })
+    json({
+      parseErrors: exported.parse_errors ?? [],
+      classificationReason: classification.reason,
+      classificationForumCwd: classification.forumCwd,
+    })
   );
   return { topicId, forumSessionId, created: true };
 }
@@ -400,7 +323,7 @@ async function main(): Promise<void> {
       const exported = await fetchJson<ExportedSession>(
         `${args.agentdBaseUrl}/v1/pi/sessions/${encodeURIComponent(summary.id)}/export`
       );
-      const classification = classify(exported.session, exported.entries);
+      const classification = classifyPiSession(exported.session, exported.entries);
       const key = `${targetLabel(classification.target)} (${classification.kind})`;
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
@@ -427,7 +350,7 @@ async function main(): Promise<void> {
       const exported = await fetchJson<ExportedSession>(
         `${args.agentdBaseUrl}/v1/pi/sessions/${encodeURIComponent(summary.id)}/export`
       );
-      const classification = classify(exported.session, exported.entries);
+      const classification = classifyPiSession(exported.session, exported.entries);
       const result = db.transaction(() => {
         const importedSession = ensureImportedSession(db, exported, classification, runId);
         return {

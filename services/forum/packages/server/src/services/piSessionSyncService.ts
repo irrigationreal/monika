@@ -3,6 +3,9 @@ import { randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 
 import { EchsClient } from '../echsClient';
+import { classifyPiSession } from './piSessionClassifier';
+
+import type { ForumTarget, SessionClassification } from './piSessionClassifier';
 
 export interface PiSessionSyncOptions {
   enabled: boolean;
@@ -112,50 +115,6 @@ function titleFromText(text: string, fallback: string): string {
   return (firstMeaningful ?? fallback).replace(/\s+/g, ' ').slice(0, 96).trim() || fallback;
 }
 
-function isDelegate(entries: PiEntry[]): boolean {
-  return firstUserText(entries).includes('=== FOCUSED TASK MODE ===');
-}
-
-function isSleep(entries: PiEntry[]): boolean {
-  const sample = firstUserText(entries).slice(0, 5000).toLowerCase();
-  return (
-    sample.includes('/sleep') ||
-    (sample.includes('sleep cycle') && (sample.includes('wake.md') || sample.includes('facts.md')))
-  );
-}
-
-function classify(session: PiSessionSummary, entries: PiEntry[]): string {
-  if (isSleep(entries)) return 'sleep';
-  if (isDelegate(entries)) return 'delegate';
-  if (session.kind === 'fork' || session.path.includes('/forks/')) return 'fork';
-  return 'normal';
-}
-
-const cwdMappings = [
-  { name: 'The Zeta Directive', paths: ['/home/monika/repos/TheZetaDirective'] },
-  { name: 'Monika Runtime', paths: ['/home/monika/repos/monika', '/home/monika/.pi'] },
-  { name: 'Shadowsea', paths: ['/persist/shadowsea'] },
-  { name: 'Vesper', paths: ['/home/monika/repos/vesper'] },
-  { name: 'OpenStarbound', paths: ['/home/monika/repos/OpenStarbound'] },
-  { name: 'neosynth-arise', paths: ['/home/monika/repos/neosynth-arise'] },
-];
-
-function forumNameFor(kind: string, cwd?: string | null): { parent?: string; name: string } {
-  if (kind === 'sleep') return { parent: 'System', name: 'Sleep' };
-  if (kind === 'delegate') return { parent: 'System', name: 'Delegates' };
-  if (kind === 'fork') return { parent: 'System', name: 'Forks' };
-  const normalized = cwd ?? '';
-  let best: { name: string; prefix: string } | null = null;
-  for (const mapping of cwdMappings) {
-    for (const prefix of mapping.paths) {
-      if (normalized === prefix || normalized.startsWith(`${prefix}/`)) {
-        if (!best || prefix.length > best.prefix.length) best = { name: mapping.name, prefix };
-      }
-    }
-  }
-  return { name: best?.name ?? 'General' };
-}
-
 function extractForumPostId(text: string): string | null {
   const match = text.match(/\[FORUM TURN\][\s\S]*?\bpostId=([^\n\r]+)[\s\S]*?\[\/FORUM TURN\]/);
   return match?.[1]?.trim() || null;
@@ -231,8 +190,8 @@ export class PiSessionSyncService {
 
   private importExported(exported: ExportedSession, summary: PiSessionSummary): number {
     return this.db.transaction(() => {
-      const kind = classify(exported.session, exported.entries);
-      const target = this.ensureSession(exported, summary, kind);
+      const classification = classifyPiSession(exported.session, exported.entries);
+      const target = this.ensureSession(exported, summary, classification);
       return this.importMessages(exported, target, summary);
     })();
   }
@@ -252,7 +211,7 @@ export class PiSessionSyncService {
     return id;
   }
 
-  private ensureForum(name: string, parentForumId: string | null = null): string {
+  private ensureForum(name: string, parentForumId: string | null = null, cwd: string | null = null): string {
     const existing = this.db
       .prepare('select id from forums where name = ? and parent_forum_id is ? order by created_at asc limit 1')
       .get(name, parentForumId) as { id: string } | undefined;
@@ -269,8 +228,8 @@ export class PiSessionSyncService {
         parentForumId,
         null,
         name,
-        `Imported Pi sessions: ${name}`,
-        null,
+        name === 'System' ? 'System/imported Pi sessions' : `Imported Pi sessions: ${name}`,
+        cwd,
         null,
         'active',
         'public',
@@ -281,13 +240,16 @@ export class PiSessionSyncService {
     return id;
   }
 
-  private targetForum(kind: string, cwd?: string | null): string {
-    const target = forumNameFor(kind, cwd);
-    if (target.parent) return this.ensureForum(target.name, this.ensureForum(target.parent, null));
-    return this.ensureForum(target.name, null);
+  private targetForum(target: ForumTarget, cwd: string | null): string {
+    if (target.parent) return this.ensureForum(target.name, this.ensureForum(target.parent, null, cwd), cwd);
+    return this.ensureForum(target.name, null, cwd);
   }
 
-  private ensureSession(exported: ExportedSession, summary: PiSessionSummary, kind: string): SyncTarget {
+  private ensureSession(
+    exported: ExportedSession,
+    summary: PiSessionSummary,
+    classification: SessionClassification
+  ): SyncTarget {
     const existing = this.db
       .prepare(
         `select l.topic_id as topicId,
@@ -308,6 +270,8 @@ export class PiSessionSyncService {
       mtimeMs: summary.mtime_ms ?? null,
       sizeBytes: summary.size_bytes ?? null,
       parseErrors: exported.parse_errors ?? [],
+      classificationReason: classification.reason,
+      classificationForumCwd: classification.forumCwd,
     };
     if (existing) {
       const tags = parseTags(existing.tagsJson);
@@ -337,7 +301,7 @@ export class PiSessionSyncService {
       return { topicId: existing.topicId, sessionId: existing.sessionId, liveForumSession };
     }
     const neonId = this.ensureIdentity('Pi CLI', 'system', '/avatars/pi-cli.gif');
-    const forumId = this.targetForum(kind, exported.session.cwd);
+    const forumId = this.targetForum(classification.target, classification.forumCwd);
     const topicId = randomUUID();
     const sessionId = randomUUID();
     const createdAt = exported.session.timestamp ?? nowIso();
@@ -352,7 +316,7 @@ export class PiSessionSyncService {
         null,
         title,
         'open',
-        JSON.stringify(['pi-sync', kind]),
+        JSON.stringify(['pi-sync', classification.kind]),
         'manual',
         neonId,
         createdAt,
@@ -374,7 +338,7 @@ export class PiSessionSyncService {
         topicId,
         sessionId,
         exported.session.cwd ?? null,
-        kind,
+        classification.kind,
         exported.session.timestamp ?? null,
         nowIso(),
         null,

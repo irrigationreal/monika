@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "defaults": {
+    "target": { "name": "General" },
+    "cwd": "/workspace",
+    "homeCwds": ["/workspace"]
+  },
+  "system": {
+    "parent": "System",
+    "cwd": "/workspace",
+    "sleep": { "name": "Sleep" },
+    "delegate": { "name": "Delegates" },
+    "fork": { "name": "Forks" }
+  },
+  "rules": [
+    {
+      "target": { "name": "Monika Runtime" },
+      "cwd": "/workspace/monika",
+      "cwdPrefixes": ["/workspace/monika"],
+      "homeKeywords": [
+        ".pi",
+        "pi upgrade",
+        "pi config",
+        "stateful-memory",
+        "memstore",
+        "codex forum",
+        "agentd",
+        "monika container"
+      ]
+    }
+  ]
+}
