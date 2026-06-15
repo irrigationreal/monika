@@ -1,0 +1,19 @@
+{
+  "name": "default-runner-job",
+  "description": "Illustrative runner job contract; scripts/agent-runner does not consume this file yet.",
+  "taskFile": "/task/prompt.md",
+  "systemPromptFile": "/task/system.md",
+  "workspace": {
+    "path": "/workspace",
+    "readOnly": true
+  },
+  "outputs": {
+    "path": "/outputs",
+    "artifactsPath": "/outputs/artifacts"
+  },
+  "scratchPath": "/scratch",
+  "expect": "text",
+  "timeoutSeconds": 1800,
+  "saveSession": false,
+  "toolMode": "default"
+}
