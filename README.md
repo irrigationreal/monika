@@ -31,8 +31,9 @@ The container bundles:
 - **AgentLogs CLI** — manual sharing of selected Pi sessions
 - **Persona files** — SOUL.md, STYLE.md, REGISTER.md, topic addenda
 
-Optional companion service:
+Optional runtime shapes:
 - **Forum frontend** — `services/forum`, run through the `compose.local.yaml` `forum` profile or `compose.forum.yaml`, talks to Monika through `agentd` while keeping Pi JSONL as canonical state
+- **Agent runner** — `runner/` and `scripts/agent-runner` provide disposable one-off Pi jobs using the same Monika image with explicit task/workspace/output mounts
 
 ### Modes
 
@@ -56,6 +57,14 @@ keys/config permit it.
 
 The same image serves these configurations — runtime configuration (bind mounts, env vars)
 determines the behavior.
+
+**Runner mode**: The image can also run short-lived non-interactive jobs through
+`/app/bin/agent-runner.mjs` or the local `scripts/agent-runner` Docker wrapper. Runner
+mode mounts task input at `/task`, a workspace at `/workspace`, disposable scratch at
+`/scratch`, and durable results at `/outputs`. It preserves the useful Monika/Pi runtime
+by default, disables Pi session persistence and `agentd` for disposable execution, and
+adds explicit controls such as `--no-tools`, `--tools`, `--timeout`, and `--system`.
+See `runner/README.md` for the full contract.
 
 ### Host shell mechanism
 
@@ -151,7 +160,10 @@ Host prerequisites:
 Containerfile          Multi-stage build (Go memstore + Debian slim + Node.js + pi)
 entrypoint.sh          Starts memstore, detects mode, runs command
 host-shell             SSH wrapper for host bash execution
+bin/agent-runner.mjs   Headless one-off Pi runner entrypoint
+scripts/agent-runner   Local Docker wrapper for disposable runner jobs
 scripts/agentlogs-monika  AgentLogs wrapper with dedicated writable HOME
+runner/                Runner docs, prompts, and example job specs
 compose.yaml           Host mode deployment (stanza)
 compose.test.yaml      Standalone mode (isolated)
 compose.local.yaml     Standalone mode with runtime persistence and optional forum profile
