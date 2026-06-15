@@ -36,6 +36,11 @@ services:
       - ./runtime/pi-agent/sessions:/app/.pi/agent/sessions
       - ./runtime/pi-agent/skills:/app/.pi/agent/skills
 
+      # Optional forum upload storage. Mounted read-only into Monika so agentd can
+      # present user-uploaded forum attachments to Pi without giving the forum
+      # direct access to Pi or memstore state.
+      - ./runtime/forum/uploads:/forum/uploads:ro
+
       # Historical session import source. Read-only; import script writes to memstore.
       - ./runtime/import:/import:ro
 
@@ -65,6 +70,8 @@ services:
     env_file:
       - path: ./runtime/secrets/secrets.env
         required: false
+      - path: ./runtime/secrets/forum.env
+        required: false
     environment:
       HOME: /app
       PI_CODING_AGENT_DIR: /app/.pi/agent
@@ -74,7 +81,54 @@ services:
       GNUPGHOME: /tmp/gnupg
       MONIKA_WORKSPACE: /workspace
       AGENTLOGS_HOME: /agentlogs-home
+      MONIKA_AGENTD_HOST: 0.0.0.0
+      MONIKA_AGENTD_DEFAULT_CWD: /workspace
+      MONIKA_AGENTD_ATTACHMENT_ALLOWED_ROOTS: /forum/uploads
+      MONIKA_AGENTD_ARTIFACT_ALLOWED_ROOTS: /workspace:/tmp:/data
+      MONIKA_FORUM_API_BASE_URL: http://forum:4310/api
       GIT_USER_NAME: ${GIT_USER_NAME:-Monika}
       GIT_USER_EMAIL: ${GIT_USER_EMAIL:-monika@neosynth.net}
       # Optional: set this in your shell if you want first-start model download.
       POOL_CONFIG_URL: ${POOL_CONFIG_URL:-}
+
+  forum:
+    image: monika-forum:local
+    profiles: ["forum"]
+    build:
+      context: ./services/forum
+      dockerfile: Dockerfile
+    container_name: monika-forum
+    restart: unless-stopped
+    # The forum writes SQLite/uploads under runtime/forum and requester metadata
+    # under /workspace/.codex-forum. Run as root for now to avoid bind-mount UID
+    # mismatches across macOS/OrbStack, Parallels, and Linux hosts.
+    user: "0:0"
+    depends_on:
+      - monika
+    ports:
+      - "127.0.0.1:4310:4310"
+    volumes:
+      # Forum-owned projection database and attachment blob storage.
+      - ./runtime/forum:/forum
+      # Match Monika's workspace path so forum-written requester metadata and
+      # forum-level cwd defaults refer to paths visible to agentd/Pi.
+      - ${MONIKA_WORKSPACE:-${HOME}/Repos}:/workspace
+    env_file:
+      - path: ./runtime/secrets/forum.env
+        required: false
+    environment:
+      NODE_ENV: production
+      CODEX_FORUM_PORT: "4310"
+      CODEX_FORUM_DB: /forum/data.db
+      CODEX_FORUM_UPLOADS_DIR: /forum/uploads
+      CODEX_FORUM_BASE_URL: http://localhost:4310
+      CODEX_FORUM_API_BASE_URL: http://forum:4310
+      CODEX_FORUM_API_PREFIX: /api
+      CODEX_FORUM_AGENT_BACKEND: monika-pi
+      # Set CODEX_FORUM_AGENT_MODEL in runtime/secrets/forum.env to a model id
+      # available in the local Pi model catalog.
+      MONIKA_AGENTD_BASE_URL: http://monika:7724
+      CODEX_WORK_DIR: /workspace
+      CODEX_FORUM_ENABLE_AUTH: "1"
+      CODEX_FORUM_ENABLE_RATE_LIMITING: "0"
+      CODEX_FORUM_REDIS_STREAM_BUS: "0"

@@ -168,6 +168,61 @@ If `MONIKA_PI_SESSION_TAXONOMY_CONFIG` is set and the file is missing or invalid
 forum startup/sync should fail loudly rather than silently falling back to unsafe
 defaults.
 
+## Local deployment with `compose.local.yaml`
+
+Local standalone mode can run the forum as an optional profile without host
+networking or host-mode shell access:
+
+```bash
+cd ~/Repos/monika
+mkdir -p runtime/secrets
+cp docs/examples/forum.env.example runtime/secrets/forum.env
+# Edit runtime/secrets/forum.env and replace the example password/token.
+docker compose -f compose.local.yaml --profile forum up -d --build
+```
+
+Local defaults:
+
+- Forum URL: `http://localhost:4310`
+- Forum DB/uploads: `runtime/forum/data.db` and `runtime/forum/uploads/`
+- agentd binding in the Monika container: `0.0.0.0:7724`
+- Forum-to-agentd URL: `http://monika:7724`
+- Default work directory: `/workspace`
+- Local forum bootstrap/internal secrets: `runtime/secrets/forum.env`
+- Background Pi sync: enabled by default; set `MONIKA_PI_SYNC_ENABLED=0` in
+  `runtime/secrets/forum.env` only when debugging.
+
+The example forum env sets `CODEX_FORUM_AGENT_MODEL=codex/gpt-5.5` because it is
+known to work with the current Monika/Pi runtime. Change that value in
+`runtime/secrets/forum.env` if your local Pi model catalog uses a different
+model id.
+
+Local mode uses the built-in generic import/sync taxonomy by default. To customize
+routing, copy `docs/examples/forum-taxonomy.example.json` to an ignored runtime
+path such as `runtime/forum/taxonomy.local.json`, edit it for paths visible
+inside the Monika container, and set this in `runtime/secrets/forum.env`:
+
+```bash
+MONIKA_PI_SESSION_TAXONOMY_CONFIG=/forum/taxonomy.local.json
+```
+
+Do not set `MONIKA_PI_SESSION_TAXONOMY_CONFIG` until the file exists; missing or
+invalid taxonomy config is treated as a startup error so deployments do not
+silently fall back to unsafe cwd defaults.
+
+Historical import attributes imported user messages to `neon`; later Pi CLI
+sessions discovered by sync are attributed to `Pi CLI` unless they are recognized
+as forum-originated turns and linked back to the original forum post.
+
+Health checks inside the Docker network:
+
+```bash
+docker compose -f compose.local.yaml --profile forum exec monika curl -fsS http://forum:4310/healthz
+docker compose -f compose.local.yaml --profile forum exec monika curl -fsS http://forum:4310/api/healthz
+docker compose -f compose.local.yaml --profile forum exec monika curl -fsS http://forum:4310/api/models
+```
+
+
 ## Local deployment on stanza
 
 The live Monika container runs in host network mode. Do **not** restart it from

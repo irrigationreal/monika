@@ -32,7 +32,7 @@ The container bundles:
 - **Persona files** — SOUL.md, STYLE.md, REGISTER.md, topic addenda
 
 Optional companion service:
-- **Forum frontend** — `services/forum`, run through `compose.forum.yaml`, talks to Monika through `agentd` while keeping Pi JSONL as canonical state
+- **Forum frontend** — `services/forum`, run through the `compose.local.yaml` `forum` profile or `compose.forum.yaml`, talks to Monika through `agentd` while keeping Pi JSONL as canonical state
 
 ### Modes
 
@@ -154,8 +154,8 @@ host-shell             SSH wrapper for host bash execution
 scripts/agentlogs-monika  AgentLogs wrapper with dedicated writable HOME
 compose.yaml           Host mode deployment (stanza)
 compose.test.yaml      Standalone mode (isolated)
-compose.local.yaml     Standalone mode with runtime persistence
-compose.forum.yaml     Optional forum frontend overlay
+compose.local.yaml     Standalone mode with runtime persistence and optional forum profile
+compose.forum.yaml     Optional host-mode forum frontend overlay
 services/memstore/     memstore Go source
 services/agentd/       Pi-backed HTTP/SSE daemon for alternate frontends
 services/forum/        Monika forum frontend
@@ -176,6 +176,20 @@ docker compose -f compose.local.yaml up -d --build
 docker exec -it monika pi
 ```
 
+Enable the optional local forum frontend with the `forum` profile:
+
+```bash
+mkdir -p runtime/secrets
+cp docs/examples/forum.env.example runtime/secrets/forum.env
+# Edit runtime/secrets/forum.env and replace the example password/token.
+docker compose -f compose.local.yaml --profile forum up -d --build
+```
+
+The local forum listens on `http://localhost:4310`, stores projection state under
+`runtime/forum/`, and talks to Pi through agentd in the Monika container. Local
+mode uses `/workspace` as the default forum work directory; individual forums can
+store more specific cwd defaults such as `/workspace/monika`.
+
 For macOS/OrbStack, the default workspace mount is `${HOME}/Repos:/workspace`. Override
 it with `MONIKA_WORKSPACE=/path/to/workspace` if needed.
 
@@ -185,6 +199,7 @@ Secrets are not committed. Place them under `runtime/secrets/`:
 runtime/secrets/auth.json        # optional Pi auth
 runtime/secrets/models.json      # optional model definitions
 runtime/secrets/secrets.env      # optional provider/API env vars
+runtime/secrets/forum.env        # optional local forum bootstrap user + internal API token
 runtime/secrets/git-identity.env # optional git identity (GIT_USER_NAME/GIT_USER_EMAIL)
 runtime/secrets/ssh/             # mounted read-only to /root/.ssh and /app/.ssh
 runtime/secrets/gnupg/           # copied at startup to /tmp/gnupg for gpg-agent
