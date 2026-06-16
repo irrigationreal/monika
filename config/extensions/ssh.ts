@@ -138,7 +138,7 @@ async function validateSshTarget(remote: string, remoteCwd?: string): Promise<{
 		}
 
 		// Get remote cwd
-		const cwd = remoteCwd ?? (await sshExec(remote, "pwd", RELOCATE_SSH_OPTIONS)).toString().trim();
+		const cwd = await resolveRemoteCwd(remote, remoteCwd, RELOCATE_SSH_OPTIONS);
 
 		// Verify cwd exists
 		try {
@@ -176,11 +176,28 @@ async function validateSshTarget(remote: string, remoteCwd?: string): Promise<{
 }
 
 function parseSshArg(arg: string): { remote: string; remoteCwd?: string } {
-	const match = arg.match(/^(.+?):(\/.*)$/);
+	const match = arg.match(/^([^:]+):(.+)$/);
 	if (match) {
 		return { remote: match[1], remoteCwd: match[2] };
 	}
 	return { remote: arg };
+}
+
+function shellQuote(value: string): string {
+	return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+function quoteRemotePathForCd(value: string): string {
+	const match = value.match(/^(~[^/]*)(?:\/(.*))?$/);
+	if (!match) return shellQuote(value);
+	const home = match[1];
+	const rest = match[2];
+	return rest ? `${home}/${shellQuote(rest)}` : home;
+}
+
+async function resolveRemoteCwd(remote: string, remoteCwd: string | undefined, options?: string[]): Promise<string> {
+	if (!remoteCwd) return (await sshExec(remote, "pwd", options)).toString().trim();
+	return (await sshExec(remote, `cd ${quoteRemotePathForCd(remoteCwd)} && pwd -P`, options)).toString().trim();
 }
 
 function createRemoteReadOps(remote: string, remoteCwd: string, localCwd: string): ReadOperations {
@@ -218,7 +235,7 @@ function createRemoteEditOps(remote: string, remoteCwd: string, localCwd: string
 }
 
 function createRemoteBashOps(remote: string, remoteCwd: string, localCwd: string): BashOperations {
-	const toRemote = (p: string) => p.replace(localCwd, remoteCwd);
+	const toRemote = (p: string) => resolveRemotePath(remoteCwd, localCwd, p);
 	return {
 		exec: (command, cwd, { onData, signal, timeout }) =>
 			new Promise((resolve, reject) => {
@@ -254,13 +271,29 @@ function createRemoteBashOps(remote: string, remoteCwd: string, localCwd: string
 	};
 }
 
-function resolveRemotePath(remoteCwd: string, localCwd: string, path: string | undefined): string {
-	const rawPath = path ?? ".";
-	if (rawPath.startsWith(localCwd)) {
-		return rawPath.replace(localCwd, remoteCwd);
+function normalizePosixPath(input: string): string {
+	return path.posix.normalize(input.replace(/\\/g, "/"));
+}
+
+function isPathWithin(parent: string, candidate: string): boolean {
+	const relative = path.posix.relative(normalizePosixPath(parent), normalizePosixPath(candidate));
+	return relative === "" || (!relative.startsWith("..") && !path.posix.isAbsolute(relative));
+}
+
+function resolveRemotePath(remoteCwd: string, localCwd: string, inputPath: string | undefined): string {
+	const rawPath = inputPath?.trim() || ".";
+	const normalizedRemoteCwd = normalizePosixPath(remoteCwd);
+	const normalizedLocalCwd = normalizePosixPath(localCwd);
+	if (rawPath === ".") return normalizedRemoteCwd;
+	if (path.posix.isAbsolute(rawPath)) {
+		const normalizedRawPath = normalizePosixPath(rawPath);
+		if (isPathWithin(normalizedLocalCwd, normalizedRawPath)) {
+			const relative = path.posix.relative(normalizedLocalCwd, normalizedRawPath);
+			return relative ? path.posix.join(normalizedRemoteCwd, relative) : normalizedRemoteCwd;
+		}
+		return normalizedRawPath;
 	}
-	if (rawPath.startsWith("/")) return rawPath;
-	return `${remoteCwd}/${rawPath}`;
+	return path.posix.join(normalizedRemoteCwd, rawPath);
 }
 
 async function remoteLs(
@@ -516,14 +549,15 @@ export default function (pi: ExtensionAPI) {
 		type: "string",
 	});
 
-	const localCwd = process.cwd();
-	const localRead = createReadTool(localCwd);
-	const localWrite = createWriteTool(localCwd);
-	const localEdit = createEditTool(localCwd);
-	const localFind = createFindTool(localCwd);
-	const localGrep = createGrepTool(localCwd);
-	const localLs = createLsTool(localCwd);
-	const localBash = createBashTool(localCwd);
+	const fallbackCwd = process.cwd();
+	const toolMetadataCwd = fallbackCwd;
+	const localRead = createReadTool(toolMetadataCwd);
+	const localWrite = createWriteTool(toolMetadataCwd);
+	const localEdit = createEditTool(toolMetadataCwd);
+	const localFind = createFindTool(toolMetadataCwd);
+	const localGrep = createGrepTool(toolMetadataCwd);
+	const localLs = createLsTool(toolMetadataCwd);
+	const localBash = createBashTool(toolMetadataCwd);
 
 	// Resolved lazily on session_start (CLI flags not available during factory)
 	let resolvedSsh: { remote: string; remoteCwd: string } | null = null;
@@ -541,7 +575,8 @@ export default function (pi: ExtensionAPI) {
 		}
 		return resolvedSsh;
 	};
-	const mapRemotePath = (ssh: { remoteCwd: string }, p: string) => p.replace(localCwd, ssh.remoteCwd);
+	const getSessionCwd = (ctx?: { cwd?: string }) => ctx?.cwd ?? fallbackCwd;
+	const mapRemotePath = (ssh: { remoteCwd: string }, localRoot: string, p: string | undefined) => resolveRemotePath(ssh.remoteCwd, localRoot, p);
 	const setDebugStatus = (ctx: any, message: string) => {
 		if (!sshDebug) return;
 		ctx.ui.setStatus("ssh-debug", ctx.ui.theme.fg("accent", message));
@@ -552,17 +587,19 @@ export default function (pi: ExtensionAPI) {
 		async execute(id, params, signal, onUpdate, ctx) {
 			const ssh = requireSsh();
 			if (sshDebug && ctx) {
+				const sessionCwd = getSessionCwd(ctx);
 				const path = (params as { path: string }).path;
-				const targetPath = ssh ? mapRemotePath(ssh, path) : path;
+				const targetPath = ssh ? mapRemotePath(ssh, sessionCwd, path) : path;
 				setDebugStatus(ctx, `SSH ${ssh ? "remote" : "local"} read: ${targetPath}`);
 			}
 			if (ssh) {
-				const tool = createReadTool(localCwd, {
-					operations: createRemoteReadOps(ssh.remote, ssh.remoteCwd, localCwd),
+				const sessionCwd = getSessionCwd(ctx);
+				const tool = createReadTool(sessionCwd, {
+					operations: createRemoteReadOps(ssh.remote, ssh.remoteCwd, sessionCwd),
 				});
 				return tool.execute(id, params, signal, onUpdate);
 			}
-			return localRead.execute(id, params, signal, onUpdate);
+			return createReadTool(getSessionCwd(ctx)).execute(id, params, signal, onUpdate);
 		},
 	});
 
@@ -571,17 +608,19 @@ export default function (pi: ExtensionAPI) {
 		async execute(id, params, signal, onUpdate, ctx) {
 			const ssh = requireSsh();
 			if (sshDebug && ctx) {
+				const sessionCwd = getSessionCwd(ctx);
 				const path = (params as { path: string }).path;
-				const targetPath = ssh ? mapRemotePath(ssh, path) : path;
+				const targetPath = ssh ? mapRemotePath(ssh, sessionCwd, path) : path;
 				setDebugStatus(ctx, `SSH ${ssh ? "remote" : "local"} write: ${targetPath}`);
 			}
 			if (ssh) {
-				const tool = createWriteTool(localCwd, {
-					operations: createRemoteWriteOps(ssh.remote, ssh.remoteCwd, localCwd),
+				const sessionCwd = getSessionCwd(ctx);
+				const tool = createWriteTool(sessionCwd, {
+					operations: createRemoteWriteOps(ssh.remote, ssh.remoteCwd, sessionCwd),
 				});
 				return tool.execute(id, params, signal, onUpdate);
 			}
-			return localWrite.execute(id, params, signal, onUpdate);
+			return createWriteTool(getSessionCwd(ctx)).execute(id, params, signal, onUpdate);
 		},
 	});
 
@@ -590,17 +629,19 @@ export default function (pi: ExtensionAPI) {
 		async execute(id, params, signal, onUpdate, ctx) {
 			const ssh = requireSsh();
 			if (sshDebug && ctx) {
+				const sessionCwd = getSessionCwd(ctx);
 				const path = (params as { path: string }).path;
-				const targetPath = ssh ? mapRemotePath(ssh, path) : path;
+				const targetPath = ssh ? mapRemotePath(ssh, sessionCwd, path) : path;
 				setDebugStatus(ctx, `SSH ${ssh ? "remote" : "local"} edit: ${targetPath}`);
 			}
 			if (ssh) {
-				const tool = createEditTool(localCwd, {
-					operations: createRemoteEditOps(ssh.remote, ssh.remoteCwd, localCwd),
+				const sessionCwd = getSessionCwd(ctx);
+				const tool = createEditTool(sessionCwd, {
+					operations: createRemoteEditOps(ssh.remote, ssh.remoteCwd, sessionCwd),
 				});
 				return tool.execute(id, params, signal, onUpdate);
 			}
-			return localEdit.execute(id, params, signal, onUpdate);
+			return createEditTool(getSessionCwd(ctx)).execute(id, params, signal, onUpdate);
 		},
 	});
 
@@ -614,13 +655,14 @@ export default function (pi: ExtensionAPI) {
 				limit?: number;
 			};
 			if (sshDebug && ctx) {
-				const targetPath = ssh ? resolveRemotePath(ssh.remoteCwd, localCwd, searchPath) : searchPath ?? ".";
+				const sessionCwd = getSessionCwd(ctx);
+				const targetPath = ssh ? resolveRemotePath(ssh.remoteCwd, sessionCwd, searchPath) : searchPath ?? ".";
 				setDebugStatus(ctx, `SSH ${ssh ? "remote" : "local"} find: ${targetPath} :: ${pattern}`);
 			}
 			if (ssh) {
-				return remoteFind(ssh.remote, ssh.remoteCwd, localCwd, pattern, searchPath, limit);
+				return remoteFind(ssh.remote, ssh.remoteCwd, getSessionCwd(ctx), pattern, searchPath, limit);
 			}
-			return localFind.execute(id, params, _signal, _onUpdate);
+			return createFindTool(getSessionCwd(ctx)).execute(id, params, _signal, _onUpdate);
 		},
 	});
 
@@ -638,13 +680,14 @@ export default function (pi: ExtensionAPI) {
 				limit?: number;
 			};
 			if (sshDebug && ctx) {
-				const targetPath = ssh ? resolveRemotePath(ssh.remoteCwd, localCwd, typed.path) : typed.path ?? ".";
+				const sessionCwd = getSessionCwd(ctx);
+				const targetPath = ssh ? resolveRemotePath(ssh.remoteCwd, sessionCwd, typed.path) : typed.path ?? ".";
 				setDebugStatus(ctx, `SSH ${ssh ? "remote" : "local"} grep: ${targetPath} :: ${typed.pattern}`);
 			}
 			if (ssh) {
-				return remoteGrep(ssh.remote, ssh.remoteCwd, localCwd, typed);
+				return remoteGrep(ssh.remote, ssh.remoteCwd, getSessionCwd(ctx), typed);
 			}
-			return localGrep.execute(id, params, _signal, _onUpdate);
+			return createGrepTool(getSessionCwd(ctx)).execute(id, params, _signal, _onUpdate);
 		},
 	});
 
@@ -654,13 +697,14 @@ export default function (pi: ExtensionAPI) {
 			const ssh = requireSsh();
 			const { path, limit } = params as { path?: string; limit?: number };
 			if (sshDebug && ctx) {
-				const targetPath = ssh ? resolveRemotePath(ssh.remoteCwd, localCwd, path) : path ?? ".";
+				const sessionCwd = getSessionCwd(ctx);
+				const targetPath = ssh ? resolveRemotePath(ssh.remoteCwd, sessionCwd, path) : path ?? ".";
 				setDebugStatus(ctx, `SSH ${ssh ? "remote" : "local"} ls: ${targetPath}`);
 			}
 			if (ssh) {
-				return remoteLs(ssh.remote, ssh.remoteCwd, localCwd, path, limit);
+				return remoteLs(ssh.remote, ssh.remoteCwd, getSessionCwd(ctx), path, limit);
 			}
-			return localLs.execute(id, params, _signal, _onUpdate);
+			return createLsTool(getSessionCwd(ctx)).execute(id, params, _signal, _onUpdate);
 		},
 	});
 
@@ -669,17 +713,19 @@ export default function (pi: ExtensionAPI) {
 		async execute(id, params, signal, onUpdate, ctx) {
 			const ssh = requireSsh();
 			if (sshDebug && ctx) {
+				const sessionCwd = getSessionCwd(ctx);
 				const { command, cwd } = params as { command: string; cwd: string };
-				const targetCwd = ssh ? mapRemotePath(ssh, cwd) : cwd;
+				const targetCwd = ssh ? mapRemotePath(ssh, sessionCwd, cwd) : cwd;
 				setDebugStatus(ctx, `SSH ${ssh ? "remote" : "local"} bash: ${targetCwd} :: ${command}`);
 			}
 			if (ssh) {
-				const tool = createBashTool(localCwd, {
-					operations: createRemoteBashOps(ssh.remote, ssh.remoteCwd, localCwd),
+				const sessionCwd = getSessionCwd(ctx);
+				const tool = createBashTool(sessionCwd, {
+					operations: createRemoteBashOps(ssh.remote, ssh.remoteCwd, sessionCwd),
 				});
 				return tool.execute(id, params, signal, onUpdate);
 			}
-			return localBash.execute(id, params, signal, onUpdate);
+			return createBashTool(getSessionCwd(ctx)).execute(id, params, signal, onUpdate);
 		},
 	});
 
@@ -807,7 +853,7 @@ export default function (pi: ExtensionAPI) {
 			try {
 				const parsed = parseSshArg(arg);
 				const remote = parsed.remote;
-				const remoteCwd = parsed.remoteCwd ?? (await sshExec(remote, "pwd")).toString().trim();
+				const remoteCwd = await resolveRemoteCwd(remote, parsed.remoteCwd);
 				await sshExec(remote, `test -d ${JSON.stringify(remoteCwd)}`);
 				if (sshVerify) {
 					await sshExec(remote, `test -d ${JSON.stringify(sshVerify)}`);
@@ -875,7 +921,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("user_bash", (_event) => {
 		const ssh = requireSsh();
 		if (!ssh) return; // No SSH, use local execution
-		return { operations: createRemoteBashOps(ssh.remote, ssh.remoteCwd, localCwd) };
+		return { operations: createRemoteBashOps(ssh.remote, ssh.remoteCwd, (_event as { cwd?: string }).cwd ?? fallbackCwd) };
 	});
 
 	pi.on("context", async (event) => {
@@ -897,17 +943,18 @@ export default function (pi: ExtensionAPI) {
 	// Replace local cwd with remote cwd in system prompt
 	pi.on("before_agent_start", async (event) => {
 		const ssh = getSsh();
+		const sessionCwd = event.systemPromptOptions?.cwd ?? fallbackCwd;
 		let modified = event.systemPrompt;
 		if (ssh) {
 			modified = modified.replace(
-				`Current working directory: ${localCwd}`,
+				`Current working directory: ${sessionCwd}`,
 				`Current working directory: ${ssh.remoteCwd} (via SSH: ${ssh.remote})`,
 			);
 		}
 		if (sshDebug) {
 			if (ssh) {
 				const hostInfo = remoteHost ?? "unknown";
-				modified += `\nSSH debug: remote=${ssh.remote} host=${hostInfo} cwd=${ssh.remoteCwd} localCwd=${localCwd}`;
+				modified += `\nSSH debug: remote=${ssh.remote} host=${hostInfo} cwd=${ssh.remoteCwd} localCwd=${sessionCwd}`;
 			} else if (sshRequired) {
 				modified += "\nSSH debug: requested but not connected";
 			} else {
