@@ -78,6 +78,10 @@ export class AgentBridge {
     await this.echs.start();
   }
 
+  async stop(): Promise<void> {
+    await this.echs.stop();
+  }
+
   async resumeAllThreads(opts?: { sinceMs?: number }): Promise<{ resumed: number; skipped: number }> {
     return this.echs.resumeAllThreads(opts);
   }

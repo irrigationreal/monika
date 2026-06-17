@@ -500,6 +500,29 @@ export class EchsBridge {
     this.startThreadHealthCheck();
   }
 
+  async stop(): Promise<void> {
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    if (this.healthPollTimer) clearInterval(this.healthPollTimer);
+    if (this.threadHealthTimer) clearInterval(this.threadHealthTimer);
+    this.heartbeatTimer = null;
+    this.healthPollTimer = null;
+    this.threadHealthTimer = null;
+
+    for (const timer of this.assistantBackfillTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.assistantBackfillTimers.clear();
+
+    for (const sub of this.subscriptions.values()) {
+      try {
+        sub.close();
+      } catch {
+        // ignore close errors during shutdown
+      }
+    }
+    this.subscriptions.clear();
+  }
+
   getEchsHealth(): { queue_depth: number | null; active_threads: number | null } {
     return { queue_depth: this.echs_queue_depth, active_threads: this.echs_active_threads };
   }

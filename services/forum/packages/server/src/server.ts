@@ -315,11 +315,20 @@ app.setErrorHandler((error, _request, reply) => {
     details: errObj['validation'] ? { validation: errObj['validation'] } : undefined,
   });
 });
-if (bus instanceof RedisStreamBus) {
-  app.addHook('onClose', async () => {
+app.addHook('onClose', async () => {
+  piSessionSync?.stop();
+  await piSessionSync?.waitForIdle();
+  await autoRunDirector.stop();
+  await codex.stop();
+  if (bus instanceof RedisStreamBus) {
     await bus.close();
-  });
-}
+  }
+  try {
+    db.close();
+  } catch {
+    // ignore duplicate close attempts during shutdown
+  }
+});
 
 await app.register(cors, {
   origin: CORS_ORIGINS ?? true,
@@ -407,10 +416,32 @@ const adapterRegistry = createAdapterRegistry({
   },
 });
 
+const forumDeploymentStatus = () => {
+  const activeTurns = codex.listActiveTurns().length;
+  const queuedTurns = codex.listQueuedTurns().length;
+  const piSync = piSessionSync?.getStatus() ?? { enabled: false, running: false, intervalMs: null };
+  const blockers = [] as Array<Record<string, unknown>>;
+  if (activeTurns > 0) blockers.push({ code: 'active_robot_turns', count: activeTurns });
+  if (queuedTurns > 0) blockers.push({ code: 'queued_robot_turns', count: queuedTurns });
+  if (piSync.running) blockers.push({ code: 'pi_session_sync_running' });
+  const blockingRobotStates = store
+    .listRobotStates()
+    .filter((state) => state.activity !== 'idle' && state.activity !== 'error');
+  if (blockingRobotStates.length > 0) {
+    blockers.push({ code: 'non_idle_robot_states', count: blockingRobotStates.length });
+  }
+  return {
+    safeToStop: blockers.length === 0,
+    blockers,
+    robot: { activeTurns, queuedTurns },
+    piSessionSync: piSync,
+  };
+};
+
 const registerApiRoutes: FastifyPluginAsync = async (api) => {
-  registerSystemRoutes({ app: api, modelCatalog, echsClient, access });
+  registerSystemRoutes({ app: api, modelCatalog, echsClient, access, deploymentStatus: forumDeploymentStatus });
   registerAuthRoutes({ app: api, store, featureFlags, linkIssuer, emailService, access });
-  registerAdminRoutes({ app: api, store, db, access, codex });
+  registerAdminRoutes({ app: api, store, db, access, codex, piSessionSync });
   registerForumRoutes({
     app: api,
     store,
@@ -461,3 +492,24 @@ app.setNotFoundHandler((request, reply) => {
 });
 
 await app.listen({ port: PORT, host: '0.0.0.0' });
+
+let shuttingDown = false;
+const shutdown = async (signal: string) => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  app.log.info({ signal }, 'Shutting down forum server');
+  try {
+    await app.close();
+    process.exit(0);
+  } catch (err) {
+    app.log.error({ err }, 'Forum shutdown failed');
+    process.exit(1);
+  }
+};
+
+process.on('SIGTERM', () => {
+  void shutdown('SIGTERM');
+});
+process.on('SIGINT', () => {
+  void shutdown('SIGINT');
+});

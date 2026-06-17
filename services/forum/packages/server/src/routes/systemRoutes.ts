@@ -11,12 +11,14 @@ export function registerSystemRoutes({
   app,
   modelCatalog,
   echsClient,
-  access
+  access,
+  deploymentStatus
 }: {
   app: FastifyInstance;
   modelCatalog?: { listModels: () => Promise<ModelCatalogSnapshot> } | null;
   echsClient?: EchsClient | null;
   access?: Pick<AccessHelpers, 'requireTopicVisible'> | null;
+  deploymentStatus?: (() => unknown) | null;
 }): void {
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
   const openApiSpecPath = join(repoRoot, 'docs', 'openapi.json');
@@ -76,8 +78,13 @@ export function registerSystemRoutes({
     const echs = echsClient ? await echsClient.checkHealth() : undefined;
     return {
       ok: true,
-      echs: echs ?? { status: 'unreachable' }
+      echs: echs ?? { status: 'unreachable' },
+      deployment: deploymentStatus?.() ?? null
     };
+  });
+
+  app.get('/deploy/quiescence', async () => {
+    return deploymentStatus?.() ?? { safeToStop: true, blockers: [] };
   });
 
   app.get('/models', async () => {
