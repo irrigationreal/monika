@@ -6,6 +6,7 @@ import type { FastifyInstance } from 'fastify';
 import type { Database } from 'better-sqlite3';
 import type { ForumStore } from '../store';
 import type { AgentBridge } from '../agentBridge';
+import type { PiSessionSyncService } from '../services/piSessionSyncService';
 import type { MessageTamperContext } from '@irrigationreal/codex-forum-core';
 import type { AccessHelpers } from '../utils/access';
 import { hashPassword } from '../utils/auth';
@@ -62,13 +63,15 @@ export function registerAdminRoutes({
   store,
   db,
   access,
-  codex
+  codex,
+  piSessionSync = null
 }: {
   app: FastifyInstance;
   store: ForumStore;
   db: Database;
   access: AccessHelpers;
   codex: AgentBridge;
+  piSessionSync?: PiSessionSyncService | null;
 }): void {
   const { requireAdmin } = access;
   const echsBaseUrl = ECHS_BASE_URL ?? 'http://localhost:0';
@@ -119,15 +122,29 @@ export function registerAdminRoutes({
   let deployOnFinishLastError: string | null = null;
   let deployOnFinishTimer: ReturnType<typeof setInterval> | null = null;
 
-  function hasBlockingRobotWork(): boolean {
-    // In-memory activity (turns in-flight or queued)
-    if (codex.listActiveTurns().length > 0) return true;
-    if (codex.listQueuedTurns().length > 0) return true;
+  function getDeployBlockers(): Array<Record<string, unknown>> {
+    const blockers: Array<Record<string, unknown>> = [];
+    const activeTurns = codex.listActiveTurns();
+    const queuedTurns = codex.listQueuedTurns();
+    if (activeTurns.length > 0) blockers.push({ code: 'active_robot_turns', count: activeTurns.length });
+    if (queuedTurns.length > 0) blockers.push({ code: 'queued_robot_turns', count: queuedTurns.length });
+
+    const syncStatus = piSessionSync?.getStatus() ?? null;
+    if (syncStatus?.running) blockers.push({ code: 'pi_session_sync_running' });
 
     // DB-persisted robot state (ex: waiting). We deliberately ignore "error"
     // states since they are "concluded" from a deploy-safety standpoint.
-    const robotStates = store.listRobotStates();
-    return robotStates.some((state) => state.activity !== 'idle' && state.activity !== 'error');
+    const blockingRobotStates = store
+      .listRobotStates()
+      .filter((state) => state.activity !== 'idle' && state.activity !== 'error');
+    if (blockingRobotStates.length > 0) {
+      blockers.push({ code: 'non_idle_robot_states', count: blockingRobotStates.length });
+    }
+    return blockers;
+  }
+
+  function hasBlockingRobotWork(): boolean {
+    return getDeployBlockers().length > 0;
   }
 
   async function startDeploy(opts: { source: 'manual' | 'on_finish' }): Promise<{ ok: true; startedAt: string; logPath: string }> {
@@ -285,6 +302,13 @@ export function registerAdminRoutes({
       lastExitCode: lastDeployExitCode,
       lastError: lastDeployError,
       commitSha,
+      safeToStop: getDeployBlockers().length === 0,
+      blockers: getDeployBlockers(),
+      robot: {
+        activeTurns: codex.listActiveTurns().length,
+        queuedTurns: codex.listQueuedTurns().length
+      },
+      piSessionSync: piSessionSync?.getStatus() ?? { enabled: false, running: false, intervalMs: null },
       deployOnFinishRequestedAt,
       deployOnFinishLastCheckedAt,
       deployOnFinishLastError

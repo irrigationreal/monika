@@ -151,6 +151,19 @@ export class PiSessionSyncService {
     this.timer = null;
   }
 
+  getStatus(): { running: boolean; intervalMs: number; enabled: boolean } {
+    return { running: this.running, intervalMs: this.intervalMs, enabled: Boolean(this.timer) };
+  }
+
+  async waitForIdle(timeoutMs = 0): Promise<boolean> {
+    const started = Date.now();
+    while (this.running) {
+      if (timeoutMs > 0 && Date.now() - started >= timeoutMs) return false;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    return true;
+  }
+
   async syncChanged(): Promise<void> {
     if (this.running) return;
     this.running = true;
