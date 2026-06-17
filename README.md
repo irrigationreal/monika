@@ -110,7 +110,7 @@ runtime/secrets/ssh/        # SSH config/keys mounted for git and explicit reloc
 ```
 
 At startup, `entrypoint.sh` copies `runtime/secrets/gitconfig` to writable
-container-local storage and exports `GIT_CONFIG_GLOBAL` so git can use signing
+container-local `$HOME/.gitconfig` and exports `GIT_CONFIG_GLOBAL` so git can use signing
 configuration while still allowing environment-provided identity overrides.
 
 OpenSSH is strict about ownership of user config and key files. If SSH inside the

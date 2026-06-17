@@ -81,7 +81,7 @@ fi
 # later git config --global calls can safely apply env overrides without mutating
 # the read-only runtime secrets mount.
 if [ -f "/runtime/secrets/gitconfig" ]; then
-  export GIT_CONFIG_GLOBAL="${GIT_CONFIG_GLOBAL:-/tmp/gitconfig}"
+  export GIT_CONFIG_GLOBAL="${GIT_CONFIG_GLOBAL:-$HOME/.gitconfig}"
   cp "/runtime/secrets/gitconfig" "$GIT_CONFIG_GLOBAL" 2>/dev/null || true
   chmod 600 "$GIT_CONFIG_GLOBAL" 2>/dev/null || true
 fi
