@@ -1,4 +1,4 @@
-# Monika runtime container CI — smoke-test that the runtime image builds.
+# Monika runtime container CI — build and smoke-test the runtime image.
 #
 # This follows the branch-protection pattern used by Vesper: a changes job
 # decides whether the expensive job should run, the build job can fail, and a
@@ -67,6 +67,121 @@ jobs:
       - name: Build Monika runtime image
         run: docker build -f Containerfile -t monika-test .
 
+      - name: Smoke-test Monika runtime image
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          section() { echo "::group::$1"; }
+          endsection() { echo "::endgroup::"; }
+          pass() { printf '✓ %s\n' "$1"; }
+          info() { printf '  %s\n' "$1"; }
+
+          cleanup() {
+            status=$?
+            if [ "$status" -ne 0 ]; then
+              echo "::group::monika-smoke logs"
+              docker logs monika-smoke 2>/dev/null || true
+              echo "::endgroup::"
+            fi
+            docker rm -f monika-smoke >/dev/null 2>&1 || true
+            exit "$status"
+          }
+          trap cleanup EXIT
+
+          section "Start standalone runtime"
+          CONTAINER_ID="$(docker run -d \
+            --name monika-smoke \
+            -p 127.0.0.1::7724 \
+            -e HOME=/app \
+            -e MEMSTORE_SOCKET=/tmp/memstore.sock \
+            -e MEMSTORE_DATA_DIR=/data/memstore \
+            -e MONIKA_AGENTD_HOST=0.0.0.0 \
+            -e MONIKA_AGENTD_PORT=7724 \
+            -e AGENTLOGS_HOME=/agentlogs-home \
+            monika-test)"
+          AGENTD_PORT="$(docker port monika-smoke 7724/tcp | sed 's/.*://')"
+          if [ -z "$AGENTD_PORT" ]; then
+            echo "Could not determine published agentd port"
+            exit 1
+          fi
+          pass "container started"
+          info "image: monika-test"
+          info "container: ${CONTAINER_ID:0:12}"
+          info "mode: standalone (/app/.pi, ephemeral /data)"
+          info "agentd: http://127.0.0.1:${AGENTD_PORT}"
+          endsection
+
+          section "Wait for runtime readiness"
+          ready_after=""
+          for i in {1..60}; do
+            if docker exec monika-smoke test -S /tmp/memstore.sock \
+              && curl -fsS "http://127.0.0.1:${AGENTD_PORT}/healthz" >/tmp/monika-healthz.json 2>/dev/null; then
+              ready_after="$i"
+              break
+            fi
+            if ! docker inspect -f '{{.State.Running}}' monika-smoke 2>/dev/null | grep -qx true; then
+              echo "monika-smoke exited before becoming healthy"
+              exit 1
+            fi
+            sleep 1
+          done
+          if [ -z "$ready_after" ]; then
+            echo "monika-smoke did not become healthy within 60s"
+            exit 1
+          fi
+          pass "memstore socket ready: /tmp/memstore.sock"
+          pass "agentd health endpoint ready after ${ready_after}s"
+          endsection
+
+          section "Runtime checks"
+          PI_VERSION="$(docker exec monika-smoke pi --version 2>&1)"
+          pass "pi CLI available: ${PI_VERSION}"
+
+          AGENTD_PORT="$AGENTD_PORT" node <<'NODE_SMOKE'
+          const base = `http://127.0.0.1:${process.env.AGENTD_PORT}`;
+
+          async function request(method, path, body) {
+            const response = await fetch(base + path, {
+              method,
+              headers: { 'content-type': 'application/json' },
+              body: body === undefined ? undefined : JSON.stringify(body),
+            });
+            const text = await response.text();
+            const parsed = text ? JSON.parse(text) : null;
+            if (!response.ok) {
+              throw new Error(`${method} ${path} failed: ${response.status} ${text}`);
+            }
+            return parsed;
+          }
+
+          const health = await request('GET', '/healthz');
+          if (health.ok !== true) {
+            throw new Error(`agentd health check failed: ${JSON.stringify(health)}`);
+          }
+          console.log(`✓ agentd healthy: active=${health.active_threads}, loaded=${health.loaded_conversations}, queue=${health.queue_depth}`);
+
+          const created = await request('POST', '/v1/conversations', { cwd: '/tmp' });
+          const conversation = created?.conversation ?? {};
+          const conversationId = conversation.id ?? conversation.conversation_id ?? conversation.session_id;
+          if (!conversationId) {
+            throw new Error(`conversation creation did not return an id: ${JSON.stringify(created)}`);
+          }
+          console.log(`✓ conversation created: ${conversationId}`);
+          console.log(`  cwd: ${conversation.cwd ?? '/tmp'}`);
+          console.log(`  model: ${conversation.model ?? 'unknown'}`);
+          console.log(`  session: ${conversation.session_path ?? '(not reported)'}`);
+
+          const closed = await request('POST', `/v1/conversations/${conversationId}/close`, {});
+          if (closed.ok !== true) {
+            throw new Error(`conversation close failed: ${JSON.stringify(closed)}`);
+          }
+          console.log('✓ conversation closed cleanly');
+          NODE_SMOKE
+          endsection
+
+          echo "Monika runtime smoke test passed."
+
   # Gate job — branch protection should require this check.
   monika-container-checks:
     if: always()
@@ -77,8 +192,8 @@ jobs:
         shell: bash
         run: |
           if [ "${{ needs.monika-container-build.result }}" = "failure" ] || [ "${{ needs.monika-container-build.result }}" = "cancelled" ]; then
-            echo "Monika runtime container build failed or was cancelled"
+            echo "Monika runtime container build/smoke failed or was cancelled"
             exit 1
           fi
 
-          echo "Monika runtime container build passed or was skipped (no relevant changes)"
+          echo "Monika runtime container build/smoke passed or was skipped (no relevant changes)"
