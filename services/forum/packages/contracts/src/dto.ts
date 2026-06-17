@@ -621,6 +621,54 @@ export interface AdminDeployOnFinishResponseDto {
   requestedAt?: string | null;
 }
 
+export interface PiSyncAnomalyDto {
+  id: string;
+  piSessionId: string;
+  piMessageId: string;
+  topicId: string;
+  sessionId: string;
+  topicTitle: string | null;
+  role: string | null;
+  status: string;
+  reason: string;
+  preview: string | null;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  lastCheckedAt: string | null;
+  nextRetryAt: string | null;
+  retryCount: number;
+  resolvedAt: string | null;
+  resolvedBy: string | null;
+  resolution: string | null;
+  resolutionNote: string | null;
+  postId: string | null;
+}
+
+export interface PiSyncHealthDto {
+  enabled: boolean;
+  running: boolean;
+  lastRunStartedAt: string | null;
+  lastRunFinishedAt: string | null;
+  lastRunError: string | null;
+  lastRunStats: { sessionsChecked: number; postsImported: number; anomaliesProcessed: number } | null;
+  counts: Record<string, number>;
+  anomalies: PiSyncAnomalyDto[];
+}
+
+export interface PiSyncRunResponseDto {
+  ok: boolean;
+  message: string;
+  sessionsChecked: number;
+  postsImported: number;
+  anomaliesProcessed: number;
+}
+
+export interface PiSyncBackfillResponseDto {
+  ok: boolean;
+  postId?: string;
+  message: string;
+}
+
 export interface AdminCancelDeployOnFinishResponseDto {
   ok: boolean;
 }

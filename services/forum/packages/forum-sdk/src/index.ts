@@ -73,6 +73,9 @@ import type {
   ModelCatalogDto,
   ModelInfoDto,
   NotificationDto,
+  PiSyncBackfillResponseDto,
+  PiSyncHealthDto,
+  PiSyncRunResponseDto,
   TopicSubscriptionDto,
   TopicUnreadDto
 } from '@irrigationreal/codex-forum-contracts';
@@ -153,6 +156,9 @@ export type {
   ModelCatalogDto,
   ModelInfoDto,
   NotificationDto,
+  PiSyncBackfillResponseDto,
+  PiSyncHealthDto,
+  PiSyncRunResponseDto,
   TopicSubscriptionDto,
   TopicUnreadDto,
   ForumApi
@@ -162,6 +168,9 @@ export { BrowserTokenStorage, MemoryTokenStorage };
 export type { TokenStorage };
 
 export type ListForumsParams = ListForumsRequest;
+export type PiSyncHealth = PiSyncHealthDto;
+export type PiSyncRunResponse = PiSyncRunResponseDto;
+export type PiSyncBackfillResponse = PiSyncBackfillResponseDto;
 export type AdminDeployStatus = AdminDeployStatusDto;
 export type AdminDeployResponse = AdminDeployResponseDto;
 export type AdminDeployOnFinishResponse = AdminDeployOnFinishResponseDto;
@@ -846,6 +855,24 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
       json<{ topic: TopicDto; move: TopicMoveDto }>(`/admin/topics/${topicId}/move`, { method: 'POST', body: JSON.stringify({ forumId }) }),
     deleteAccessRule: (ruleId: string) =>
       json<{ ok: boolean }>(`/admin/access/${ruleId}`, { method: 'DELETE' }),
+
+    // Pi session sync health (Admin)
+    getPiSyncHealth: () =>
+      json<PiSyncHealth>('/admin/pi-sync/health'),
+    runPiSync: () =>
+      json<PiSyncRunResponse>('/admin/pi-sync/run', { method: 'POST' }),
+    runPiSessionSync: (piSessionId: string) =>
+      json<PiSyncRunResponse>(`/admin/pi-sync/sessions/${encodeURIComponent(piSessionId)}/run`, { method: 'POST' }),
+    backfillPiSyncAnomaly: (anomalyId: string, opts?: { bumpTopic?: boolean }) =>
+      json<PiSyncBackfillResponse>(`/admin/pi-sync/anomalies/${encodeURIComponent(anomalyId)}/backfill`, {
+        method: 'POST',
+        body: JSON.stringify(opts ?? {})
+      }),
+    ignorePiSyncAnomaly: (anomalyId: string, opts?: { note?: string | null }) =>
+      json<PiSyncBackfillResponse>(`/admin/pi-sync/anomalies/${encodeURIComponent(anomalyId)}/ignore`, {
+        method: 'POST',
+        body: JSON.stringify(opts ?? {})
+      }),
 
     // Deploy Management (Admin)
     getDeployStatus: () =>
