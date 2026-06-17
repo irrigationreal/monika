@@ -156,7 +156,7 @@ Host prerequisites:
 
 ## GitHub Actions
 
-The repo uses separate pull-request CI gates so branch protection can fail or skip checks by subsystem. These workflows intentionally avoid branch `push` triggers to prevent duplicate runs; `pull_request` re-runs on every PR update via the `synchronize` event:
+The repo uses separate pull-request CI gates so branch protection can fail or skip checks by subsystem. These workflows intentionally avoid branch `push` triggers to prevent duplicate runs; `pull_request` re-runs on every PR update via the `synchronize` event, and `merge_group` runs the same required gates for GitHub merge queue candidates:
 
 - `CI / Monika Container` (`ci-monika-container.yml`) uses `monika-container-changes` → `monika-container-build` → `monika-container-checks`. It builds the Monika image and runs `tests/smoke/monika-runtime.sh` to verify standalone startup, memstore, agentd, Pi CLI, and conversation create/close. Require `monika-container-checks` in branch rules.
 - `CI / Forum Container` (`ci-forum-container.yml`) uses `forum-container-changes` → `forum-container-build` → `forum-container-checks`. Require `forum-container-checks` in branch rules.

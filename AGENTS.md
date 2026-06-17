@@ -25,7 +25,7 @@ This repo builds Monika's runtime containers and supporting services.
 
 ## GitHub Actions / branch gates
 
-Container CI follows a three-stage branch-protection pattern copied from Vesper. These CI gates run on `pull_request` and manual dispatch, not branch `push`, so open PRs get fresh checks for every new commit without duplicate push/PR runs:
+Container CI follows a three-stage branch-protection pattern copied from Vesper. These CI gates run on `pull_request`, `merge_group`, and manual dispatch, not branch `push`, so open PRs and merge-queue candidates get fresh checks without duplicate push/PR runs:
 
 1. `*-changes` decides whether relevant files changed.
 2. `*-build` or placeholder test jobs run only when needed and may fail.
