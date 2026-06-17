@@ -14,6 +14,7 @@ import {
   type AdminSkillListResponseDto,
   type AdminSkillRootDto,
   type AdminDeployStatus,
+  type PiSyncHealth,
   type RobotAutomationDto,
   type RobotAutomationRunDto,
   type AdminRobotPersonaDto,
@@ -27,7 +28,17 @@ const state = useForumState();
 
 // Tab state
 const activeTab = ref<
-  'forums' | 'personas' | 'skills' | 'users' | 'invites' | 'discord' | 'matrix' | 'deploy' | 'robots' | 'tampers'
+  | 'forums'
+  | 'personas'
+  | 'skills'
+  | 'users'
+  | 'invites'
+  | 'discord'
+  | 'matrix'
+  | 'deploy'
+  | 'sync'
+  | 'robots'
+  | 'tampers'
 >('forums');
 
 // Forums list
@@ -131,6 +142,13 @@ const deployLoading = ref(false);
 const deployError = ref('');
 const deployMessage = ref('');
 const deployTriggering = ref(false);
+
+// Pi sync health state
+const piSyncHealth = ref<PiSyncHealth | null>(null);
+const piSyncLoading = ref(false);
+const piSyncAction = ref(false);
+const piSyncError = ref('');
+const piSyncMessage = ref('');
 
 // Robot Settings state
 const robotSettings = ref({ maxConcurrentTurns: 10, activeTurnsCount: 0 });
@@ -415,6 +433,9 @@ watch(activeTab, async (tab) => {
   }
   if (tab === 'robots') {
     await loadRobotSettings();
+  }
+  if (tab === 'sync') {
+    await loadPiSyncHealth();
   }
 });
 
@@ -1133,6 +1154,68 @@ async function triggerDeploy(): Promise<void> {
   }
 }
 
+async function loadPiSyncHealth(): Promise<void> {
+  piSyncLoading.value = true;
+  piSyncError.value = '';
+  try {
+    piSyncHealth.value = await api.getPiSyncHealth();
+  } catch (err) {
+    piSyncError.value = err instanceof Error ? err.message : 'Failed to load Pi sync health';
+  } finally {
+    piSyncLoading.value = false;
+  }
+}
+
+async function runPiSync(piSessionId?: string): Promise<void> {
+  piSyncAction.value = true;
+  piSyncError.value = '';
+  piSyncMessage.value = '';
+  try {
+    const result = piSessionId ? await api.runPiSessionSync(piSessionId) : await api.runPiSync();
+    piSyncMessage.value = `${result.message} Checked ${result.sessionsChecked}, imported ${result.postsImported}, processed ${result.anomaliesProcessed} anomalies.`;
+    await loadPiSyncHealth();
+  } catch (err) {
+    piSyncError.value = err instanceof Error ? err.message : 'Failed to run Pi sync';
+  } finally {
+    piSyncAction.value = false;
+  }
+}
+
+async function backfillPiSyncAnomaly(anomalyId: string, bumpTopic = false): Promise<void> {
+  piSyncAction.value = true;
+  piSyncError.value = '';
+  piSyncMessage.value = '';
+  try {
+    const result = await api.backfillPiSyncAnomaly(anomalyId, { bumpTopic });
+    piSyncMessage.value = result.message;
+    await loadPiSyncHealth();
+  } catch (err) {
+    piSyncError.value = err instanceof Error ? err.message : 'Failed to backfill anomaly';
+  } finally {
+    piSyncAction.value = false;
+  }
+}
+
+async function ignorePiSyncAnomaly(anomalyId: string): Promise<void> {
+  if (!window.confirm('Ignore this sync anomaly? It will remain in audit history.')) return;
+  piSyncAction.value = true;
+  piSyncError.value = '';
+  piSyncMessage.value = '';
+  try {
+    const result = await api.ignorePiSyncAnomaly(anomalyId);
+    piSyncMessage.value = result.message;
+    await loadPiSyncHealth();
+  } catch (err) {
+    piSyncError.value = err instanceof Error ? err.message : 'Failed to ignore anomaly';
+  } finally {
+    piSyncAction.value = false;
+  }
+}
+
+function formatMaybeDate(value: string | null | undefined): string {
+  return value ? new Date(value).toLocaleString() : '—';
+}
+
 // Robot Automation functions
 async function loadRobotAutomations(): Promise<void> {
   loadingRobotAutomations.value = true;
@@ -1849,6 +1932,13 @@ onMounted(async () => {
           @click="activeTab = 'deploy'"
         >
           Deploy
+        </button>
+        <button
+          class="vb-admin-tab"
+          :class="{ active: activeTab === 'sync' }"
+          @click="activeTab = 'sync'"
+        >
+          Sync Health
         </button>
         <button
           class="vb-admin-tab"
@@ -3578,6 +3668,71 @@ onMounted(async () => {
             >
               Refresh Status
             </button>
+          </div>
+        </template>
+      </div>
+
+      <!-- Sync Health Tab -->
+      <div v-if="activeTab === 'sync'" class="vb-admin-panel">
+        <h3 class="vb-admin-section-title">Pi Sync Health</h3>
+        <p class="vb-form-hint">
+          Tracks bounded Pi/forum projection anomalies so failed live-topic imports are visible and repairable without making the hot sync loop retry forever.
+        </p>
+
+        <div v-if="piSyncError" class="vb-login-error">{{ piSyncError }}</div>
+        <div v-if="piSyncMessage" class="vb-admin-status"><span>{{ piSyncMessage }}</span></div>
+        <div v-if="piSyncLoading" class="vb-admin-loading">Loading sync health...</div>
+
+        <template v-else>
+          <div class="vb-admin-info">
+            <div class="vb-admin-info-row"><span class="vb-admin-info-label">Enabled:</span><span>{{ piSyncHealth?.enabled ? 'Yes' : 'No' }}</span></div>
+            <div class="vb-admin-info-row"><span class="vb-admin-info-label">Running:</span><span>{{ piSyncHealth?.running ? 'Yes' : 'No' }}</span></div>
+            <div class="vb-admin-info-row"><span class="vb-admin-info-label">Last run:</span><span>{{ formatMaybeDate(piSyncHealth?.lastRunFinishedAt) }}</span></div>
+            <div class="vb-admin-info-row"><span class="vb-admin-info-label">Deferred:</span><span>{{ piSyncHealth?.counts.deferred ?? 0 }}</span></div>
+            <div class="vb-admin-info-row"><span class="vb-admin-info-label">Needs review:</span><span>{{ piSyncHealth?.counts.needs_manual_review ?? 0 }}</span></div>
+            <div v-if="piSyncHealth?.lastRunError" class="vb-admin-info-row"><span class="vb-admin-info-label">Last error:</span><span>{{ piSyncHealth.lastRunError }}</span></div>
+          </div>
+
+          <div class="vb-modal-actions">
+            <button class="vb-btn" :disabled="piSyncAction || piSyncHealth?.running" @click="runPiSync()">
+              {{ piSyncAction || piSyncHealth?.running ? 'Syncing...' : 'Run Sync Now' }}
+            </button>
+            <button class="vb-btn vb-btn-secondary" :disabled="piSyncLoading" @click="loadPiSyncHealth">Refresh</button>
+          </div>
+
+          <div v-if="!piSyncHealth?.anomalies.length" class="vb-admin-empty">No active sync anomalies.</div>
+          <div v-else class="vb-admin-table-scroll" aria-label="Pi sync anomalies table">
+            <table class="vb-admin-table">
+              <thead>
+                <tr>
+                  <th>Status</th>
+                  <th>Topic</th>
+                  <th>Role</th>
+                  <th>First seen</th>
+                  <th>Retries</th>
+                  <th>Preview</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="anomaly in piSyncHealth.anomalies" :key="anomaly.id">
+                  <td>{{ anomaly.status }}</td>
+                  <td><router-link :to="{ name: 'topic.view', params: { topicId: anomaly.topicId } }">{{ anomaly.topicTitle || anomaly.topicId }}</router-link></td>
+                  <td>{{ anomaly.role || '—' }}</td>
+                  <td>{{ formatMaybeDate(anomaly.firstSeenAt) }}</td>
+                  <td>{{ anomaly.retryCount }}</td>
+                  <td>{{ anomaly.preview || anomaly.piMessageId }}</td>
+                  <td>
+                    <div class="vb-inline-actions">
+                      <button class="vb-small-btn" :disabled="piSyncAction" @click="runPiSync(anomaly.piSessionId)">Sync Session</button>
+                      <button class="vb-small-btn" :disabled="piSyncAction" @click="backfillPiSyncAnomaly(anomaly.id, false)">Backfill Silent</button>
+                      <button class="vb-small-btn" :disabled="piSyncAction" @click="backfillPiSyncAnomaly(anomaly.id, true)">Backfill + Bump</button>
+                      <button class="vb-small-btn vb-danger-btn" :disabled="piSyncAction" @click="ignorePiSyncAnomaly(anomaly.id)">Ignore</button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </template>
       </div>
