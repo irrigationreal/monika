@@ -112,6 +112,14 @@ Implemented in `services/forum`:
 - Sync polls agentd list/export endpoints, imports new/changed sessions
   idempotently, and links forum-origin `[FORUM TURN]` Pi user messages back to
   the originating forum post rather than duplicating them.
+- Live forum topics are single-writer for public posts while the bridge is active.
+  If sync sees an unmatched visible Pi message in such a topic, it records a
+  bounded `pi_sync_anomalies` row instead of importing immediately or retrying
+  forever in the hot path. Deferred anomalies retry briefly, then move to
+  `needs_manual_review` for explicit admin repair.
+- Admin → Sync Health exposes current anomaly counts, a manual sync trigger,
+  targeted per-session sync, silent historical backfill, optional backfill+bump,
+  and ignore actions. Ignored/resolved anomalies remain as audit history.
 - Bootstrap identities are `neon`, `Pi CLI`, `robot`, and `Director`.
 - Forum-native handoff is implemented with disposable draft generation and final
   confirmation that creates the destination topic, parented Pi session, lineage
