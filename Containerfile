@@ -83,28 +83,25 @@ RUN npm install --omit=dev
 COPY services/agentd/src/ /opt/agentd/src/
 WORKDIR /
 
-# Host shell wrapper and AgentLogs runtime wrapper
-COPY host-shell /usr/local/bin/host-shell
+# AgentLogs runtime wrapper
 COPY scripts/agentlogs-monika /usr/local/bin/agentlogs-monika
-RUN chmod +x /usr/local/bin/host-shell /usr/local/bin/agentlogs-monika
+RUN chmod +x /usr/local/bin/agentlogs-monika
 
-# SSH config for container root user — all SSH connections (relocate, git,
-# --ssh remote) use the deploy key and accept new host keys automatically.
-# The key itself is bind-mounted at /persist/keys/ssh-local at runtime.
+# SSH config for container root user. Runtime deployments may mount
+# /runtime/secrets/ssh over /root/.ssh for git and explicit relocate operations.
 RUN mkdir -p /root/.ssh && \
     printf '%s\n' \
       'Host *' \
-      '    IdentityFile /persist/keys/ssh-local' \
-      '    IdentityFile /home/monika/.ssh/id_ed25519' \
-      '    IdentityFile /home/monika/.ssh/id_rsa' \
-      '    UserKnownHostsFile /home/monika/.ssh/known_hosts' \
+      '    IdentityFile /root/.ssh/id_ed25519' \
+      '    IdentityFile /root/.ssh/id_rsa' \
+      '    UserKnownHostsFile /tmp/known_hosts' \
       '    StrictHostKeyChecking accept-new' \
     > /root/.ssh/config && \
     chmod 700 /root/.ssh && \
     chmod 600 /root/.ssh/config
 
-# Bundled .pi directory for standalone/test mode.
-# In production, /home/monika/.pi is bind-mounted over this.
+# Bundled .pi directory. Runtime deployments may mount selected persistent state
+# under /app/.pi, but extensions and defaults are image-owned.
 RUN mkdir -p /app/.pi/agent/extensions /app/.pi/stateful-memory/persona_topics \
              /app/.pi/stateful-memory/memory/sessions \
              /app/.pi/stateful-memory/dreams \
@@ -125,8 +122,6 @@ RUN node -e "\
   s.baseDir = '/app/.pi';\
   require('fs').writeFileSync('/app/.pi/agent/stateful-memory.json', JSON.stringify(s, null, 2)+'\n');"
 
-# The production config at /home/monika/.pi/agent/stateful-memory.json
-# will have baseDir=/home/monika/.pi and be bind-mounted from the host.
 
 VOLUME /data
 

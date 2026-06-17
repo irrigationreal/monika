@@ -9,47 +9,27 @@ monika_log() {
   fi
 }
 
-# ── Mode detection ───────────────────────────────────────
-# Host mode: /home/monika/.pi/agent exists (bind-mounted from host)
-# Standalone mode: no host mounts, use bundled /app/.pi
-
-if [ -d "/home/monika/.pi/agent" ]; then
-  export PI_CODING_AGENT_DIR="/home/monika/.pi/agent"
-  MEMSTORE_DATA_DIR="${MEMSTORE_DATA_DIR:-/home/monika/.pi/memstore}"
-  MEMSTORE_SOCKET="${MEMSTORE_SOCKET:-/home/monika/.pi/memstore/memstore.sock}"
-  export MONIKA_HOST_MODE=1
-  export HOME=/home/monika
-  # SSH config for host-mode auto-relocate: root's user config doesn't exist by
-  # default (container runs as root, but SSH keys live in /home/monika/.ssh).
-  # Create /root/.ssh/config pointing to the identity file if it doesn't exist.
-  mkdir -p /root/.ssh
-  if [ ! -f /root/.ssh/config ]; then
-    echo "Host *\n    IdentityFile /persist/keys/ssh-local" > /root/.ssh/config
-    chmod 600 /root/.ssh/config
-  fi
-  monika_log "[monika] Host mode: .pi mounted, SSH host shell enabled"
-else
-  export PI_CODING_AGENT_DIR="/app/.pi/agent"
-  MEMSTORE_DATA_DIR="${MEMSTORE_DATA_DIR:-/data/memstore}"
-  MEMSTORE_SOCKET="${MEMSTORE_SOCKET:-/tmp/memstore.sock}"
-  unset MONIKA_HOST_MODE
-  export HOME=/app
-  monika_log "[monika] Standalone mode: bundled .pi, container shell"
-  mkdir -p "$MEMSTORE_DATA_DIR" /data/sessions /app/.config /app/.ssh /app/.gnupg
-fi
-
+# ── Runtime layout ───────────────────────────────────────
+# Monika runs as a standalone container. The image owns Pi/extensions/defaults;
+# compose mounts selected persistent state under /app/.pi and /data.
+export PI_CODING_AGENT_DIR="${PI_CODING_AGENT_DIR:-/app/.pi/agent}"
+MEMSTORE_DATA_DIR="${MEMSTORE_DATA_DIR:-/data/memstore}"
+MEMSTORE_SOCKET="${MEMSTORE_SOCKET:-/tmp/memstore.sock}"
 export MEMSTORE_SOCKET
+export HOME="${MONIKA_HOME:-/app}"
+monika_log "[monika] Standalone mode: container-owned Pi runtime"
+mkdir -p "$MEMSTORE_DATA_DIR" /data/sessions /app/.config /app/.ssh /app/.gnupg "$PI_CODING_AGENT_DIR"
 
 # ── AgentLogs runtime state ──────────────────────────────
 # AgentLogs writes auth/config to ~/.config/agentlogs. Keep that state separate
-# from Monika's HOME so host-mode read-only .config mounts do not block login.
+# from Monika's HOME so read-only runtime config mounts do not block login.
 export AGENTLOGS_HOME="${AGENTLOGS_HOME:-/agentlogs-home}"
 mkdir -p "$AGENTLOGS_HOME/.config/agentlogs"
 
 # ── Runtime secrets (container-only persistent mode) ──────
-# compose.local.yaml mounts host-owned private state at /runtime/secrets.
-# Keep the image canonical for code/extensions, and link only host-owned auth/model
-# files into Pi's agent dir when they exist.
+# compose.yaml mounts host-owned private state at
+# /runtime/secrets. Keep the image canonical for code/extensions, and link only
+# host-owned model/keybinding files into Pi's agent dir when they exist.
 link_secret_file() {
   local src="$1"
   local dest="$2"
@@ -59,10 +39,29 @@ link_secret_file() {
   fi
 }
 
-link_secret_file "/runtime/secrets/pi-agent/auth.json" "$PI_CODING_AGENT_DIR/auth.json"
+# Pi OAuth credentials are mutable runtime state: Pi refreshes access tokens and
+# persists the new expiry back to auth.json. /runtime/secrets is intentionally
+# read-only, so seed a writable persistent auth file from secrets on first start
+# and point Pi at that copy.
+PI_AUTH_STATE_DIR="${PI_AUTH_STATE_DIR:-/data/pi-agent-auth}"
+PI_AUTH_STATE_FILE="${PI_AUTH_STATE_FILE:-$PI_AUTH_STATE_DIR/auth.json}"
+mkdir -p "$PI_AUTH_STATE_DIR"
+if [ ! -f "$PI_AUTH_STATE_FILE" ]; then
+  if [ -f "/runtime/secrets/pi-agent/auth.json" ]; then
+    cp "/runtime/secrets/pi-agent/auth.json" "$PI_AUTH_STATE_FILE"
+  elif [ -f "/runtime/secrets/auth.json" ]; then
+    cp "/runtime/secrets/auth.json" "$PI_AUTH_STATE_FILE"
+  else
+    printf '{}\n' > "$PI_AUTH_STATE_FILE"
+  fi
+  chmod 600 "$PI_AUTH_STATE_FILE" 2>/dev/null || true
+fi
+mkdir -p "$PI_CODING_AGENT_DIR"
+ln -sf "$PI_AUTH_STATE_FILE" "$PI_CODING_AGENT_DIR/auth.json"
+
 link_secret_file "/runtime/secrets/pi-agent/models.json" "$PI_CODING_AGENT_DIR/models.json"
 link_secret_file "/runtime/secrets/pi-agent/keybindings.json" "$PI_CODING_AGENT_DIR/keybindings.json"
-link_secret_file "/runtime/secrets/auth.json" "$PI_CODING_AGENT_DIR/auth.json"
+link_secret_file "/runtime/secrets/keybindings.json" "$PI_CODING_AGENT_DIR/keybindings.json"
 link_secret_file "/runtime/secrets/models.json" "$PI_CODING_AGENT_DIR/models.json"
 
 # GPG keyrings on macOS/Parallels bind mounts cannot reliably host gpg-agent's
@@ -76,7 +75,18 @@ if [ -d "/runtime/secrets/gnupg" ]; then
   find "$GNUPGHOME" -type f -exec chmod 600 {} + 2>/dev/null || true
 fi
 
-# ── Git config (host /etc/gitconfig isn't available in container) ──
+# ── Git config / signing state ────────────────────────
+# Runtime deployments can provide a full git config at /runtime/secrets/gitconfig,
+# including commit signing settings. Copy it to writable container-local storage so
+# later git config --global calls can safely apply env overrides without mutating
+# the read-only runtime secrets mount.
+if [ -f "/runtime/secrets/gitconfig" ]; then
+  export GIT_CONFIG_GLOBAL="${GIT_CONFIG_GLOBAL:-$HOME/.gitconfig}"
+  cp "/runtime/secrets/gitconfig" "$GIT_CONFIG_GLOBAL" 2>/dev/null || true
+  chmod 600 "$GIT_CONFIG_GLOBAL" 2>/dev/null || true
+fi
+
+# ── Git identity overrides ──────────────────────────────
 # Identity is runtime-owned, not baked into the image. Configure it with env vars
 # or an env-style file containing GIT_USER_NAME/GIT_USER_EMAIL (or
 # GIT_AUTHOR_NAME/GIT_AUTHOR_EMAIL) in one of:
@@ -115,7 +125,7 @@ fi
 git config --global safe.directory "*" 2>/dev/null || true
 
 # ── Source secrets if available ──────────────────────────
-for secrets_file in "/home/monika/.config/secrets.env" "/app/.config/secrets.env" "/runtime/secrets/secrets.env"; do
+for secrets_file in "/app/.config/secrets.env" "/runtime/secrets/secrets.env"; do
   if [ -f "$secrets_file" ]; then
     # shellcheck source=/dev/null
     set +e
@@ -133,8 +143,7 @@ done
 
 # ── Pool models config ───────────────────────────────────
 # The pool provides a models.json with provider endpoints and auth.
-# In host mode this is already at ~/.pi/agent/models.json (bind-mounted).
-# For standalone mode, download it if not present and POOL_CONFIG_URL is set.
+# Download model config if it is not provided by runtime secrets and POOL_CONFIG_URL is set.
 MODELS_JSON="$PI_CODING_AGENT_DIR/models.json"
 if [ ! -f "$MODELS_JSON" ] && [ -n "$POOL_CONFIG_URL" ]; then
   monika_log "[monika] Downloading pool models config..."

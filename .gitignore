@@ -5,6 +5,7 @@ node_modules/
 .env
 /data/
 /runtime/
+/compose.yaml
 /runner-runtime/
 
 # Local forum taxonomy/runtime configuration. Commit docs/examples/*.json instead.

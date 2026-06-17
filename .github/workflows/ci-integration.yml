@@ -42,9 +42,8 @@ jobs:
 
           if git diff --name-only "$BASE" "${{ github.sha }}" -- \
               'compose.yaml' \
-              'compose.forum.yaml' \
-              'compose.local.yaml' \
-              'compose.test.yaml' \
+              'compose.yaml.example' \
+              'tests/compose.monika-runtime.yaml' \
               'Containerfile' \
               'entrypoint.sh' \
               'config/extensions/' \

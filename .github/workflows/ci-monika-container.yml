@@ -46,7 +46,6 @@ jobs:
               'bin/' \
               'config/' \
               'entrypoint.sh' \
-              'host-shell' \
               'scripts/' \
               'services/agentd/' \
               'services/memstore/' \

@@ -4,24 +4,26 @@ This repo builds Monika's runtime containers and supporting services.
 
 ## Layout
 
-- `Containerfile`, `entrypoint.sh`, `compose.yaml` — primary Monika runtime container.
+- `Containerfile`, `entrypoint.sh`, `compose.yaml.example` — primary standalone Monika runtime deployment template.
+- `compose.yaml` — local ignored deployment file copied from `compose.yaml.example`.
 - `services/agentd/` — Pi-backed HTTP/SSE daemon used by alternate frontends.
 - `services/memstore/` — SQLite FTS5 memory/observation service.
 - `services/forum/` — Monika forum frontend imported from `irrigationreal/monika-forum`.
-- `config/extensions/` — bundled Pi extensions.
+- `config/extensions/` — bundled Pi extensions copied into the image; this repo is the runtime source of truth for extensions.
 - `config/persona/` — bundled default persona files for standalone/test mode.
-- `tests/` — locally runnable smoke and integration tests used by CI gates.
+- `tests/` — locally runnable smoke and integration tests used by CI gates, including test-only compose files.
 - `docs/forum.md` — forum/agentd architecture notes.
 
 ## Operating rules
 
-- Your current active session is likely running out of the live `monika` container, so do not restart the live `monika` container from inside an active Pi session. Instead, you should try to make sure everything is ready for the user to restart it.
+- Your current active session is likely running out of the live `monika` container, so do not restart the live `monika` container from inside an active Pi session. Instead, make sure everything is ready for the user to restart it.
+- The runtime is standalone/container-owned. Do not reintroduce host mode, automatic host-shell execution, host-network deployment, or bind-mounted host `~/.pi` as canonical state.
+- Host/infra work should use explicit SSH relocation, not implicit host execution.
 - When testing throwaway Monika containers, do **not** mount the live/in-use memstore database. Use ephemeral memstore state so two containers cannot lock or mutate the same SQLite DB.
 - The forum is a UI/projection service only. Pi JSONL sessions remain canonical.
 - Forum SQLite stores metadata/projection state; it must not talk directly to memstore or invent memory origins.
 - One forum topic maps to one canonical Pi session.
 - Agent execution, tools, memory lifecycle, stateful-memory, and memstore stay behind `agentd` in the Monika container.
-- Keep `compose.forum.yaml` as an optional overlay; the normal Monika runtime compose flow should not require the forum.
 
 ## GitHub Actions / branch gates
 
@@ -49,41 +51,41 @@ Image publishing workflows:
 Run these from the host shell. Restarting the live `monika` container kills active
 Pi sessions; restart it only when the user is prepared to reconnect.
 
+Initial local deployment setup:
+
+```bash
+cp compose.yaml.example compose.yaml
+```
+
 Build the Monika runtime without cache:
 
 ```bash
 docker compose build --no-cache monika
 ```
 
-Recreate the Monika runtime:
+Recreate the full runtime and forum deployment:
 
 ```bash
-docker compose up -d --force-recreate monika
+docker compose up -d --force-recreate
 ```
 
-Build the forum frontend without cache:
+Recreate only the forum frontend:
 
 ```bash
-docker compose -f compose.yaml -f compose.forum.yaml build --no-cache forum
+docker compose up -d --force-recreate forum
 ```
 
-Recreate the forum frontend only:
+Build/recreate normally:
 
 ```bash
-docker compose -f compose.yaml -f compose.forum.yaml up -d --force-recreate forum
+docker compose up -d --build
 ```
 
-Build/recreate the forum frontend normally:
-
-```bash
-docker compose -f compose.yaml -f compose.forum.yaml up -d --build forum
-```
-
-For throwaway Monika runtime tests, prefer standalone/test compose files or an
-ephemeral volume. Do not bind-mount `/home/monika/.pi/memstore` or another live
-memstore database into a second container. The CI smoke test is runnable locally
-with `tests/smoke/monika-runtime.sh <image>`; keep repo-level tests lean,
-non-flaky, and documented in `tests/README.md`.
+For throwaway Monika runtime tests, prefer `tests/smoke/monika-runtime.sh <image>`
+or `tests/compose.monika-runtime.yaml` with ephemeral volumes. Do not bind-mount
+`runtime/data/memstore`, `/app/.pi/memstore`, or another live memstore database
+into a second container. Keep repo-level tests lean, non-flaky, and documented in
+`tests/README.md`.
 
 ## Forum development
 

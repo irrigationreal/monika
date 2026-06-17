@@ -11,7 +11,7 @@ import { classifyPiSession } from '../services/piSessionClassifier';
 import type { ForumTarget, SessionClassification } from '../services/piSessionClassifier';
 
 const DEFAULT_AGENTD = process.env['MONIKA_AGENTD_BASE_URL'] ?? 'http://127.0.0.1:7724';
-const DEFAULT_DB = process.env['CODEX_FORUM_DB'] ?? '/home/monika/.pi/forum/data.db';
+const DEFAULT_DB = process.env['CODEX_FORUM_DB'] ?? '/forum/data.db';
 
 type PiSessionSummary = {
   id: string;

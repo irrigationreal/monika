@@ -25,7 +25,7 @@ const IDLE_REAP_MS = Number(process.env.MONIKA_AGENTD_IDLE_REAP_MS ?? 30 * 60 * 
 const IDLE_REAP_INTERVAL_MS = Number(process.env.MONIKA_AGENTD_IDLE_REAP_INTERVAL_MS ?? 60 * 1000);
 const ATTACHMENT_IMAGE_INLINE_MAX_BYTES = Number(process.env.MONIKA_AGENTD_ATTACHMENT_IMAGE_INLINE_MAX_BYTES ?? 5 * 1024 * 1024);
 const ATTACHMENT_TEXT_EXTRACT_MAX_BYTES = Number(process.env.MONIKA_AGENTD_ATTACHMENT_TEXT_EXTRACT_MAX_BYTES ?? 64 * 1024);
-const ATTACHMENT_ALLOWED_ROOTS = (process.env.MONIKA_AGENTD_ATTACHMENT_ALLOWED_ROOTS ?? '/home/monika/.pi/forum/uploads')
+const ATTACHMENT_ALLOWED_ROOTS = (process.env.MONIKA_AGENTD_ATTACHMENT_ALLOWED_ROOTS ?? '/forum/uploads')
   .split(':')
   .map((root) => path.resolve(root.trim()))
   .filter(Boolean);

@@ -892,29 +892,6 @@ export default function (pi: ExtensionAPI) {
 			}
 		}
 
-		// Auto-relocate from RELOCATE_TARGET env var (production container mode).
-		// Only fires if --ssh was not explicitly provided.
-		if (!arg && process.env.RELOCATE_TARGET) {
-			const autoTarget = process.env.RELOCATE_TARGET;
-			const parsed = parseSshArg(autoTarget);
-			const validation = await validateSshTarget(parsed.remote, parsed.remoteCwd);
-			if (validation.success) {
-				resolvedSsh = { remote: parsed.remote, remoteCwd: validation.remoteCwd };
-				sshRequired = true;
-				remoteHost = validation.hostname ?? null;
-				// Read AGENTS.md
-				try {
-					const agentsPath = `${validation.remoteCwd}/AGENTS.md`;
-					await sshExec(parsed.remote, `test -r ${JSON.stringify(agentsPath)}`, RELOCATE_SSH_OPTIONS);
-					const content = (await sshExec(parsed.remote, `cat ${JSON.stringify(agentsPath)}`, RELOCATE_SSH_OPTIONS)).toString("utf-8");
-					if (content.trim().length > 0) remoteAgentsContent = content;
-				} catch { /* no AGENTS.md */ }
-				ctx.ui.setStatus("ssh", ctx.ui.theme.fg("accent", `SSH: ${resolvedSsh.remote}:${resolvedSsh.remoteCwd}`));
-				ctx.ui.notify(`Auto-relocated to ${resolvedSsh.remote}:${resolvedSsh.remoteCwd}`, "info");
-			} else {
-				ctx.ui.notify(`Auto-relocate to ${autoTarget} failed: ${validation.error}. Starting in container-local mode.`, "error");
-			}
-		}
 	});
 
 	// Handle user ! commands via SSH

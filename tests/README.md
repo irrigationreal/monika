@@ -43,3 +43,14 @@ The script verifies:
 The smoke test deliberately does **not** call a real model provider. Provider
 canaries belong in a separate trusted-branch workflow because they require
 secrets, network availability, and quota.
+
+## Test compose
+
+`tests/compose.monika-runtime.yaml` is a test-only standalone compose file for
+manual runtime startup with ephemeral Docker volumes. It is not a deployment
+template. Use `compose.yaml.example` for real deployments.
+
+```bash
+docker compose -f tests/compose.monika-runtime.yaml up -d
+docker exec -it monika-test pi
+```
