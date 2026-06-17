@@ -1,22 +1,21 @@
-name: Build and push Monika runtime image
+name: Image / Forum
 
 on:
   push:
     branches: [main]
     paths:
-      - "Containerfile"
-      - ".dockerignore"
-      - "bin/**"
-      - "config/**"
-      - "entrypoint.sh"
-      - "host-shell"
-      - "scripts/**"
-      - "services/agentd/**"
-      - "services/memstore/**"
-      - ".github/workflows/docker-monika.yml"
+      - "services/forum/Containerfile"
+      - "services/forum/.dockerignore"
+      - "services/forum/package.json"
+      - "services/forum/pnpm-lock.yaml"
+      - "services/forum/pnpm-workspace.yaml"
+      - "services/forum/apps/**"
+      - "services/forum/packages/**"
+      - "services/forum/tsconfig.json"
+      - ".github/workflows/image-forum.yml"
 
 concurrency:
-  group: docker-monika-${{ github.ref }}
+  group: image-forum-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -48,21 +47,21 @@ jobs:
       - uses: docker/metadata-action@v5
         id: meta
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ghcr.io/${{ github.repository }}-forum
           tags: |
             type=raw,value=main,suffix=-${{ matrix.arch }}
             type=sha,prefix=sha-,suffix=-${{ matrix.arch }}
 
       - uses: docker/build-push-action@v6
         with:
-          context: .
-          file: ./Containerfile
+          context: ./services/forum
+          file: ./services/forum/Containerfile
           push: true
           provenance: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=monika-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=monika-${{ matrix.arch }}
+          cache-from: type=gha,scope=forum-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=forum-${{ matrix.arch }}
 
   manifest:
     runs-on: ubuntu-latest
@@ -79,7 +78,7 @@ jobs:
       - uses: docker/metadata-action@v5
         id: meta
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ghcr.io/${{ github.repository }}-forum
           tags: |
             type=raw,value=main
             type=sha,prefix=sha-

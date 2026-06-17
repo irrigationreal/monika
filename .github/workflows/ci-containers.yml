@@ -4,7 +4,7 @@
 # build-context, and .dockerignore issues before a branch lands on main and
 # starts publishing GHCR images.
 
-name: Docker Build
+name: CI / Containers
 
 on:
   push:
@@ -13,14 +13,14 @@ on:
   pull_request:
 
 concurrency:
-  group: test-docker-${{ github.ref }}
+  group: ci-containers-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  docker-changes:
+  container-changes:
     runs-on: ubuntu-latest
     outputs:
       monika: ${{ steps.check.outputs.monika }}
@@ -53,8 +53,8 @@ jobs:
               'scripts/' \
               'services/agentd/' \
               'services/memstore/' \
-              '.github/workflows/test-docker.yml' \
-              '.github/workflows/docker-monika.yml' \
+              '.github/workflows/ci-containers.yml' \
+              '.github/workflows/image-monika.yml' \
             | grep -qvE '\.md$'; then
             echo "monika=true" >> "$GITHUB_OUTPUT"
           else
@@ -70,8 +70,8 @@ jobs:
               'services/forum/apps/' \
               'services/forum/packages/' \
               'services/forum/tsconfig.json' \
-              '.github/workflows/test-docker.yml' \
-              '.github/workflows/docker-forum.yml' \
+              '.github/workflows/ci-containers.yml' \
+              '.github/workflows/image-forum.yml' \
             | grep -qvE '\.md$'; then
             echo "forum=true" >> "$GITHUB_OUTPUT"
           else
@@ -79,8 +79,8 @@ jobs:
           fi
 
   monika-build:
-    needs: docker-changes
-    if: needs.docker-changes.outputs.monika == 'true'
+    needs: container-changes
+    if: needs.container-changes.outputs.monika == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -89,8 +89,8 @@ jobs:
         run: docker build -f Containerfile -t monika-test .
 
   forum-build:
-    needs: docker-changes
-    if: needs.docker-changes.outputs.forum == 'true'
+    needs: container-changes
+    if: needs.container-changes.outputs.forum == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -98,9 +98,9 @@ jobs:
       - name: Build forum image
         run: docker build -f services/forum/Containerfile -t monika-forum-test ./services/forum
 
-  docker-checks:
+  container-checks:
     if: always()
-    needs: [docker-changes, monika-build, forum-build]
+    needs: [container-changes, monika-build, forum-build]
     runs-on: ubuntu-latest
     steps:
       - name: Evaluate result
