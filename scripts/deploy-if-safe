@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Pull and apply the Monika + forum :main images only when the runtime reports
+# that stopping containers is safe. Exit 75 (EX_TEMPFAIL) when a deploy should
+# be retried later rather than forced.
+
+ROOT="${MONIKA_DEPLOY_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+COMPOSE_FILE="${MONIKA_DEPLOY_COMPOSE_FILE:-$ROOT/compose.yaml}"
+AGENTD_URL="${MONIKA_AGENTD_BASE_URL:-http://127.0.0.1:7724}"
+FORUM_URL="${MONIKA_FORUM_BASE_URL:-http://127.0.0.1:4310/api}"
+AGENTD_DRAIN_TIMEOUT_MS="${MONIKA_AGENTD_DRAIN_TIMEOUT_MS:-0}"
+
+export MONIKA_IMAGE="${MONIKA_IMAGE:-ghcr.io/irrigationreal/monika:main}"
+export MONIKA_FORUM_IMAGE="${MONIKA_FORUM_IMAGE:-ghcr.io/irrigationreal/monika-forum:main}"
+
+json_field() {
+  python3 -c 'import json,sys; data=json.load(sys.stdin); expr=sys.argv[1].split("."); v=data
+for part in expr:
+    v = v.get(part) if isinstance(v, dict) else None
+print("true" if v is True else "false" if v is False else "" if v is None else v)' "$1"
+}
+
+tempfail() {
+  echo "deploy deferred: $*" >&2
+  exit 75
+}
+
+require_safe_forum() {
+  local state safe
+  state="$(curl -fsS "$FORUM_URL/deploy/quiescence")" || tempfail "forum quiescence endpoint unavailable"
+  safe="$(printf '%s' "$state" | json_field safeToStop)"
+  [ "$safe" = "true" ] || tempfail "forum is not safe to stop: $state"
+}
+
+drain_agentd() {
+  local state status safe
+  state="$(curl -fsS "$AGENTD_URL/v1/admin/quiescence")" || tempfail "agentd quiescence endpoint unavailable"
+  status="$(printf '%s' "$state" | json_field status)"
+  if [ "$status" = "blocked" ]; then
+    tempfail "agentd is blocked: $state"
+  fi
+  if [ "$status" != "safe_to_stop" ]; then
+    state="$(curl -fsS -X POST "$AGENTD_URL/v1/admin/drain" \
+      -H 'content-type: application/json' \
+      --data "{\"timeout_ms\":${AGENTD_DRAIN_TIMEOUT_MS}}")" || tempfail "agentd drain failed"
+  fi
+  safe="$(printf '%s' "$state" | json_field ok)"
+  [ "$safe" = "true" ] || tempfail "agentd is not safe to stop after drain: $state"
+}
+
+cd "$ROOT"
+require_safe_forum
+drain_agentd
+
+docker compose -f "$COMPOSE_FILE" pull monika forum
+docker compose -f "$COMPOSE_FILE" up -d --remove-orphans monika forum

@@ -198,6 +198,7 @@ entrypoint.sh             Starts memstore/agentd and wires runtime state
 bin/agent-runner.mjs      Headless one-off Pi runner entrypoint
 scripts/agent-runner      Local Docker wrapper for disposable runner jobs
 scripts/agentlogs-monika  AgentLogs wrapper with dedicated writable HOME
+scripts/deploy-if-safe   Quiescence-gated Docker Compose redeploy helper
 scripts/import-sessions.mjs  Historical session import helper
 runner/                   Runner docs, prompts, and example job specs
 tests/                    Local/CI smoke and integration test harnesses
@@ -208,6 +209,7 @@ services/memstore/        memstore Go source
 services/agentd/          Pi-backed HTTP/SSE daemon for alternate frontends
 services/forum/           Monika forum frontend
 docs/forum.md             Forum/agentd architecture notes
+docs/redeployment.md      Quiescence/drain redeployment contract
 config/extensions/        Pi extensions copied into the image
 config/persona/           Bundled default persona files
 config/settings.json      Pi settings

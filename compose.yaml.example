@@ -12,12 +12,13 @@ name: monika
 
 services:
   monika:
-    image: ${MONIKA_IMAGE:-monika:local}
+    image: ${MONIKA_IMAGE:-ghcr.io/irrigationreal/monika:main}
     build:
       context: .
       dockerfile: Containerfile
     container_name: monika
     restart: unless-stopped
+    stop_grace_period: 10m
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -55,12 +56,13 @@ services:
       POOL_CONFIG_URL: ${POOL_CONFIG_URL:-}
 
   forum:
-    image: ${MONIKA_FORUM_IMAGE:-monika-forum:local}
+    image: ${MONIKA_FORUM_IMAGE:-ghcr.io/irrigationreal/monika-forum:main}
     build:
       context: ./services/forum
       dockerfile: Containerfile
     container_name: monika-forum
     restart: unless-stopped
+    stop_grace_period: 10m
     user: "0:0"
     depends_on:
       - monika
