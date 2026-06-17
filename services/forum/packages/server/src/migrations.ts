@@ -1128,6 +1128,43 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    version: 28,
+    name: 'pi-sync-anomalies',
+    up: (db) => {
+      db.exec(`
+        create table if not exists pi_sync_anomalies (
+          id text primary key,
+          pi_session_id text not null,
+          pi_message_id text not null,
+          topic_id text not null,
+          session_id text not null,
+          role text,
+          status text not null,
+          reason text not null,
+          preview text,
+          first_seen_at text not null,
+          last_seen_at text not null,
+          last_checked_at text,
+          next_retry_at text,
+          retry_count integer not null default 0,
+          resolved_at text,
+          resolved_by text,
+          resolution text,
+          resolution_note text,
+          post_id text,
+          metadata_json text,
+          foreign key (topic_id) references topics(id),
+          foreign key (session_id) references sessions(id),
+          foreign key (post_id) references posts(id),
+          unique (pi_session_id, pi_message_id, reason)
+        );
+        create index if not exists idx_pi_sync_anomalies_status on pi_sync_anomalies(status, next_retry_at);
+        create index if not exists idx_pi_sync_anomalies_topic on pi_sync_anomalies(topic_id);
+        create index if not exists idx_pi_sync_anomalies_session on pi_sync_anomalies(pi_session_id);
+      `);
+    },
+  },
 ];
 
 export const SCHEMA_VERSION: number = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;

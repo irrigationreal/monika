@@ -1160,6 +1160,60 @@ export function registerAdminRoutes({
     };
   });
 
+  // Pi session sync health endpoints
+  app.get('/admin/pi-sync/health', async (request) => {
+    requireAdmin(request);
+    if (!piSessionSync) {
+      return {
+        enabled: false,
+        running: false,
+        lastRunStartedAt: null,
+        lastRunFinishedAt: null,
+        lastRunError: null,
+        lastRunStats: null,
+        counts: {},
+        anomalies: []
+      };
+    }
+    return piSessionSync.getHealth();
+  });
+
+  app.post('/admin/pi-sync/run', async (request) => {
+    requireAdmin(request);
+    if (!piSessionSync) throw app.httpErrors.conflict('Pi session sync is disabled.');
+    return piSessionSync.runManualSync();
+  });
+
+  app.post('/admin/pi-sync/sessions/:piSessionId/run', async (request) => {
+    requireAdmin(request);
+    if (!piSessionSync) throw app.httpErrors.conflict('Pi session sync is disabled.');
+    const params = request.params as { piSessionId: string };
+    return piSessionSync.runManualSync(params.piSessionId);
+  });
+
+  app.post('/admin/pi-sync/anomalies/:anomalyId/backfill', async (request) => {
+    const user = requireAdmin(request);
+    if (!piSessionSync) throw app.httpErrors.conflict('Pi session sync is disabled.');
+    const params = request.params as { anomalyId: string };
+    const body = (request.body ?? {}) as { bumpTopic?: boolean };
+    const result = await piSessionSync.backfillAnomaly(params.anomalyId, {
+      bumpTopic: Boolean(body.bumpTopic),
+      resolvedBy: user.identityId
+    });
+    if (!result.ok) throw app.httpErrors.badRequest(result.message);
+    return result;
+  });
+
+  app.post('/admin/pi-sync/anomalies/:anomalyId/ignore', async (request) => {
+    const user = requireAdmin(request);
+    if (!piSessionSync) throw app.httpErrors.conflict('Pi session sync is disabled.');
+    const params = request.params as { anomalyId: string };
+    const body = (request.body ?? {}) as { note?: string | null };
+    const result = piSessionSync.ignoreAnomaly(params.anomalyId, user.identityId, body.note ?? null);
+    if (!result.ok) throw app.httpErrors.badRequest(result.message);
+    return result;
+  });
+
   // Admin deploy endpoints
   app.get('/admin/deploy/status', async (request) => {
     requireAdmin(request);

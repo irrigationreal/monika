@@ -60,9 +60,69 @@ type SyncTarget = {
 
 type ExistingPost = { id: string; body: string; created_at: string };
 
+type PiSyncAnomalyRow = {
+  id: string;
+  pi_session_id: string;
+  pi_message_id: string;
+  topic_id: string;
+  session_id: string;
+  role: string | null;
+  status: string;
+  reason: string;
+  preview: string | null;
+  first_seen_at: string;
+  last_seen_at: string;
+  last_checked_at: string | null;
+  next_retry_at: string | null;
+  retry_count: number;
+  resolved_at: string | null;
+  resolved_by: string | null;
+  resolution: string | null;
+  resolution_note: string | null;
+  post_id: string | null;
+  metadata_json: string | null;
+};
+
+export type PiSyncHealth = {
+  enabled: boolean;
+  running: boolean;
+  lastRunStartedAt: string | null;
+  lastRunFinishedAt: string | null;
+  lastRunError: string | null;
+  lastRunStats: { sessionsChecked: number; postsImported: number; anomaliesProcessed: number } | null;
+  counts: Record<string, number>;
+  anomalies: Array<{
+    id: string;
+    piSessionId: string;
+    piMessageId: string;
+    topicId: string;
+    sessionId: string;
+    topicTitle: string | null;
+    role: string | null;
+    status: string;
+    reason: string;
+    preview: string | null;
+    firstSeenAt: string;
+    lastSeenAt: string;
+    lastCheckedAt: string | null;
+    nextRetryAt: string | null;
+    retryCount: number;
+    resolvedAt: string | null;
+    resolvedBy: string | null;
+    resolution: string | null;
+    resolutionNote: string | null;
+    postId: string | null;
+  }>;
+};
+
+export type PiSyncRunResult = { ok: boolean; message: string; sessionsChecked: number; postsImported: number; anomaliesProcessed: number };
+export type PiSyncBackfillResult = { ok: boolean; postId?: string; message: string };
+
 const nowIso = () => new Date().toISOString();
 const json = (value: unknown): string => JSON.stringify(value ?? null);
 const LIVE_DUPLICATE_WINDOW_MS = 5 * 60 * 1000;
+const LIVE_ANOMALY_RETRY_LIMIT_MS = 10 * 60 * 1000;
+const LIVE_ANOMALY_BACKOFF_MS = [30_000, 60_000, 120_000, 300_000];
 
 function stripArtifactMarkers(text: string): string {
   return text
@@ -123,6 +183,10 @@ function extractForumPostId(text: string): string | null {
 export class PiSessionSyncService {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
+  private lastRunStartedAt: string | null = null;
+  private lastRunFinishedAt: string | null = null;
+  private lastRunError: string | null = null;
+  private lastRunStats: PiSyncHealth['lastRunStats'] = null;
   private readonly client: EchsClient;
 
   constructor(
@@ -165,15 +229,28 @@ export class PiSessionSyncService {
   }
 
   async syncChanged(): Promise<void> {
-    if (this.running) return;
+    await this.runSync({ changedOnly: true });
+  }
+
+  async runManualSync(piSessionId?: string | null): Promise<PiSyncRunResult> {
+    return this.runSync({ changedOnly: false, piSessionId: piSessionId ?? null });
+  }
+
+  private async runSync(opts: { changedOnly: boolean; piSessionId?: string | null }): Promise<PiSyncRunResult> {
+    if (this.running) return { ok: false, message: 'Pi sync is already running.', sessionsChecked: 0, postsImported: 0, anomaliesProcessed: 0 };
     this.running = true;
+    this.lastRunStartedAt = nowIso();
+    this.lastRunError = null;
     try {
+      this.seedLegacySkippedAnomalies();
       const listed = await this.client.listPiSessions();
-      const sessions = (listed?.sessions ?? []) as PiSessionSummary[];
+      const sessions = ((listed?.sessions ?? []) as PiSessionSummary[]).filter((summary) =>
+        opts.piSessionId ? summary.id === opts.piSessionId : true
+      );
       let checked = 0;
       let importedPosts = 0;
       for (const summary of sessions) {
-        if (!this.needsSync(summary)) continue;
+        if (opts.changedOnly && !this.needsSync(summary)) continue;
         try {
           const exported = (await this.client.exportPiSession(summary.id)) as ExportedSession | null;
           if (!exported) continue;
@@ -183,10 +260,172 @@ export class PiSessionSyncService {
           console.warn('[pi-sync] session failed:', summary.id, err instanceof Error ? err.message : err);
         }
       }
-      if (checked > 0 || importedPosts > 0) console.log(`[pi-sync] synced=${checked} posts=${importedPosts}`);
+      const anomaliesProcessed = await this.processDueAnomalies();
+      this.lastRunFinishedAt = nowIso();
+      this.lastRunStats = { sessionsChecked: checked, postsImported: importedPosts, anomaliesProcessed };
+      if (checked > 0 || importedPosts > 0 || anomaliesProcessed > 0) {
+        console.log(`[pi-sync] synced=${checked} posts=${importedPosts} anomalies=${anomaliesProcessed}`);
+      }
+      return { ok: true, message: 'Pi sync completed.', sessionsChecked: checked, postsImported: importedPosts, anomaliesProcessed };
+    } catch (err) {
+      this.lastRunError = err instanceof Error ? err.message : String(err);
+      throw err;
     } finally {
       this.running = false;
     }
+  }
+
+  private seedLegacySkippedAnomalies(): void {
+    const now = nowIso();
+    const rows = this.db
+      .prepare(
+        `select l.pi_session_id, l.pi_message_id, l.role, l.metadata_json, s.topic_id, s.session_id
+         from pi_message_links l
+         join pi_session_links s on s.pi_session_id = l.pi_session_id
+         left join pi_sync_anomalies a on a.pi_session_id = l.pi_session_id
+          and a.pi_message_id = l.pi_message_id
+          and a.reason = 'live-topic-unmatched-visible-message'
+         where l.post_id is null
+           and json_extract(l.metadata_json, '$.skippedLiveForumPost') = 1
+           and a.id is null
+         limit 500`
+      )
+      .all() as Array<{ pi_session_id: string; pi_message_id: string; role: string | null; metadata_json: string | null; topic_id: string; session_id: string }>;
+    const insert = this.db.prepare(
+      `insert or ignore into pi_sync_anomalies
+       (id, pi_session_id, pi_message_id, topic_id, session_id, role, status, reason, preview, first_seen_at, last_seen_at, last_checked_at, next_retry_at, retry_count, metadata_json)
+       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    const tx = this.db.transaction(() => {
+      for (const row of rows) {
+        const meta = parseJsonObject(row.metadata_json);
+        const timestamp = typeof meta['timestamp'] === 'string' ? meta['timestamp'] : now;
+        insert.run(
+          randomUUID(),
+          row.pi_session_id,
+          row.pi_message_id,
+          row.topic_id,
+          row.session_id,
+          row.role,
+          'needs_manual_review',
+          'live-topic-unmatched-visible-message',
+          null,
+          timestamp,
+          now,
+          now,
+          null,
+          0,
+          json({ ...meta, seededFromLegacySkippedLiveForumPost: true })
+        );
+      }
+    });
+    if (rows.length > 0) tx();
+  }
+
+  getHealth(): PiSyncHealth {
+    this.seedLegacySkippedAnomalies();
+    const counts: Record<string, number> = {};
+    const countRows = this.db
+      .prepare('select status, count(*) as count from pi_sync_anomalies group by status')
+      .all() as Array<{ status: string; count: number }>;
+    for (const row of countRows) counts[row.status] = row.count;
+
+    const rows = this.db
+      .prepare(
+        `select a.*, t.title as topic_title
+         from pi_sync_anomalies a
+         left join topics t on t.id = a.topic_id
+         where a.status in ('deferred', 'needs_manual_review')
+         order by case a.status when 'needs_manual_review' then 0 else 1 end, a.first_seen_at asc
+         limit 100`
+      )
+      .all() as Array<PiSyncAnomalyRow & { topic_title: string | null }>;
+
+    return {
+      enabled: true,
+      running: this.running,
+      lastRunStartedAt: this.lastRunStartedAt,
+      lastRunFinishedAt: this.lastRunFinishedAt,
+      lastRunError: this.lastRunError,
+      lastRunStats: this.lastRunStats,
+      counts,
+      anomalies: rows.map((row) => ({
+        id: row.id,
+        piSessionId: row.pi_session_id,
+        piMessageId: row.pi_message_id,
+        topicId: row.topic_id,
+        sessionId: row.session_id,
+        topicTitle: row.topic_title,
+        role: row.role,
+        status: row.status,
+        reason: row.reason,
+        preview: row.preview,
+        firstSeenAt: row.first_seen_at,
+        lastSeenAt: row.last_seen_at,
+        lastCheckedAt: row.last_checked_at,
+        nextRetryAt: row.next_retry_at,
+        retryCount: row.retry_count,
+        resolvedAt: row.resolved_at,
+        resolvedBy: row.resolved_by,
+        resolution: row.resolution,
+        resolutionNote: row.resolution_note,
+        postId: row.post_id,
+      })),
+    };
+  }
+
+  ignoreAnomaly(anomalyId: string, resolvedBy: string, note?: string | null): PiSyncBackfillResult {
+    const now = nowIso();
+    const result = this.db
+      .prepare(
+        `update pi_sync_anomalies
+         set status = 'ignored', resolved_at = ?, resolved_by = ?, resolution = 'ignored', resolution_note = ?
+         where id = ? and status in ('deferred', 'needs_manual_review')`
+      )
+      .run(now, resolvedBy, note ?? null, anomalyId);
+    return result.changes > 0 ? { ok: true, message: 'Anomaly ignored.' } : { ok: false, message: 'Active anomaly not found.' };
+  }
+
+  async backfillAnomaly(anomalyId: string, opts?: { bumpTopic?: boolean; resolvedBy?: string | null }): Promise<PiSyncBackfillResult> {
+    const anomaly = this.db.prepare('select * from pi_sync_anomalies where id = ? limit 1').get(anomalyId) as PiSyncAnomalyRow | undefined;
+    if (!anomaly) return { ok: false, message: 'Anomaly not found.' };
+    if (!['deferred', 'needs_manual_review'].includes(anomaly.status)) return { ok: false, message: `Anomaly is ${anomaly.status}.` };
+    const exported = (await this.client.exportPiSession(anomaly.pi_session_id)) as ExportedSession | null;
+    if (!exported) return { ok: false, message: 'Pi session could not be exported.' };
+    const entry = exported.entries.find((candidate) => candidate.id === anomaly.pi_message_id);
+    if (!entry || entry.type !== 'message' || !entry.hasVisibleText || !entry.role) return { ok: false, message: 'Visible Pi message not found.' };
+    const text = entry.role === 'assistant' ? stripArtifactMarkers(entry.text ?? '') : entry.text ?? '';
+    if (!text.trim()) return { ok: false, message: 'Pi message has no visible text to backfill.' };
+    const authorId = this.ensureIdentity(entry.role === 'user' ? 'Pi CLI' : 'Monika', entry.role === 'user' ? 'system' : 'robot', entry.role === 'user' ? '/avatars/pi-cli.gif' : '/avatars/monika.png');
+    const existing = this.findUnlinkedMatchingPost(anomaly.topic_id, authorId, text, entry.timestamp ?? null);
+    const now = nowIso();
+    const postId = existing?.id ?? randomUUID();
+    const sessionMessageId = existing ? null : randomUUID();
+    const at = entry.timestamp ?? now;
+    this.db.transaction(() => {
+      if (!existing) {
+        this.db
+          .prepare(
+            'insert into posts (id, topic_id, tenant_id, parent_post_id, author_id, body, source_message_id, silent, created_at, edited_at, deleted_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+          )
+          .run(postId, anomaly.topic_id, null, null, authorId, text, entry.id, opts?.bumpTopic ? 0 : 1, at, null, null);
+        this.db
+          .prepare('insert into session_messages (id, session_id, role, content, created_at, visibility) values (?, ?, ?, ?, ?, ?)')
+          .run(sessionMessageId, anomaly.session_id, entry.role, text, at, 'public');
+      }
+      this.db
+        .prepare('update pi_message_links set post_id = coalesce(post_id, ?), session_message_id = coalesce(session_message_id, ?), metadata_json = ? where pi_session_id = ? and pi_message_id = ?')
+        .run(postId, sessionMessageId, json({ backfilledFromAnomaly: true }), anomaly.pi_session_id, anomaly.pi_message_id);
+      this.db
+        .prepare(
+          `update pi_sync_anomalies
+           set status = 'resolved', resolved_at = ?, resolved_by = ?, resolution = ?, post_id = ?, last_checked_at = ?
+           where id = ?`
+        )
+        .run(now, opts?.resolvedBy ?? null, existing ? 'matched_existing_post' : 'backfilled', postId, now, anomaly.id);
+      if (opts?.bumpTopic) this.db.prepare('update topics set updated_at = ? where id = ?').run(now, anomaly.topic_id);
+    })();
+    return { ok: true, postId, message: existing ? 'Anomaly linked to an existing post.' : 'Anomaly backfilled as a forum post.' };
   }
 
   private needsSync(summary: PiSessionSummary): boolean {
@@ -399,6 +638,62 @@ export class PiSessionSyncService {
     return candidates.find((post) => normalizePostBodyForDuplicateCheck(post.body) === normalized) ?? null;
   }
 
+  private anomalyStatus(firstSeenAt: string, now = Date.now()): 'deferred' | 'needs_manual_review' {
+    const firstSeen = Date.parse(firstSeenAt);
+    return Number.isFinite(firstSeen) && now - firstSeen > LIVE_ANOMALY_RETRY_LIMIT_MS ? 'needs_manual_review' : 'deferred';
+  }
+
+  private nextRetryAt(retryCount: number, now = Date.now()): string | null {
+    const delay = LIVE_ANOMALY_BACKOFF_MS[Math.min(retryCount, LIVE_ANOMALY_BACKOFF_MS.length - 1)];
+    return delay ? new Date(now + delay).toISOString() : null;
+  }
+
+  private recordLiveForumAnomaly(target: SyncTarget, entry: PiEntry, text: string, summary: PiSessionSummary, metadata: unknown): void {
+    const now = nowIso();
+    const existing = this.db
+      .prepare('select * from pi_sync_anomalies where pi_session_id = ? and pi_message_id = ? and reason = ? limit 1')
+      .get(summary.id, entry.id, 'live-topic-unmatched-visible-message') as PiSyncAnomalyRow | undefined;
+    const firstSeenAt = existing?.first_seen_at ?? now;
+    const retryCount = existing?.retry_count ?? 0;
+    const status = this.anomalyStatus(firstSeenAt);
+    const nextRetry = status === 'deferred' ? existing?.next_retry_at ?? this.nextRetryAt(retryCount) : null;
+    const preview = text.trim().replace(/\s+/g, ' ').slice(0, 240);
+    if (existing) {
+      if (['resolved', 'ignored'].includes(existing.status)) return;
+      this.db
+        .prepare(
+          `update pi_sync_anomalies
+           set topic_id = ?, session_id = ?, role = ?, status = ?, preview = ?, last_seen_at = ?, next_retry_at = ?, metadata_json = ?
+           where id = ?`
+        )
+        .run(target.topicId, target.sessionId, entry.role ?? null, status, preview, now, nextRetry, json(metadata), existing.id);
+      return;
+    }
+    this.db
+      .prepare(
+        `insert into pi_sync_anomalies
+         (id, pi_session_id, pi_message_id, topic_id, session_id, role, status, reason, preview, first_seen_at, last_seen_at, last_checked_at, next_retry_at, retry_count, metadata_json)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        randomUUID(),
+        summary.id,
+        entry.id,
+        target.topicId,
+        target.sessionId,
+        entry.role ?? null,
+        status,
+        'live-topic-unmatched-visible-message',
+        preview,
+        firstSeenAt,
+        now,
+        null,
+        nextRetry,
+        retryCount,
+        json(metadata)
+      );
+  }
+
   private insertMessageLink(opts: {
     piSessionId: string;
     piMessageId: string;
@@ -421,6 +716,61 @@ export class PiSessionSyncService {
         nowIso(),
         json(opts.metadata)
       );
+  }
+
+  private async processDueAnomalies(): Promise<number> {
+    const now = nowIso();
+    const rows = this.db
+      .prepare(
+        `select * from pi_sync_anomalies
+         where status = 'deferred' and (next_retry_at is null or next_retry_at <= ?)
+         order by first_seen_at asc
+         limit 25`
+      )
+      .all(now) as PiSyncAnomalyRow[];
+    let processed = 0;
+    for (const anomaly of rows) {
+      processed += 1;
+      try {
+        const exported = (await this.client.exportPiSession(anomaly.pi_session_id)) as ExportedSession | null;
+        const entry = exported?.entries.find((candidate) => candidate.id === anomaly.pi_message_id);
+        if (!entry) {
+          this.bumpAnomalyRetry(anomaly, 'Pi message not present in exported session.');
+          continue;
+        }
+        const text = entry.role === 'assistant' ? stripArtifactMarkers(entry.text ?? '') : entry.text ?? '';
+        const authorId = this.ensureIdentity(entry.role === 'user' ? 'Pi CLI' : 'Monika', entry.role === 'user' ? 'system' : 'robot', entry.role === 'user' ? '/avatars/pi-cli.gif' : '/avatars/monika.png');
+        const existing = this.findUnlinkedMatchingPost(anomaly.topic_id, authorId, text, entry.timestamp ?? null);
+        if (existing) {
+          const resolvedAt = nowIso();
+          this.db.transaction(() => {
+            this.db
+              .prepare('update pi_message_links set post_id = coalesce(post_id, ?), metadata_json = ? where pi_session_id = ? and pi_message_id = ?')
+              .run(existing.id, json({ reconciledExistingPost: true, resolvedAnomaly: true }), anomaly.pi_session_id, anomaly.pi_message_id);
+            this.db
+              .prepare("update pi_sync_anomalies set status = 'resolved', resolved_at = ?, resolution = 'matched_existing_post', post_id = ?, last_checked_at = ? where id = ?")
+              .run(resolvedAt, existing.id, resolvedAt, anomaly.id);
+          })();
+          continue;
+        }
+        this.bumpAnomalyRetry(anomaly, null);
+      } catch (err) {
+        this.bumpAnomalyRetry(anomaly, err instanceof Error ? err.message : String(err));
+      }
+    }
+    return processed;
+  }
+
+  private bumpAnomalyRetry(anomaly: PiSyncAnomalyRow, error: string | null): void {
+    const checkedAt = nowIso();
+    const retryCount = anomaly.retry_count + 1;
+    const firstSeen = Date.parse(anomaly.first_seen_at);
+    const status = Number.isFinite(firstSeen) && Date.now() - firstSeen > LIVE_ANOMALY_RETRY_LIMIT_MS ? 'needs_manual_review' : 'deferred';
+    const nextRetry = status === 'deferred' ? this.nextRetryAt(retryCount) : null;
+    const meta = { ...parseJsonObject(anomaly.metadata_json), lastRetryError: error };
+    this.db
+      .prepare('update pi_sync_anomalies set status = ?, retry_count = ?, last_checked_at = ?, next_retry_at = ?, metadata_json = ? where id = ?')
+      .run(status, retryCount, checkedAt, nextRetry, json(meta), anomaly.id);
   }
 
   private importMessages(exported: ExportedSession, target: SyncTarget, summary: PiSessionSummary): number {
@@ -486,13 +836,15 @@ export class PiSessionSyncService {
         }
 
         if (liveForumSession) {
+          const anomalyMetadata = { ...metadata, deferredLiveForumPost: true };
+          this.recordLiveForumAnomaly(target, entry, text, summary, anomalyMetadata);
           this.insertMessageLink({
             piSessionId: exported.session.id,
             piMessageId: entry.id,
             postId: null,
             sessionMessageId: null,
             role: entry.role,
-            metadata: { ...metadata, skippedLiveForumPost: true },
+            metadata: anomalyMetadata,
           });
           continue;
         }
