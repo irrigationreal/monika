@@ -42,6 +42,7 @@ describe('Forum routes silent posts', () => {
     const queries = new ForumQueries(db);
     const runtime = new ForumStoreRuntime(store);
     const statsReadModel = new SqliteStatsReadModel(db);
+    const postDispatchService = { wake: vi.fn() };
     registerForumRoutes({
       app,
       store,
@@ -53,14 +54,19 @@ describe('Forum routes silent posts', () => {
       codex,
       webhookService: { dispatch: () => {} } as any,
       bus,
+      postDispatchService,
       access,
       webIdentityId: store.createIdentity('web', 'human').id
     });
     await app.ready();
-    return { app, codex };
+    return { app, codex, postDispatchService };
   }
 
-  it('creates silent replies without dispatching the robot and allows steering while busy', async () => {
+  function countDispatches(): number {
+    return (db.prepare('select count(*) as count from post_dispatches').get() as { count: number }).count;
+  }
+
+  it('creates silent replies without dispatching the robot and queues non-silent replies while busy', async () => {
     const { app, codex } = await buildApp();
 
     const forum = store.createForum('Forum', null, null, null, null, 'active', 'public');
@@ -99,7 +105,8 @@ describe('Forum routes silent posts', () => {
     });
     expect(resNonSilent.statusCode).toBe(200);
     expect(codex.sendUserMessage).toHaveBeenCalledTimes(0);
-    expect(codex.steerUserMessage).toHaveBeenCalledTimes(1);
+    expect(codex.steerUserMessage).toHaveBeenCalledTimes(0);
+    expect(countDispatches()).toBe(1);
   });
 
   it('creates silent topics without dispatching the robot', async () => {
@@ -192,7 +199,7 @@ describe('Forum routes silent posts', () => {
       payload: { body: 'hey @robot can you help?' }
     });
     expect(resMention.statusCode).toBe(200);
-    expect(codex.sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(countDispatches()).toBe(1);
   });
 
   it('detects @robot mentions across common punctuation and ignores email addresses', async () => {
@@ -229,13 +236,16 @@ describe('Forum routes silent posts', () => {
         payload: { body: testCase.body }
       });
       expect(res.statusCode).toBe(200);
-      expect(codex.sendUserMessage).toHaveBeenCalledTimes(testCase.shouldDispatch ? 1 : 0);
+      const dispatchCount = countDispatches();
+      expect(dispatchCount).toBe(testCase.shouldDispatch ? 1 : 0);
+      db.prepare('delete from post_dispatches').run();
+      expect(codex.sendUserMessage).toHaveBeenCalledTimes(0);
       expect(codex.steerUserMessage).toHaveBeenCalledTimes(0);
       expect((res.json() as any)?.body).toBe(testCase.body);
     }
   });
 
-  it('bypasses busy guard for mention-only posts and steers when mentioned', async () => {
+  it('bypasses busy guard for mention-only posts and records a dispatch when mentioned', async () => {
     const { app, codex } = await buildApp();
 
     const forum = store.createForum('Forum', null, null, null, null, 'active', 'public');
@@ -279,7 +289,8 @@ describe('Forum routes silent posts', () => {
     });
     expect(resMention.statusCode).toBe(200);
     expect(codex.sendUserMessage).toHaveBeenCalledTimes(0);
-    expect(codex.steerUserMessage).toHaveBeenCalledTimes(1);
+    expect(codex.steerUserMessage).toHaveBeenCalledTimes(0);
+    expect(countDispatches()).toBe(1);
   });
 
   it('can create mention-only topics and dispatches only if the starter post includes @robot', async () => {
@@ -306,7 +317,8 @@ describe('Forum routes silent posts', () => {
       payload: { title: 'Mention only', body: 'starter (@robot)', robotMode: 'mention' }
     });
     expect(resMention.statusCode).toBe(200);
-    expect(codex.sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(codex.sendUserMessage).toHaveBeenCalledTimes(0);
+    expect(countDispatches()).toBe(1);
   });
 
   it('never dispatches for robotMode=off topics even if @robot is included', async () => {

@@ -36,6 +36,7 @@ import type {
   MessageTamperRow,
   NotificationRow,
   PlanRow,
+  PostDispatchRow,
   PostRow,
   ReactionRow,
   RefreshSessionRow,
@@ -305,6 +306,15 @@ export interface UpdateRobotStateInput {
   model?: string | null;
   reasoningEffort?: string | null;
   currentPlanId?: string | null;
+}
+
+export interface CreatePostDispatchInput {
+  topicId: string;
+  postId: string;
+  sessionId: string;
+  mode?: string;
+  model?: string | null;
+  reasoningEffort?: string | null;
 }
 
 export interface CreateExternalRefInput {
@@ -2071,6 +2081,133 @@ export class ForumStore {
     return row ?? null;
   }
 
+  createPostDispatch(input: CreatePostDispatchInput): PostDispatchRow {
+    const existing = this.getPostDispatchByPost(input.postId);
+    if (existing) return existing;
+    const id = randomUUID();
+    const now = nowIso();
+    this.db
+      .prepare(
+        `insert into post_dispatches
+          (id, topic_id, post_id, session_id, status, mode, model, reasoning_effort, attempt_count, last_attempt_at, next_attempt_at, dispatched_at, error_message, created_at, updated_at)
+          values (?, ?, ?, ?, 'pending', ?, ?, ?, 0, null, ?, null, null, ?, ?)`
+      )
+      .run(
+        id,
+        input.topicId,
+        input.postId,
+        input.sessionId,
+        input.mode ?? 'auto',
+        input.model ?? null,
+        input.reasoningEffort ?? null,
+        now,
+        now,
+        now
+      );
+    return this.getPostDispatch(id) as PostDispatchRow;
+  }
+
+  getPostDispatch(id: string): PostDispatchRow | null {
+    const row = this.db.prepare('select * from post_dispatches where id = ?').get(id) as PostDispatchRow | undefined;
+    return row ?? null;
+  }
+
+  getPostDispatchByPost(postId: string): PostDispatchRow | null {
+    const row = this.db.prepare('select * from post_dispatches where post_id = ?').get(postId) as PostDispatchRow | undefined;
+    return row ?? null;
+  }
+
+  listDuePostDispatches(limit: number): PostDispatchRow[] {
+    const now = nowIso();
+    return this.db
+      .prepare(
+        `select * from post_dispatches
+         where status in ('pending', 'dispatching')
+           and (next_attempt_at is null or next_attempt_at <= ?)
+         order by created_at asc
+         limit ?`
+      )
+      .all(now, Math.max(1, Math.trunc(limit))) as PostDispatchRow[];
+  }
+
+  listPendingPostDispatchesForTopic(topicId: string): PostDispatchRow[] {
+    return this.db
+      .prepare(`select * from post_dispatches where topic_id = ? and status in ('pending', 'dispatching') order by created_at asc`)
+      .all(topicId) as PostDispatchRow[];
+  }
+
+  countActionablePostDispatches(topicId: string): number {
+    const row = this.db
+      .prepare(`select count(*) as count from post_dispatches where topic_id = ? and status in ('pending', 'dispatching', 'failed')`)
+      .get(topicId) as { count: number } | undefined;
+    return row?.count ?? 0;
+  }
+
+  markPostDispatchDispatching(id: string): PostDispatchRow | null {
+    const existing = this.getPostDispatch(id);
+    if (!existing) return null;
+    const now = nowIso();
+    this.db
+      .prepare(`update post_dispatches set status = 'dispatching', attempt_count = attempt_count + 1, last_attempt_at = ?, next_attempt_at = null, error_message = null, updated_at = ? where id = ?`)
+      .run(now, now, id);
+    return this.getPostDispatch(id);
+  }
+
+  markPostDispatchDispatched(id: string): PostDispatchRow | null {
+    const now = nowIso();
+    this.db
+      .prepare(`update post_dispatches set status = 'dispatched', dispatched_at = ?, next_attempt_at = null, error_message = null, updated_at = ? where id = ?`)
+      .run(now, now, id);
+    return this.getPostDispatch(id);
+  }
+
+  markPostDispatchSuperseded(id: string, reason = 'Included as catch-up context in a newer dispatch.'): PostDispatchRow | null {
+    const now = nowIso();
+    this.db
+      .prepare(`update post_dispatches set status = 'superseded', next_attempt_at = null, error_message = ?, updated_at = ? where id = ? and status in ('pending', 'dispatching')`)
+      .run(reason, now, id);
+    return this.getPostDispatch(id);
+  }
+
+  markPostDispatchAbandoned(id: string, reason: string): PostDispatchRow | null {
+    const now = nowIso();
+    this.db
+      .prepare(`update post_dispatches set status = 'abandoned', next_attempt_at = null, error_message = ?, updated_at = ? where id = ?`)
+      .run(reason, now, id);
+    return this.getPostDispatch(id);
+  }
+
+  markPostDispatchFailed(id: string, message: string, opts?: { retryAt?: string | null }): PostDispatchRow | null {
+    const existing = this.getPostDispatch(id);
+    if (!existing) return null;
+    const now = nowIso();
+    const status = opts?.retryAt ? 'pending' : 'failed';
+    this.db
+      .prepare(`update post_dispatches set status = ?, next_attempt_at = ?, error_message = ?, updated_at = ? where id = ?`)
+      .run(status, opts?.retryAt ?? null, message.slice(0, 1000), now, id);
+    return this.getPostDispatch(id);
+  }
+
+  clearRobotTurnError(topicId: string): RobotStateRow | null {
+    const existing = this.getRobotState(topicId);
+    if (!existing) return null;
+    const now = nowIso();
+    this.db
+      .prepare(`update robot_state set last_error_message = null, last_error_at = null, last_error_post_id = null, last_error_turn_id = null, last_updated_at = ? where topic_id = ?`)
+      .run(now, topicId);
+    return this.getRobotState(topicId);
+  }
+
+  setRobotTurnError(topicId: string, input: { message: string; postId?: string | null; turnId?: string | null }): RobotStateRow | null {
+    const existing = this.getRobotState(topicId);
+    if (!existing) return null;
+    const now = nowIso();
+    this.db
+      .prepare(`update robot_state set activity = 'idle', last_error_message = ?, last_error_at = ?, last_error_post_id = ?, last_error_turn_id = ?, last_updated_at = ? where topic_id = ?`)
+      .run(input.message.slice(0, 1000), now, input.postId ?? null, input.turnId ?? null, now, topicId);
+    return this.getRobotState(topicId);
+  }
+
   getRobotState(topicId: string): RobotStateRow | null {
     const row = this.db.prepare('select * from robot_state where topic_id = ?').get(topicId) as
       | RobotStateRow
@@ -2480,7 +2617,13 @@ export class ForumStore {
     if (existing) {
       this.db
         .prepare(
-          'update robot_state set session_id = ?, activity = ?, model = ?, reasoning_effort = ?, last_updated_at = ?, current_plan_id = ? where topic_id = ?'
+          `update robot_state
+             set session_id = ?, activity = ?, model = ?, reasoning_effort = ?, last_updated_at = ?, current_plan_id = ?,
+                 last_error_message = case when ? != 'idle' then null else last_error_message end,
+                 last_error_at = case when ? != 'idle' then null else last_error_at end,
+                 last_error_post_id = case when ? != 'idle' then null else last_error_post_id end,
+                 last_error_turn_id = case when ? != 'idle' then null else last_error_turn_id end
+             where topic_id = ?`
         )
         .run(
           input.sessionId,
@@ -2489,12 +2632,18 @@ export class ForumStore {
           input.reasoningEffort ?? null,
           now,
           input.currentPlanId ?? null,
+          input.activity,
+          input.activity,
+          input.activity,
+          input.activity,
           input.topicId
         );
     } else {
       this.db
         .prepare(
-          'insert into robot_state (topic_id, session_id, activity, model, reasoning_effort, last_updated_at, current_plan_id) values (?, ?, ?, ?, ?, ?, ?)'
+          `insert into robot_state
+            (topic_id, session_id, activity, model, reasoning_effort, last_updated_at, current_plan_id, last_error_message, last_error_at, last_error_post_id, last_error_turn_id)
+            values (?, ?, ?, ?, ?, ?, ?, null, null, null, null)`
         )
         .run(
           input.topicId,

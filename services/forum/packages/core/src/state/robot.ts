@@ -36,6 +36,12 @@ export interface RobotState {
   model?: string | null;
   reasoningEffort?: string | null;
   lastUpdatedAt: string;
+  lastTurnError?: {
+    message: string;
+    at: string;
+    postId?: string | null;
+    turnId?: string | null;
+  } | null;
   currentPlan?: PlanArtifact | null;
   recentToolRuns: ToolRunSummary[];
 }

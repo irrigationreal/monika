@@ -76,6 +76,7 @@ import {
 import { AutoRunDirector } from './services/autoRunDirector';
 import { getEmailService } from './services/emailService';
 import { PiSessionSyncService } from './services/piSessionSyncService';
+import { PostDispatchService } from './services/postDispatchService';
 import { WebhookService } from './services/webhookService';
 import { ForumStore } from './store';
 import { RedisStreamBus, createStreamBus } from './streamBus';
@@ -248,6 +249,11 @@ autoRunDirector.setRobotDispatcher(({ topicId, body, parentPostId, model, reason
 
 await codex.start();
 
+const postDispatchService = new PostDispatchService(store, codex, {
+  maxConcurrent: Math.max(1, Math.min(10, MAX_CONCURRENT_TURNS)),
+});
+postDispatchService.start();
+
 const piSessionSync = MONIKA_PI_SYNC_ENABLED
   ? new PiSessionSyncService(db, {
       agentdBaseUrl: ECHS_BASE_URL,
@@ -418,6 +424,7 @@ const registerApiRoutes: FastifyPluginAsync = async (api) => {
     codex,
     webhookService,
     bus,
+    postDispatchService,
     access,
     webIdentityId: bootstrapResult.webIdentityId,
   });

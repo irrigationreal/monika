@@ -125,6 +125,15 @@ export class AgentBridge {
     return this.echs.steerUserMessage(topicId, body, parentPostId, options);
   }
 
+  async dispatchPostToAgent(
+    topicId: string,
+    postId: string,
+    options?: { mode?: 'queue' | 'steer'; model?: string | null; reasoningEffort?: string | null }
+  ): Promise<void> {
+    this.store.setSessionAgentBackend(this.store.ensureSession({ topicId }).id, 'echs');
+    return this.echs.dispatchPostToAgent(topicId, postId, options);
+  }
+
   async interruptTopic(topicId: string): Promise<{ ok: boolean; message: string }> {
     return this.echs.interruptTopic(topicId);
   }

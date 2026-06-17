@@ -160,6 +160,14 @@ export function mapRobotStateRowToDomain(row: RobotStateRow): RobotState {
     model: row.model,
     reasoningEffort: row.reasoning_effort,
     lastUpdatedAt: row.last_updated_at,
+    lastTurnError: row.last_error_message && row.last_error_at
+      ? {
+          message: row.last_error_message,
+          at: row.last_error_at,
+          postId: row.last_error_post_id ?? null,
+          turnId: row.last_error_turn_id ?? null,
+        }
+      : null,
     recentToolRuns: []
   };
 }

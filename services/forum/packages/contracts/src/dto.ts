@@ -417,6 +417,12 @@ export interface RobotStateDto {
   model?: string | null;
   reasoningEffort?: string | null;
   lastUpdatedAt: string;
+  lastTurnError?: {
+    message: string;
+    at: string;
+    postId?: string | null;
+    turnId?: string | null;
+  } | null;
   currentPlan?: PlanDto | null;
   recentToolRuns: ToolRunDto[];
 }

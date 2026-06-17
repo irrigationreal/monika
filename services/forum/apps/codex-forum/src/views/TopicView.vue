@@ -2222,6 +2222,11 @@ onUnmounted(() => {
             {{ state.robotControlPending.value ? 'Stopping...' : 'Stop Robot' }}
           </button>
         </div>
+        <div v-if="state.robotState.value?.lastTurnError" class="vb-robot-error-notice">
+          <strong>Robot turn failed.</strong>
+          <span>The last turn stopped before producing a reply. The robot is idle; you can retry or send another message.</span>
+          <span class="vb-robot-error-detail">{{ state.robotState.value.lastTurnError.message }}</span>
+        </div>
         <label>Message:</label>
         <textarea v-model="replyBody" rows="6" placeholder="Type your reply here..."></textarea>
         <div class="vb-reply-attachments">
@@ -2316,6 +2321,9 @@ onUnmounted(() => {
       <div class="vb-robot-body">
         <div class="vb-state-row">
           <div><strong>Status:</strong> {{ state.robotState.value?.activity ?? 'idle' }}</div>
+          <div v-if="state.robotState.value?.lastTurnError" class="vb-state-error">
+            <strong>Last turn failed:</strong> {{ state.robotState.value.lastTurnError.message }}
+          </div>
           <div>
             <strong>Last Update:</strong>
             {{ state.robotState.value?.lastUpdatedAt ? state.formatDate(state.robotState.value.lastUpdatedAt) : 'n/a' }}
