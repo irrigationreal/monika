@@ -156,7 +156,7 @@ Host prerequisites:
 
 ## GitHub Actions
 
-The repo uses separate CI gates so branch protection can fail or skip checks by subsystem:
+The repo uses separate pull-request CI gates so branch protection can fail or skip checks by subsystem. These workflows intentionally avoid branch `push` triggers to prevent duplicate runs; `pull_request` re-runs on every PR update via the `synchronize` event:
 
 - `CI / Monika Container` (`ci-monika-container.yml`) uses `monika-container-changes` → `monika-container-build` → `monika-container-checks`. Require `monika-container-checks` in branch rules.
 - `CI / Forum Container` (`ci-forum-container.yml`) uses `forum-container-changes` → `forum-container-build` → `forum-container-checks`. Require `forum-container-checks` in branch rules.

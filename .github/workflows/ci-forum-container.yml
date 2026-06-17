@@ -7,10 +7,8 @@
 name: CI / Forum Container
 
 on:
-  push:
-    branches-ignore: [main]
-    tags-ignore: ["*"]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-forum-container-${{ github.ref }}

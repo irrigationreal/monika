@@ -7,10 +7,8 @@
 name: CI / Monika Container
 
 on:
-  push:
-    branches-ignore: [main]
-    tags-ignore: ["*"]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-monika-container-${{ github.ref }}
