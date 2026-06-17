@@ -162,9 +162,12 @@ Host stanza host.docker.internal
   User monika
   IdentityFile /root/.ssh/ssh-local
   StrictHostKeyChecking accept-new
-  UserKnownHostsFile /root/.ssh/known_hosts
+  UserKnownHostsFile /tmp/known_hosts
 SSHCONF
   chmod 600 "$RUNTIME/secrets/ssh/config" || true
+  if command -v sudo >/dev/null 2>&1; then
+    sudo chown -R root:root "$RUNTIME/secrets/ssh" 2>/dev/null || true
+  fi
 }
 
 write_forum_env_if_missing() {

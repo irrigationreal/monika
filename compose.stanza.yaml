@@ -81,7 +81,7 @@ services:
     depends_on:
       - monika
     ports:
-      - "127.0.0.1:4310:4310"
+      - "4310:4310"
     volumes:
       - ./runtime/forum:/forum
       - /home/monika/repos:/workspace
