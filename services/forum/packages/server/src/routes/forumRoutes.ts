@@ -466,25 +466,64 @@ export function registerForumRoutes({
     store.createSessionMessage(session.id, 'user', draft, 'public');
 
     const cwd = body.cwd?.trim() || destinationForum.cwd || sourceLink.cwd || sourceForum.cwd || undefined;
-    await codex.createLinkedHandoffConversation(topic.id, {
-      parentPiSessionId: sourceLink.pi_session_id,
-      parentPiSessionPath: sourceLink.pi_session_path,
-      cwd: cwd ?? '',
-      model: body.model?.trim() || null,
-      reasoningEffort: body.reasoningEffort?.trim() || null,
-    });
+    const launchModel = body.model?.trim() || null;
+    const launchReasoningEffort = body.reasoningEffort?.trim() || null;
+    let launchError: { message: string } | null = null;
 
-    await codex.sendUserMessage(topic.id, draft, post.id, {
-      model: body.model?.trim() || null,
-      reasoningEffort: body.reasoningEffort?.trim() || null,
-    });
+    try {
+      await codex.createLinkedHandoffConversation(topic.id, {
+        parentPiSessionId: sourceLink.pi_session_id,
+        parentPiSessionPath: sourceLink.pi_session_path,
+        cwd: cwd ?? '',
+        model: launchModel,
+        reasoningEffort: launchReasoningEffort,
+      });
+
+      await codex.sendUserMessage(topic.id, draft, post.id, {
+        model: launchModel,
+        reasoningEffort: launchReasoningEffort,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to launch handoff turn.';
+      launchError = { message };
+      store.upsertRobotState({
+        topicId: topic.id,
+        sessionId: session.id,
+        activity: 'idle',
+        model: launchModel,
+        reasoningEffort: launchReasoningEffort,
+        currentPlanId: null,
+      });
+      const robotState = store.setRobotTurnError(topic.id, { message, postId: post.id });
+      bus.emit(topic.id, {
+        type: 'state',
+        data: {
+          topicId: topic.id,
+          sessionId: session.id,
+          activity: 'idle',
+          model: launchModel,
+          reasoningEffort: launchReasoningEffort,
+          lastUpdatedAt: robotState?.last_updated_at ?? null,
+          lastTurnError: robotState?.last_error_message && robotState.last_error_at
+            ? {
+                message: robotState.last_error_message,
+                at: robotState.last_error_at,
+                postId: robotState.last_error_post_id ?? null,
+                turnId: robotState.last_error_turn_id ?? null,
+              }
+            : { message, at: new Date().toISOString(), postId: post.id, turnId: null },
+          currentPlan: null,
+          recentToolRuns: [],
+        },
+      });
+    }
 
     webhookService.dispatch('topic.created', {
       topic: { id: topic.id, forumId: topic.forum_id, title: topic.title, status: topic.status, createdBy: topic.created_by, createdAt: topic.created_at },
       post: { id: post.id, topicId: post.topic_id, authorId: post.author_id, body: post.body, createdAt: post.created_at }
     });
 
-    return { topic: serializeTopicWithPiLineage(topic), post: serializePost(post) };
+    return { topic: serializeTopicWithPiLineage(topic), post: serializePost(post), launchError };
   });
 
   app.patch('/topics/:topicId/status', async (request) => {
