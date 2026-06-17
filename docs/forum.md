@@ -28,6 +28,14 @@ Monika frontend. Upstream project: https://github.com/irrigationreal/codex-forum
 Future development should happen in this repository. The old `monika-forum`
 repository is retained as historical provenance.
 
+## Forum CI and image publishing
+
+Forum container changes are checked by `CI / Forum Container`, which follows the Vesper branch-gate pattern: `forum-container-changes` decides whether the build is relevant, `forum-container-build` runs the smoke build, and `forum-container-checks` is the stable required branch-protection check.
+
+Forum/agentd compatibility belongs in `CI / Integration`. That workflow is currently a passing placeholder so branch protection can require `integration-checks`; grow it with compose-based health checks and forum↔agentd request smoke tests when those tests are ready.
+
+The forum image is published from this repository by `Image / Forum` as `ghcr.io/irrigationreal/monika-forum:main` and `sha-*`. Nightly and stable release workflows publish or promote `:nightly`, date-style release tags, and `:latest`.
+
 ## agentd
 
 Source:

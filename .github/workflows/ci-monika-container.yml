@@ -1,0 +1,86 @@
+# Monika runtime container CI — smoke-test that the runtime image builds.
+#
+# This follows the branch-protection pattern used by Vesper: a changes job
+# decides whether the expensive job should run, the build job can fail, and a
+# stable checks job is the required branch-rule gate.
+
+name: CI / Monika Container
+
+on:
+  push:
+    branches-ignore: [main]
+    tags-ignore: ["*"]
+  pull_request:
+
+concurrency:
+  group: ci-monika-container-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  monika-container-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.check.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for relevant changes
+        id: check
+        shell: bash
+        run: |
+          git fetch origin main --depth=1 2>/dev/null || true
+          BASE=$(git merge-base origin/main "${{ github.sha }}" 2>/dev/null || echo "")
+
+          if [ -z "$BASE" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if git diff --name-only "$BASE" "${{ github.sha }}" -- \
+              'Containerfile' \
+              '.dockerignore' \
+              'bin/' \
+              'config/' \
+              'entrypoint.sh' \
+              'host-shell' \
+              'scripts/' \
+              'services/agentd/' \
+              'services/memstore/' \
+              '.github/workflows/ci-monika-container.yml' \
+              '.github/workflows/image-monika.yml' \
+            | grep -qvE '\.md$'; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  monika-container-build:
+    needs: monika-container-changes
+    if: needs.monika-container-changes.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Monika runtime image
+        run: docker build -f Containerfile -t monika-test .
+
+  # Gate job — branch protection should require this check.
+  monika-container-checks:
+    if: always()
+    needs: [monika-container-changes, monika-container-build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate result
+        shell: bash
+        run: |
+          if [ "${{ needs.monika-container-build.result }}" = "failure" ] || [ "${{ needs.monika-container-build.result }}" = "cancelled" ]; then
+            echo "Monika runtime container build failed or was cancelled"
+            exit 1
+          fi
+
+          echo "Monika runtime container build passed or was skipped (no relevant changes)"
