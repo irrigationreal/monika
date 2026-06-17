@@ -111,18 +111,37 @@ pass "pi CLI available: ${PI_VERSION}"
 AGENTD_PORT="$AGENTD_PORT" node <<'NODE_SMOKE'
 const base = `http://127.0.0.1:${process.env.AGENTD_PORT}`;
 
-async function request(method, path, body) {
-  const response = await fetch(base + path, {
-    method,
-    headers: { 'content-type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const text = await response.text();
-  const parsed = text ? JSON.parse(text) : null;
-  if (!response.ok) {
-    throw new Error(`${method} ${path} failed: ${response.status} ${text}`);
+async function request(method, path, body, opts = {}) {
+  const timeoutMs = opts.timeoutMs ?? 60_000;
+  const attempts = opts.attempts ?? 1;
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error(`${method} ${path} timed out after ${timeoutMs}ms`)), timeoutMs);
+    try {
+      const response = await fetch(base + path, {
+        method,
+        headers: { 'content-type': 'application/json' },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: controller.signal,
+      });
+      const text = await response.text();
+      const parsed = text ? JSON.parse(text) : null;
+      if (!response.ok) {
+        throw new Error(`${method} ${path} failed: ${response.status} ${text}`);
+      }
+      return parsed;
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts) {
+        console.log(`  retrying ${method} ${path} after failure: ${error?.message ?? error}`);
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    } finally {
+      clearTimeout(timer);
+    }
   }
-  return parsed;
+  throw lastError;
 }
 
 const health = await request('GET', '/healthz');
@@ -131,7 +150,7 @@ if (health.ok !== true) {
 }
 console.log(`✓ agentd healthy: active=${health.active_threads}, loaded=${health.loaded_conversations}, queue=${health.queue_depth}`);
 
-const created = await request('POST', '/v1/conversations', { cwd: '/tmp' });
+const created = await request('POST', '/v1/conversations', { cwd: '/tmp' }, { attempts: 2, timeoutMs: 60_000 });
 const conversation = created?.conversation ?? {};
 const conversationId = conversation.id ?? conversation.conversation_id ?? conversation.session_id;
 if (!conversationId) {
