@@ -62,7 +62,7 @@ jobs:
           fi
 
           if git diff --name-only "$BASE" "${{ github.sha }}" -- \
-              'services/forum/Dockerfile' \
+              'services/forum/Containerfile' \
               'services/forum/.dockerignore' \
               'services/forum/package.json' \
               'services/forum/pnpm-lock.yaml' \
@@ -96,7 +96,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build forum image
-        run: docker build -f services/forum/Dockerfile -t monika-forum-test ./services/forum
+        run: docker build -f services/forum/Containerfile -t monika-forum-test ./services/forum
 
   docker-checks:
     if: always()

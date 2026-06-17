@@ -280,7 +280,7 @@ curl -fsS http://127.0.0.1:4310/api/models | head
 - The forum container currently runs as root to avoid bind-mount permission
   issues with the host-owned `~/.pi/forum` directory. This is acceptable for the
   experiment but should be cleaned up before production exposure.
-- The forum Dockerfile currently installs dev dependencies in the runtime image
+- The forum Containerfile currently installs dev dependencies in the runtime image
   because the server starts with `tsx src/server.ts` and workspace package
   exports point at `src/index.ts`. This is fine for the experiment but should be
   cleaned up by either compiling runnable JS or changing package exports.

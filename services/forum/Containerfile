@@ -30,6 +30,7 @@ COPY packages/core/package.json ./packages/core/
 COPY packages/adapters/package.json ./packages/adapters/
 COPY packages/server/package.json ./packages/server/
 COPY packages/cli/package.json ./packages/cli/
+COPY packages/forum-sdk/package.json ./packages/forum-sdk/
 COPY apps/codex-forum/package.json ./apps/codex-forum/
 
 # Install all dependencies

@@ -13,7 +13,7 @@ services:
     image: ghcr.io/irrigationreal/monika-forum:latest
     build:
       context: ./services/forum
-      dockerfile: Dockerfile
+      dockerfile: Containerfile
     container_name: monika-forum
     restart: unless-stopped
     network_mode: host
