@@ -1085,6 +1085,49 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 27,
+    name: 'durable-post-dispatches',
+    up: (db) => {
+      db.exec(`
+        create table if not exists post_dispatches (
+          id text primary key,
+          topic_id text not null,
+          post_id text not null unique,
+          session_id text not null,
+          status text not null,
+          mode text not null default 'auto',
+          model text,
+          reasoning_effort text,
+          attempt_count integer not null default 0,
+          last_attempt_at text,
+          next_attempt_at text,
+          dispatched_at text,
+          error_message text,
+          created_at text not null,
+          updated_at text not null,
+          foreign key (topic_id) references topics(id),
+          foreign key (post_id) references posts(id),
+          foreign key (session_id) references sessions(id)
+        );
+        create index if not exists idx_post_dispatches_due on post_dispatches(status, next_attempt_at, created_at);
+        create index if not exists idx_post_dispatches_topic_status on post_dispatches(topic_id, status, created_at);
+      `);
+
+      if (!hasColumn(db, 'robot_state', 'last_error_message')) {
+        db.prepare('alter table robot_state add column last_error_message text').run();
+      }
+      if (!hasColumn(db, 'robot_state', 'last_error_at')) {
+        db.prepare('alter table robot_state add column last_error_at text').run();
+      }
+      if (!hasColumn(db, 'robot_state', 'last_error_post_id')) {
+        db.prepare('alter table robot_state add column last_error_post_id text').run();
+      }
+      if (!hasColumn(db, 'robot_state', 'last_error_turn_id')) {
+        db.prepare('alter table robot_state add column last_error_turn_id text').run();
+      }
+    },
+  },
 ];
 
 export const SCHEMA_VERSION: number = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;

@@ -809,6 +809,27 @@ export class EchsBridge {
     await this.dispatchUserMessage(turn);
   }
 
+  async dispatchPostToAgent(
+    topicId: string,
+    postId: string,
+    options?: { mode?: 'queue' | 'steer'; model?: string | null; reasoningEffort?: string | null }
+  ): Promise<void> {
+    const post = this.store.getPost(postId);
+    if (!post || post.topic_id !== topicId) {
+      throw new Error('post not found for dispatch');
+    }
+    const session = this.store.ensureSession({ topicId });
+    const turn: QueuedTurn = {
+      topicId,
+      sessionId: session.id,
+      body: post.body,
+      parentPostId: post.id,
+      options: { model: options?.model ?? null, reasoningEffort: options?.reasoningEffort ?? null, mode: options?.mode ?? 'queue' },
+      queuedAt: new Date().toISOString(),
+    };
+    await this.dispatchUserMessage(turn);
+  }
+
   async closeTopic(topicId: string): Promise<{ ok: boolean; message: string }> {
     const session = this.store.getSessionByTopic(topicId);
     const threadId = session?.agent_thread_id ?? null;
@@ -1771,15 +1792,13 @@ export class EchsBridge {
         const errorValue = data?.error ?? 'unknown error';
         const errorMsg = typeof errorValue === 'string' ? errorValue : safeJson(errorValue);
         console.error(`[ECHS] turn_error topic=${ctx.topicId} thread=${threadId} error=${errorMsg}`);
+        const failedTurnId = ctx.currentTurnId;
         ctx.currentTurnId = null;
         ctx.turnStartedAt = null;
-        this.store.upsertRobotState({
-          topicId: ctx.topicId,
-          sessionId: ctx.sessionId,
-          activity: 'error',
-          model: ctx.model,
-          reasoningEffort: ctx.reasoningEffort,
-          currentPlanId: ctx.planId,
+        this.store.setRobotTurnError(ctx.topicId, {
+          message: errorMsg,
+          postId: ctx.turnParentPostId ?? ctx.lastUserPostId ?? null,
+          turnId: failedTurnId,
         });
         this.emitState(ctx.topicId);
         this.bus.emit(ctx.topicId, {

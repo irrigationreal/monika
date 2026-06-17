@@ -298,6 +298,7 @@ export function mapRobotStateToDto(state: RobotState): RobotStateDto {
     model: state.model ?? null,
     reasoningEffort: state.reasoningEffort ?? null,
     lastUpdatedAt: state.lastUpdatedAt,
+    lastTurnError: state.lastTurnError ?? null,
     currentPlan: state.currentPlan ? mapPlanArtifactToDto(state.currentPlan) : null,
     recentToolRuns: state.recentToolRuns.map(mapToolRunSummaryToDto)
   };

@@ -570,6 +570,12 @@ export const RobotStateDtoSchema: z.ZodType<RobotStateDto> = z.object({
   model: optionalNullableString,
   reasoningEffort: optionalNullableString,
   lastUpdatedAt: z.string(),
+  lastTurnError: z.object({
+    message: z.string(),
+    at: z.string(),
+    postId: optionalNullableString,
+    turnId: optionalNullableString
+  }).nullable().optional(),
   currentPlan: PlanDtoSchema.nullable().optional(),
   recentToolRuns: z.array(ToolRunDtoSchema)
 });

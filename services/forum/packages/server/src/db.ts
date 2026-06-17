@@ -272,6 +272,28 @@ export interface RobotStateRow {
   reasoning_effort: string | null;
   last_updated_at: string;
   current_plan_id: string | null;
+  last_error_message?: string | null;
+  last_error_at?: string | null;
+  last_error_post_id?: string | null;
+  last_error_turn_id?: string | null;
+}
+
+export interface PostDispatchRow {
+  id: string;
+  topic_id: string;
+  post_id: string;
+  session_id: string;
+  status: string;
+  mode: string;
+  model: string | null;
+  reasoning_effort: string | null;
+  attempt_count: number;
+  last_attempt_at: string | null;
+  next_attempt_at: string | null;
+  dispatched_at: string | null;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface RobotAutomationRow {

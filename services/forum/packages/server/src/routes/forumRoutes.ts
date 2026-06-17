@@ -4,8 +4,8 @@ import type { AgentBridge } from '../agentBridge';
 import type { ForumStore } from '../store';
 import type { WebhookService } from '../services/webhookService';
 import type { StreamBusInterface } from '../streamBus';
+import type { PostDispatchService } from '../services/postDispatchService';
 import type { AccessHelpers } from '../utils/access';
-import { ROBOT_STALE_MS } from '../runtimeConfig';
 import { serializePost, serializeTopic } from '../utils/serializers';
 
 export function registerForumRoutes({
@@ -15,6 +15,7 @@ export function registerForumRoutes({
   codex,
   webhookService,
   bus,
+  postDispatchService,
   access,
   webIdentityId
 }: {
@@ -24,6 +25,7 @@ export function registerForumRoutes({
   codex: AgentBridge;
   webhookService: WebhookService;
   bus: StreamBusInterface;
+  postDispatchService?: Pick<PostDispatchService, 'wake'>;
   access: AccessHelpers;
   webIdentityId: string;
 }): void {
@@ -344,41 +346,16 @@ export function registerForumRoutes({
       const shouldDispatchRobot =
         !body.silent && !deferRobot && robotMode !== 'off' && (robotMode !== 'mention' || hasRobotMention(body.body));
 
-      if (!shouldDispatchRobot) {
-        // Dispatch webhook for topic creation
-        webhookService.dispatch('topic.created', {
-          topic: {
-            id: topic.id,
-            forumId: topic.forum_id,
-            title: topic.title,
-            status: topic.status,
-            createdBy: topic.created_by,
-            createdAt: topic.created_at
-          },
-          post: {
-            id: post.id,
-            topicId: post.topic_id,
-            authorId: post.author_id,
-            body: post.body,
-            createdAt: post.created_at
-          }
-        });
-
-        return serializeTopicWithPiLineage(topic);
-      }
-
-      const topicRobotState = store.getRobotState(topic.id);
-      const shouldSteer = topicRobotState && topicRobotState.activity !== 'idle';
-      if (shouldSteer) {
-        await codex.steerUserMessage(topic.id, body.body, post.id, {
+      if (shouldDispatchRobot) {
+        store.createPostDispatch({
+          topicId: topic.id,
+          postId: post.id,
+          sessionId: session.id,
+          mode: 'auto',
           model: body.model?.trim() || null,
-          reasoningEffort: body.reasoningEffort?.trim() || null
+          reasoningEffort: body.reasoningEffort?.trim() || null,
         });
-      } else {
-        await codex.sendUserMessage(topic.id, body.body, post.id, {
-          model: body.model?.trim() || null,
-          reasoningEffort: body.reasoningEffort?.trim() || null
-        });
+        postDispatchService?.wake();
       }
 
       // Dispatch webhook for topic creation
@@ -736,33 +713,6 @@ export function registerForumRoutes({
       const shouldDispatchRobot =
         !body.silent && !deferRobot && robotMode !== 'off' && (robotMode !== 'mention' || hasRobotMention(body.body ?? ''));
 
-      if (shouldDispatchRobot) {
-        const robotState = store.getRobotState(topicId);
-        if (robotState && robotState.activity !== 'idle') {
-          // Auto-recover stale robot states (configurable timeout), but allow steering.
-          const lastUpdated = new Date(robotState.last_updated_at).getTime();
-          const isStale = Date.now() - lastUpdated > ROBOT_STALE_MS;
-          if (isStale) {
-            const session = store.getSessionByTopic(topicId);
-            const threadId = session?.agent_thread_id ?? null;
-            if (threadId) {
-              try {
-                const loaded = await codex.isThreadLoaded(threadId);
-                if (loaded) {
-                  store.setRobotActivity(topicId, robotState.activity);
-                } else {
-                  store.setRobotActivity(topicId, 'idle');
-                }
-              } catch {
-                store.setRobotActivity(topicId, robotState.activity);
-              }
-            } else {
-              store.setRobotActivity(topicId, 'idle');
-            }
-          }
-        }
-      }
-
       const post = store.createPost({
         topicId,
         body: body.body,
@@ -778,42 +728,16 @@ export function registerForumRoutes({
       const session = store.ensureSession({ topicId });
       store.createSessionMessage(session.id, 'user', body.body, 'public');
 
-      if (!shouldDispatchRobot) {
-        // Dispatch webhook for post creation
-        webhookService.dispatch('post.created', {
-          post: {
-            id: post.id,
-            topicId: post.topic_id,
-            parentPostId: post.parent_post_id,
-            authorId: post.author_id,
-            body: post.body,
-            createdAt: post.created_at
-          }
+      if (shouldDispatchRobot) {
+        store.createPostDispatch({
+          topicId,
+          postId: post.id,
+          sessionId: session.id,
+          mode: 'auto',
+          model: body.model?.trim() || null,
+          reasoningEffort: body.reasoningEffort?.trim() || null,
         });
-        return serializePost(post);
-      }
-
-      const replyRobotState = store.getRobotState(topicId);
-      const shouldSteerReply = replyRobotState && replyRobotState.activity !== 'idle';
-      try {
-        if (shouldSteerReply) {
-          await codex.steerUserMessage(topicId, body.body, post.id, {
-            model: body.model?.trim() || null,
-            reasoningEffort: body.reasoningEffort?.trim() || null
-          });
-        } else {
-          await codex.sendUserMessage(topicId, body.body, post.id, {
-            model: body.model?.trim() || null,
-            reasoningEffort: body.reasoningEffort?.trim() || null
-          });
-        }
-      } catch (dispatchErr) {
-        // Log but don't fail the post — the post is already created.
-        // The robot dispatch can be retried via "continue" or the health check.
-        request.log.error(
-          { err: dispatchErr },
-          `Robot dispatch failed for topic ${topicId}, post created but robot not started`
-        );
+        postDispatchService?.wake();
       }
 
       // Dispatch webhook for post creation
@@ -891,49 +815,20 @@ export function registerForumRoutes({
       return { ok: true, dispatched: false, post: serializePost(store.getPost(postId)!) };
     }
 
-    const robotState = store.getRobotState(topic.id);
-    if (robotState && robotState.activity !== 'idle') {
-      // Auto-recover stale robot states (configurable timeout).
-      const lastUpdated = new Date(robotState.last_updated_at).getTime();
-      const isStale = Date.now() - lastUpdated > ROBOT_STALE_MS;
-      if (isStale) {
-        const session = store.getSessionByTopic(topic.id);
-        const threadId = session?.agent_thread_id ?? null;
-        if (threadId) {
-          try {
-            const loaded = await codex.isThreadLoaded(threadId);
-            if (loaded) {
-              store.setRobotActivity(topic.id, robotState.activity);
-              throw app.httpErrors.badRequest('Robot is busy; interrupt or wait before continuing.');
-            }
-          } catch {
-            store.setRobotActivity(topic.id, robotState.activity);
-            throw app.httpErrors.badRequest('Robot is busy; interrupt or wait before continuing.');
-          }
-        }
-        store.setRobotActivity(topic.id, 'idle');
-      } else {
-        throw app.httpErrors.badRequest('Robot is busy; interrupt or wait before continuing.');
-      }
-    }
-
     if (post.silent) {
       store.setPostSilent(postId, false);
     }
 
-    const replyRobotState = store.getRobotState(topic.id);
-    const shouldSteerReply = replyRobotState && replyRobotState.activity !== 'idle';
-    if (shouldSteerReply) {
-      await codex.steerUserMessage(topic.id, post.body, post.id, {
-        model: body.model?.trim() || null,
-        reasoningEffort: body.reasoningEffort?.trim() || null
-      });
-    } else {
-      await codex.sendUserMessage(topic.id, post.body, post.id, {
-        model: body.model?.trim() || null,
-        reasoningEffort: body.reasoningEffort?.trim() || null
-      });
-    }
+    const session = store.ensureSession({ topicId: topic.id });
+    store.createPostDispatch({
+      topicId: topic.id,
+      postId,
+      sessionId: session.id,
+      mode: 'auto',
+      model: body.model?.trim() || null,
+      reasoningEffort: body.reasoningEffort?.trim() || null,
+    });
+    postDispatchService?.wake();
 
     return { ok: true, dispatched: true, post: serializePost(store.getPost(postId)!) };
   });
