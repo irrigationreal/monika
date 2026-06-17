@@ -139,7 +139,7 @@ Key env vars (see `packages/server/src/runtimeConfig.ts` for the full list):
 | `CODEX_FORUM_ENABLE_SEARCH` | Search toggle | `0` |
 | `CODEX_FORUM_ECHS_BASE_URL` | ECHS server base URL (required) | unset |
 | `CODEX_FORUM_ECHS_API_TOKEN` | Optional ECHS API token | unset |
-| `CODEX_FORUM_ECHS_MODEL` | Default model | `gpt-5.2` |
+| `CODEX_FORUM_AGENT_MODEL` | Default agent model | `codex/gpt-5.5` |
 | `CODEX_FORUM_ECHS_REASONING_EFFORT` | Default reasoning effort | `medium` |
 
 For full deployment guidance, see `docs/DEPLOYMENT.md`.

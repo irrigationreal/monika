@@ -68,7 +68,7 @@ export const MODEL: string =
   process.env['CODEX_FORUM_AGENT_MODEL'] ??
   process.env['CODEX_FORUM_ECHS_MODEL'] ??
   process.env['ECHS_MODEL'] ??
-  'pi-default';
+  'codex/gpt-5.5';
 export const REASONING_EFFORT: string =
   process.env['CODEX_FORUM_AGENT_REASONING_EFFORT'] ??
   process.env['CODEX_FORUM_ECHS_REASONING_EFFORT'] ??
