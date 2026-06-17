@@ -62,6 +62,12 @@ the forum thread/post that requested the change.
 - If you need a convenience type, alias from core/contracts.
 - Run `pnpm guardrails:types` before final commit when touching shared types.
 
+## CI expectations
+
+Forum container build checks live at `.github/workflows/ci-forum-container.yml` and expose `forum-container-checks` as the branch-protection gate. Cross-service agentd/forum compatibility belongs in `.github/workflows/ci-integration.yml`; it is currently a placeholder gate named `integration-checks`.
+
+The forum image definition is `services/forum/Containerfile`. The `Image / Forum`, `Release / Nightly`, and `Release / Stable` workflows publish or promote `ghcr.io/irrigationreal/monika-forum` images from this repo.
+
 ## Testing
 
 Run from `services/forum`:

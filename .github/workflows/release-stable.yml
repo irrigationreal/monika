@@ -1,0 +1,124 @@
+name: Release / Stable
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag. Defaults to YYYY.MM.DD."
+        required: false
+        type: string
+
+concurrency:
+  group: release-stable
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare release metadata
+        id: meta
+        shell: bash
+        run: |
+          TAG="${{ inputs.tag }}"
+          if [ -z "$TAG" ]; then
+            TAG=$(date -u +%Y.%m.%d)
+          fi
+
+          if ! [[ "$TAG" =~ ^[0-9A-Za-z][0-9A-Za-z._-]{0,127}$ ]]; then
+            echo "Invalid container/release tag: $TAG" >&2
+            exit 1
+          fi
+
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          FULL_SHA=$(git rev-parse HEAD)
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release '$TAG' already exists; refusing to overwrite it." >&2
+            exit 1
+          fi
+
+          {
+            echo "tag=${TAG}"
+            echo "short_sha=${SHORT_SHA}"
+            echo "full_sha=${FULL_SHA}"
+          } >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify source images exist
+        env:
+          MONIKA_IMAGE: ghcr.io/${{ github.repository }}
+          FORUM_IMAGE: ghcr.io/${{ github.repository }}-forum
+          SHORT_SHA: ${{ steps.meta.outputs.short_sha }}
+        run: |
+          docker buildx imagetools inspect "${MONIKA_IMAGE}:sha-${SHORT_SHA}" >/dev/null
+          docker buildx imagetools inspect "${FORUM_IMAGE}:sha-${SHORT_SHA}" >/dev/null
+
+      - name: Promote image tags
+        env:
+          MONIKA_IMAGE: ghcr.io/${{ github.repository }}
+          FORUM_IMAGE: ghcr.io/${{ github.repository }}-forum
+          SHORT_SHA: ${{ steps.meta.outputs.short_sha }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          docker buildx imagetools create \
+            -t "${MONIKA_IMAGE}:${RELEASE_TAG}" \
+            -t "${MONIKA_IMAGE}:latest" \
+            "${MONIKA_IMAGE}:sha-${SHORT_SHA}"
+
+          docker buildx imagetools create \
+            -t "${FORUM_IMAGE}:${RELEASE_TAG}" \
+            -t "${FORUM_IMAGE}:latest" \
+            "${FORUM_IMAGE}:sha-${SHORT_SHA}"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+          SHORT_SHA: ${{ steps.meta.outputs.short_sha }}
+          FULL_SHA: ${{ steps.meta.outputs.full_sha }}
+        run: |
+          cat > release-notes.md <<NOTES
+          ## Stable Release — ${RELEASE_TAG}
+
+          **Commit:** [\`${SHORT_SHA}\`](${{ github.server_url }}/${{ github.repository }}/commit/${FULL_SHA})
+
+          ### Container Images
+
+          \`\`\`bash
+          docker pull ghcr.io/${{ github.repository }}:${RELEASE_TAG}
+          docker pull ghcr.io/${{ github.repository }}-forum:${RELEASE_TAG}
+          \`\`\`
+
+          ### Exact Source Images
+
+          \`\`\`bash
+          docker pull ghcr.io/${{ github.repository }}:sha-${SHORT_SHA}
+          docker pull ghcr.io/${{ github.repository }}-forum:sha-${SHORT_SHA}
+          \`\`\`
+
+          \`latest\` now points at this stable release for both images.
+          NOTES
+
+          gh release create "${RELEASE_TAG}" \
+            --title "Stable Release — ${RELEASE_TAG}" \
+            --notes-file release-notes.md \
+            --target "${FULL_SHA}"

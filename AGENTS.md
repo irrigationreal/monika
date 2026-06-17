@@ -22,6 +22,27 @@ This repo builds Monika's runtime containers and supporting services.
 - Agent execution, tools, memory lifecycle, stateful-memory, and memstore stay behind `agentd` in the Monika container.
 - Keep `compose.forum.yaml` as an optional overlay; the normal Monika runtime compose flow should not require the forum.
 
+## GitHub Actions / branch gates
+
+Container CI follows a three-stage branch-protection pattern copied from Vesper. These CI gates run on `pull_request` and manual dispatch, not branch `push`, so open PRs get fresh checks for every new commit without duplicate push/PR runs:
+
+1. `*-changes` decides whether relevant files changed.
+2. `*-build` or placeholder test jobs run only when needed and may fail.
+3. `*-checks` always runs and is the stable branch-rule gate.
+
+Current CI gates:
+
+- `monika-container-checks` from `CI / Monika Container` — builds the Monika runtime image when runtime-relevant files change.
+- `forum-container-checks` from `CI / Forum Container` — builds the forum image when forum-relevant files change.
+- `integration-checks` from `CI / Integration` — currently a documented placeholder that always passes/skips; grow this into agentd/forum compatibility checks.
+
+Image publishing workflows:
+
+- `Image / Monika` publishes multi-arch `ghcr.io/irrigationreal/monika:main` and `sha-*` from `main`.
+- `Image / Forum` publishes multi-arch `ghcr.io/irrigationreal/monika-forum:main` and `sha-*` from `main`.
+- `Release / Nightly` publishes rolling `:nightly` images and recreates a `nightly` prerelease when `main` changes.
+- `Release / Stable` manually promotes existing `sha-*` images to a date-style release tag and `latest`; it does not rebuild artifacts.
+
 ## Container commands
 
 Run these from the host shell. Restarting the live `monika` container kills active

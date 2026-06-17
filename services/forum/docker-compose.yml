@@ -16,7 +16,7 @@ services:
   codex-forum:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Containerfile
     container_name: codex-forum
     restart: unless-stopped
     ports:

@@ -154,6 +154,21 @@ Host prerequisites:
 - Container's SSH key in the host user's `authorized_keys`
 - `network_mode: host` in compose (for SSH + network transparency)
 
+## GitHub Actions
+
+The repo uses separate pull-request CI gates so branch protection can fail or skip checks by subsystem. These workflows intentionally avoid branch `push` triggers to prevent duplicate runs; `pull_request` re-runs on every PR update via the `synchronize` event:
+
+- `CI / Monika Container` (`ci-monika-container.yml`) uses `monika-container-changes` → `monika-container-build` → `monika-container-checks`. Require `monika-container-checks` in branch rules.
+- `CI / Forum Container` (`ci-forum-container.yml`) uses `forum-container-changes` → `forum-container-build` → `forum-container-checks`. Require `forum-container-checks` in branch rules.
+- `CI / Integration` (`ci-integration.yml`) uses `integration-changes` → `integration-placeholder` → `integration-checks`. It is a placeholder today; require `integration-checks` now so the branch rule is already in place when real agentd/forum compatibility tests are added.
+
+Publishing workflows are intentionally separate from CI gates:
+
+- `Image / Monika` publishes multi-arch `ghcr.io/irrigationreal/monika:main` and `sha-*` on `main` changes.
+- `Image / Forum` publishes multi-arch `ghcr.io/irrigationreal/monika-forum:main` and `sha-*` on forum image changes.
+- `Release / Nightly` builds rolling `:nightly` images once per day when `main` has changed, and recreates the `nightly` prerelease.
+- `Release / Stable` is manual and promotes existing `sha-*` images to a date-style release tag and `latest`; it refuses to overwrite an existing release and does not rebuild artifacts.
+
 ## Files
 
 ```

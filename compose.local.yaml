@@ -96,7 +96,7 @@ services:
     profiles: ["forum"]
     build:
       context: ./services/forum
-      dockerfile: Dockerfile
+      dockerfile: Containerfile
     container_name: monika-forum
     restart: unless-stopped
     # The forum writes SQLite/uploads under runtime/forum and requester metadata

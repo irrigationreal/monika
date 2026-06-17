@@ -28,6 +28,14 @@ Monika frontend. Upstream project: https://github.com/irrigationreal/codex-forum
 Future development should happen in this repository. The old `monika-forum`
 repository is retained as historical provenance.
 
+## Forum CI and image publishing
+
+Forum container changes are checked by `CI / Forum Container`, which follows the Vesper branch-gate pattern: `forum-container-changes` decides whether the build is relevant, `forum-container-build` runs the smoke build, and `forum-container-checks` is the stable required branch-protection check.
+
+Forum/agentd compatibility belongs in `CI / Integration`. That workflow is currently a passing placeholder so branch protection can require `integration-checks`; grow it with compose-based health checks and forum↔agentd request smoke tests when those tests are ready.
+
+The forum image is published from this repository by `Image / Forum` as `ghcr.io/irrigationreal/monika-forum:main` and `sha-*`. Nightly and stable release workflows publish or promote `:nightly`, date-style release tags, and `:latest`.
+
 ## agentd
 
 Source:
@@ -280,7 +288,7 @@ curl -fsS http://127.0.0.1:4310/api/models | head
 - The forum container currently runs as root to avoid bind-mount permission
   issues with the host-owned `~/.pi/forum` directory. This is acceptable for the
   experiment but should be cleaned up before production exposure.
-- The forum Dockerfile currently installs dev dependencies in the runtime image
+- The forum Containerfile currently installs dev dependencies in the runtime image
   because the server starts with `tsx src/server.ts` and workspace package
   exports point at `src/index.ts`. This is fine for the experiment but should be
   cleaned up by either compiling runnable JS or changing package exports.
