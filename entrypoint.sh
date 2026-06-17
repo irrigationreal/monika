@@ -9,45 +9,25 @@ monika_log() {
   fi
 }
 
-# ── Mode detection ───────────────────────────────────────
-# Host mode: /home/monika/.pi/agent exists (bind-mounted from host)
-# Standalone mode: no host mounts, use bundled /app/.pi
-
-if [ -d "/home/monika/.pi/agent" ]; then
-  export PI_CODING_AGENT_DIR="/home/monika/.pi/agent"
-  MEMSTORE_DATA_DIR="${MEMSTORE_DATA_DIR:-/home/monika/.pi/memstore}"
-  MEMSTORE_SOCKET="${MEMSTORE_SOCKET:-/home/monika/.pi/memstore/memstore.sock}"
-  export MONIKA_HOST_MODE=1
-  export HOME=/home/monika
-  # SSH config for host-mode auto-relocate: root's user config doesn't exist by
-  # default (container runs as root, but SSH keys live in /home/monika/.ssh).
-  # Create /root/.ssh/config pointing to the identity file if it doesn't exist.
-  mkdir -p /root/.ssh
-  if [ ! -f /root/.ssh/config ]; then
-    echo "Host *\n    IdentityFile /persist/keys/ssh-local" > /root/.ssh/config
-    chmod 600 /root/.ssh/config
-  fi
-  monika_log "[monika] Host mode: .pi mounted, SSH host shell enabled"
-else
-  export PI_CODING_AGENT_DIR="/app/.pi/agent"
-  MEMSTORE_DATA_DIR="${MEMSTORE_DATA_DIR:-/data/memstore}"
-  MEMSTORE_SOCKET="${MEMSTORE_SOCKET:-/tmp/memstore.sock}"
-  unset MONIKA_HOST_MODE
-  export HOME=/app
-  monika_log "[monika] Standalone mode: bundled .pi, container shell"
-  mkdir -p "$MEMSTORE_DATA_DIR" /data/sessions /app/.config /app/.ssh /app/.gnupg
-fi
-
+# ── Runtime layout ───────────────────────────────────────
+# Monika runs as a standalone container. The image owns Pi/extensions/defaults;
+# compose mounts selected persistent state under /app/.pi and /data.
+export PI_CODING_AGENT_DIR="${PI_CODING_AGENT_DIR:-/app/.pi/agent}"
+MEMSTORE_DATA_DIR="${MEMSTORE_DATA_DIR:-/data/memstore}"
+MEMSTORE_SOCKET="${MEMSTORE_SOCKET:-/tmp/memstore.sock}"
 export MEMSTORE_SOCKET
+export HOME="${MONIKA_HOME:-/app}"
+monika_log "[monika] Standalone mode: container-owned Pi runtime"
+mkdir -p "$MEMSTORE_DATA_DIR" /data/sessions /app/.config /app/.ssh /app/.gnupg "$PI_CODING_AGENT_DIR"
 
 # ── AgentLogs runtime state ──────────────────────────────
 # AgentLogs writes auth/config to ~/.config/agentlogs. Keep that state separate
-# from Monika's HOME so host-mode read-only .config mounts do not block login.
+# from Monika's HOME so read-only runtime config mounts do not block login.
 export AGENTLOGS_HOME="${AGENTLOGS_HOME:-/agentlogs-home}"
 mkdir -p "$AGENTLOGS_HOME/.config/agentlogs"
 
 # ── Runtime secrets (container-only persistent mode) ──────
-# compose.local.yaml / compose.stanza.yaml mount host-owned private state at
+# compose.yaml mounts host-owned private state at
 # /runtime/secrets. Keep the image canonical for code/extensions, and link only
 # host-owned model/keybinding files into Pi's agent dir when they exist.
 link_secret_file() {
@@ -152,8 +132,7 @@ done
 
 # ── Pool models config ───────────────────────────────────
 # The pool provides a models.json with provider endpoints and auth.
-# In host mode this is already at ~/.pi/agent/models.json (bind-mounted).
-# For standalone mode, download it if not present and POOL_CONFIG_URL is set.
+# Download model config if it is not provided by runtime secrets and POOL_CONFIG_URL is set.
 MODELS_JSON="$PI_CODING_AGENT_DIR/models.json"
 if [ ! -f "$MODELS_JSON" ] && [ -n "$POOL_CONFIG_URL" ]; then
   monika_log "[monika] Downloading pool models config..."

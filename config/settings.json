@@ -28,6 +28,5 @@
     "kimi/kimi-k2-thinking",
     "minimax/MiniMax-M2.7",
     "minimax/MiniMax-M2.7-highspeed"
-  ],
-  "shellPath": "/usr/local/bin/host-shell"
+  ]
 }

@@ -1,18 +1,18 @@
-# Standalone-persistent deployment for Stanza.
+# Canonical standalone-persistent Monika deployment.
 #
-# This is the intended production shape after migrating away from host mode:
-# - the Monika container owns Pi, extensions, memstore, and agentd
-# - mutable/private state lives in ./runtime
-# - forum remains reachable on the existing host loopback port 4310
-# - host access is explicit via manual SSH/relocate, not automatic host shell mode
+# Copy this file to compose.yaml and keep local edits out of git:
+#   cp compose.yaml.example compose.yaml
+#   docker compose up -d --build
 #
-# Cutover is performed by scripts/stanza-standalone-cutover.sh from a host shell.
+# The container owns Pi, extensions, memstore, agentd, and the forum runtime.
+# Mutable/private state lives in ./runtime. Host access is explicit through SSH
+# / relocate, not automatic host-mode shell execution.
 
 name: monika
 
 services:
   monika:
-    image: monika:local
+    image: ${MONIKA_IMAGE:-monika:local}
     build:
       context: .
       dockerfile: Containerfile
@@ -21,33 +21,17 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      # Persistent memstore DB and writable Pi OAuth state. The memstore socket
-      # stays container-local under /tmp and is intentionally not backed up.
       - ./runtime/data:/data
-
-      # Durable identity/state files. Image-owned defaults are replaced by the
-      # migrated runtime state on Stanza.
       - ./runtime/persona:/app/.pi/stateful-memory
-
-      # Persistent Pi JSONL sessions and local skills.
       - ./runtime/pi-agent/sessions:/app/.pi/agent/sessions
       - ./runtime/pi-agent/skills:/app/.pi/agent/skills
-
-      # Forum uploads are readable by agentd for attachment presentation.
       - ./runtime/forum/uploads:/forum/uploads:ro
-
-      # Historical import source, if needed later.
       - ./runtime/import:/import:ro
-
-      # AgentLogs state and runtime secrets.
       - ./runtime/agentlogs-home:/agentlogs-home
       - ./runtime/secrets:/runtime/secrets:ro
-      - ./runtime/secrets/gitconfig:/app/.gitconfig:ro
       - ./runtime/secrets/ssh:/root/.ssh:ro
       - ./runtime/secrets/ssh:/app/.ssh:ro
-
-      # Explicit workspace. Broader host/infra work should use manual relocate.
-      - /home/monika/repos:/workspace
+      - ${MONIKA_WORKSPACE:-/home/monika/repos}:/workspace
     working_dir: /workspace/monika
     env_file:
       - path: ./runtime/secrets/secrets.env
@@ -62,7 +46,7 @@ services:
       MONIKA_WORKSPACE: /workspace
       AGENTLOGS_HOME: /agentlogs-home
       MONIKA_AGENTD_HOST: 0.0.0.0
-      MONIKA_AGENTD_DEFAULT_CWD: /workspace/monika
+      MONIKA_AGENTD_DEFAULT_CWD: ${MONIKA_AGENTD_DEFAULT_CWD:-/workspace/monika}
       MONIKA_AGENTD_ATTACHMENT_ALLOWED_ROOTS: /forum/uploads
       MONIKA_AGENTD_ARTIFACT_ALLOWED_ROOTS: /workspace:/tmp:/data
       MONIKA_FORUM_API_BASE_URL: http://forum:4310/api
@@ -71,7 +55,7 @@ services:
       POOL_CONFIG_URL: ${POOL_CONFIG_URL:-}
 
   forum:
-    image: monika-forum:local
+    image: ${MONIKA_FORUM_IMAGE:-monika-forum:local}
     build:
       context: ./services/forum
       dockerfile: Containerfile
@@ -81,10 +65,10 @@ services:
     depends_on:
       - monika
     ports:
-      - "4310:4310"
+      - "${MONIKA_FORUM_BIND:-4310:4310}"
     volumes:
       - ./runtime/forum:/forum
-      - /home/monika/repos:/workspace
+      - ${MONIKA_WORKSPACE:-/home/monika/repos}:/workspace
     env_file:
       - path: ./runtime/secrets/forum.env
         required: false
@@ -93,15 +77,15 @@ services:
       CODEX_FORUM_PORT: "4310"
       CODEX_FORUM_DB: /forum/data.db
       CODEX_FORUM_UPLOADS_DIR: /forum/uploads
-      CODEX_FORUM_BASE_URL: http://monika.shadowsea.org:4310
+      CODEX_FORUM_BASE_URL: ${CODEX_FORUM_BASE_URL:-http://localhost:4310}
       CODEX_FORUM_API_BASE_URL: http://forum:4310
       CODEX_FORUM_API_PREFIX: /api
       CODEX_FORUM_AGENT_BACKEND: monika-pi
       CODEX_FORUM_AGENT_MODEL: ${CODEX_FORUM_AGENT_MODEL:-codex/gpt-5.5}
       MONIKA_AGENTD_BASE_URL: http://monika:7724
       MONIKA_PI_SESSION_TAXONOMY_CONFIG: /forum/taxonomy.local.json
-      MONIKA_FORUM_DEFAULT_CWD: /workspace/monika
-      CODEX_WORK_DIR: /workspace/monika
+      MONIKA_FORUM_DEFAULT_CWD: ${MONIKA_FORUM_DEFAULT_CWD:-/workspace/monika}
+      CODEX_WORK_DIR: ${CODEX_WORK_DIR:-/workspace/monika}
       CODEX_FORUM_ENABLE_AUTH: "1"
       CODEX_FORUM_ENABLE_RATE_LIMITING: "0"
       CODEX_FORUM_REDIS_STREAM_BUS: "0"

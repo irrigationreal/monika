@@ -179,7 +179,7 @@ function deriveMcpAlias(tool: ToolInfo, flatName: string): string | null {
 	// Fall back to extracting from the file path
 	if (fullPath) {
 		// Try to find a directory name that looks like an extension name
-		// e.g. /home/monika/.pi/agent/extensions/stateful-memory/extension.js
+		// e.g. /app/.pi/agent/extensions/stateful-memory/extension.js
 		// → stateful-memory
 		const pathParts = fullPath.replace(/\\/g, "/").split("/");
 		const extIndex = pathParts.indexOf("extensions");
