@@ -156,9 +156,9 @@ Host prerequisites:
 
 ## GitHub Actions
 
-The repo uses separate pull-request CI gates so branch protection can fail or skip checks by subsystem. These workflows intentionally avoid branch `push` triggers to prevent duplicate runs; `pull_request` re-runs on every PR update via the `synchronize` event:
+The repo uses separate pull-request CI gates so branch protection can fail or skip checks by subsystem. These workflows intentionally avoid branch `push` triggers to prevent duplicate runs; `pull_request` re-runs on every PR update via the `synchronize` event, and `merge_group` runs the same required gates for GitHub merge queue candidates:
 
-- `CI / Monika Container` (`ci-monika-container.yml`) uses `monika-container-changes` → `monika-container-build` → `monika-container-checks`. Require `monika-container-checks` in branch rules.
+- `CI / Monika Container` (`ci-monika-container.yml`) uses `monika-container-changes` → `monika-container-build` → `monika-container-checks`. It builds the Monika image and runs `tests/smoke/monika-runtime.sh` to verify standalone startup, memstore, agentd, Pi CLI, and conversation create/close. Require `monika-container-checks` in branch rules.
 - `CI / Forum Container` (`ci-forum-container.yml`) uses `forum-container-changes` → `forum-container-build` → `forum-container-checks`. Require `forum-container-checks` in branch rules.
 - `CI / Integration` (`ci-integration.yml`) uses `integration-changes` → `integration-placeholder` → `integration-checks`. It is a placeholder today; require `integration-checks` now so the branch rule is already in place when real agentd/forum compatibility tests are added.
 
@@ -178,6 +178,7 @@ host-shell             SSH wrapper for host bash execution
 bin/agent-runner.mjs   Headless one-off Pi runner entrypoint
 scripts/agent-runner   Local Docker wrapper for disposable runner jobs
 scripts/agentlogs-monika  AgentLogs wrapper with dedicated writable HOME
+tests/                Local/CI smoke and integration test harnesses
 runner/                Runner docs, prompts, and example job specs
 compose.yaml           Host mode deployment (stanza)
 compose.test.yaml      Standalone mode (isolated)
@@ -304,9 +305,8 @@ Build, test, deploy:
 docker build -f Containerfile -t monika:dev .
 
 # Test in standalone mode first
-docker compose -f compose.test.yaml up -d
-docker exec -it monika-test pi   # verify it works
-docker compose -f compose.test.yaml down
+docker build -f Containerfile -t monika-test .
+tests/smoke/monika-runtime.sh monika-test
 
 # Promote to host mode (from HOST shell, never inside pi)
 docker compose up -d

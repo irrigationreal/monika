@@ -1,4 +1,4 @@
-# Monika runtime container CI — smoke-test that the runtime image builds.
+# Monika runtime container CI — build and smoke-test the runtime image.
 #
 # This follows the branch-protection pattern used by Vesper: a changes job
 # decides whether the expensive job should run, the build job can fail, and a
@@ -8,6 +8,7 @@ name: CI / Monika Container
 
 on:
   pull_request:
+  merge_group:
   workflow_dispatch:
 
 concurrency:
@@ -49,6 +50,7 @@ jobs:
               'scripts/' \
               'services/agentd/' \
               'services/memstore/' \
+              'tests/' \
               '.github/workflows/ci-monika-container.yml' \
               '.github/workflows/image-monika.yml' \
             | grep -qvE '\.md$'; then
@@ -67,6 +69,9 @@ jobs:
       - name: Build Monika runtime image
         run: docker build -f Containerfile -t monika-test .
 
+      - name: Smoke-test Monika runtime image
+        run: tests/smoke/monika-runtime.sh monika-test
+
   # Gate job — branch protection should require this check.
   monika-container-checks:
     if: always()
@@ -77,8 +82,8 @@ jobs:
         shell: bash
         run: |
           if [ "${{ needs.monika-container-build.result }}" = "failure" ] || [ "${{ needs.monika-container-build.result }}" = "cancelled" ]; then
-            echo "Monika runtime container build failed or was cancelled"
+            echo "Monika runtime container build/smoke failed or was cancelled"
             exit 1
           fi
 
-          echo "Monika runtime container build passed or was skipped (no relevant changes)"
+          echo "Monika runtime container build/smoke passed or was skipped (no relevant changes)"

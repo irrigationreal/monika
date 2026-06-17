@@ -10,6 +10,7 @@ This repo builds Monika's runtime containers and supporting services.
 - `services/forum/` — Monika forum frontend imported from `irrigationreal/monika-forum`.
 - `config/extensions/` — bundled Pi extensions.
 - `config/persona/` — bundled default persona files for standalone/test mode.
+- `tests/` — locally runnable smoke and integration tests used by CI gates.
 - `docs/forum.md` — forum/agentd architecture notes.
 
 ## Operating rules
@@ -24,7 +25,7 @@ This repo builds Monika's runtime containers and supporting services.
 
 ## GitHub Actions / branch gates
 
-Container CI follows a three-stage branch-protection pattern copied from Vesper. These CI gates run on `pull_request` and manual dispatch, not branch `push`, so open PRs get fresh checks for every new commit without duplicate push/PR runs:
+Container CI follows a three-stage branch-protection pattern copied from Vesper. These CI gates run on `pull_request`, `merge_group`, and manual dispatch, not branch `push`, so open PRs and merge-queue candidates get fresh checks without duplicate push/PR runs:
 
 1. `*-changes` decides whether relevant files changed.
 2. `*-build` or placeholder test jobs run only when needed and may fail.
@@ -32,7 +33,7 @@ Container CI follows a three-stage branch-protection pattern copied from Vesper.
 
 Current CI gates:
 
-- `monika-container-checks` from `CI / Monika Container` — builds the Monika runtime image when runtime-relevant files change.
+- `monika-container-checks` from `CI / Monika Container` — builds the Monika runtime image and runs `tests/smoke/monika-runtime.sh` when runtime-relevant files change.
 - `forum-container-checks` from `CI / Forum Container` — builds the forum image when forum-relevant files change.
 - `integration-checks` from `CI / Integration` — currently a documented placeholder that always passes/skips; grow this into agentd/forum compatibility checks.
 
@@ -80,7 +81,9 @@ docker compose -f compose.yaml -f compose.forum.yaml up -d --build forum
 
 For throwaway Monika runtime tests, prefer standalone/test compose files or an
 ephemeral volume. Do not bind-mount `/home/monika/.pi/memstore` or another live
-memstore database into a second container.
+memstore database into a second container. The CI smoke test is runnable locally
+with `tests/smoke/monika-runtime.sh <image>`; keep repo-level tests lean,
+non-flaky, and documented in `tests/README.md`.
 
 ## Forum development
 
