@@ -183,7 +183,8 @@ runner/                Runner docs, prompts, and example job specs
 compose.yaml           Host mode deployment (stanza)
 compose.test.yaml      Standalone mode (isolated)
 compose.local.yaml     Standalone mode with runtime persistence and optional forum profile
-compose.forum.yaml     Optional host-mode forum frontend overlay
+compose.stanza.yaml    Stanza standalone-persistent production deployment
+compose.forum.yaml     Legacy optional host-mode forum frontend overlay
 services/memstore/     memstore Go source
 services/agentd/       Pi-backed HTTP/SSE daemon for alternate frontends
 services/forum/        Monika forum frontend
@@ -242,6 +243,25 @@ or `~/.config/monika/git-identity.env`:
 GIT_USER_NAME="Monika"
 GIT_USER_EMAIL="monika@example.com"
 ```
+
+## Stanza standalone cutover
+
+Stanza should use standalone-persistent mode for production once migrated. The
+container owns Pi/memstore/agentd, mutable state lives under `runtime/`, and
+the forum remains exposed on the existing host-facing port. Run the cutover only
+from a host shell, because stopping the current `monika` container terminates the
+active Pi session:
+
+```bash
+cd ~/repos/monika
+scripts/stanza-standalone-cutover.sh plan
+scripts/stanza-standalone-cutover.sh preflight
+scripts/stanza-standalone-cutover.sh --yes execute
+```
+
+See `docs/stanza-standalone-cutover.md` for backup, rollback, and path-migration
+details. After cutover, `~/repos/monika/` including gitignored `runtime/` is the
+practical restore unit; `runtime/` should contain real files, not symlinks.
 
 ## AgentLogs manual session sharing
 

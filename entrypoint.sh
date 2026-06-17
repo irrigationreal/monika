@@ -47,9 +47,9 @@ export AGENTLOGS_HOME="${AGENTLOGS_HOME:-/agentlogs-home}"
 mkdir -p "$AGENTLOGS_HOME/.config/agentlogs"
 
 # ── Runtime secrets (container-only persistent mode) ──────
-# compose.local.yaml mounts host-owned private state at /runtime/secrets.
-# Keep the image canonical for code/extensions, and link only host-owned auth/model
-# files into Pi's agent dir when they exist.
+# compose.local.yaml / compose.stanza.yaml mount host-owned private state at
+# /runtime/secrets. Keep the image canonical for code/extensions, and link only
+# host-owned model/keybinding files into Pi's agent dir when they exist.
 link_secret_file() {
   local src="$1"
   local dest="$2"
@@ -59,10 +59,29 @@ link_secret_file() {
   fi
 }
 
-link_secret_file "/runtime/secrets/pi-agent/auth.json" "$PI_CODING_AGENT_DIR/auth.json"
+# Pi OAuth credentials are mutable runtime state: Pi refreshes access tokens and
+# persists the new expiry back to auth.json. /runtime/secrets is intentionally
+# read-only, so seed a writable persistent auth file from secrets on first start
+# and point Pi at that copy.
+PI_AUTH_STATE_DIR="${PI_AUTH_STATE_DIR:-/data/pi-agent-auth}"
+PI_AUTH_STATE_FILE="${PI_AUTH_STATE_FILE:-$PI_AUTH_STATE_DIR/auth.json}"
+mkdir -p "$PI_AUTH_STATE_DIR"
+if [ ! -f "$PI_AUTH_STATE_FILE" ]; then
+  if [ -f "/runtime/secrets/pi-agent/auth.json" ]; then
+    cp "/runtime/secrets/pi-agent/auth.json" "$PI_AUTH_STATE_FILE"
+  elif [ -f "/runtime/secrets/auth.json" ]; then
+    cp "/runtime/secrets/auth.json" "$PI_AUTH_STATE_FILE"
+  else
+    printf '{}\n' > "$PI_AUTH_STATE_FILE"
+  fi
+  chmod 600 "$PI_AUTH_STATE_FILE" 2>/dev/null || true
+fi
+mkdir -p "$PI_CODING_AGENT_DIR"
+ln -sf "$PI_AUTH_STATE_FILE" "$PI_CODING_AGENT_DIR/auth.json"
+
 link_secret_file "/runtime/secrets/pi-agent/models.json" "$PI_CODING_AGENT_DIR/models.json"
 link_secret_file "/runtime/secrets/pi-agent/keybindings.json" "$PI_CODING_AGENT_DIR/keybindings.json"
-link_secret_file "/runtime/secrets/auth.json" "$PI_CODING_AGENT_DIR/auth.json"
+link_secret_file "/runtime/secrets/keybindings.json" "$PI_CODING_AGENT_DIR/keybindings.json"
 link_secret_file "/runtime/secrets/models.json" "$PI_CODING_AGENT_DIR/models.json"
 
 # GPG keyrings on macOS/Parallels bind mounts cannot reliably host gpg-agent's

@@ -1,0 +1,107 @@
+# Standalone-persistent deployment for Stanza.
+#
+# This is the intended production shape after migrating away from host mode:
+# - the Monika container owns Pi, extensions, memstore, and agentd
+# - mutable/private state lives in ./runtime
+# - forum remains reachable on the existing host loopback port 4310
+# - host access is explicit via manual SSH/relocate, not automatic host shell mode
+#
+# Cutover is performed by scripts/stanza-standalone-cutover.sh from a host shell.
+
+name: monika
+
+services:
+  monika:
+    image: monika:local
+    build:
+      context: .
+      dockerfile: Containerfile
+    container_name: monika
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Persistent memstore DB and writable Pi OAuth state. The memstore socket
+      # stays container-local under /tmp and is intentionally not backed up.
+      - ./runtime/data:/data
+
+      # Durable identity/state files. Image-owned defaults are replaced by the
+      # migrated runtime state on Stanza.
+      - ./runtime/persona:/app/.pi/stateful-memory
+
+      # Persistent Pi JSONL sessions and local skills.
+      - ./runtime/pi-agent/sessions:/app/.pi/agent/sessions
+      - ./runtime/pi-agent/skills:/app/.pi/agent/skills
+
+      # Forum uploads are readable by agentd for attachment presentation.
+      - ./runtime/forum/uploads:/forum/uploads:ro
+
+      # Historical import source, if needed later.
+      - ./runtime/import:/import:ro
+
+      # AgentLogs state and runtime secrets.
+      - ./runtime/agentlogs-home:/agentlogs-home
+      - ./runtime/secrets:/runtime/secrets:ro
+      - ./runtime/secrets/gitconfig:/app/.gitconfig:ro
+      - ./runtime/secrets/ssh:/root/.ssh:ro
+      - ./runtime/secrets/ssh:/app/.ssh:ro
+
+      # Explicit workspace. Broader host/infra work should use manual relocate.
+      - /home/monika/repos:/workspace
+    working_dir: /workspace/monika
+    env_file:
+      - path: ./runtime/secrets/secrets.env
+        required: false
+      - path: ./runtime/secrets/forum.env
+        required: false
+    environment:
+      HOME: /app
+      PI_CODING_AGENT_DIR: /app/.pi/agent
+      MEMSTORE_SOCKET: /tmp/memstore.sock
+      GNUPGHOME: /tmp/gnupg
+      MONIKA_WORKSPACE: /workspace
+      AGENTLOGS_HOME: /agentlogs-home
+      MONIKA_AGENTD_HOST: 0.0.0.0
+      MONIKA_AGENTD_DEFAULT_CWD: /workspace/monika
+      MONIKA_AGENTD_ATTACHMENT_ALLOWED_ROOTS: /forum/uploads
+      MONIKA_AGENTD_ARTIFACT_ALLOWED_ROOTS: /workspace:/tmp:/data
+      MONIKA_FORUM_API_BASE_URL: http://forum:4310/api
+      GIT_USER_NAME: ${GIT_USER_NAME:-Monika}
+      GIT_USER_EMAIL: ${GIT_USER_EMAIL:-monika@neosynth.net}
+      POOL_CONFIG_URL: ${POOL_CONFIG_URL:-}
+
+  forum:
+    image: monika-forum:local
+    build:
+      context: ./services/forum
+      dockerfile: Containerfile
+    container_name: monika-forum
+    restart: unless-stopped
+    user: "0:0"
+    depends_on:
+      - monika
+    ports:
+      - "127.0.0.1:4310:4310"
+    volumes:
+      - ./runtime/forum:/forum
+      - /home/monika/repos:/workspace
+    env_file:
+      - path: ./runtime/secrets/forum.env
+        required: false
+    environment:
+      NODE_ENV: production
+      CODEX_FORUM_PORT: "4310"
+      CODEX_FORUM_DB: /forum/data.db
+      CODEX_FORUM_UPLOADS_DIR: /forum/uploads
+      CODEX_FORUM_BASE_URL: http://monika.shadowsea.org:4310
+      CODEX_FORUM_API_BASE_URL: http://forum:4310
+      CODEX_FORUM_API_PREFIX: /api
+      CODEX_FORUM_AGENT_BACKEND: monika-pi
+      CODEX_FORUM_AGENT_MODEL: ${CODEX_FORUM_AGENT_MODEL:-codex/gpt-5.5}
+      MONIKA_AGENTD_BASE_URL: http://monika:7724
+      MONIKA_PI_SESSION_TAXONOMY_CONFIG: /forum/taxonomy.local.json
+      MONIKA_FORUM_DEFAULT_CWD: /workspace/monika
+      CODEX_WORK_DIR: /workspace/monika
+      CODEX_FORUM_ENABLE_AUTH: "1"
+      CODEX_FORUM_ENABLE_RATE_LIMITING: "0"
+      CODEX_FORUM_REDIS_STREAM_BUS: "0"
