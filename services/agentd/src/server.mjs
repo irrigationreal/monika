@@ -1,4 +1,5 @@
 import http from 'node:http';
+import net from 'node:net';
 import { createHash, randomUUID } from 'node:crypto';
 import { completeSimple } from '@earendil-works/pi-ai';
 import { promises as fs } from 'node:fs';
@@ -20,6 +21,7 @@ const PORT = Number(process.env.MONIKA_AGENTD_PORT ?? 7724);
 const HOST = process.env.MONIKA_AGENTD_HOST ?? '127.0.0.1';
 const AGENT_DIR = process.env.PI_CODING_AGENT_DIR ?? path.join(process.env.HOME ?? '/home/monika', '.pi/agent');
 const DEFAULT_CWD = process.env.MONIKA_AGENTD_DEFAULT_CWD ?? process.env.HOME ?? '/home/monika';
+const MEMSTORE_SOCKET = process.env.MEMSTORE_SOCKET ?? '/tmp/memstore.sock';
 const IDLE_REAP_ENABLED = process.env.MONIKA_AGENTD_IDLE_REAP_ENABLED !== '0';
 const IDLE_REAP_MS = Number(process.env.MONIKA_AGENTD_IDLE_REAP_MS ?? 30 * 60 * 1000);
 const IDLE_REAP_INTERVAL_MS = Number(process.env.MONIKA_AGENTD_IDLE_REAP_INTERVAL_MS ?? 60 * 1000);
@@ -58,6 +60,7 @@ Files involved:
 [Clear description of what to do next based on user's goal]`;
 
 const conversations = new Map();
+let draining = false;
 
 function json(res, status, body) {
   const data = JSON.stringify(body);
@@ -71,6 +74,103 @@ function json(res, status, body) {
 function notFound(res) { json(res, 404, { error: 'not_found' }); }
 function badRequest(res, message) { json(res, 400, { error: 'bad_request', message }); }
 function serverError(res, err) { json(res, 500, { error: 'internal_error', message: err instanceof Error ? err.message : String(err) }); }
+
+function unavailable(res, message) { json(res, 503, { error: 'unavailable', message }); }
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function callMemstoreTool(name, args = {}, timeoutMs = 2000) {
+  return new Promise((resolve) => {
+    const socket = net.createConnection(MEMSTORE_SOCKET);
+    let settled = false;
+    let buffer = '';
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(value);
+    };
+    const timer = setTimeout(() => finish(null), timeoutMs);
+    socket.on('connect', () => {
+      socket.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }) + '\n');
+    });
+    socket.on('data', (chunk) => {
+      buffer += chunk.toString('utf8');
+      const newline = buffer.indexOf('\n');
+      if (newline < 0) return;
+      const line = buffer.slice(0, newline).trim();
+      if (!line) return;
+      try {
+        const parsed = JSON.parse(line);
+        finish(parsed.result?.structuredContent ?? parsed.result ?? null);
+      } catch {
+        finish(null);
+      }
+    });
+    socket.on('error', () => finish(null));
+    socket.on('close', () => finish(null));
+  });
+}
+
+async function memstoreDeployState() {
+  const status = await callMemstoreTool('memstore_status');
+  const saveQueue = status?.save_queue && typeof status.save_queue === 'object' ? status.save_queue : null;
+  const queueDepth = Number(saveQueue?.queue_depth ?? 0);
+  const processing = Boolean(saveQueue?.processing);
+  return {
+    reachable: Boolean(status),
+    queue_depth: Number.isFinite(queueDepth) ? queueDepth : null,
+    processing,
+    current_job: saveQueue?.current_job ?? null,
+  };
+}
+
+async function deployState() {
+  const convs = [...conversations.values()];
+  const active = convs.filter((c) => c.current);
+  const idle = convs.filter((c) => !c.current);
+  const memstore = await memstoreDeployState();
+  const blockers = [];
+  const drainRequired = [];
+  if (active.length > 0) blockers.push({ code: 'active_agent_turns', count: active.length });
+  if (!memstore.reachable) blockers.push({ code: 'memstore_unreachable' });
+  if ((memstore.queue_depth ?? 0) > 0 || memstore.processing) blockers.push({ code: 'memstore_busy', queue_depth: memstore.queue_depth, processing: memstore.processing });
+  if (idle.length > 0) drainRequired.push({ code: 'idle_loaded_conversations', count: idle.length });
+  return {
+    ok: blockers.length === 0 && drainRequired.length === 0,
+    status: blockers.length === 0 && drainRequired.length === 0 ? 'safe_to_stop' : blockers.length === 0 ? 'drain_required' : 'blocked',
+    draining,
+    active_threads: active.length,
+    loaded_conversations: convs.length,
+    idle_loaded_conversations: idle.length,
+    memstore,
+    blockers,
+    drain_required: drainRequired,
+  };
+}
+
+async function closeIdleConversations(reason) {
+  const idle = [...conversations.values()].filter((conv) => !conv.current);
+  await Promise.all(idle.map((conv) => closeConversation(conv, reason).catch((err) => {
+    console.warn('[agentd] failed to close idle conversation during drain:', err instanceof Error ? err.message : String(err));
+  })));
+  return idle.length;
+}
+
+async function waitForDeployState(opts = {}) {
+  const timeoutMs = Number(opts.timeoutMs ?? 0);
+  const started = Date.now();
+  let state = await deployState();
+  while (timeoutMs > 0 && state.blockers.length > 0 && Date.now() - started < timeoutMs) {
+    await sleep(500);
+    state = await deployState();
+  }
+  return state;
+}
+
 
 async function readBody(req) {
   const chunks = [];
@@ -875,7 +975,19 @@ const server = http.createServer(async (req, res) => {
     const method = req.method ?? 'GET';
 
     if (method === 'GET' && url.pathname === '/healthz') {
-      return json(res, 200, { ok: true, status: 'healthy', active_threads: [...conversations.values()].filter((c) => c.current).length, loaded_conversations: conversations.size, idle_reap_enabled: IDLE_REAP_ENABLED, queue_depth: 0 });
+      return json(res, 200, { ok: true, status: draining ? 'draining' : 'healthy', active_threads: [...conversations.values()].filter((c) => c.current).length, loaded_conversations: conversations.size, idle_reap_enabled: IDLE_REAP_ENABLED, queue_depth: 0 });
+    }
+    if (method === 'GET' && url.pathname === '/v1/admin/quiescence') return json(res, 200, await deployState());
+    if (method === 'POST' && url.pathname === '/v1/admin/drain') {
+      draining = true;
+      const body = await readBody(req);
+      const closed = await closeIdleConversations('deploy-drain');
+      const state = await waitForDeployState({ timeoutMs: body.timeout_ms ?? body.timeoutMs ?? 0 });
+      return json(res, state.blockers.length === 0 ? 200 : 409, { ...state, closed_idle_conversations: closed });
+    }
+    if (method === 'POST' && url.pathname === '/v1/admin/drain/cancel') {
+      draining = false;
+      return json(res, 200, await deployState());
     }
     if (method === 'GET' && url.pathname === '/v1/models') return json(res, 200, await listModels());
     if (method === 'GET' && url.pathname === '/v1/pi/sessions') return json(res, 200, { sessions: await scanSessions() });
@@ -901,12 +1013,14 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (method === 'POST' && url.pathname === '/v1/conversations') {
+      if (draining) return unavailable(res, 'agentd is draining for deployment');
       const body = await readBody(req);
       const conv = await createConversation(body);
       return json(res, 200, { conversation: conversationRecord(conv) });
     }
 
     if (method === 'POST' && url.pathname === '/v1/conversations/open') {
+      if (draining) return unavailable(res, 'agentd is draining for deployment');
       const body = await readBody(req);
       const conv = await openConversation(body);
       if (!conv) return notFound(res);
@@ -943,6 +1057,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       if (method === 'POST' && tail === 'messages') {
+        if (draining) return unavailable(res, 'agentd is draining for deployment');
         const body = await readBody(req);
         const messageId = body.message_id ?? randomUUID();
         const baseText = textFromContent(body.content);
@@ -1009,8 +1124,9 @@ server.listen(PORT, HOST, () => {
 });
 
 process.on('SIGTERM', async () => {
+  draining = true;
   for (const conv of conversations.values()) {
-    try { await closeConversation(conv, 'sigterm'); } catch {} 
+    try { await closeConversation(conv, 'sigterm'); } catch {}
   }
   server.close(() => process.exit(0));
 });

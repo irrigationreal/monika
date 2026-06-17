@@ -161,9 +161,13 @@ type proxy struct {
 	clientSeq atomic.Uint64
 
 	// Save job queue
-	saveQueue  []*saveJob
-	saveMu     sync.Mutex
-	saveNotify chan struct{}
+	saveQueue       []*saveJob
+	saveMu          sync.Mutex
+	saveNotify      chan struct{}
+	processingSave  bool
+	currentSaveJob  *saveJob
+	saveProcessorWg sync.WaitGroup
+	shutdownOnce    sync.Once
 
 	// Origin map
 	originMap   map[string]int
@@ -598,11 +602,12 @@ func (p *proxy) toolStatus() (any, error) {
 	}
 
 	return map[string]any{
-		"total_entries":       total,
-		"by_depth":            byDepth,
-		"by_tag":              byTag,
-		"db_size_bytes":       dbSize,
-		"total_observations":  totalObs,
+		"total_entries":          total,
+		"by_depth":               byDepth,
+		"by_tag":                 byTag,
+		"db_size_bytes":          dbSize,
+		"save_queue":             p.saveStatus(),
+		"total_observations":     totalObs,
 		"observations_by_type":   obsByType,
 		"observations_by_entity": obsByEntity,
 	}, nil
@@ -793,13 +798,13 @@ WHERE observations_fts MATCH ?`
 	var observations []map[string]any
 	for rows.Next() {
 		var (
-			id         int
-			entType    string
-			entName    string
-			body       string
-			tagsJSON   string
-			createdAt  string
-			score      float64
+			id        int
+			entType   string
+			entName   string
+			body      string
+			tagsJSON  string
+			createdAt string
+			score     float64
 		)
 		if err := rows.Scan(&id, &entType, &entName, &body, &tagsJSON, &createdAt, &score); err != nil {
 			return nil, fmt.Errorf("scan: %w", err)
@@ -933,7 +938,7 @@ func (p *proxy) toolDeleteObservation(args json.RawMessage) (any, error) {
 	affected, _ := result.RowsAffected()
 	return map[string]any{
 		"deleted": affected > 0,
-		"id":     params.ID,
+		"id":      params.ID,
 	}, nil
 }
 
@@ -1150,24 +1155,39 @@ func (p *proxy) handleSubmitSave(msg *rpcMessage) []byte {
 	return b
 }
 
-func (p *proxy) handleQueueStatus(msg *rpcMessage) []byte {
+func (p *proxy) saveStatus() map[string]any {
 	p.saveMu.Lock()
+	defer p.saveMu.Unlock()
+
 	jobs := make([]map[string]any, len(p.saveQueue))
 	for i, j := range p.saveQueue {
 		jobs[i] = map[string]any{
 			"id": j.ID, "origin": j.Origin, "status": j.Status,
 		}
 	}
-	depth := len(p.saveQueue)
-	p.saveMu.Unlock()
 
+	var current map[string]any
+	if p.currentSaveJob != nil {
+		current = map[string]any{
+			"id":     p.currentSaveJob.ID,
+			"origin": p.currentSaveJob.Origin,
+			"status": p.currentSaveJob.Status,
+		}
+	}
+
+	return map[string]any{
+		"queue_depth": len(p.saveQueue),
+		"processing":  p.processingSave,
+		"current_job": current,
+		"jobs":        jobs,
+	}
+}
+
+func (p *proxy) handleQueueStatus(msg *rpcMessage) []byte {
 	resp := map[string]any{
 		"jsonrpc": "2.0",
 		"id":      json.RawMessage(msg.id()),
-		"result": map[string]any{
-			"queue_depth": depth,
-			"jobs":        jobs,
-		},
+		"result":  p.saveStatus(),
 	}
 	b, _ := json.Marshal(resp)
 	return b
@@ -1207,6 +1227,17 @@ func (p *proxy) processSaveJobs() {
 }
 
 func (p *proxy) processOneJob(job *saveJob) {
+	p.saveMu.Lock()
+	p.processingSave = true
+	p.currentSaveJob = job
+	p.saveMu.Unlock()
+	defer func() {
+		p.saveMu.Lock()
+		p.processingSave = false
+		p.currentSaveJob = nil
+		p.saveMu.Unlock()
+	}()
+
 	// Check origin map for previous entry
 	p.originMapMu.Lock()
 	prevID, hasPrev := p.originMap[job.Origin]
@@ -1343,7 +1374,11 @@ func main() {
 	p.loadSaveQueue()
 
 	// Start save processor
-	go p.processSaveJobs()
+	p.saveProcessorWg.Add(1)
+	go func() {
+		defer p.saveProcessorWg.Done()
+		p.processSaveJobs()
+	}()
 
 	// Resume pending jobs
 	if len(p.saveQueue) > 0 {
@@ -1369,12 +1404,22 @@ func main() {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
+	shutdown := func() {
+		p.shutdownOnce.Do(func() {
+			log.Println("shutting down...")
+			close(p.done)
+			select {
+			case p.saveNotify <- struct{}{}:
+			default:
+			}
+			ln.Close()
+			_ = os.Remove(sockPath)
+		})
+	}
+
 	go func() {
 		<-sigCh
-		log.Println("shutting down...")
-		close(p.done)
-		ln.Close()
-		_ = os.Remove(sockPath)
+		shutdown()
 	}()
 
 	for {
@@ -1382,7 +1427,9 @@ func main() {
 		if err != nil {
 			select {
 			case <-p.done:
-				// Clean return — deferred db.Close() runs, WAL checkpoint happens
+				// Clean return — wait for the save processor to finish any in-flight
+				// write before deferred db.Close() runs and WAL checkpoint happens.
+				p.saveProcessorWg.Wait()
 				return
 			default:
 				log.Printf("accept: %v", err)
