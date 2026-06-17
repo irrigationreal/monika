@@ -55,7 +55,7 @@ runtime/
     secrets.env        optional provider/API env vars sourced at startup
     forum.env          optional forum bootstrap/auth settings
     git-identity.env   optional git identity (GIT_USER_NAME/GIT_USER_EMAIL)
-    gitconfig          optional git config mounted at /app/.gitconfig
+    gitconfig          optional full git config, including signing settings
     ssh/               optional SSH config/keys for git and manual relocate
     gnupg/             optional GPG keyring copied to /tmp/gnupg for gpg-agent
 ```
@@ -97,6 +97,31 @@ container, project paths should use `/workspace/...`.
 
 The forum is part of the main compose deployment and listens on port 4310 by
 default. It talks to `agentd` at `http://monika:7724` on the Docker network.
+
+## Git, SSH, and signing state
+
+Standalone mode keeps git credentials and signing material in runtime-owned
+secrets instead of bind-mounting the host home directory. The deployment supports:
+
+```text
+runtime/secrets/gitconfig   # full git config; may include commit.gpgsign and signingkey
+runtime/secrets/gnupg/      # GPG keyring copied to /tmp/gnupg at startup
+runtime/secrets/ssh/        # SSH config/keys mounted for git and explicit relocate
+```
+
+At startup, `entrypoint.sh` copies `runtime/secrets/gitconfig` to writable
+container-local storage and exports `GIT_CONFIG_GLOBAL` so git can use signing
+configuration while still allowing environment-provided identity overrides.
+
+OpenSSH is strict about ownership of user config and key files. If SSH inside the
+container reports bad owner/permissions, fix the host-side runtime secret files,
+for example:
+
+```bash
+sudo chown -R root:root runtime/secrets/ssh
+chmod 700 runtime/secrets/ssh
+chmod 600 runtime/secrets/ssh/*
+```
 
 ## Host-side Pi launcher
 

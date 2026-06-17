@@ -75,7 +75,18 @@ if [ -d "/runtime/secrets/gnupg" ]; then
   find "$GNUPGHOME" -type f -exec chmod 600 {} + 2>/dev/null || true
 fi
 
-# ── Git config (host /etc/gitconfig isn't available in container) ──
+# ── Git config / signing state ────────────────────────
+# Runtime deployments can provide a full git config at /runtime/secrets/gitconfig,
+# including commit signing settings. Copy it to writable container-local storage so
+# later git config --global calls can safely apply env overrides without mutating
+# the read-only runtime secrets mount.
+if [ -f "/runtime/secrets/gitconfig" ]; then
+  export GIT_CONFIG_GLOBAL="${GIT_CONFIG_GLOBAL:-/tmp/gitconfig}"
+  cp "/runtime/secrets/gitconfig" "$GIT_CONFIG_GLOBAL" 2>/dev/null || true
+  chmod 600 "$GIT_CONFIG_GLOBAL" 2>/dev/null || true
+fi
+
+# ── Git identity overrides ──────────────────────────────
 # Identity is runtime-owned, not baked into the image. Configure it with env vars
 # or an env-style file containing GIT_USER_NAME/GIT_USER_EMAIL (or
 # GIT_AUTHOR_NAME/GIT_AUTHOR_EMAIL) in one of:
@@ -114,7 +125,7 @@ fi
 git config --global safe.directory "*" 2>/dev/null || true
 
 # ── Source secrets if available ──────────────────────────
-for secrets_file in "/home/monika/.config/secrets.env" "/app/.config/secrets.env" "/runtime/secrets/secrets.env"; do
+for secrets_file in "/app/.config/secrets.env" "/runtime/secrets/secrets.env"; do
   if [ -f "$secrets_file" ]; then
     # shellcheck source=/dev/null
     set +e
