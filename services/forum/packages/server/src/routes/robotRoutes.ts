@@ -120,6 +120,14 @@ export function registerRobotRoutes({
       model: state.model,
       reasoningEffort: state.reasoning_effort,
       lastUpdatedAt: state.last_updated_at,
+      lastTurnError: state.last_error_message && state.last_error_at
+        ? {
+            message: state.last_error_message,
+            at: state.last_error_at,
+            postId: state.last_error_post_id ?? null,
+            turnId: state.last_error_turn_id ?? null,
+          }
+        : null,
       stream: codex.getStreamLiveness(topicId),
       currentPlan: plan
         ? {

@@ -44,9 +44,9 @@ Edit `.env` and configure at minimum:
 # Server URL (important for link generation)
 CODEX_FORUM_BASE_URL=https://your-domain.com
 
-# ECHS configuration
+# Agent backend configuration
 CODEX_FORUM_ECHS_BASE_URL=https://your-echs-host
-CODEX_FORUM_ECHS_MODEL=gpt-5.2
+CODEX_FORUM_AGENT_MODEL=codex/gpt-5.5
 CODEX_FORUM_ECHS_REASONING_EFFORT=medium
 ```
 

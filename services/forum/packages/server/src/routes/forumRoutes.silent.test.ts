@@ -35,6 +35,7 @@ describe('Forum routes silent posts', () => {
     const codex = {
       sendUserMessage: vi.fn(async () => {}),
       steerUserMessage: vi.fn(async () => {}),
+      createLinkedHandoffConversation: vi.fn(async () => ({})),
       isThreadLoaded: vi.fn(async () => false),
       ...codexOverrides
     } as any;
@@ -127,6 +128,62 @@ describe('Forum routes silent posts', () => {
     expect(res.statusCode).toBe(200);
     expect(codex.sendUserMessage).toHaveBeenCalledTimes(0);
     expect(codex.steerUserMessage).toHaveBeenCalledTimes(0);
+  });
+
+  it('returns created handoff topics with a failed robot state when launch dispatch fails', async () => {
+    const { app, codex } = await buildApp({
+      sendUserMessage: vi.fn(async () => {
+        throw new Error('ECHS 500: {"error":"Unknown model: pi-default"}');
+      })
+    });
+
+    const forum = store.createForum('Forum', null, null, null, null, 'active', 'public');
+    const author = store.createIdentityWithPassword('Author', 'human', 'pw-hash', 'author');
+    const token = 'author-token';
+    store.createAuthSession(token, author.id);
+
+    const { topic: sourceTopic } = store.createTopic({
+      forumId: forum.id,
+      title: 'Source topic',
+      body: 'source body',
+      authorId: author.id
+    });
+    const sourceSession = store.ensureSession({ topicId: sourceTopic.id });
+    store.upsertPiSessionLink({
+      piSessionId: 'source-session',
+      piSessionPath: '/tmp/source-session.jsonl',
+      topicId: sourceTopic.id,
+      sessionId: sourceSession.id,
+      cwd: '/workspace/monika',
+      kind: 'normal',
+      metadata: { source: 'test' }
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/topics/${sourceTopic.id}/handoff`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        title: 'Handoff: Source topic',
+        draft: 'Continue this work in a new thread with enough detail to retry.',
+        model: null,
+        reasoningEffort: null
+      }
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { topic: { id: string }; post: { id: string }; launchError: { message: string } | null };
+    expect(body.topic.id).not.toBe(sourceTopic.id);
+    expect(body.launchError?.message).toContain('Unknown model');
+    expect(codex.createLinkedHandoffConversation).toHaveBeenCalledTimes(1);
+    expect(codex.sendUserMessage).toHaveBeenCalledTimes(1);
+
+    const handoffTopic = store.getTopic(body.topic.id);
+    expect(handoffTopic?.title).toBe('Handoff: Source topic');
+    const robotState = store.getRobotState(body.topic.id);
+    expect(robotState?.activity).toBe('idle');
+    expect(robotState?.last_error_message).toContain('Unknown model');
+    expect(robotState?.last_error_post_id).toBe(body.post.id);
   });
 
   it('skips the robot when topic robotMode is off', async () => {
