@@ -158,6 +158,20 @@ relocate stanza:/home/monika
 This keeps host access visible and reversible instead of making every shell command
 implicitly execute on the host.
 
+## Runner mode
+
+The same Monika image can run short-lived, non-interactive jobs through
+`/app/bin/agent-runner.mjs` or the local `scripts/agent-runner` Docker wrapper.
+Runner mode is for disposable tasks, not the long-lived forum/Pi deployment. It
+mounts task input at `/task`, a workspace at `/workspace`, scratch space at
+`/scratch`, and durable outputs at `/outputs`.
+
+Runner mode keeps the useful Monika/Pi runtime available by default, but disables
+Pi session persistence and `agentd` unless explicitly requested. It supports
+controls such as `--no-tools`, `--tools`, `--timeout`, and `--system`.
+
+See `runner/README.md` for the full contract and examples.
+
 ## GitHub Actions
 
 The repo uses separate pull-request CI gates so branch protection can fail or skip
