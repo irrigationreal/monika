@@ -565,7 +565,8 @@ export function useForumState() {
     if (!isActiveTopic(topicId)) return;
     robotState.value = nextState;
     activePlanId = nextState?.currentPlan?.id ?? null;
-    reasoningDraft.value = nextState?.currentPlan?.summary ?? '';
+    reasoningDraft.value = nextState?.currentTurn?.reasoningText ?? nextState?.currentPlan?.summary ?? '';
+    assistantDraft.value = nextState?.currentTurn?.draftText ?? '';
     resetRobotActivity();
     if (nextState) {
       syncToolActivity(nextState.recentToolRuns);
@@ -728,9 +729,15 @@ export function useForumState() {
       const payload = JSON.parse(event.data) as RobotStateDto;
       robotState.value = payload;
       const nextPlanId = payload.currentPlan?.id ?? null;
-      // The server clears currentPlan at the start of a new turn. Use that as a boundary so
-      // we don't concatenate two different turns into one "reasoningDraft" blob.
-      if (activePlanId !== null && nextPlanId === null) {
+      const currentTurn = payload.currentTurn ?? null;
+      // Prefer durable turn snapshots when present so reconnects and refreshes rebuild the
+      // live card from server state instead of only future deltas.
+      if (currentTurn) {
+        assistantDraft.value = currentTurn.draftText ?? assistantDraft.value;
+        reasoningDraft.value = currentTurn.reasoningText ?? reasoningDraft.value;
+      } else if (activePlanId !== null && nextPlanId === null) {
+        // The server clears currentPlan at the start of a new turn. Use that as a boundary so
+        // we don't concatenate two different turns into one "reasoningDraft" blob.
         reasoningDraft.value = '';
         assistantDraft.value = '';
         resetRobotActivity();
@@ -763,6 +770,17 @@ export function useForumState() {
       void handleAssistantMessage().finally(() => {
         assistantMessagePending = false;
       });
+    });
+    stream.addEventListener('assistant_error', (event: MessageEvent<string>) => {
+      const payload = JSON.parse(event.data) as { error?: string };
+      const message = payload.error || 'Assistant turn failed.';
+      robotState.value = robotState.value
+        ? {
+            ...robotState.value,
+            activity: 'error',
+            lastTurnError: { message, at: new Date().toISOString() },
+          }
+        : robotState.value;
     });
     stream.addEventListener('error', () => {
       if (streamManuallyClosed || !selectedTopicId.value) {

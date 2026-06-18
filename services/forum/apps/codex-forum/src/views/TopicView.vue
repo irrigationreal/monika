@@ -212,6 +212,8 @@ const liveToolRuns = computed(() => {
 });
 
 const liveToolRunDtos = computed(() => liveToolRuns.value.map((e) => e.toolRun));
+const liveTurnError = computed(() => state.robotState.value?.lastTurnError?.message ?? state.robotState.value?.currentTurn?.errorMessage ?? null);
+const liveTurnStatus = computed(() => state.robotState.value?.currentTurn?.status ?? null);
 
 function toolExitCodeValue(tool: { exitCode?: number | null; outputSummary?: string | null }): number | null {
   if (tool.exitCode !== null && tool.exitCode !== undefined) return tool.exitCode;
@@ -1953,9 +1955,10 @@ onUnmounted(() => {
           <template v-if="hasMultipostSegments(state.assistantDraft.value)">
             <div class="vb-post-content vb-post-content--multipost">
               <div class="vb-post-heading">
-                <span>Monika Draft (live)</span>
-                <span class="vb-spinner vb-spinner-dark"></span>
+                <span>{{ liveTurnStatus === 'failed' ? 'Monika Draft (error)' : 'Monika Draft (live)' }}</span>
+                <span v-if="liveTurnStatus !== 'failed'" class="vb-spinner vb-spinner-dark"></span>
               </div>
+              <div v-if="liveTurnError" class="vb-live-turn-error">{{ liveTurnError }}</div>
               <PostTracePanel
                 :reasoningSteps="previousReasoningSteps.map((s: any) => ({ title: s.title, detail: s.detail ?? null }))"
                 :latestReasoningTitle="latestReasoningStep?.title"
@@ -1988,9 +1991,7 @@ onUnmounted(() => {
                     <div class="vb-multipost-segment-header">
                       <a class="vb-segment-link" :href="`#draft-s${segIdx}`">#</a>
                     </div>
-                    <div class="vb-post-text vb-decrypt-content">
-                      <DecryptText :text="segment.body" mode="append" />
-                    </div>
+                    <div class="vb-post-text vb-rendered-content" v-html="renderPost(segment.body)"></div>
                     <div v-if="personaSignature(segment.personaKey)" class="vb-post-signature">
                       <div class="vb-signature-line"></div>
                       <div
@@ -2015,9 +2016,10 @@ onUnmounted(() => {
             </aside>
             <div class="vb-post-content">
               <div class="vb-post-heading">
-                <span>Monika Draft (live)</span>
-                <span class="vb-spinner vb-spinner-dark"></span>
+                <span>{{ liveTurnStatus === 'failed' ? 'Monika Draft (error)' : 'Monika Draft (live)' }}</span>
+                <span v-if="liveTurnStatus !== 'failed'" class="vb-spinner vb-spinner-dark"></span>
               </div>
+              <div v-if="liveTurnError" class="vb-live-turn-error">{{ liveTurnError }}</div>
               <PostTracePanel
                 :reasoningSteps="previousReasoningSteps.map((s: any) => ({ title: s.title, detail: s.detail ?? null }))"
                 :latestReasoningTitle="latestReasoningStep?.title"
@@ -2028,9 +2030,11 @@ onUnmounted(() => {
                 traceId="draft-regular"
                 :topicId="routeTopicId"
               />
-              <div v-if="state.assistantDraft.value" class="vb-post-text vb-decrypt-content">
-                <DecryptText :text="state.assistantDraft.value" mode="append" />
-              </div>
+              <div
+                v-if="state.assistantDraft.value"
+                class="vb-post-text vb-rendered-content"
+                v-html="renderPost(state.assistantDraft.value)"
+              ></div>
             </div>
           </template>
         </div>

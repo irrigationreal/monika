@@ -1238,6 +1238,15 @@
   letter-spacing: 0.4px;
 }
 
+.vb-live-turn-error {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--status-error);
+  background: var(--status-error-bg);
+  color: var(--status-error);
+  font-size: 0.9rem;
+}
+
 /* Status pill */
 .vb-status-pill {
   background: var(--topbar-bg);
