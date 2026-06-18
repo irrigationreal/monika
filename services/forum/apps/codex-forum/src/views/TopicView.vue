@@ -232,14 +232,26 @@ function compact(value: string | null | undefined, max = 400): string | null {
 
 function liveToolTitle(tool: ToolRunDto): string {
   const mini = toolMini(tool);
-  const command = tool.command?.trim();
-  if (mini.kind === 'exec' && command) return compact(command, 120) ?? command;
+  if (mini.kind === 'exec' && mini.summary) return mini.summary;
   return mini.name || tool.tool || 'tool';
 }
 
 function liveToolDetail(tool: ToolRunDto): string | null {
-  const parts = [compact(tool.command, 1000), compact(tool.outputSummary, 900)].filter(Boolean);
+  const mini = toolMini(tool);
+  const detail = mini.detail?.lines?.length ? mini.detail.lines.join('\n') : null;
+  const output = compact(mini.output, 900);
+  const parts = [detail, output ? `Output:\n${output}` : null].filter(Boolean);
   return parts.length > 0 ? parts.join('\n\n') : null;
+}
+
+function liveToolDurationLabel(tool: ToolRunDto): string | null {
+  if (!tool.startedAt || !tool.finishedAt) return null;
+  const start = new Date(tool.startedAt).getTime();
+  const end = new Date(tool.finishedAt).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  const ms = Math.max(0, end - start);
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
 }
 
 const liveTurnItems = computed<LiveTurnItem[]>(() => {
@@ -269,7 +281,7 @@ const liveTurnItems = computed<LiveTurnItem[]>(() => {
       type: 'tool',
       title: liveToolTitle(tool),
       status,
-      meta: [tool.tool, toolStatusLabel(tool), timeoutHint ? `timeout ${timeoutHint}ms` : null].filter(Boolean).join(' · '),
+      meta: [tool.tool, toolStatusLabel(tool), liveToolDurationLabel(tool), timeoutHint ? `timeout ${timeoutHint}ms` : null].filter(Boolean).join(' · '),
       detail: liveToolDetail(tool),
     });
   }

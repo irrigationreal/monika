@@ -2620,11 +2620,30 @@ function extractLatestReasoningSummary(items: any[]): string {
 function summarizeToolResult(result: unknown): string {
   if (result === undefined || result === null) return '';
   if (typeof result === 'string') return result;
-  try {
-    return JSON.stringify(result);
-  } catch {
-    return String(result);
+  if (Array.isArray(result)) {
+    const text = result.map(summarizeToolResult).filter(Boolean).join('\n');
+    return text || safeJson(result);
   }
+  if (typeof result === 'object') {
+    const record = result as Record<string, unknown>;
+    if (Array.isArray(record['content'])) {
+      const text = record['content']
+        .map((part) => {
+          if (part && typeof part === 'object' && typeof (part as Record<string, unknown>)['text'] === 'string') {
+            return String((part as Record<string, unknown>)['text']);
+          }
+          return summarizeToolResult(part);
+        })
+        .filter(Boolean)
+        .join('\n');
+      if (text.trim()) return text;
+    }
+    if (typeof record['text'] === 'string') return record['text'];
+    if (typeof record['output'] === 'string') return record['output'];
+    if (typeof record['result'] === 'string') return record['result'];
+    return safeJson(result);
+  }
+  return String(result);
 }
 
 function mapEchsToolName(name: string): string {

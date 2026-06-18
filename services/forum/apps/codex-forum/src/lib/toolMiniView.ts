@@ -33,6 +33,10 @@ const KNOWN_TOOL_NAMES = new Set([
   'shell',
   'exec_command',
   'write_stdin',
+  'read',
+  'grep',
+  'find',
+  'ls',
   'read_file',
   'list_dir',
   'grep_files',
@@ -73,7 +77,7 @@ const WEB_TOOL_NAMES = new Set([
 
 const IMAGE_TOOL_NAMES = new Set(['image_query', 'view_image']);
 
-const READ_TOOL_NAMES = new Set(['read_file', 'list_dir', 'grep_files']);
+const READ_TOOL_NAMES = new Set(['read', 'grep', 'find', 'ls', 'read_file', 'list_dir', 'grep_files']);
 
 const EXEC_TOOL_NAMES = new Set(['shell_command', 'shell', 'exec_command', 'write_stdin', 'exec']);
 
@@ -120,9 +124,10 @@ function parseToolCommand(command: string | null | undefined, toolType?: string)
   const head = spaceIndex === -1 ? raw : raw.slice(0, spaceIndex).trim();
   const tail = spaceIndex === -1 ? '' : raw.slice(spaceIndex + 1).trim();
   const isKnown = KNOWN_TOOL_NAMES.has(head) || head.startsWith('forum_') || head.startsWith('mcp_');
+  const looksLikeToolName = /^[A-Za-z_][A-Za-z0-9_.:-]*$/.test(head);
+  const inputJson = tail && (tail.startsWith('{') || tail.startsWith('[')) ? safeJsonParse(tail) : null;
 
-  if (isKnown) {
-    const inputJson = tail && (tail.startsWith('{') || tail.startsWith('[')) ? safeJsonParse(tail) : null;
+  if (isKnown || (looksLikeToolName && (inputJson !== null || tail))) {
     return { name: head, rawInput: tail || null, inputJson };
   }
 
@@ -166,13 +171,38 @@ function extractCommand(inputJson: unknown, rawInput: string | null): string | n
   return rawInput ? rawInput.trim() : null;
 }
 
+function textFromToolResultPayload(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string') return value.trim() || null;
+  if (Array.isArray(value)) {
+    const text = value
+      .map((item) => textFromToolResultPayload(item))
+      .filter(Boolean)
+      .join('\n');
+    return text.trim() || null;
+  }
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    if (Array.isArray(record.content)) return textFromToolResultPayload(record.content);
+    if (typeof record.text === 'string') return record.text.trim() || null;
+    if (typeof record.output === 'string') return record.output.trim() || null;
+    if (typeof record.result === 'string') return record.result.trim() || null;
+  }
+  return null;
+}
+
 function extractOutputSummary(summary: string | null | undefined): string | null {
   const trimmed = summary?.trim();
   if (!trimmed) return null;
+  const parsed = safeJsonParse(trimmed);
+  const parsedText = parsed !== null ? textFromToolResultPayload(parsed) : null;
+  if (parsedText) return parsedText;
   const outputMatch = trimmed.match(/Output:\s*([\s\S]*)$/i);
   if (outputMatch) {
     const extracted = outputMatch[1].trim();
-    return extracted ? extracted : null;
+    const parsedOutput = safeJsonParse(extracted);
+    const parsedOutputText = parsedOutput !== null ? textFromToolResultPayload(parsedOutput) : null;
+    return parsedOutputText || (extracted ? extracted : null);
   }
   const lines = trimmed
     .split('\n')
@@ -300,29 +330,40 @@ export function getToolMiniModel(tool: ToolRunDto): ToolMiniModel {
     detail = lines.length > 0 ? { style: 'diff', lines } : null;
   } else if (READ_TOOL_NAMES.has(name)) {
     const input = parsed.inputJson as Record<string, unknown> | null;
-    if (name === 'read_file') {
-      summary = input?.file_path ? truncateOneLine(String(input.file_path), 60) : null;
+    if (name === 'read_file' || name === 'read') {
+      const filePath = input?.file_path ?? input?.path;
+      summary = filePath ? truncateOneLine(String(filePath), 60) : null;
       const lines = [
-        formatKeyValueLine('Path', input?.file_path),
+        formatKeyValueLine('Path', filePath),
         formatKeyValueLine('Offset', input?.offset),
         formatKeyValueLine('Limit', input?.limit),
         formatKeyValueLine('Mode', input?.mode)
       ].filter(Boolean) as string[];
       detail = lines.length > 0 ? { style: 'table', lines } : null;
-    } else if (name === 'list_dir') {
-      summary = input?.dir_path ? truncateOneLine(String(input.dir_path), 60) : null;
+    } else if (name === 'list_dir' || name === 'ls') {
+      const dirPath = input?.dir_path ?? input?.path;
+      summary = dirPath ? truncateOneLine(String(dirPath), 60) : null;
       const lines = [
-        formatKeyValueLine('Dir', input?.dir_path),
+        formatKeyValueLine('Dir', dirPath),
         formatKeyValueLine('Depth', input?.depth),
         formatKeyValueLine('Limit', input?.limit)
       ].filter(Boolean) as string[];
       detail = lines.length > 0 ? { style: 'table', lines } : null;
-    } else if (name === 'grep_files') {
+    } else if (name === 'grep_files' || name === 'grep') {
       summary = input?.pattern ? truncateOneLine(String(input.pattern), 60) : null;
       const lines = [
         formatKeyValueLine('Pattern', input?.pattern),
+        formatKeyValueLine('Glob', input?.glob),
         formatKeyValueLine('Include', input?.include),
         formatKeyValueLine('Path', input?.path)
+      ].filter(Boolean) as string[];
+      detail = lines.length > 0 ? { style: 'table', lines } : null;
+    } else if (name === 'find') {
+      summary = input?.pattern ? truncateOneLine(String(input.pattern), 60) : null;
+      const lines = [
+        formatKeyValueLine('Pattern', input?.pattern),
+        formatKeyValueLine('Path', input?.path),
+        formatKeyValueLine('Limit', input?.limit)
       ].filter(Boolean) as string[];
       detail = lines.length > 0 ? { style: 'table', lines } : null;
     }

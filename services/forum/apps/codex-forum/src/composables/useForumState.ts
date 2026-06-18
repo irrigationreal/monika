@@ -106,6 +106,7 @@ let flushHandle: number | null = null;
 let assistantMessagePending = false;
 let topicLoadCounter = 0;
 let topicHydrationEnabled = true;
+let liveTurnStartedAt: number | null = null;
 
 function resetRobotActivity(): void {
   reasoningSteps.value = [];
@@ -174,6 +175,10 @@ function syncToolActivity(toolRuns: RobotStateDto['recentToolRuns']): void {
   const runsOldestFirst = toolRuns.slice().reverse();
 
   for (const run of runsOldestFirst) {
+    if (liveTurnStartedAt !== null) {
+      const startedAt = new Date(run.startedAt).getTime();
+      if (Number.isFinite(startedAt) && startedAt < liveTurnStartedAt - 2000) continue;
+    }
     const id = `tool:${run.id}`;
     const existing = activityLog.value.find((event) => event.type === 'tool_run' && event.id === id) as
       | Extract<RobotActivityEvent, { type: 'tool_run' }>
@@ -765,7 +770,9 @@ export function useForumState() {
       reasoningDraft.value = '';
       pendingAssistantDelta = '';
       pendingReasoningDelta = '';
-      syncReasoningActivity();
+      activePlanId = null;
+      liveTurnStartedAt = Date.now();
+      resetRobotActivity();
     });
     stream.addEventListener('assistant_message', () => {
       if (assistantMessagePending) return;
@@ -798,6 +805,7 @@ export function useForumState() {
   async function handleAssistantMessage(): Promise<void> {
     assistantDraft.value = '';
     reasoningDraft.value = '';
+    liveTurnStartedAt = null;
     resetRobotActivity();
     if (selectedTopicId.value) {
       const topicId = selectedTopicId.value;
@@ -805,6 +813,7 @@ export function useForumState() {
       await Promise.all([
         loadAttachmentsForPosts(posts.value.map((post) => post.id)),
         loadAutoRun(topicId),
+        loadState(topicId),
         loadSessionInspector(),
       ]);
     }
@@ -842,6 +851,7 @@ export function useForumState() {
     assistantDraft.value = '';
     reasoningDraft.value = '';
     activePlanId = null;
+    liveTurnStartedAt = null;
     resetRobotActivity();
     closeStream();
     if (!hydrateState) {
@@ -897,6 +907,7 @@ export function useForumState() {
     assistantDraft.value = '';
     reasoningDraft.value = '';
     activePlanId = null;
+    liveTurnStartedAt = null;
     resetRobotActivity();
     closeStream();
   }
