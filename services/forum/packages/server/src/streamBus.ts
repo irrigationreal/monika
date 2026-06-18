@@ -5,6 +5,7 @@ export type StreamEventType =
   | 'assistant_delta'
   | 'reasoning_delta'
   | 'tool_run'
+  | 'tool_started'
   | 'assistant_message'
   | 'assistant_error'
   | 'assistant_reset'

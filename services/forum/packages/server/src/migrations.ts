@@ -1165,6 +1165,15 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 29,
+    name: 'plan-reasoning-checkpoints',
+    up: (db) => {
+      if (!hasColumn(db, 'plans', 'reasoning_checkpoints_json')) {
+        db.prepare('alter table plans add column reasoning_checkpoints_json text').run();
+      }
+    },
+  },
 ];
 
 export const SCHEMA_VERSION: number = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;

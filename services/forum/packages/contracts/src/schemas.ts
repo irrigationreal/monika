@@ -544,6 +544,7 @@ export const PlanDtoSchema: z.ZodType<PlanDto> = z.object({
   content: z.string(),
   summary: optionalNullableString,
   parentPostId: optionalNullableString,
+  reasoningCheckpoints: z.array(z.number()).nullable().optional(),
   visibility: PlanVisibilitySchema,
   createdAt: z.string(),
   updatedAt: z.string()

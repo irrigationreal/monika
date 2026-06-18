@@ -243,6 +243,7 @@ export interface PlanRow {
   content: string;
   summary: string | null;
   parent_post_id: string | null;
+  reasoning_checkpoints_json: string | null;
   visibility: string;
   created_at: string;
   updated_at: string;

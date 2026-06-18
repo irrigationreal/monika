@@ -33,6 +33,10 @@ const KNOWN_TOOL_NAMES = new Set([
   'shell',
   'exec_command',
   'write_stdin',
+  'read',
+  'grep',
+  'find',
+  'ls',
   'read_file',
   'list_dir',
   'grep_files',
@@ -73,7 +77,7 @@ const WEB_TOOL_NAMES = new Set([
 
 const IMAGE_TOOL_NAMES = new Set(['image_query', 'view_image']);
 
-const READ_TOOL_NAMES = new Set(['read_file', 'list_dir', 'grep_files']);
+const READ_TOOL_NAMES = new Set(['read', 'grep', 'find', 'ls', 'read_file', 'list_dir', 'grep_files']);
 
 const EXEC_TOOL_NAMES = new Set(['shell_command', 'shell', 'exec_command', 'write_stdin', 'exec']);
 
@@ -120,9 +124,10 @@ function parseToolCommand(command: string | null | undefined, toolType?: string)
   const head = spaceIndex === -1 ? raw : raw.slice(0, spaceIndex).trim();
   const tail = spaceIndex === -1 ? '' : raw.slice(spaceIndex + 1).trim();
   const isKnown = KNOWN_TOOL_NAMES.has(head) || head.startsWith('forum_') || head.startsWith('mcp_');
+  const looksLikeToolName = /^[A-Za-z_][A-Za-z0-9_.:-]*$/.test(head);
+  const inputJson = tail && (tail.startsWith('{') || tail.startsWith('[')) ? safeJsonParse(tail) : null;
 
-  if (isKnown) {
-    const inputJson = tail && (tail.startsWith('{') || tail.startsWith('[')) ? safeJsonParse(tail) : null;
+  if (isKnown || (looksLikeToolName && (inputJson !== null || tail))) {
     return { name: head, rawInput: tail || null, inputJson };
   }
 
@@ -157,6 +162,26 @@ function normalizeInput(inputJson: unknown, rawInput: string | null): string | n
   return rawInput.trim() || null;
 }
 
+function extractTimeoutMs(inputJson: unknown): number | null {
+  if (!inputJson || typeof inputJson !== 'object') return null;
+  const record = inputJson as Record<string, unknown>;
+  // timeoutMs / timeout_ms are already in milliseconds.
+  // timeout is in seconds (Pi's Bash tool uses this convention).
+  if (record.timeoutMs !== null && record.timeoutMs !== undefined) {
+    const v = typeof record.timeoutMs === 'number' ? record.timeoutMs : Number(record.timeoutMs);
+    return Number.isFinite(v) && v > 0 ? v : null;
+  }
+  if (record.timeout_ms !== null && record.timeout_ms !== undefined) {
+    const v = typeof record.timeout_ms === 'number' ? record.timeout_ms : Number(record.timeout_ms);
+    return Number.isFinite(v) && v > 0 ? v : null;
+  }
+  if (record.timeout !== null && record.timeout !== undefined) {
+    const v = typeof record.timeout === 'number' ? record.timeout : Number(record.timeout);
+    return Number.isFinite(v) && v > 0 ? v * 1000 : null;  // seconds → ms
+  }
+  return null;
+}
+
 function extractCommand(inputJson: unknown, rawInput: string | null): string | null {
   if (inputJson && typeof inputJson === 'object' && 'command' in (inputJson as Record<string, unknown>)) {
     const command = (inputJson as Record<string, unknown>).command;
@@ -166,13 +191,38 @@ function extractCommand(inputJson: unknown, rawInput: string | null): string | n
   return rawInput ? rawInput.trim() : null;
 }
 
+function textFromToolResultPayload(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string') return value.trim() || null;
+  if (Array.isArray(value)) {
+    const text = value
+      .map((item) => textFromToolResultPayload(item))
+      .filter(Boolean)
+      .join('\n');
+    return text.trim() || null;
+  }
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    if (Array.isArray(record.content)) return textFromToolResultPayload(record.content);
+    if (typeof record.text === 'string') return record.text.trim() || null;
+    if (typeof record.output === 'string') return record.output.trim() || null;
+    if (typeof record.result === 'string') return record.result.trim() || null;
+  }
+  return null;
+}
+
 function extractOutputSummary(summary: string | null | undefined): string | null {
   const trimmed = summary?.trim();
   if (!trimmed) return null;
+  const parsed = safeJsonParse(trimmed);
+  const parsedText = parsed !== null ? textFromToolResultPayload(parsed) : null;
+  if (parsedText) return parsedText;
   const outputMatch = trimmed.match(/Output:\s*([\s\S]*)$/i);
   if (outputMatch) {
     const extracted = outputMatch[1].trim();
-    return extracted ? extracted : null;
+    const parsedOutput = safeJsonParse(extracted);
+    const parsedOutputText = parsedOutput !== null ? textFromToolResultPayload(parsedOutput) : null;
+    return parsedOutputText || (extracted ? extracted : null);
   }
   const lines = trimmed
     .split('\n')
@@ -267,7 +317,13 @@ export function getToolMiniModel(tool: ToolRunDto): ToolMiniModel {
   let detail: ToolMiniDetail | null = null;
   let files: string[] = Array.isArray(tool.filesTouched) ? tool.filesTouched : [];
 
-  if (EXEC_TOOL_NAMES.has(name)) {
+  // Extract timeout from input JSON (Pi tools often pass timeout/timeoutMs)
+  const timeoutMs = extractTimeoutMs(parsed.inputJson);
+  if (timeoutMs !== null) meta.timeoutMs = timeoutMs;
+
+  // Use `kind` for formatting branches rather than name sets, because Pi tool
+  // names arrive capitalised (e.g. "Bash") while the legacy sets are lowercase.
+  if (kind === 'exec') {
     const command = extractCommand(parsed.inputJson, parsed.rawInput);
     summary = command ? truncateOneLine(command, 80) : null;
     if (parsed.inputJson && typeof parsed.inputJson === 'object') {
@@ -279,7 +335,7 @@ export function getToolMiniModel(tool: ToolRunDto): ToolMiniModel {
       meta.cwd ? `cwd: ${meta.cwd}` : null
     ].filter(Boolean) as string[];
     if (lines.length > 0) detail = { style: 'mono', lines };
-  } else if (name === 'apply_patch') {
+  } else if (kind === 'apply_patch') {
     // Extract actual patch/diff text from JSON input (server stores as {patch: "..."})
     const patchFromJson = parsed.inputJson && typeof parsed.inputJson === 'object'
       ? String((parsed.inputJson as Record<string, unknown>).patch ?? (parsed.inputJson as Record<string, unknown>).diff ?? '')
@@ -298,35 +354,47 @@ export function getToolMiniModel(tool: ToolRunDto): ToolMiniModel {
     const fileLines = files.length > 0 ? limitLines(files, 3) : [];
     const lines = [diffLine, ...fileLines.map((file) => `• ${file}`)];
     detail = lines.length > 0 ? { style: 'diff', lines } : null;
-  } else if (READ_TOOL_NAMES.has(name)) {
+  } else if (kind === 'read') {
     const input = parsed.inputJson as Record<string, unknown> | null;
-    if (name === 'read_file') {
-      summary = input?.file_path ? truncateOneLine(String(input.file_path), 60) : null;
+    const lowerName = (name ?? '').toLowerCase();
+    if (lowerName === 'read_file' || lowerName === 'read') {
+      const filePath = input?.file_path ?? input?.path;
+      summary = filePath ? truncateOneLine(String(filePath), 60) : null;
       const lines = [
-        formatKeyValueLine('Path', input?.file_path),
+        formatKeyValueLine('Path', filePath),
         formatKeyValueLine('Offset', input?.offset),
         formatKeyValueLine('Limit', input?.limit),
         formatKeyValueLine('Mode', input?.mode)
       ].filter(Boolean) as string[];
       detail = lines.length > 0 ? { style: 'table', lines } : null;
-    } else if (name === 'list_dir') {
-      summary = input?.dir_path ? truncateOneLine(String(input.dir_path), 60) : null;
+    } else if (lowerName === 'list_dir' || lowerName === 'ls') {
+      const dirPath = input?.dir_path ?? input?.path;
+      summary = dirPath ? truncateOneLine(String(dirPath), 60) : null;
       const lines = [
-        formatKeyValueLine('Dir', input?.dir_path),
+        formatKeyValueLine('Dir', dirPath),
         formatKeyValueLine('Depth', input?.depth),
         formatKeyValueLine('Limit', input?.limit)
       ].filter(Boolean) as string[];
       detail = lines.length > 0 ? { style: 'table', lines } : null;
-    } else if (name === 'grep_files') {
+    } else if (lowerName === 'grep_files' || lowerName === 'grep') {
       summary = input?.pattern ? truncateOneLine(String(input.pattern), 60) : null;
       const lines = [
         formatKeyValueLine('Pattern', input?.pattern),
+        formatKeyValueLine('Glob', input?.glob),
         formatKeyValueLine('Include', input?.include),
         formatKeyValueLine('Path', input?.path)
       ].filter(Boolean) as string[];
       detail = lines.length > 0 ? { style: 'table', lines } : null;
+    } else if (lowerName === 'find') {
+      summary = input?.pattern ? truncateOneLine(String(input.pattern), 60) : null;
+      const lines = [
+        formatKeyValueLine('Pattern', input?.pattern),
+        formatKeyValueLine('Path', input?.path),
+        formatKeyValueLine('Limit', input?.limit)
+      ].filter(Boolean) as string[];
+      detail = lines.length > 0 ? { style: 'table', lines } : null;
     }
-  } else if (WEB_TOOL_NAMES.has(name)) {
+  } else if (kind === 'web') {
     const input = parsed.inputJson as Record<string, unknown> | null;
     summary = input?.q ? truncateOneLine(String(input.q), 80) : truncateOneLine(parsed.rawInput ?? '', 80) || null;
     const chips = [
@@ -337,7 +405,7 @@ export function getToolMiniModel(tool: ToolRunDto): ToolMiniModel {
       formatKeyValueLine('pageno', input?.pageno)
     ].filter(Boolean) as string[];
     detail = chips.length > 0 ? { style: 'chips', lines: limitLines(chips, 4) } : null;
-  } else if (IMAGE_TOOL_NAMES.has(name)) {
+  } else if (kind === 'image') {
     const input = parsed.inputJson as Record<string, unknown> | null;
     summary = input?.q ? truncateOneLine(String(input.q), 80) : input?.path ? truncateOneLine(String(input.path), 80) : null;
     const chips = [
@@ -345,9 +413,10 @@ export function getToolMiniModel(tool: ToolRunDto): ToolMiniModel {
       formatKeyValueLine('path', input?.path)
     ].filter(Boolean) as string[];
     detail = chips.length > 0 ? { style: 'chips', lines: limitLines(chips, 4) } : null;
-  } else if (AGENT_TOOL_NAMES.has(name)) {
+  } else if (kind === 'agent') {
     const input = parsed.inputJson as Record<string, unknown> | null;
-    if (name === 'spawn_agent') {
+    const lowerName = (name ?? '').toLowerCase();
+    if (lowerName === 'spawn_agent') {
       const agentType = input?.agent_type ? String(input.agent_type) : '';
       const firstLine = input?.message ? String(input.message).split('\n')[0].trim() : null;
       const isGenericType = !agentType || agentType === 'default' || agentType === 'agent';
@@ -359,7 +428,7 @@ export function getToolMiniModel(tool: ToolRunDto): ToolMiniModel {
         firstLine ? truncateOneLine(firstLine, 120) : null
       ].filter(Boolean) as string[];
       detail = lines.length > 0 ? { style: 'plain', lines } : null;
-    } else if (name === 'send_input') {
+    } else if (lowerName === 'send_input') {
       summary = input?.id ? `id: ${String(input.id)}` : 'send';
       const firstLine = input?.message ? String(input.message).split('\n')[0] : null;
       const lines = [
@@ -368,18 +437,18 @@ export function getToolMiniModel(tool: ToolRunDto): ToolMiniModel {
         input?.interrupt ? 'interrupt: true' : null
       ].filter(Boolean) as string[];
       detail = lines.length > 0 ? { style: 'plain', lines } : null;
-    } else if (name === 'wait') {
+    } else if (lowerName === 'wait') {
       summary = Array.isArray(input?.ids) ? `${input?.ids.length} ids` : 'wait';
       const lines = [
         formatKeyValueLine('Ids', Array.isArray(input?.ids) ? input.ids.join(', ') : null),
         formatKeyValueLine('Timeout', input?.timeout_ms)
       ].filter(Boolean) as string[];
       detail = lines.length > 0 ? { style: 'plain', lines } : null;
-    } else if (name === 'close_agent') {
+    } else if (lowerName === 'close_agent') {
       summary = input?.id ? `id: ${String(input.id)}` : 'close';
       const lines = [formatKeyValueLine('Id', input?.id)].filter(Boolean) as string[];
       detail = lines.length > 0 ? { style: 'plain', lines } : null;
-    } else if (name.startsWith('blackboard_')) {
+    } else if (lowerName.startsWith('blackboard_')) {
       summary = input?.key ? `key: ${String(input.key)}` : 'blackboard';
       const lines = [
         formatKeyValueLine('Key', input?.key),
@@ -387,7 +456,7 @@ export function getToolMiniModel(tool: ToolRunDto): ToolMiniModel {
       ].filter(Boolean) as string[];
       detail = lines.length > 0 ? { style: 'plain', lines } : null;
     }
-  } else if (name.startsWith('forum_')) {
+  } else if (kind === 'forum') {
     const input = parsed.inputJson as Record<string, unknown> | null;
     summary = truncateOneLine(name.replace('forum_', '').replace(/_/g, ' '), 40);
     const chips = [

@@ -134,6 +134,7 @@ export function registerRobotRoutes({
             id: plan.id,
             content: plan.content,
             summary: plan.summary,
+            reasoningCheckpoints: plan.reasoning_checkpoints_json ? JSON.parse(plan.reasoning_checkpoints_json) as number[] : null,
             visibility: plan.visibility,
             createdAt: plan.created_at,
             updatedAt: plan.updated_at,
@@ -144,6 +145,7 @@ export function registerRobotRoutes({
         ? toolRuns.map((run) => ({
             id: run.id,
             tool: run.tool,
+            parentPostId: run.parent_post_id,
             startedAt: run.started_at,
             finishedAt: run.finished_at,
             exitCode: run.exit_code,
@@ -577,6 +579,7 @@ export function registerRobotRoutes({
         content: plan.content,
         summary: plan.summary,
         parentPostId: plan.parent_post_id,
+        reasoningCheckpoints: plan.reasoning_checkpoints_json ? JSON.parse(plan.reasoning_checkpoints_json) as number[] : null,
         visibility: plan.visibility,
         createdAt: plan.created_at,
         updatedAt: plan.updated_at,

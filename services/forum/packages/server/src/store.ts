@@ -1994,11 +1994,18 @@ export class ForumStore {
     return this.getPlan(id) as PlanRow;
   }
 
-  updatePlan(planId: string, content: string, summary?: string | null): PlanRow {
+  updatePlan(planId: string, content: string, summary?: string | null, reasoningCheckpoints?: number[] | null): PlanRow {
     const now = nowIso();
-    this.db
-      .prepare('update plans set content = ?, summary = ?, updated_at = ? where id = ?')
-      .run(content, summary ?? null, now, planId);
+    const checkpointsJson = reasoningCheckpoints ? JSON.stringify(reasoningCheckpoints) : undefined;
+    if (checkpointsJson !== undefined) {
+      this.db
+        .prepare('update plans set content = ?, summary = ?, reasoning_checkpoints_json = ?, updated_at = ? where id = ?')
+        .run(content, summary ?? null, checkpointsJson, now, planId);
+    } else {
+      this.db
+        .prepare('update plans set content = ?, summary = ?, updated_at = ? where id = ?')
+        .run(content, summary ?? null, now, planId);
+    }
     return this.getPlan(planId) as PlanRow;
   }
 
@@ -2027,7 +2034,7 @@ export class ForumStore {
         input.tool,
         input.parentPostId ?? null,
         now,
-        now,
+        null,
         null,
         input.command ?? null,
         null,

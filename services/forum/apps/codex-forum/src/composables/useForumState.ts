@@ -51,6 +51,7 @@ export type RobotActivityEvent =
   | {
       type: 'reasoning_step';
       id: string;
+      seq: number;
       title: string;
       detail: string | null;
       status: 'running' | 'done';
@@ -58,6 +59,7 @@ export type RobotActivityEvent =
   | {
       type: 'tool_run';
       id: string;
+      seq: number;
       toolRun: RobotStateDto['recentToolRuns'][number];
     };
 
@@ -106,74 +108,56 @@ let flushHandle: number | null = null;
 let assistantMessagePending = false;
 let topicLoadCounter = 0;
 let topicHydrationEnabled = true;
+let liveTurnStartedAt: number | null = null;
+// Reasoning checkpoints: when each tool event first appears, record how many
+// parsed reasoning steps existed at that moment. This lets liveTurnItems
+// interleave reasoning blocks between tool cards chronologically.
+const reasoningCheckpoints = ref<number[]>([]);
+// Same idea for assistant text: snapshot assistantDraft.length when each tool appears
+// so mid-turn text segments can be interleaved with tool cards.
+const assistantCheckpoints = ref<number[]>([]);
 
 function resetRobotActivity(): void {
   reasoningSteps.value = [];
   activityLog.value = [];
   reasoningStepCount = 0;
+  reasoningCheckpoints.value = [];
+  assistantCheckpoints.value = [];
 }
 
 function syncReasoningActivity(statusOverride?: { status: 'running' | 'done' }): void {
   const parsed = parseReasoningSteps(reasoningDraft.value);
   reasoningSteps.value = parsed;
-
-  if (parsed.length === 0) {
-    return;
-  }
-
-  const currentStatus: 'running' | 'done' =
-    statusOverride?.status ?? (robotState.value?.activity === 'idle' ? 'done' : 'running');
-  const lastIndex = parsed.length - 1;
-
-  if (parsed.length < reasoningStepCount) {
-    // We do not expect the reasoning stream to shrink, but if it does, treat it as a reset.
-    activityLog.value = activityLog.value.filter((event) => event.type !== 'reasoning_step');
-    reasoningStepCount = 0;
-  }
-
-  for (let i = 0; i < parsed.length; i++) {
-    const step = parsed[i];
-    if (!step) continue;
-    const id = `reasoning:${String(i)}`;
-    const existing = activityLog.value.find((event) => event.type === 'reasoning_step' && event.id === id) as
-      | Extract<RobotActivityEvent, { type: 'reasoning_step' }>
-      | undefined;
-    const status = i === lastIndex ? currentStatus : 'done';
-
-    if (existing) {
-      existing.title = step.title;
-      existing.detail = step.detail;
-      existing.status = status;
-    } else {
-      activityLog.value.push({
-        type: 'reasoning_step',
-        id,
-        title: step.title,
-        detail: step.detail,
-        status,
-      });
-    }
-  }
-
-  // Mark any extra stale reasoning events as done (shouldn't happen, but keeps UI sane).
-  for (const event of activityLog.value) {
-    if (event.type !== 'reasoning_step') continue;
-    const match = /^reasoning:(\d+)$/.exec(event.id);
-    const idx = match ? Number(match[1]) : NaN;
-    if (!Number.isFinite(idx)) continue;
-    if (idx < lastIndex) {
-      event.status = 'done';
-    }
-  }
-
   reasoningStepCount = parsed.length;
 }
 
+/** Flush any buffered reasoning deltas into reasoningDraft and re-parse steps.
+ *  Must be called before recording reasoning checkpoints so the step count
+ *  reflects all reasoning that arrived before the tool event. */
+function flushPendingDeltas(): void {
+  if (pendingReasoningDelta) {
+    reasoningDraft.value += pendingReasoningDelta;
+    pendingReasoningDelta = '';
+    syncReasoningActivity();
+  }
+  if (pendingAssistantDelta) {
+    assistantDraft.value += pendingAssistantDelta;
+    pendingAssistantDelta = '';
+  }
+  if (flushHandle !== null) {
+    window.cancelAnimationFrame(flushHandle);
+    flushHandle = null;
+  }
+}
+
 function syncToolActivity(toolRuns: RobotStateDto['recentToolRuns']): void {
-  // toolRuns arrives newest-first from the API. Append new ones to the log in chronological order.
   const runsOldestFirst = toolRuns.slice().reverse();
 
   for (const run of runsOldestFirst) {
+    if (liveTurnStartedAt !== null) {
+      const startedAt = new Date(run.startedAt).getTime();
+      if (Number.isFinite(startedAt) && startedAt < liveTurnStartedAt - 2000) continue;
+    }
     const id = `tool:${run.id}`;
     const existing = activityLog.value.find((event) => event.type === 'tool_run' && event.id === id) as
       | Extract<RobotActivityEvent, { type: 'tool_run' }>
@@ -182,10 +166,12 @@ function syncToolActivity(toolRuns: RobotStateDto['recentToolRuns']): void {
       existing.toolRun = run;
       continue;
     }
-    activityLog.value.push({ type: 'tool_run', id, toolRun: run });
+    // Flush all buffered deltas so checkpoints reflect everything that
+    // arrived before this tool event.
+    flushPendingDeltas();
+    activityLog.value.push({ type: 'tool_run', id, seq: 0, toolRun: run });
   }
 }
-
 function getTopicActivityTime(topic: TopicDto): number {
   const iso = topic.lastPostAt ?? topic.updatedAt;
   return new Date(iso).getTime();
@@ -221,7 +207,17 @@ export function useForumState() {
 
   const sortedPosts = computed(() => posts.value.slice().sort((a, b) => a.createdAt.localeCompare(b.createdAt)));
 
-  const totalPages = computed(() => Math.max(1, Math.ceil(sortedPosts.value.length / POSTS_PER_PAGE)));
+  const hasPendingAssistantTurn = computed(() => {
+    if (!selectedTopic.value?.robotMode || selectedTopic.value.robotMode === 'off') return false;
+    if (assistantDraft.value.trim()) return true;
+    const activity = robotState.value?.activity ?? 'idle';
+    return activity !== 'idle';
+  });
+
+  const totalPages = computed(() => {
+    const timelineLength = sortedPosts.value.length + (hasPendingAssistantTurn.value ? 1 : 0);
+    return Math.max(1, Math.ceil(timelineLength / POSTS_PER_PAGE));
+  });
 
   const currentPosts = computed(() => {
     const start = (currentPage.value - 1) * POSTS_PER_PAGE;
@@ -736,9 +732,19 @@ export function useForumState() {
         resetRobotActivity();
       }
       activePlanId = nextPlanId;
+      // Flush buffered reasoning before processing tools so checkpoints are accurate.
+      flushPendingDeltas();
       syncToolActivity(payload.recentToolRuns);
-      // Update step statuses even if no new deltas arrive (e.g. when a turn completes).
       syncReasoningActivity();
+    });
+    stream.addEventListener('tool_started', () => {
+      // A new tool just started on the server. Record checkpoints NOW,
+      // before the state event arrives with the tool in recentToolRuns.
+      // This is the only reliable moment to snapshot draft lengths because
+      // by the time the state event arrives, multiple tools may already exist.
+      flushPendingDeltas();
+      reasoningCheckpoints.value = [...reasoningCheckpoints.value, reasoningDraft.value.length];
+      assistantCheckpoints.value = [...assistantCheckpoints.value, assistantDraft.value.length];
     });
     stream.addEventListener('reasoning_delta', (event: MessageEvent<string>) => {
       const payload = JSON.parse(event.data) as { delta: string };
@@ -755,7 +761,9 @@ export function useForumState() {
       reasoningDraft.value = '';
       pendingAssistantDelta = '';
       pendingReasoningDelta = '';
-      syncReasoningActivity();
+      activePlanId = null;
+      liveTurnStartedAt = Date.now();
+      resetRobotActivity();
     });
     stream.addEventListener('assistant_message', () => {
       if (assistantMessagePending) return;
@@ -788,6 +796,7 @@ export function useForumState() {
   async function handleAssistantMessage(): Promise<void> {
     assistantDraft.value = '';
     reasoningDraft.value = '';
+    liveTurnStartedAt = null;
     resetRobotActivity();
     if (selectedTopicId.value) {
       const topicId = selectedTopicId.value;
@@ -795,8 +804,15 @@ export function useForumState() {
       await Promise.all([
         loadAttachmentsForPosts(posts.value.map((post) => post.id)),
         loadAutoRun(topicId),
+        loadState(topicId),
         loadSessionInspector(),
       ]);
+      // assistant_message is authoritative — the turn is done. If the server
+      // state reload still shows busy (race with agentd transition), force idle
+      // locally so the live trace disappears.
+      if (robotState.value && robotState.value.activity !== 'idle') {
+        robotState.value = { ...robotState.value, activity: 'idle' };
+      }
     }
   }
 
@@ -832,6 +848,7 @@ export function useForumState() {
     assistantDraft.value = '';
     reasoningDraft.value = '';
     activePlanId = null;
+    liveTurnStartedAt = null;
     resetRobotActivity();
     closeStream();
     if (!hydrateState) {
@@ -887,6 +904,7 @@ export function useForumState() {
     assistantDraft.value = '';
     reasoningDraft.value = '';
     activePlanId = null;
+    liveTurnStartedAt = null;
     resetRobotActivity();
     closeStream();
   }
@@ -1266,6 +1284,8 @@ export function useForumState() {
     reasoningDraft,
     assistantDraft,
     reasoningSteps,
+    reasoningCheckpoints,
+    assistantCheckpoints,
     activityLog,
     sessionInfo,
     sessionInspector,
@@ -1290,6 +1310,7 @@ export function useForumState() {
     sortedPosts,
     totalPages,
     currentPosts,
+    hasPendingAssistantTurn,
     latestToolRun,
     isRobotBusy,
     isLoggedIn,

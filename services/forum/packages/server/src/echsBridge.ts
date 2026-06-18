@@ -417,6 +417,8 @@ interface ThreadContext {
   activeSubagents: Map<string, { task: string; startedAt: number }>;
   /** Timestamp of last SSE event received (including keepalives). */
   lastStreamEventAt: number | null;
+  /** Character offsets into reasoningSummary recorded at each tool start. */
+  reasoningCheckpoints: number[];
 }
 
 interface PlanContext {
@@ -761,6 +763,7 @@ export class EchsBridge {
         totalOutputTokens: 0,
         activeSubagents: new Map(),
         lastStreamEventAt: null,
+        reasoningCheckpoints: [],
       });
       await this.ensureSubscribed(threadId);
       // Update stale last_dispatched_post_id if missing.
@@ -1438,6 +1441,7 @@ export class EchsBridge {
         totalOutputTokens: existingCtx?.totalOutputTokens ?? 0,
         activeSubagents: existingCtx?.activeSubagents ?? new Map(),
         lastStreamEventAt: existingCtx?.lastStreamEventAt ?? null,
+        reasoningCheckpoints: [],
       };
       this.threadMap.set(threadId, threadCtx);
 
@@ -1665,6 +1669,15 @@ export class EchsBridge {
           if (callId) {
             this.toolRunByCallId.set(callId, toolRun.id);
           }
+          // Notify the client that a new tool started — this arrives before
+          // the state event and lets the client record checkpoints for
+          // reasoning/text interleaving.
+          this.bus.emit(ctx.topicId, {
+            type: 'tool_started',
+            data: { toolRunId: toolRun.id, tool, callId: callId ?? null },
+          });
+          // Record a server-side reasoning checkpoint for saved-trace interleaving
+          ctx.reasoningCheckpoints.push(ctx.reasoningSummary.length);
           if (ctx.currentTurnId !== null) {
             this.store.upsertRobotState({
               topicId: ctx.topicId,
@@ -1673,6 +1686,23 @@ export class EchsBridge {
               model: ctx.model,
               reasoningEffort: ctx.reasoningEffort,
               currentPlanId: ctx.planId,
+            });
+            this.emitState(ctx.topicId);
+          }
+        }
+        break;
+      }
+      case 'tool_updated': {
+        const data = event.data as any;
+        const callId = data?.call_id ?? data?.callId;
+        if (callId) {
+          const toolRunId = this.toolRunByCallId.get(callId);
+          if (toolRunId) {
+            const rawSummary = summarizeToolResult(data?.partial_result ?? data?.partialResult);
+            const { text: summary, redacted } = redactSensitiveData(rawSummary);
+            this.store.updateToolRun(toolRunId, {
+              output_summary: truncateText(summary, 1000),
+              redactions_applied: redacted ? 1 : 0,
             });
             this.emitState(ctx.topicId);
           }
@@ -1689,8 +1719,8 @@ export class EchsBridge {
             const { text: summary, redacted } = redactSensitiveData(rawSummary);
             this.store.updateToolRun(toolRunId, {
               finished_at: new Date().toISOString(),
-              exit_code: null,
-              output_summary: truncateText(summary, 500),
+              exit_code: data?.is_error || data?.isError ? 1 : null,
+              output_summary: truncateText(summary, 1000),
               redactions_applied: redacted ? 1 : 0,
             });
             // Detect spawn_agent completion by checking for agent_id in result
@@ -1887,7 +1917,7 @@ export class EchsBridge {
     };
   }
 
-  private upsertPlanForSummary(planContext: PlanContext, summary: string, preferredPlanId?: string | null): string {
+  private upsertPlanForSummary(planContext: PlanContext, summary: string, preferredPlanId?: string | null, reasoningCheckpoints?: number[] | null): string {
     const parentPostId = planContext.parentPostId ?? null;
     let plan = preferredPlanId ? this.store.getPlan(preferredPlanId) : null;
     if (plan && parentPostId && plan.parent_post_id !== parentPostId) {
@@ -1912,7 +1942,7 @@ export class EchsBridge {
       });
       return created.id;
     }
-    this.store.updatePlan(plan.id, summary, summary);
+    this.store.updatePlan(plan.id, summary, summary, reasoningCheckpoints);
     return plan.id;
   }
 
@@ -1940,7 +1970,7 @@ export class EchsBridge {
       sessionId: ctx.sessionId,
       parentPostId: ctx.lastUserPostId ?? null,
     };
-    const planId = this.upsertPlanForSummary(planContext, summary, ctx.planId);
+    const planId = this.upsertPlanForSummary(planContext, summary, ctx.planId, ctx.reasoningCheckpoints.length > 0 ? ctx.reasoningCheckpoints : null);
     ctx.planId = planId;
     this.upsertRobotStateForPlan(planContext, planId, {
       activity: 'thinking',
@@ -2313,7 +2343,7 @@ export class EchsBridge {
     if (ctx) {
       ctx.reasoningSummary = summary;
     }
-    const planId = this.upsertPlanForSummary(planContext, summary, ctx?.planId ?? null);
+    const planId = this.upsertPlanForSummary(planContext, summary, ctx?.planId ?? null, ctx?.reasoningCheckpoints?.length ? ctx.reasoningCheckpoints : null);
     if (ctx) {
       ctx.planId = planId;
     }
@@ -2603,17 +2633,38 @@ function extractLatestReasoningSummary(items: any[]): string {
 function summarizeToolResult(result: unknown): string {
   if (result === undefined || result === null) return '';
   if (typeof result === 'string') return result;
-  try {
-    return JSON.stringify(result);
-  } catch {
-    return String(result);
+  if (Array.isArray(result)) {
+    const text = result.map(summarizeToolResult).filter(Boolean).join('\n');
+    return text || safeJson(result);
   }
+  if (typeof result === 'object') {
+    const record = result as Record<string, unknown>;
+    if (Array.isArray(record['content'])) {
+      const text = record['content']
+        .map((part) => {
+          if (part && typeof part === 'object' && typeof (part as Record<string, unknown>)['text'] === 'string') {
+            return String((part as Record<string, unknown>)['text']);
+          }
+          return summarizeToolResult(part);
+        })
+        .filter(Boolean)
+        .join('\n');
+      if (text.trim()) return text;
+    }
+    if (typeof record['text'] === 'string') return record['text'];
+    if (typeof record['output'] === 'string') return record['output'];
+    if (typeof record['result'] === 'string') return record['result'];
+    return safeJson(result);
+  }
+  return String(result);
 }
 
 function mapEchsToolName(name: string): string {
   const key = name.toLowerCase();
-  if (['exec_command', 'write_stdin', 'shell', 'local_shell'].includes(key)) return 'exec';
-  if (key === 'apply_patch') return 'apply_patch';
+  if (['exec_command', 'write_stdin', 'shell', 'local_shell', 'bash', 'exec'].includes(key)) return 'exec';
+  if (key === 'apply_patch' || key === 'edit' || key === 'write') return 'apply_patch';
+  if (['read', 'grep', 'find', 'ls', 'read_file', 'grep_files', 'list_dir'].includes(key)) return 'read';
+  if (['web_search', 'websearch', 'browser', 'open', 'click', 'screenshot'].includes(key)) return 'web';
   if (key.startsWith('forum_')) return 'mcp';
   if (['spawn_agent', 'send_input', 'wait', 'close_agent', 'blackboard_read', 'blackboard_write'].includes(key))
     return 'agent';

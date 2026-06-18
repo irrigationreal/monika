@@ -94,3 +94,62 @@ E2E tests live under:
 - `apps/codex-forum/e2e/**/*.spec.ts`
 
 Do not add new tests unless explicitly instructed, unless the change is large or high-risk enough that you should recommend tests first.
+
+## Live trace and Trace History
+
+The forum renders robot responses as a chronological trace of reasoning, text,
+and tool calls. Understanding the event pipeline is essential before modifying
+trace rendering.
+
+### Key files
+
+| File | Role |
+|---|---|
+| `apps/codex-forum/src/composables/useForumState.ts` | SSE event handling, checkpoint recording, activity state |
+| `apps/codex-forum/src/views/TopicView.vue` | `liveTurnItems` computed builds the interleaved live trace |
+| `apps/codex-forum/src/components/LiveAssistantTurn.vue` | Renders the live trace UI |
+| `apps/codex-forum/src/components/ToolElapsedTimer.vue` | Self-contained elapsed timer for running tools |
+| `apps/codex-forum/src/components/PostTracePanel.vue` | Renders saved "Trace History" after response completes |
+| `apps/codex-forum/src/components/ToolTimeline.vue` | Tool timeline with density/filter/burst grouping |
+| `apps/codex-forum/src/components/ToolTimelineEvent.vue` | Individual tool event in saved timeline |
+| `apps/codex-forum/src/lib/toolMiniView.ts` | Tool parsing: name detection, kind classification, detail extraction |
+| `apps/codex-forum/src/lib/toolTimeline.ts` | Timeline building: events, bursts, agent frames |
+| `apps/codex-forum/src/lib/reasoning.ts` | `parseReasoningSteps`: splits `**bold**`-delimited reasoning text |
+| `packages/server/src/echsBridge.ts` | Server-side: maps Pi events, creates tool runs, emits SSE, stores checkpoints |
+| `packages/server/src/streamBus.ts` | SSE event type registry |
+
+### Footguns to know before modifying trace code
+
+1. **Flush before checkpoint.** `reasoning_delta` and `assistant_delta` are rAF-buffered.
+   `tool_started` events process synchronously. Call `flushPendingDeltas()` before
+   recording any checkpoint or the text lengths will be stale.
+
+2. **Use `tool_started`, not `recentToolRuns`.** The `state` SSE event carries all
+   recent tools at once — there's no incremental tool-by-tool progression. Checkpoints
+   must be triggered by per-tool `tool_started` events.
+
+3. **Use `kind` for formatting, not tool names.** Pi tool names are capitalised
+   (`Bash`, `Read`). The `tool` DB column is normalised lowercase (`exec`, `read`).
+   The `command` column preserves the original. Branch on `kind` (from
+   `toolKindFromName`), and lowercase names before sub-type checks.
+
+4. **Timeout is seconds from Pi, milliseconds elsewhere.** `extractTimeoutMs`
+   handles both. Don't add new timeout extraction without checking units.
+
+5. **Elapsed timers must use client-relative time.** Server timestamps differ from
+   browser clocks. `ToolElapsedTimer` records `Date.now()` at mount and ticks from
+   there. Never use `Date.now() - serverTimestamp` for live countdown display.
+
+6. **`assistant_reset` fires once per dispatch, not per Pi turn.** A single reply
+   spans multiple Pi turns (think → tools → think → tools → final text). Don't add
+   mid-response resets.
+
+7. **`parseReasoningSteps` is positional, not temporal.** It splits on `**bold**`
+   markers. Adding text to an existing step's detail doesn't change the step count.
+   Checkpoints use raw text length, not step count.
+
+8. **Saved trace checkpoints are nullable.** Old data and imported sessions won't
+   have `reasoning_checkpoints_json`. Always handle the fallback path.
+
+See `docs/forum.md` § "Live trace and saved trace architecture" for the full event
+pipeline and checkpoint design.

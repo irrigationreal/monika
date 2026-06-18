@@ -760,12 +760,11 @@ test.describe('Robot UI (mocked)', () => {
 
     const draftPanel = page.locator('.vb-post--draft');
     await expect(draftPanel).toBeVisible();
-    await expect(draftPanel.locator('.vb-live-reasoning-title')).toContainText('Draft response');
-    await expect(draftPanel).toContainText('Search "search_query: robot activity"');
-    await expect(draftPanel).toContainText('ls -la');
-
-    await draftPanel.locator('.vb-live-reasoning-history-btn').click();
-    await expect(draftPanel.locator('.vb-live-reasoning-history-item')).toHaveCount(1);
+    // Reasoning steps render as inline trace items in the live turn
+    await expect(draftPanel.locator('.vb-live-turn-item--reasoning .vb-live-turn-title')).toContainText(['Draft response']);
+    // Tool runs render as trace items with human-readable titles
+    await expect(draftPanel.locator('.vb-live-turn-item--tool')).toHaveCount(2);
+    await expect(draftPanel).toContainText('List -la');
   });
 
   test('mention/off modes gate robot dispatch and block non-admin dashboard access', async ({ page }) => {

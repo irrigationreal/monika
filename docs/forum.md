@@ -92,7 +92,9 @@ Conversation records include `session_id` and `session_path`. Forum-supplied
 model/reasoning options are mapped to Pi `setModel()` / `setThinkingLevel()` using
 Pi model IDs directly, for example `codex/gpt-5.5`. The event stream maps Pi SDK
 events into forum-consumed turn, reasoning, tool, usage, completion, interrupt,
-and error events.
+and error events. The echsBridge adds a `tool_started` event (not from agentd) to
+the SSE bus when each tool run is created, enabling per-tool checkpoint recording
+for trace interleaving. See "Live trace and saved trace architecture" below.
 
 ## Forum integration state
 
@@ -267,3 +269,144 @@ Preferred outbound upload flow:
   normal attachments, and strips the reference line from the rendered body.
 - Legacy `[artifact ...]` markers are also consumed only as standalone lines
   outside fenced code blocks.
+
+## Live trace and saved trace architecture
+
+The forum renders two views of agent activity during and after a response:
+
+- **Live trace**: real-time chronological timeline shown while the robot is
+  responding, rendered by `LiveAssistantTurn.vue` in `TopicView.vue`.
+- **Saved trace** ("Trace History"): collapsible post-completion view rendered by
+  `PostTracePanel.vue`, using data from the session inspector API.
+
+Both aim to show reasoning, assistant text, and tool calls in chronological order,
+interleaved as they actually occurred during the agent loop.
+
+### Pi agent loop event flow
+
+A single forum reply triggers a Pi agent loop that may span multiple LLM turns:
+
+```
+Turn 1: thinking → text → tool_call(s)
+  ↓ tools execute
+Turn 2: thinking → text → tool_call(s)
+  ↓ tools execute
+Turn N: thinking → text (final) → assistant_message
+```
+
+Each turn is one LLM call. Within a turn, the model produces thinking tokens,
+then visible text tokens, then tool-use blocks. Tools execute after the full
+response, then the next turn begins with tool results.
+
+### SSE event pipeline
+
+```
+Pi SDK events → agentd (server.mjs) → echsBridge (forum server) → SSE bus → browser
+```
+
+Key events emitted to the browser SSE stream:
+
+| Event | Source | Purpose |
+|---|---|---|
+| `state` | echsBridge.emitState() | Full robot state snapshot including `recentToolRuns` (last 10) |
+| `reasoning_delta` | Pi thinking_delta → agentd → echsBridge | Incremental reasoning/thinking text |
+| `assistant_delta` | Pi text_delta → agentd turn_delta → echsBridge | Incremental visible assistant text |
+| `tool_started` | echsBridge item_started handler | Per-tool notification when a tool run is created |
+| `assistant_reset` | echsBridge.dispatchUserMessage() | Fires once at the start of a new user message dispatch |
+| `assistant_message` | echsBridge turn_completed handler | Response is done; final text committed as a post |
+
+### Live trace: checkpoint-based interleaving
+
+The live trace interleaves reasoning, assistant text, and tool cards using
+**checkpoints** — snapshots of accumulated text lengths at the moment each tool
+starts.
+
+**Recording checkpoints (client-side, `useForumState.ts`):**
+
+1. `reasoning_delta` and `assistant_delta` events accumulate text in
+   `reasoningDraft` and `assistantDraft` (buffered via `requestAnimationFrame`).
+2. When a `tool_started` SSE event arrives, `flushPendingDeltas()` synchronously
+   drains both buffers, then records:
+   - `reasoningCheckpoints.push(reasoningDraft.value.length)`
+   - `assistantCheckpoints.push(assistantDraft.value.length)`
+3. `state` events update tool run data via `syncToolActivity`.
+
+**Rendering (`liveTurnItems` computed in `TopicView.vue`):**
+
+The computed iterates tools in order. For each tool, it slices both the reasoning
+draft and assistant draft at the corresponding checkpoint boundaries, parses/renders
+each segment, and emits it before the tool card. Remaining text after the last
+tool appears at the end.
+
+### Saved trace: server-side checkpoints
+
+The same checkpoint concept is stored server-side for post-completion rendering.
+
+**Recording (echsBridge):**
+
+When `item_started` fires for a tool, the echsBridge records
+`ctx.reasoningSummary.length` into `ctx.reasoningCheckpoints`. These are persisted
+to the `plans.reasoning_checkpoints_json` column when the plan is updated.
+
+**Rendering (`PostTracePanel.vue`):**
+
+If `reasoningCheckpoints` is available from the session inspector API, the
+component splits the raw plan text at checkpoint boundaries, parses each segment
+with `parseReasoningSteps`, and interleaves with tools sorted by `startedAt`.
+Falls back to legacy layout (reasoning at top, tools below) when checkpoints are
+absent (pre-existing data or imported sessions).
+
+### Critical footguns
+
+**SSE event timing and buffering:**
+`reasoning_delta` and `assistant_delta` events are buffered client-side via
+`requestAnimationFrame` for performance. `state` events (carrying tool run data)
+process synchronously. If you record checkpoints during `state` processing without
+flushing the pending delta buffers first, the checkpoints will reflect stale text
+lengths. Always call `flushPendingDeltas()` before recording any checkpoint.
+
+**`recentToolRuns` batching:**
+The `state` event's `recentToolRuns` array contains ALL recent tools (last 10 from
+DB), not incremental additions. By the time the first `state` event reaches the
+client, all tools from the current turn may already exist. This is why checkpoints
+must be triggered by `tool_started` events (which fire per-tool in real time), not
+by detecting new tools in `recentToolRuns`.
+
+**`assistant_reset` scope:**
+`assistant_reset` fires once per user message dispatch, NOT between Pi turns within
+the same agent loop. It clears `assistantDraft`, `reasoningDraft`, and all activity
+state. Do not add additional reset points without understanding that a single forum
+reply spans multiple Pi turns.
+
+**Plan ID transitions:**
+The `state` event handler checks for `activePlanId !== null && nextPlanId === null`
+to detect turn boundaries. This fires when the server clears the current plan
+(e.g., at message dispatch). It resets drafts and activity. Be careful not to
+create spurious null transitions that would wipe accumulated trace state mid-response.
+
+**Clock skew for remote users:**
+Server timestamps (`tool.startedAt`) may differ from browser `Date.now()` by
+seconds. The `ToolElapsedTimer` component uses client-relative timing (records
+`Date.now()` at mount, ticks from there) to avoid this. Never compute live elapsed
+time as `Date.now() - serverTimestamp` — it breaks for any user not on the same
+host.
+
+**Tool name casing:**
+Pi sends tool names capitalised (`Bash`, `Read`, `Edit`, `Grep`, `Write`). The
+echsBridge normalises these to lowercase categories (`exec`, `read`, `apply_patch`)
+in the `tool` column. But the `command` column preserves the original Pi name
+(e.g., `Bash {"command":"...","timeout":15}`). Client-side formatting must use
+`kind` (already normalised) for branching, not tool name string comparisons, and
+must lowercase names before sub-type matching (e.g., `lowerName === 'write_stdin'`).
+
+**Timeout units:**
+Pi's Bash tool sends `timeout` in seconds (`"Timeout in seconds"`). Other tools
+may use `timeoutMs` (milliseconds). The `extractTimeoutMs` function handles both
+conventions: `timeoutMs`/`timeout_ms` → kept as-is; `timeout` → multiplied by
+1000. Do not assume a single unit convention.
+
+**Imported/synced sessions:**
+Sessions imported from Pi JSONL files via `importPiSessions.ts` or background sync
+will not have reasoning checkpoints (the column is nullable). `PostTracePanel`
+falls back gracefully. Checkpoint reconstruction from JSONL data is theoretically
+possible but not implemented.
