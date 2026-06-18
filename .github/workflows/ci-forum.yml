@@ -1,10 +1,10 @@
-# Forum test CI — run source-level forum tests when forum code changes.
+# Forum CI — test the forum application and build the forum image.
 #
-# This follows the same branch-protection pattern as the container workflows:
-# a changes job decides whether work is needed, the test job may fail, and a
+# This follows the branch-protection pattern used by Vesper: a changes job
+# decides whether the expensive job should run, the build job can fail, and a
 # stable checks job is the required branch-rule gate.
 
-name: CI / Forum Tests
+name: CI / Forum
 
 on:
   pull_request:
@@ -12,14 +12,14 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ci-forum-tests-${{ github.ref }}
+  group: ci-forum-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  forum-tests-changes:
+  forum-changes:
     runs-on: ubuntu-latest
     outputs:
       changed: ${{ steps.check.outputs.changed }}
@@ -41,6 +41,8 @@ jobs:
           fi
 
           if git diff --name-only "$BASE" "${{ github.sha }}" -- \
+              'services/forum/Containerfile' \
+              'services/forum/.dockerignore' \
               'services/forum/package.json' \
               'services/forum/pnpm-lock.yaml' \
               'services/forum/pnpm-workspace.yaml' \
@@ -48,16 +50,17 @@ jobs:
               'services/forum/packages/' \
               'services/forum/tsconfig.json' \
               'tests/forum/' \
-              '.github/workflows/ci-forum-tests.yml' \
+              '.github/workflows/ci-forum.yml' \
+              '.github/workflows/image-forum.yml' \
             | grep -qvE '\.md$'; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
-  forum-tests:
-    needs: forum-tests-changes
-    if: needs.forum-tests-changes.outputs.changed == 'true'
+  forum-build:
+    needs: forum-changes
+    if: needs.forum-changes.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -77,17 +80,21 @@ jobs:
       - name: Run forum E2E tests
         run: tests/forum/e2e.sh
 
-  forum-tests-checks:
+      - name: Build forum image
+        run: docker build -f services/forum/Containerfile -t monika-forum-test ./services/forum
+
+  # Gate job — branch protection should require this check.
+  forum-checks:
     if: always()
-    needs: [forum-tests-changes, forum-tests]
+    needs: [forum-changes, forum-build]
     runs-on: ubuntu-latest
     steps:
       - name: Evaluate result
         shell: bash
         run: |
-          if [ "${{ needs.forum-tests.result }}" = "failure" ] || [ "${{ needs.forum-tests.result }}" = "cancelled" ]; then
-            echo "Forum tests failed or were cancelled"
+          if [ "${{ needs.forum-build.result }}" = "failure" ] || [ "${{ needs.forum-build.result }}" = "cancelled" ]; then
+            echo "Forum build/tests failed or were cancelled"
             exit 1
           fi
 
-          echo "Forum tests passed or were skipped (no relevant changes)"
+          echo "Forum build/tests passed or were skipped (no relevant changes)"
