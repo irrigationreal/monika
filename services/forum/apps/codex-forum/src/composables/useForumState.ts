@@ -113,12 +113,16 @@ let liveTurnStartedAt: number | null = null;
 // parsed reasoning steps existed at that moment. This lets liveTurnItems
 // interleave reasoning blocks between tool cards chronologically.
 const reasoningCheckpoints = ref<number[]>([]);
+// Same idea for assistant text: snapshot assistantDraft.length when each tool appears
+// so mid-turn text segments can be interleaved with tool cards.
+const assistantCheckpoints = ref<number[]>([]);
 
 function resetRobotActivity(): void {
   reasoningSteps.value = [];
   activityLog.value = [];
   reasoningStepCount = 0;
   reasoningCheckpoints.value = [];
+  assistantCheckpoints.value = [];
 }
 
 function syncReasoningActivity(statusOverride?: { status: 'running' | 'done' }): void {
@@ -130,14 +134,17 @@ function syncReasoningActivity(statusOverride?: { status: 'running' | 'done' }):
 /** Flush any buffered reasoning deltas into reasoningDraft and re-parse steps.
  *  Must be called before recording reasoning checkpoints so the step count
  *  reflects all reasoning that arrived before the tool event. */
-function flushPendingReasoning(): void {
-  if (!pendingReasoningDelta) return;
-  reasoningDraft.value += pendingReasoningDelta;
-  pendingReasoningDelta = '';
-  syncReasoningActivity();
-  // If the rAF is pending only for reasoning (no assistant delta queued),
-  // cancel it since we just handled the reasoning flush synchronously.
-  if (flushHandle !== null && !pendingAssistantDelta) {
+function flushPendingDeltas(): void {
+  if (pendingReasoningDelta) {
+    reasoningDraft.value += pendingReasoningDelta;
+    pendingReasoningDelta = '';
+    syncReasoningActivity();
+  }
+  if (pendingAssistantDelta) {
+    assistantDraft.value += pendingAssistantDelta;
+    pendingAssistantDelta = '';
+  }
+  if (flushHandle !== null) {
     window.cancelAnimationFrame(flushHandle);
     flushHandle = null;
   }
@@ -159,10 +166,11 @@ function syncToolActivity(toolRuns: RobotStateDto['recentToolRuns']): void {
       existing.toolRun = run;
       continue;
     }
-    // Flush any buffered reasoning deltas so the checkpoint reflects all
-    // reasoning that arrived before this tool event.
-    flushPendingReasoning();
+    // Flush all buffered deltas so checkpoints reflect everything that
+    // arrived before this tool event.
+    flushPendingDeltas();
     reasoningCheckpoints.value = [...reasoningCheckpoints.value, reasoningSteps.value.length];
+    assistantCheckpoints.value = [...assistantCheckpoints.value, assistantDraft.value.length];
     activityLog.value.push({ type: 'tool_run', id, seq: 0, toolRun: run });
   }
 }
@@ -727,7 +735,7 @@ export function useForumState() {
       }
       activePlanId = nextPlanId;
       // Flush buffered reasoning before processing tools so checkpoints are accurate.
-      flushPendingReasoning();
+      flushPendingDeltas();
       syncToolActivity(payload.recentToolRuns);
       syncReasoningActivity();
     });
@@ -1270,6 +1278,7 @@ export function useForumState() {
     assistantDraft,
     reasoningSteps,
     reasoningCheckpoints,
+    assistantCheckpoints,
     activityLog,
     sessionInfo,
     sessionInspector,

@@ -265,16 +265,19 @@ const liveTurnItems = computed<LiveTurnItem[]>(() => {
     items.push({ id: 'status:activity', type: 'status', title: statusTitle, status: activity === 'error' ? 'error' : 'running' });
   }
 
-  // Build an interleaved timeline using reasoning checkpoints.
-  // Each checkpoint records how many reasoning steps existed when a tool first appeared.
-  // This lets us place reasoning blocks between the correct tool cards.
+  // Build an interleaved timeline using checkpoints.
+  // Reasoning checkpoints: how many parsed steps existed when each tool arrived.
+  // Assistant checkpoints: how many chars of assistantDraft existed when each tool arrived.
   const allSteps = state.reasoningSteps.value;
   const toolEvents = liveActivityEvents.value.filter(
     (e): e is Extract<RobotActivityEvent, { type: 'tool_run' }> => e.type === 'tool_run'
   );
-  const checkpoints = state.reasoningCheckpoints.value;
+  const rCheckpoints = state.reasoningCheckpoints.value;
+  const aCheckpoints = state.assistantCheckpoints.value;
+  const fullDraft = state.assistantDraft.value;
   const isIdle = activity === 'idle';
   let stepCursor = 0;
+  let textCursor = 0;
 
   function pushReasoningSlice(from: number, to: number): void {
     for (let i = from; i < to && i < allSteps.length; i++) {
@@ -291,11 +294,28 @@ const liveTurnItems = computed<LiveTurnItem[]>(() => {
     }
   }
 
+  function pushAssistantSlice(from: number, to: number, sliceId: string): void {
+    const slice = fullDraft.slice(from, to).trim();
+    if (!slice) return;
+    items.push({
+      id: sliceId,
+      type: 'assistant_text',
+      title: '',
+      status: 'done',
+      text: slice,
+    });
+  }
+
   for (let t = 0; t < toolEvents.length; t++) {
-    // Emit reasoning steps that existed before this tool appeared
-    const checkpoint = checkpoints[t] ?? allSteps.length;
-    pushReasoningSlice(stepCursor, checkpoint);
-    stepCursor = checkpoint;
+    // Emit reasoning steps that existed before this tool
+    const rCp = rCheckpoints[t] ?? allSteps.length;
+    pushReasoningSlice(stepCursor, rCp);
+    stepCursor = rCp;
+
+    // Emit assistant text that existed before this tool
+    const aCp = aCheckpoints[t] ?? fullDraft.length;
+    pushAssistantSlice(textCursor, aCp, `assistant:mid:${t}`);
+    textCursor = aCp;
 
     // Emit the tool card
     const tool = toolEvents[t].toolRun;
@@ -308,7 +328,7 @@ const liveTurnItems = computed<LiveTurnItem[]>(() => {
       type: 'tool',
       title: liveToolTitle(tool),
       status,
-      meta: [tool.tool, toolStatusLabel(tool), liveToolDurationLabel(tool), finishedTimeoutLabel].filter(Boolean).join(' · '),
+      meta: [tool.tool, toolStatusLabel(tool), liveToolDurationLabel(tool), finishedTimeoutLabel].filter(Boolean).join(' \u00b7 '),
       detail: liveToolDetail(tool),
       startedAt: tool.startedAt ?? null,
       timeoutMs: !tool.finishedAt ? toolTimeoutMs : null,
@@ -324,8 +344,10 @@ const liveTurnItems = computed<LiveTurnItem[]>(() => {
     items.push({ id: 'error:last-turn', type: 'error', title: 'Turn error', status: 'error', detail: lastError });
   }
 
-  if (state.assistantDraft.value.trim()) {
-    items.push({ id: 'assistant:live', type: 'assistant_text', title: 'Writing response', status: 'running', text: state.assistantDraft.value });
+  // Emit remaining assistant text after the last tool (the active tail)
+  const remainingText = fullDraft.slice(textCursor).trim();
+  if (remainingText) {
+    items.push({ id: 'assistant:live', type: 'assistant_text', title: '', status: 'running', text: remainingText });
   }
   return items;
 });
