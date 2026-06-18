@@ -33,6 +33,9 @@ type LiveTurnItem = {
   detail?: string | null;
   markdown?: string | null;
   text?: string | null;
+  startedAt?: string | null;
+  timeoutMs?: number | null;
+  finished?: boolean;
 };
 
 const { renderContent, renderBBCode } = useMarkdown();
@@ -62,8 +65,6 @@ const showInspectorTools = ref(false);
 const expandedInspectorTools = ref(new Set<string>());
 const showInspectorMessages = ref(false);
 const showScrollTop = ref(false);
-const liveTick = ref(0);
-let liveTickTimer: ReturnType<typeof setInterval> | null = null;
 const isReplying = ref(false);
 const isUploadingReply = ref(false);
 const replyFiles = ref<File[]>([]);
@@ -256,20 +257,6 @@ function liveToolDurationLabel(tool: ToolRunDto): string | null {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
-function liveToolTimeoutLabel(tool: ToolRunDto): string | null {
-  // Touch liveTick to force re-evaluation every second while tools are running
-  void liveTick.value;
-  const mini = toolMini(tool);
-  const timeoutMs = mini.meta.timeoutMs;
-  if (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs)) return null;
-  if (tool.finishedAt) return `timeout ${formatDuration(timeoutMs)}`;
-  if (!tool.startedAt) return `timeout ${formatDuration(timeoutMs)}`;
-  const started = new Date(tool.startedAt).getTime();
-  if (!Number.isFinite(started)) return `timeout ${formatDuration(timeoutMs)}`;
-  const elapsed = Math.max(0, Date.now() - started);
-  return `${formatDuration(elapsed)} / ${formatDuration(timeoutMs)}`;
-}
-
 const liveTurnItems = computed<LiveTurnItem[]>(() => {
   const items: LiveTurnItem[] = [];
   const activity = state.robotState.value?.activity ?? 'idle';
@@ -278,7 +265,8 @@ const liveTurnItems = computed<LiveTurnItem[]>(() => {
     items.push({ id: 'status:activity', type: 'status', title: statusTitle, status: activity === 'error' ? 'error' : 'running' });
   }
 
-  for (const event of liveActivityEvents.value) {
+  const sortedEvents = [...liveActivityEvents.value].sort((a, b) => a.seq - b.seq);
+  for (const event of sortedEvents) {
     if (event.type === 'reasoning_step') {
       items.push({
         id: event.id,
@@ -291,14 +279,19 @@ const liveTurnItems = computed<LiveTurnItem[]>(() => {
     }
     const tool = event.toolRun;
     const status = !tool.finishedAt ? 'running' : (toolExitCodeValue(tool) ?? 0) === 0 ? 'success' : 'error';
-    const timeoutLabel = liveToolTimeoutLabel(tool);
+    const mini = toolMini(tool);
+    const toolTimeoutMs = typeof mini.meta.timeoutMs === 'number' && Number.isFinite(mini.meta.timeoutMs) ? (mini.meta.timeoutMs as number) : null;
+    const finishedTimeoutLabel = (tool.finishedAt && toolTimeoutMs) ? `timeout ${formatDuration(toolTimeoutMs)}` : null;
     items.push({
       id: event.id,
       type: 'tool',
       title: liveToolTitle(tool),
       status,
-      meta: [tool.tool, toolStatusLabel(tool), liveToolDurationLabel(tool), timeoutLabel].filter(Boolean).join(' · '),
+      meta: [tool.tool, toolStatusLabel(tool), liveToolDurationLabel(tool), finishedTimeoutLabel].filter(Boolean).join(' · '),
       detail: liveToolDetail(tool),
+      startedAt: tool.startedAt ?? null,
+      timeoutMs: !tool.finishedAt ? toolTimeoutMs : null,
+      finished: Boolean(tool.finishedAt),
     });
   }
 
@@ -1379,23 +1372,12 @@ watch(
   { immediate: true }
 );
 
-// --- Elapsed timer tick for running tools ---
-watch(isRobotBusy, (busy) => {
-  if (busy && !liveTickTimer) {
-    liveTickTimer = setInterval(() => { liveTick.value += 1; }, 1000);
-  } else if (!busy && liveTickTimer) {
-    clearInterval(liveTickTimer);
-    liveTickTimer = null;
-  }
-}, { immediate: true });
-
 onMounted(() => {
   window.addEventListener('scroll', handleScroll);
 });
 
 onUnmounted(() => {
   state.closeStream();
-  if (liveTickTimer) { clearInterval(liveTickTimer); liveTickTimer = null; }
   window.removeEventListener('scroll', handleScroll);
 });
 </script>

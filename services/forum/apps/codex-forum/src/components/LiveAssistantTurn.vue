@@ -35,6 +35,12 @@
               <div v-if="item.type !== 'assistant_text'" class="vb-live-turn-item-head">
                 <span class="vb-live-turn-title">{{ item.title }}</span>
                 <span v-if="item.meta" class="vb-live-turn-meta">{{ item.meta }}</span>
+                <ToolElapsedTimer
+                  v-if="item.startedAt && item.timeoutMs"
+                  :startedAt="item.startedAt"
+                  :timeoutMs="item.timeoutMs"
+                  :finished="item.finished"
+                />
                 <button
                   v-if="hasDetails(item)"
                   class="vb-live-turn-toggle"
@@ -79,6 +85,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { useMarkdown } from '../composables/useMarkdown';
+import ToolElapsedTimer from './ToolElapsedTimer.vue';
 
 export type LiveTurnItem = {
   id: string;
@@ -89,6 +96,9 @@ export type LiveTurnItem = {
   detail?: string | null;
   markdown?: string | null;
   text?: string | null;
+  startedAt?: string | null;
+  timeoutMs?: number | null;
+  finished?: boolean;
 };
 
 const props = defineProps<{

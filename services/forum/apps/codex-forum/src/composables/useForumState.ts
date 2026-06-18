@@ -51,6 +51,7 @@ export type RobotActivityEvent =
   | {
       type: 'reasoning_step';
       id: string;
+      seq: number;
       title: string;
       detail: string | null;
       status: 'running' | 'done';
@@ -58,6 +59,7 @@ export type RobotActivityEvent =
   | {
       type: 'tool_run';
       id: string;
+      seq: number;
       toolRun: RobotStateDto['recentToolRuns'][number];
     };
 
@@ -107,13 +109,23 @@ let assistantMessagePending = false;
 let topicLoadCounter = 0;
 let topicHydrationEnabled = true;
 let liveTurnStartedAt: number | null = null;
-let reasoningSegmentBase = 0; // tracks ID offset for reasoning entries across tool boundaries
+let activitySeq = 0;
+let lastReasoningStepCount = 0;
+// Track how many tool events existed when the last reasoning sync ran,
+// so we can detect when new reasoning appears after new tools.
+let toolCountAtLastReasoningSync = 0;
 
 function resetRobotActivity(): void {
   reasoningSteps.value = [];
   activityLog.value = [];
   reasoningStepCount = 0;
-  reasoningSegmentBase = 0;
+  activitySeq = 0;
+  lastReasoningStepCount = 0;
+  toolCountAtLastReasoningSync = 0;
+}
+
+function currentToolCount(): number {
+  return activityLog.value.filter((e) => e.type === 'tool_run').length;
 }
 
 function syncReasoningActivity(statusOverride?: { status: 'running' | 'done' }): void {
@@ -127,35 +139,28 @@ function syncReasoningActivity(statusOverride?: { status: 'running' | 'done' }):
   const currentStatus: 'running' | 'done' =
     statusOverride?.status ?? (robotState.value?.activity === 'idle' ? 'done' : 'running');
   const lastIndex = parsed.length - 1;
+  const toolsNow = currentToolCount();
 
-  if (parsed.length < reasoningStepCount) {
-    // We do not expect the reasoning stream to shrink, but if it does, treat it as a reset.
+  if (parsed.length < lastReasoningStepCount) {
     activityLog.value = activityLog.value.filter((event) => event.type !== 'reasoning_step');
-    reasoningStepCount = 0;
-    reasoningSegmentBase = 0;
+    lastReasoningStepCount = 0;
+    toolCountAtLastReasoningSync = toolsNow;
   }
 
-  // If there are tool events after the last known reasoning step, bump the segment base
-  // so new reasoning steps get fresh IDs and appear after the tools.
-  if (parsed.length > reasoningStepCount && reasoningStepCount > 0) {
-    const lastReasoningId = `reasoning:${reasoningSegmentBase + reasoningStepCount - 1}`;
-    const lastReasoningIdx = activityLog.value.findIndex(
-      (event) => event.type === 'reasoning_step' && event.id === lastReasoningId
-    );
-    const hasToolAfterLastReasoning =
-      lastReasoningIdx >= 0 &&
-      activityLog.value.slice(lastReasoningIdx + 1).some((event) => event.type === 'tool_run');
-    if (hasToolAfterLastReasoning) {
-      // Advance the segment base so new steps get IDs that don't collide
-      // with existing entries, causing them to be appended at the end.
-      reasoningSegmentBase += reasoningStepCount;
-    }
+  // Detect if new reasoning steps appeared after new tools were added.
+  // If so, remove all old reasoning entries and re-add them all at the
+  // current tail so they appear after the tools.
+  const hasNewSteps = parsed.length > lastReasoningStepCount;
+  const hasNewTools = toolsNow > toolCountAtLastReasoningSync;
+  if (hasNewSteps && hasNewTools && lastReasoningStepCount > 0) {
+    activityLog.value = activityLog.value.filter((event) => event.type !== 'reasoning_step');
+    lastReasoningStepCount = 0;
   }
 
   for (let i = 0; i < parsed.length; i++) {
     const step = parsed[i];
     if (!step) continue;
-    const id = `reasoning:${String(reasoningSegmentBase + i)}`;
+    const id = `reasoning:${String(i)}`;
     const existing = activityLog.value.find((event) => event.type === 'reasoning_step' && event.id === id) as
       | Extract<RobotActivityEvent, { type: 'reasoning_step' }>
       | undefined;
@@ -169,6 +174,7 @@ function syncReasoningActivity(statusOverride?: { status: 'running' | 'done' }):
       activityLog.value.push({
         type: 'reasoning_step',
         id,
+        seq: activitySeq++,
         title: step.title,
         detail: step.detail,
         status,
@@ -176,24 +182,22 @@ function syncReasoningActivity(statusOverride?: { status: 'running' | 'done' }):
     }
   }
 
-  // Mark any extra stale reasoning events as done (shouldn't happen, but keeps UI sane).
+  // Mark older reasoning steps as done.
   for (const event of activityLog.value) {
     if (event.type !== 'reasoning_step') continue;
     const match = /^reasoning:(\d+)$/.exec(event.id);
     const idx = match ? Number(match[1]) : NaN;
     if (!Number.isFinite(idx)) continue;
-    // Only touch entries in the current segment
-    const segmentIdx = idx - reasoningSegmentBase;
-    if (segmentIdx >= 0 && segmentIdx < lastIndex) {
+    if (idx < lastIndex) {
       event.status = 'done';
     }
   }
 
-  reasoningStepCount = parsed.length;
+  lastReasoningStepCount = parsed.length;
+  toolCountAtLastReasoningSync = toolsNow;
 }
 
 function syncToolActivity(toolRuns: RobotStateDto['recentToolRuns']): void {
-  // toolRuns arrives newest-first from the API. Append new ones to the log in chronological order.
   const runsOldestFirst = toolRuns.slice().reverse();
 
   for (const run of runsOldestFirst) {
@@ -209,10 +213,9 @@ function syncToolActivity(toolRuns: RobotStateDto['recentToolRuns']): void {
       existing.toolRun = run;
       continue;
     }
-    activityLog.value.push({ type: 'tool_run', id, toolRun: run });
+    activityLog.value.push({ type: 'tool_run', id, seq: activitySeq++, toolRun: run });
   }
 }
-
 function getTopicActivityTime(topic: TopicDto): number {
   const iso = topic.lastPostAt ?? topic.updatedAt;
   return new Date(iso).getTime();
@@ -838,6 +841,12 @@ export function useForumState() {
         loadState(topicId),
         loadSessionInspector(),
       ]);
+      // assistant_message is authoritative — the turn is done. If the server
+      // state reload still shows busy (race with agentd transition), force idle
+      // locally so the live trace disappears.
+      if (robotState.value && robotState.value.activity !== 'idle') {
+        robotState.value = { ...robotState.value, activity: 'idle' };
+      }
     }
   }
 

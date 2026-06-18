@@ -2244,6 +2244,13 @@
   overflow-wrap: anywhere;
 }
 
+.vb-live-turn-elapsed {
+  color: var(--vb-muted, #8a8f98);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .vb-live-turn-toggle {
   margin-left: auto;
   border: 1px solid var(--vb-border-subtle, rgba(255, 255, 255, 0.18));
