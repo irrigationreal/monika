@@ -127,6 +127,22 @@ function syncReasoningActivity(statusOverride?: { status: 'running' | 'done' }):
   reasoningStepCount = parsed.length;
 }
 
+/** Flush any buffered reasoning deltas into reasoningDraft and re-parse steps.
+ *  Must be called before recording reasoning checkpoints so the step count
+ *  reflects all reasoning that arrived before the tool event. */
+function flushPendingReasoning(): void {
+  if (!pendingReasoningDelta) return;
+  reasoningDraft.value += pendingReasoningDelta;
+  pendingReasoningDelta = '';
+  syncReasoningActivity();
+  // If the rAF is pending only for reasoning (no assistant delta queued),
+  // cancel it since we just handled the reasoning flush synchronously.
+  if (flushHandle !== null && !pendingAssistantDelta) {
+    window.cancelAnimationFrame(flushHandle);
+    flushHandle = null;
+  }
+}
+
 function syncToolActivity(toolRuns: RobotStateDto['recentToolRuns']): void {
   const runsOldestFirst = toolRuns.slice().reverse();
 
@@ -143,8 +159,9 @@ function syncToolActivity(toolRuns: RobotStateDto['recentToolRuns']): void {
       existing.toolRun = run;
       continue;
     }
-    // Record how many reasoning steps exist right now — this checkpoint
-    // lets the UI know which reasoning happened before vs after this tool.
+    // Flush any buffered reasoning deltas so the checkpoint reflects all
+    // reasoning that arrived before this tool event.
+    flushPendingReasoning();
     reasoningCheckpoints.value = [...reasoningCheckpoints.value, reasoningSteps.value.length];
     activityLog.value.push({ type: 'tool_run', id, seq: 0, toolRun: run });
   }
@@ -709,8 +726,9 @@ export function useForumState() {
         resetRobotActivity();
       }
       activePlanId = nextPlanId;
+      // Flush buffered reasoning before processing tools so checkpoints are accurate.
+      flushPendingReasoning();
       syncToolActivity(payload.recentToolRuns);
-      // Update step statuses even if no new deltas arrive (e.g. when a turn completes).
       syncReasoningActivity();
     });
     stream.addEventListener('reasoning_delta', (event: MessageEvent<string>) => {
