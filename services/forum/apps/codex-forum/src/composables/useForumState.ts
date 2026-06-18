@@ -169,7 +169,7 @@ function syncToolActivity(toolRuns: RobotStateDto['recentToolRuns']): void {
     // Flush all buffered deltas so checkpoints reflect everything that
     // arrived before this tool event.
     flushPendingDeltas();
-    reasoningCheckpoints.value = [...reasoningCheckpoints.value, reasoningSteps.value.length];
+    reasoningCheckpoints.value = [...reasoningCheckpoints.value, reasoningDraft.value.length];
     assistantCheckpoints.value = [...assistantCheckpoints.value, assistantDraft.value.length];
     activityLog.value.push({ type: 'tool_run', id, seq: 0, toolRun: run });
   }
