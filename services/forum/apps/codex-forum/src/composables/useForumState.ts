@@ -109,92 +109,22 @@ let assistantMessagePending = false;
 let topicLoadCounter = 0;
 let topicHydrationEnabled = true;
 let liveTurnStartedAt: number | null = null;
-let activitySeq = 0;
-let lastReasoningStepCount = 0;
-// Track how many tool events existed when the last reasoning sync ran,
-// so we can detect when new reasoning appears after new tools.
-let toolCountAtLastReasoningSync = 0;
+// Reasoning checkpoints: when each tool event first appears, record how many
+// parsed reasoning steps existed at that moment. This lets liveTurnItems
+// interleave reasoning blocks between tool cards chronologically.
+const reasoningCheckpoints = ref<number[]>([]);
 
 function resetRobotActivity(): void {
   reasoningSteps.value = [];
   activityLog.value = [];
   reasoningStepCount = 0;
-  activitySeq = 0;
-  lastReasoningStepCount = 0;
-  toolCountAtLastReasoningSync = 0;
-}
-
-function currentToolCount(): number {
-  return activityLog.value.filter((e) => e.type === 'tool_run').length;
+  reasoningCheckpoints.value = [];
 }
 
 function syncReasoningActivity(statusOverride?: { status: 'running' | 'done' }): void {
   const parsed = parseReasoningSteps(reasoningDraft.value);
   reasoningSteps.value = parsed;
-
-  if (parsed.length === 0) {
-    return;
-  }
-
-  const currentStatus: 'running' | 'done' =
-    statusOverride?.status ?? (robotState.value?.activity === 'idle' ? 'done' : 'running');
-  const lastIndex = parsed.length - 1;
-  const toolsNow = currentToolCount();
-
-  if (parsed.length < lastReasoningStepCount) {
-    activityLog.value = activityLog.value.filter((event) => event.type !== 'reasoning_step');
-    lastReasoningStepCount = 0;
-    toolCountAtLastReasoningSync = toolsNow;
-  }
-
-  // Detect if new reasoning steps appeared after new tools were added.
-  // If so, remove all old reasoning entries and re-add them all at the
-  // current tail so they appear after the tools.
-  const hasNewSteps = parsed.length > lastReasoningStepCount;
-  const hasNewTools = toolsNow > toolCountAtLastReasoningSync;
-  if (hasNewSteps && hasNewTools && lastReasoningStepCount > 0) {
-    activityLog.value = activityLog.value.filter((event) => event.type !== 'reasoning_step');
-    lastReasoningStepCount = 0;
-  }
-
-  for (let i = 0; i < parsed.length; i++) {
-    const step = parsed[i];
-    if (!step) continue;
-    const id = `reasoning:${String(i)}`;
-    const existing = activityLog.value.find((event) => event.type === 'reasoning_step' && event.id === id) as
-      | Extract<RobotActivityEvent, { type: 'reasoning_step' }>
-      | undefined;
-    const status = i === lastIndex ? currentStatus : 'done';
-
-    if (existing) {
-      existing.title = step.title;
-      existing.detail = step.detail;
-      existing.status = status;
-    } else {
-      activityLog.value.push({
-        type: 'reasoning_step',
-        id,
-        seq: activitySeq++,
-        title: step.title,
-        detail: step.detail,
-        status,
-      });
-    }
-  }
-
-  // Mark older reasoning steps as done.
-  for (const event of activityLog.value) {
-    if (event.type !== 'reasoning_step') continue;
-    const match = /^reasoning:(\d+)$/.exec(event.id);
-    const idx = match ? Number(match[1]) : NaN;
-    if (!Number.isFinite(idx)) continue;
-    if (idx < lastIndex) {
-      event.status = 'done';
-    }
-  }
-
-  lastReasoningStepCount = parsed.length;
-  toolCountAtLastReasoningSync = toolsNow;
+  reasoningStepCount = parsed.length;
 }
 
 function syncToolActivity(toolRuns: RobotStateDto['recentToolRuns']): void {
@@ -213,7 +143,10 @@ function syncToolActivity(toolRuns: RobotStateDto['recentToolRuns']): void {
       existing.toolRun = run;
       continue;
     }
-    activityLog.value.push({ type: 'tool_run', id, seq: activitySeq++, toolRun: run });
+    // Record how many reasoning steps exist right now — this checkpoint
+    // lets the UI know which reasoning happened before vs after this tool.
+    reasoningCheckpoints.value = [...reasoningCheckpoints.value, reasoningSteps.value.length];
+    activityLog.value.push({ type: 'tool_run', id, seq: 0, toolRun: run });
   }
 }
 function getTopicActivityTime(topic: TopicDto): number {
@@ -1318,6 +1251,7 @@ export function useForumState() {
     reasoningDraft,
     assistantDraft,
     reasoningSteps,
+    reasoningCheckpoints,
     activityLog,
     sessionInfo,
     sessionInspector,

@@ -265,25 +265,46 @@ const liveTurnItems = computed<LiveTurnItem[]>(() => {
     items.push({ id: 'status:activity', type: 'status', title: statusTitle, status: activity === 'error' ? 'error' : 'running' });
   }
 
-  const sortedEvents = [...liveActivityEvents.value].sort((a, b) => a.seq - b.seq);
-  for (const event of sortedEvents) {
-    if (event.type === 'reasoning_step') {
+  // Build an interleaved timeline using reasoning checkpoints.
+  // Each checkpoint records how many reasoning steps existed when a tool first appeared.
+  // This lets us place reasoning blocks between the correct tool cards.
+  const allSteps = state.reasoningSteps.value;
+  const toolEvents = liveActivityEvents.value.filter(
+    (e): e is Extract<RobotActivityEvent, { type: 'tool_run' }> => e.type === 'tool_run'
+  );
+  const checkpoints = state.reasoningCheckpoints.value;
+  const isIdle = activity === 'idle';
+  let stepCursor = 0;
+
+  function pushReasoningSlice(from: number, to: number): void {
+    for (let i = from; i < to && i < allSteps.length; i++) {
+      const step = allSteps[i];
+      if (!step) continue;
+      const isLast = i === allSteps.length - 1;
       items.push({
-        id: event.id,
+        id: `reasoning:${i}`,
         type: 'reasoning',
-        title: event.title || 'Thinking',
-        status: event.status === 'running' ? 'running' : 'done',
-        markdown: event.detail ?? null,
+        title: step.title || 'Thinking',
+        status: isLast && !isIdle ? 'running' : 'done',
+        markdown: step.detail ?? null,
       });
-      continue;
     }
-    const tool = event.toolRun;
+  }
+
+  for (let t = 0; t < toolEvents.length; t++) {
+    // Emit reasoning steps that existed before this tool appeared
+    const checkpoint = checkpoints[t] ?? allSteps.length;
+    pushReasoningSlice(stepCursor, checkpoint);
+    stepCursor = checkpoint;
+
+    // Emit the tool card
+    const tool = toolEvents[t].toolRun;
     const status = !tool.finishedAt ? 'running' : (toolExitCodeValue(tool) ?? 0) === 0 ? 'success' : 'error';
     const mini = toolMini(tool);
     const toolTimeoutMs = typeof mini.meta.timeoutMs === 'number' && Number.isFinite(mini.meta.timeoutMs) ? (mini.meta.timeoutMs as number) : null;
     const finishedTimeoutLabel = (tool.finishedAt && toolTimeoutMs) ? `timeout ${formatDuration(toolTimeoutMs)}` : null;
     items.push({
-      id: event.id,
+      id: toolEvents[t].id,
       type: 'tool',
       title: liveToolTitle(tool),
       status,
@@ -294,6 +315,9 @@ const liveTurnItems = computed<LiveTurnItem[]>(() => {
       finished: Boolean(tool.finishedAt),
     });
   }
+
+  // Emit any remaining reasoning steps after the last tool
+  pushReasoningSlice(stepCursor, allSteps.length);
 
   const lastError = state.robotState.value?.lastTurnError?.message ?? null;
   if (lastError && activity === 'error') {
