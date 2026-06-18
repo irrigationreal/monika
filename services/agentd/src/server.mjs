@@ -549,8 +549,18 @@ function handlePiEvent(conv, event) {
           id: callId,
           call_id: callId,
           name: event.toolName ?? 'tool',
-          arguments: event.input ?? event.arguments ?? null,
+          arguments: event.args ?? event.input ?? event.arguments ?? null,
         },
+      });
+      break;
+    }
+    case 'tool_execution_update': {
+      const callId = event.toolCallId ?? event.id ?? randomUUID();
+      emit(conv, 'tool_updated', {
+        call_id: callId,
+        tool_name: event.toolName ?? 'tool',
+        args: event.args ?? null,
+        partial_result: event.partialResult ?? null,
       });
       break;
     }
@@ -558,7 +568,10 @@ function handlePiEvent(conv, event) {
       const callId = event.toolCallId ?? event.id ?? randomUUID();
       emit(conv, 'tool_completed', {
         call_id: callId,
+        tool_name: event.toolName ?? 'tool',
+        args: event.args ?? null,
         result: event.result ?? event.output ?? event.error ?? null,
+        is_error: Boolean(event.isError),
       });
       break;
     }

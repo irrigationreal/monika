@@ -1679,6 +1679,23 @@ export class EchsBridge {
         }
         break;
       }
+      case 'tool_updated': {
+        const data = event.data as any;
+        const callId = data?.call_id ?? data?.callId;
+        if (callId) {
+          const toolRunId = this.toolRunByCallId.get(callId);
+          if (toolRunId) {
+            const rawSummary = summarizeToolResult(data?.partial_result ?? data?.partialResult);
+            const { text: summary, redacted } = redactSensitiveData(rawSummary);
+            this.store.updateToolRun(toolRunId, {
+              output_summary: truncateText(summary, 1000),
+              redactions_applied: redacted ? 1 : 0,
+            });
+            this.emitState(ctx.topicId);
+          }
+        }
+        break;
+      }
       case 'tool_completed': {
         const data = event.data as any;
         const callId = data?.call_id ?? data?.callId;
@@ -1689,8 +1706,8 @@ export class EchsBridge {
             const { text: summary, redacted } = redactSensitiveData(rawSummary);
             this.store.updateToolRun(toolRunId, {
               finished_at: new Date().toISOString(),
-              exit_code: null,
-              output_summary: truncateText(summary, 500),
+              exit_code: data?.is_error || data?.isError ? 1 : null,
+              output_summary: truncateText(summary, 1000),
               redactions_applied: redacted ? 1 : 0,
             });
             // Detect spawn_agent completion by checking for agent_id in result
@@ -2612,8 +2629,10 @@ function summarizeToolResult(result: unknown): string {
 
 function mapEchsToolName(name: string): string {
   const key = name.toLowerCase();
-  if (['exec_command', 'write_stdin', 'shell', 'local_shell'].includes(key)) return 'exec';
-  if (key === 'apply_patch') return 'apply_patch';
+  if (['exec_command', 'write_stdin', 'shell', 'local_shell', 'bash', 'exec'].includes(key)) return 'exec';
+  if (key === 'apply_patch' || key === 'edit' || key === 'write') return 'apply_patch';
+  if (['read', 'grep', 'find', 'ls', 'read_file', 'grep_files', 'list_dir'].includes(key)) return 'read';
+  if (['web_search', 'websearch', 'browser', 'open', 'click', 'screenshot'].includes(key)) return 'web';
   if (key.startsWith('forum_')) return 'mcp';
   if (['spawn_agent', 'send_input', 'wait', 'close_agent', 'blackboard_read', 'blackboard_write'].includes(key))
     return 'agent';

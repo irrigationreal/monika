@@ -144,6 +144,7 @@ export function registerRobotRoutes({
         ? toolRuns.map((run) => ({
             id: run.id,
             tool: run.tool,
+            parentPostId: run.parent_post_id,
             startedAt: run.started_at,
             finishedAt: run.finished_at,
             exitCode: run.exit_code,

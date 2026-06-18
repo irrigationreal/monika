@@ -2027,7 +2027,7 @@ export class ForumStore {
         input.tool,
         input.parentPostId ?? null,
         now,
-        now,
+        null,
         null,
         input.command ?? null,
         null,
