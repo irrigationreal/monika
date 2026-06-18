@@ -470,8 +470,11 @@ async function conversationFromRuntime(runtime, cwd) {
     createdAt: Date.now(),
     lastActivityAt: Date.now(),
     subscribers: new Set(),
+    piSubscribers: new Set(),
     history: [],
+    piHistory: [],
     eventSeq: 0,
+    piEventSeq: 0,
     current: null,
     unsubscribe: null,
   };
@@ -522,7 +525,42 @@ function emit(conv, event, data) {
   for (const res of conv.subscribers) res.write(wire);
 }
 
+function emitPi(conv, event, data) {
+  conv.lastActivityAt = Date.now();
+  const packet = { id: `${++conv.piEventSeq}`, event, data };
+  conv.piHistory.push(packet);
+  if (conv.piHistory.length > 1000) conv.piHistory.shift();
+  const wire = `id: ${packet.id}\nevent: ${packet.event}\ndata: ${JSON.stringify(packet.data)}\n\n`;
+  for (const res of conv.piSubscribers) res.write(wire);
+}
+
+function sanitizePiEvent(event) {
+  if (event.type === 'message_update') {
+    return {
+      type: event.type,
+      assistantMessageEvent: event.assistantMessageEvent ?? null,
+    };
+  }
+  if (event.type === 'tool_execution_start') {
+    return { type: event.type, toolCallId: event.toolCallId, toolName: event.toolName, args: event.args };
+  }
+  if (event.type === 'tool_execution_update') {
+    return { type: event.type, toolCallId: event.toolCallId, toolName: event.toolName, partialResult: event.partialResult };
+  }
+  if (event.type === 'tool_execution_end') {
+    return { type: event.type, toolCallId: event.toolCallId, toolName: event.toolName, result: event.result, isError: event.isError };
+  }
+  if (event.type === 'turn_end') {
+    return { type: event.type, message: event.message, toolResults: event.toolResults ?? [] };
+  }
+  if (event.type === 'agent_end') {
+    return { type: event.type, usage: extractUsage(event.messages), text: extractLastAssistantText(event.messages) };
+  }
+  return event;
+}
+
 function handlePiEvent(conv, event) {
+  emitPi(conv, event.type, sanitizePiEvent(event));
   switch (event.type) {
     case 'agent_start': {
       const messageId = randomUUID();
@@ -551,6 +589,15 @@ function handlePiEvent(conv, event) {
           name: event.toolName ?? 'tool',
           arguments: event.input ?? event.arguments ?? null,
         },
+      });
+      break;
+    }
+    case 'tool_execution_update': {
+      const callId = event.toolCallId ?? event.id ?? randomUUID();
+      emit(conv, 'tool_update', {
+        call_id: callId,
+        tool_name: event.toolName ?? 'tool',
+        partial_result: event.partialResult ?? null,
       });
       break;
     }
@@ -1054,6 +1101,17 @@ const server = http.createServer(async (req, res) => {
         res.write(': connected\n\n');
         conv.subscribers.add(res);
         req.on('close', () => conv.subscribers.delete(res));
+        return;
+      }
+      if (method === 'GET' && tail === 'pi-events') {
+        res.writeHead(200, {
+          'content-type': 'text/event-stream; charset=utf-8',
+          'cache-control': 'no-cache, no-transform',
+          connection: 'keep-alive',
+        });
+        res.write(': connected\n\n');
+        conv.piSubscribers.add(res);
+        req.on('close', () => conv.piSubscribers.delete(res));
         return;
       }
       if (method === 'POST' && tail === 'messages') {
