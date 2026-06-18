@@ -28,6 +28,7 @@ BACKUP_DIR="${MONIKA_DEPLOY_BACKUP_DIR:-$ROOT/runtime/backups/redeploy}"
 BACKUP_ZSTD_LEVEL="${MONIKA_DEPLOY_BACKUP_ZSTD_LEVEL:-3}"
 DOCKER_PRUNE_UNTIL="${MONIKA_DEPLOY_DOCKER_PRUNE_UNTIL:-168h}"
 REQUIRE_GIT_CURRENT="${MONIKA_DEPLOY_REQUIRE_GIT_CURRENT:-1}"
+SUDO_BIN="${MONIKA_DEPLOY_SUDO_BIN:-/run/wrappers/bin/sudo}"
 
 export MONIKA_IMAGE="${MONIKA_IMAGE:-ghcr.io/irrigationreal/monika:main}"
 export MONIKA_FORUM_IMAGE="${MONIKA_FORUM_IMAGE:-ghcr.io/irrigationreal/monika-forum:main}"
@@ -114,6 +115,16 @@ image_id() {
   docker image inspect -f '{{.Id}}' "$image" 2>/dev/null || true
 }
 
+run_as_backup_reader() {
+  if [ "$(id -u)" = "0" ]; then
+    "$@"
+  elif [ -x "$SUDO_BIN" ]; then
+    "$SUDO_BIN" -n env PATH="$PATH" "$@"
+  else
+    sudo -n env PATH="$PATH" "$@"
+  fi
+}
+
 pull_images() {
   docker compose -f "$COMPOSE_FILE" pull monika forum
 }
@@ -154,13 +165,14 @@ create_backup() {
 
   echo "creating backup: $archive"
   rm -f "$tmp"
-  tar \
+  run_as_backup_reader tar \
     --exclude="$repo_name/runtime/backups" \
     --exclude="$repo_name/out" \
     -I "$compressor" \
     -cf "$tmp" \
     -C "$repo_parent" \
     "$repo_name"
+  run_as_backup_reader chown "$(id -u):$(id -g)" "$tmp"
   zstd -t "$tmp" >/dev/null
   tar -tf "$tmp" >/dev/null
   mv "$tmp" "$archive"
