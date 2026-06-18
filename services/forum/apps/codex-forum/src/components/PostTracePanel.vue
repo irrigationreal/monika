@@ -70,70 +70,100 @@
 
         <!-- ═══ SAVED MODE: UNIFIED TRACE (reasoning + tools in one stream) ═══ -->
         <template v-if="!live">
-          <!-- Reasoning steps (collapsible if many) -->
-          <div v-if="latestStep" class="vb-trace-reasoning-inline">
-            <div v-if="olderSteps.length > 0" class="vb-trace-history">
-              <button class="vb-trace-history-toggle" type="button" @click="showHistory = !showHistory">
-                <span class="vb-live-turn-dot vb-live-turn-dot--success" style="font-size: 8px;">●</span>
-                <span class="vb-trace-dots">{{ showHistory ? '▼' : '•••' }}</span>
-                <span class="vb-trace-history-count">{{ olderSteps.length }} earlier reasoning step{{ olderSteps.length !== 1 ? 's' : '' }}</span>
-              </button>
-              <div v-if="showHistory" class="vb-trace-history-items">
+
+          <!-- === Interleaved mode (with checkpoints) === -->
+          <template v-if="hasCheckpoints">
+            <template v-for="item in interleavedItems" :key="item.type === 'reasoning' ? `seg-${item.segIdx}` : `tool-${item.toolIdx}`">
+              <!-- Reasoning segment -->
+              <div v-if="item.type === 'reasoning'" class="vb-trace-reasoning-inline">
                 <div
-                  v-for="(step, stepIdx) in olderSteps"
-                  :key="`saved-step-${stepIdx}`"
-                  class="vb-trace-history-item vb-trace-history-item--reasoning"
+                  v-for="(step, sIdx) in item.steps"
+                  :key="`interleaved-step-${item.segIdx}-${sIdx}`"
+                  class="vb-trace-latest vb-trace-latest--reasoning"
                 >
-                  <div class="vb-trace-history-row">
-                    <span class="vb-trace-history-bullet">○</span>
-                    <span class="vb-trace-history-title">{{ step.title }}</span>
-                    <button
-                      v-if="step.detail"
-                      type="button"
-                      class="vb-trace-history-expand"
-                      @click="toggleDetailExpand(stepIdx)"
-                    >
-                      {{ detailExpanded(stepIdx) ? 'Hide' : 'Show' }}
-                    </button>
+                  <div class="vb-trace-latest-row">
+                    <span class="vb-live-turn-dot vb-live-turn-dot--success" style="font-size: 8px;">●</span>
+                    <span class="vb-trace-latest-title">{{ step.title }}</span>
                   </div>
                   <div
-                    v-if="step.detail && detailExpanded(stepIdx)"
-                    class="vb-trace-history-detail vb-rendered-content"
+                    v-if="step.detail"
+                    class="vb-trace-latest-detail vb-rendered-content"
                     v-html="renderMarkdown(step.detail)"
                   ></div>
                 </div>
               </div>
-            </div>
-            <!-- Latest reasoning step -->
-            <div class="vb-trace-latest vb-trace-latest--reasoning">
-              <div class="vb-trace-latest-row">
-                <span class="vb-live-turn-dot vb-live-turn-dot--success" style="font-size: 8px;">●</span>
-                <span class="vb-trace-latest-title">{{ latestStep.title }}</span>
-              </div>
-              <div
-                v-if="latestStep.detail"
-                class="vb-trace-latest-detail vb-rendered-content"
-                v-html="renderMarkdown(latestStep.detail)"
-              ></div>
-            </div>
-          </div>
+              <!-- Single tool card -->
+              <ToolTimeline v-else-if="item.type === 'tool'" :tools="[item.tool]" :showHeader="false" />
+            </template>
+          </template>
 
-          <!-- Reasoning fallback (raw plan HTML) -->
-          <div v-else-if="reasoningFallbackHtml" class="vb-trace-reasoning-inline">
-            <div class="vb-trace-latest vb-trace-latest--reasoning">
-              <div class="vb-trace-latest-row">
-                <span class="vb-live-turn-dot vb-live-turn-dot--success" style="font-size: 8px;">●</span>
-                <span class="vb-trace-latest-title">Reasoning</span>
+          <!-- === Legacy mode (no checkpoints) === -->
+          <template v-else>
+            <!-- Reasoning steps (collapsible if many) -->
+            <div v-if="latestStep" class="vb-trace-reasoning-inline">
+              <div v-if="olderSteps.length > 0" class="vb-trace-history">
+                <button class="vb-trace-history-toggle" type="button" @click="showHistory = !showHistory">
+                  <span class="vb-live-turn-dot vb-live-turn-dot--success" style="font-size: 8px;">●</span>
+                  <span class="vb-trace-dots">{{ showHistory ? '▼' : '•••' }}</span>
+                  <span class="vb-trace-history-count">{{ olderSteps.length }} earlier reasoning step{{ olderSteps.length !== 1 ? 's' : '' }}</span>
+                </button>
+                <div v-if="showHistory" class="vb-trace-history-items">
+                  <div
+                    v-for="(step, stepIdx) in olderSteps"
+                    :key="`saved-step-${stepIdx}`"
+                    class="vb-trace-history-item vb-trace-history-item--reasoning"
+                  >
+                    <div class="vb-trace-history-row">
+                      <span class="vb-trace-history-bullet">○</span>
+                      <span class="vb-trace-history-title">{{ step.title }}</span>
+                      <button
+                        v-if="step.detail"
+                        type="button"
+                        class="vb-trace-history-expand"
+                        @click="toggleDetailExpand(stepIdx)"
+                      >
+                        {{ detailExpanded(stepIdx) ? 'Hide' : 'Show' }}
+                      </button>
+                    </div>
+                    <div
+                      v-if="step.detail && detailExpanded(stepIdx)"
+                      class="vb-trace-history-detail vb-rendered-content"
+                      v-html="renderMarkdown(step.detail)"
+                    ></div>
+                  </div>
+                </div>
               </div>
-              <div
-                class="vb-trace-latest-detail vb-rendered-content"
-                v-html="reasoningFallbackHtml"
-              ></div>
+              <!-- Latest reasoning step -->
+              <div class="vb-trace-latest vb-trace-latest--reasoning">
+                <div class="vb-trace-latest-row">
+                  <span class="vb-live-turn-dot vb-live-turn-dot--success" style="font-size: 8px;">●</span>
+                  <span class="vb-trace-latest-title">{{ latestStep.title }}</span>
+                </div>
+                <div
+                  v-if="latestStep.detail"
+                  class="vb-trace-latest-detail vb-rendered-content"
+                  v-html="renderMarkdown(latestStep.detail)"
+                ></div>
+              </div>
             </div>
-          </div>
 
-          <!-- Tools (directly in the stream, no section wrapper) -->
-          <ToolTimeline v-if="toolRuns.length > 0" :tools="toolRuns" />
+            <!-- Reasoning fallback (raw plan HTML) -->
+            <div v-else-if="reasoningFallbackHtml" class="vb-trace-reasoning-inline">
+              <div class="vb-trace-latest vb-trace-latest--reasoning">
+                <div class="vb-trace-latest-row">
+                  <span class="vb-live-turn-dot vb-live-turn-dot--success" style="font-size: 8px;">●</span>
+                  <span class="vb-trace-latest-title">Reasoning</span>
+                </div>
+                <div
+                  class="vb-trace-latest-detail vb-rendered-content"
+                  v-html="reasoningFallbackHtml"
+                ></div>
+              </div>
+            </div>
+
+            <!-- Tools (directly in the stream, no section wrapper) -->
+            <ToolTimeline v-if="toolRuns.length > 0" :tools="toolRuns" />
+          </template>
         </template>
 
       </div>
@@ -145,6 +175,7 @@
 import { computed, ref } from 'vue';
 import type { ToolRunDto } from '../lib/apiClient';
 import type { ReasoningStep } from '../lib/reasoning';
+import { parseReasoningSteps } from '../lib/reasoning';
 import { useMarkdown } from '../composables/useMarkdown';
 import DecryptText from './DecryptText.vue';
 import ToolTimeline from './ToolTimeline.vue';
@@ -169,6 +200,10 @@ const props = withDefaults(
     traceId: string;
     /** Topic id for attachment proxy URLs inside reasoning/tool detail markdown */
     topicId?: string | null;
+    /** Server-side reasoning checkpoints (character offsets into raw plan text at each tool start) */
+    reasoningCheckpoints?: number[] | null;
+    /** Raw plan text for checkpoint-based slicing (summary ?? content from plan) */
+    rawPlanText?: string | null;
   }>(),
   {
     reasoningFallbackHtml: null,
@@ -177,6 +212,8 @@ const props = withDefaults(
     live: false,
     active: false,
     topicId: null,
+    reasoningCheckpoints: null,
+    rawPlanText: null,
   }
 );
 
@@ -196,6 +233,48 @@ const latestStep = computed(() => {
 const olderSteps = computed(() => {
   const steps = props.reasoningSteps;
   return steps.length > 1 ? steps.slice(0, -1) : [];
+});
+
+// --- Interleaved segments for checkpoint-based saved mode ---
+type InterleavedItem = 
+  | { type: 'reasoning'; steps: ReasoningStep[]; segIdx: number }
+  | { type: 'tool'; tool: ToolRunDto; toolIdx: number };
+
+const hasCheckpoints = computed(() => {
+  return !!(props.reasoningCheckpoints && props.reasoningCheckpoints.length > 0 && props.rawPlanText);
+});
+
+const interleavedItems = computed<InterleavedItem[]>(() => {
+  if (!hasCheckpoints.value || !props.rawPlanText || !props.reasoningCheckpoints) return [];
+  const checkpoints = props.reasoningCheckpoints;
+  const raw = props.rawPlanText;
+  const sortedTools = [...props.toolRuns].sort((a, b) => (a.startedAt ?? '').localeCompare(b.startedAt ?? ''));
+  const items: InterleavedItem[] = [];
+  let cursor = 0;
+
+  for (let t = 0; t < sortedTools.length; t++) {
+    const cp = t < checkpoints.length ? checkpoints[t] : raw.length;
+    const segment = raw.slice(cursor, cp).trim();
+    if (segment) {
+      const steps = parseReasoningSteps(segment);
+      if (steps.length > 0) {
+        items.push({ type: 'reasoning', steps, segIdx: t });
+      }
+    }
+    cursor = cp;
+    items.push({ type: 'tool', tool: sortedTools[t], toolIdx: t });
+  }
+
+  // Remaining reasoning after last tool
+  const tail = raw.slice(cursor).trim();
+  if (tail) {
+    const steps = parseReasoningSteps(tail);
+    if (steps.length > 0) {
+      items.push({ type: 'reasoning', steps, segIdx: sortedTools.length });
+    }
+  }
+
+  return items;
 });
 
 // --- Helpers ---

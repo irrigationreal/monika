@@ -1838,6 +1838,8 @@ onUnmounted(() => {
                 :toolRuns="toolRunsForPost(post)"
                 :traceId="post.id"
                 :topicId="routeTopicId"
+                :reasoningCheckpoints="planForPost(post)?.reasoningCheckpoints ?? null"
+                :rawPlanText="planForPost(post)?.summary ?? planForPost(post)?.content ?? null"
               />
 
               <div class="vb-post-heading">
@@ -1969,6 +1971,8 @@ onUnmounted(() => {
                 :toolRuns="toolRunsForPost(post)"
                 :traceId="post.id"
                 :topicId="routeTopicId"
+                :reasoningCheckpoints="planForPost(post)?.reasoningCheckpoints ?? null"
+                :rawPlanText="planForPost(post)?.summary ?? planForPost(post)?.content ?? null"
               />
               <div class="vb-post-heading">
                 <span>{{ state.selectedTopic.value?.title }}</span>

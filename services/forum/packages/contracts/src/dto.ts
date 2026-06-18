@@ -391,6 +391,7 @@ export interface PlanDto {
   content: string;
   summary?: string | null;
   parentPostId?: string | null;
+  reasoningCheckpoints?: number[] | null;
   visibility: 'public' | 'internal' | 'private';
   createdAt: string;
   updatedAt: string;

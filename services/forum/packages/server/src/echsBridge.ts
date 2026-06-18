@@ -417,6 +417,8 @@ interface ThreadContext {
   activeSubagents: Map<string, { task: string; startedAt: number }>;
   /** Timestamp of last SSE event received (including keepalives). */
   lastStreamEventAt: number | null;
+  /** Character offsets into reasoningSummary recorded at each tool start. */
+  reasoningCheckpoints: number[];
 }
 
 interface PlanContext {
@@ -761,6 +763,7 @@ export class EchsBridge {
         totalOutputTokens: 0,
         activeSubagents: new Map(),
         lastStreamEventAt: null,
+        reasoningCheckpoints: [],
       });
       await this.ensureSubscribed(threadId);
       // Update stale last_dispatched_post_id if missing.
@@ -1438,6 +1441,7 @@ export class EchsBridge {
         totalOutputTokens: existingCtx?.totalOutputTokens ?? 0,
         activeSubagents: existingCtx?.activeSubagents ?? new Map(),
         lastStreamEventAt: existingCtx?.lastStreamEventAt ?? null,
+        reasoningCheckpoints: [],
       };
       this.threadMap.set(threadId, threadCtx);
 
@@ -1672,6 +1676,8 @@ export class EchsBridge {
             type: 'tool_started',
             data: { toolRunId: toolRun.id, tool, callId: callId ?? null },
           });
+          // Record a server-side reasoning checkpoint for saved-trace interleaving
+          ctx.reasoningCheckpoints.push(ctx.reasoningSummary.length);
           if (ctx.currentTurnId !== null) {
             this.store.upsertRobotState({
               topicId: ctx.topicId,
@@ -1911,7 +1917,7 @@ export class EchsBridge {
     };
   }
 
-  private upsertPlanForSummary(planContext: PlanContext, summary: string, preferredPlanId?: string | null): string {
+  private upsertPlanForSummary(planContext: PlanContext, summary: string, preferredPlanId?: string | null, reasoningCheckpoints?: number[] | null): string {
     const parentPostId = planContext.parentPostId ?? null;
     let plan = preferredPlanId ? this.store.getPlan(preferredPlanId) : null;
     if (plan && parentPostId && plan.parent_post_id !== parentPostId) {
@@ -1936,7 +1942,7 @@ export class EchsBridge {
       });
       return created.id;
     }
-    this.store.updatePlan(plan.id, summary, summary);
+    this.store.updatePlan(plan.id, summary, summary, reasoningCheckpoints);
     return plan.id;
   }
 
@@ -1964,7 +1970,7 @@ export class EchsBridge {
       sessionId: ctx.sessionId,
       parentPostId: ctx.lastUserPostId ?? null,
     };
-    const planId = this.upsertPlanForSummary(planContext, summary, ctx.planId);
+    const planId = this.upsertPlanForSummary(planContext, summary, ctx.planId, ctx.reasoningCheckpoints.length > 0 ? ctx.reasoningCheckpoints : null);
     ctx.planId = planId;
     this.upsertRobotStateForPlan(planContext, planId, {
       activity: 'thinking',
@@ -2337,7 +2343,7 @@ export class EchsBridge {
     if (ctx) {
       ctx.reasoningSummary = summary;
     }
-    const planId = this.upsertPlanForSummary(planContext, summary, ctx?.planId ?? null);
+    const planId = this.upsertPlanForSummary(planContext, summary, ctx?.planId ?? null, ctx?.reasoningCheckpoints?.length ? ctx.reasoningCheckpoints : null);
     if (ctx) {
       ctx.planId = planId;
     }
