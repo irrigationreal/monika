@@ -1665,6 +1665,13 @@ export class EchsBridge {
           if (callId) {
             this.toolRunByCallId.set(callId, toolRun.id);
           }
+          // Notify the client that a new tool started — this arrives before
+          // the state event and lets the client record checkpoints for
+          // reasoning/text interleaving.
+          this.bus.emit(ctx.topicId, {
+            type: 'tool_started',
+            data: { toolRunId: toolRun.id, tool, callId: callId ?? null },
+          });
           if (ctx.currentTurnId !== null) {
             this.store.upsertRobotState({
               topicId: ctx.topicId,

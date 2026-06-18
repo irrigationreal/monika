@@ -169,8 +169,6 @@ function syncToolActivity(toolRuns: RobotStateDto['recentToolRuns']): void {
     // Flush all buffered deltas so checkpoints reflect everything that
     // arrived before this tool event.
     flushPendingDeltas();
-    reasoningCheckpoints.value = [...reasoningCheckpoints.value, reasoningDraft.value.length];
-    assistantCheckpoints.value = [...assistantCheckpoints.value, assistantDraft.value.length];
     activityLog.value.push({ type: 'tool_run', id, seq: 0, toolRun: run });
   }
 }
@@ -738,6 +736,15 @@ export function useForumState() {
       flushPendingDeltas();
       syncToolActivity(payload.recentToolRuns);
       syncReasoningActivity();
+    });
+    stream.addEventListener('tool_started', () => {
+      // A new tool just started on the server. Record checkpoints NOW,
+      // before the state event arrives with the tool in recentToolRuns.
+      // This is the only reliable moment to snapshot draft lengths because
+      // by the time the state event arrives, multiple tools may already exist.
+      flushPendingDeltas();
+      reasoningCheckpoints.value = [...reasoningCheckpoints.value, reasoningDraft.value.length];
+      assistantCheckpoints.value = [...assistantCheckpoints.value, assistantDraft.value.length];
     });
     stream.addEventListener('reasoning_delta', (event: MessageEvent<string>) => {
       const payload = JSON.parse(event.data) as { delta: string };
