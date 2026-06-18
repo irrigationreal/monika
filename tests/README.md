@@ -38,7 +38,10 @@ The script verifies:
 2. memstore creates its Unix socket;
 3. agentd answers `/healthz`;
 4. `pi --version` works inside the container;
-5. agentd can create and close a Pi conversation without sending an LLM prompt.
+5. agentd can create a Pi conversation without sending an LLM prompt;
+6. agentd quiescence reports the loaded idle conversation and deploy drain closes it;
+7. `scripts/deploy-if-safe --backup-only` can create and verify an isolated runtime capsule backup through a mock forum quiescence endpoint;
+8. the container stops cleanly on SIGTERM.
 
 The smoke test deliberately does **not** call a real model provider. Provider
 canaries belong in a separate trusted-branch workflow because they require

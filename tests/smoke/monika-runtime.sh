@@ -28,6 +28,9 @@ CONTAINER_NAME="${MONIKA_SMOKE_CONTAINER:-monika-smoke-$$}"
 AGENTD_CONTAINER_PORT="7724"
 MEMSTORE_SOCKET="/tmp/memstore.sock"
 MEMSTORE_DATA_DIR="/data/memstore"
+SMOKE_TMP_DIR=""
+MOCK_FORUM_PID=""
+CONTAINER_STOPPED=0
 
 section() {
   if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
@@ -52,6 +55,13 @@ cleanup() {
     section "${CONTAINER_NAME} logs"
     docker logs "$CONTAINER_NAME" 2>/dev/null || true
     endsection
+  fi
+  if [ -n "$MOCK_FORUM_PID" ]; then
+    kill "$MOCK_FORUM_PID" >/dev/null 2>&1 || true
+    wait "$MOCK_FORUM_PID" >/dev/null 2>&1 || true
+  fi
+  if [ -n "$SMOKE_TMP_DIR" ]; then
+    rm -rf "$SMOKE_TMP_DIR"
   fi
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
   exit "$status"
@@ -161,12 +171,123 @@ console.log(`  cwd: ${conversation.cwd ?? '/tmp'}`);
 console.log(`  model: ${conversation.model ?? 'unknown'}`);
 console.log(`  session: ${conversation.session_path ?? '(not reported)'}`);
 
-const closed = await request('POST', `/v1/conversations/${conversationId}/close`, {});
-if (closed.ok !== true) {
-  throw new Error(`conversation close failed: ${JSON.stringify(closed)}`);
+const loaded = await request('GET', '/v1/admin/quiescence');
+if (loaded.status === 'blocked') {
+  throw new Error(`agentd unexpectedly blocked before drain: ${JSON.stringify(loaded)}`);
 }
-console.log('✓ conversation closed cleanly');
+if ((loaded.loaded_conversations ?? 0) < 1) {
+  throw new Error(`agentd did not report the loaded idle conversation: ${JSON.stringify(loaded)}`);
+}
+console.log(`✓ quiescence reports loaded idle conversation: status=${loaded.status}, loaded=${loaded.loaded_conversations}`);
+
+const drained = await request('POST', '/v1/admin/drain', { timeout_ms: 30_000 });
+if (drained.ok !== true) {
+  throw new Error(`agentd drain failed: ${JSON.stringify(drained)}`);
+}
+console.log(`✓ agentd drain completed: status=${drained.status ?? 'unknown'}`);
+
+const afterDrain = await request('GET', '/v1/admin/quiescence');
+if (afterDrain.status !== 'safe_to_stop') {
+  throw new Error(`agentd not safe to stop after drain: ${JSON.stringify(afterDrain)}`);
+}
+if ((afterDrain.loaded_conversations ?? 0) !== 0) {
+  throw new Error(`agentd still has loaded conversations after drain: ${JSON.stringify(afterDrain)}`);
+}
+console.log('✓ agentd quiescence safe after drain');
 NODE_SMOKE
+endsection
+
+section "Redeploy backup smoke"
+SMOKE_TMP_DIR="$(mktemp -d)"
+SMOKE_DEPLOY_ROOT="$SMOKE_TMP_DIR/deploy-root"
+MOCK_FORUM_PORT_FILE="$SMOKE_TMP_DIR/mock-forum-port"
+mkdir -p \
+  "$SMOKE_DEPLOY_ROOT/runtime/data" \
+  "$SMOKE_DEPLOY_ROOT/runtime/secrets" \
+  "$SMOKE_DEPLOY_ROOT/runtime/backups/redeploy" \
+  "$SMOKE_DEPLOY_ROOT/out"
+cat >"$SMOKE_DEPLOY_ROOT/compose.yaml" <<'COMPOSE_SMOKE'
+services:
+  monika:
+    image: monika-smoke
+  forum:
+    image: forum-smoke
+COMPOSE_SMOKE
+printf 'secret-for-backup-smoke\n' >"$SMOKE_DEPLOY_ROOT/runtime/secrets/example.env"
+printf 'excluded-backup-seed\n' >"$SMOKE_DEPLOY_ROOT/runtime/backups/redeploy/seed.txt"
+printf 'excluded-output\n' >"$SMOKE_DEPLOY_ROOT/out/generated.txt"
+
+MOCK_FORUM_PORT_FILE="$MOCK_FORUM_PORT_FILE" node <<'NODE_FORUM' &
+const fs = require('node:fs');
+const http = require('node:http');
+
+const portFile = process.env.MOCK_FORUM_PORT_FILE;
+const server = http.createServer((req, res) => {
+  if (req.method === 'GET' && req.url === '/api/deploy/quiescence') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ safeToStop: true, blockers: [] }));
+    return;
+  }
+  res.writeHead(404, { 'content-type': 'application/json' });
+  res.end(JSON.stringify({ error: 'not_found' }));
+});
+server.listen(0, '127.0.0.1', () => {
+  fs.writeFileSync(portFile, String(server.address().port));
+});
+process.on('SIGTERM', () => server.close(() => process.exit(0)));
+NODE_FORUM
+MOCK_FORUM_PID=$!
+for _ in {1..50}; do
+  if [ -s "$MOCK_FORUM_PORT_FILE" ]; then
+    break
+  fi
+  sleep 0.1
+done
+if [ ! -s "$MOCK_FORUM_PORT_FILE" ]; then
+  echo "mock forum did not start"
+  exit 1
+fi
+MOCK_FORUM_PORT="$(cat "$MOCK_FORUM_PORT_FILE")"
+
+MONIKA_DEPLOY_ROOT="$SMOKE_DEPLOY_ROOT" \
+MONIKA_DEPLOY_BACKUP_DIR="$SMOKE_DEPLOY_ROOT/runtime/backups/redeploy" \
+MONIKA_DEPLOY_REQUIRE_GIT_CURRENT=0 \
+MONIKA_DEPLOY_BACKUP_COMPRESSION=gzip \
+MONIKA_AGENTD_BASE_URL="http://127.0.0.1:${AGENTD_PORT}" \
+MONIKA_FORUM_BASE_URL="http://127.0.0.1:${MOCK_FORUM_PORT}/api" \
+./scripts/deploy-if-safe --backup-only
+
+mapfile -t archives < <(find "$SMOKE_DEPLOY_ROOT/runtime/backups/redeploy" -maxdepth 1 -type f -name 'monika-redeploy-*.tar.gz' | sort)
+if [ "${#archives[@]}" -ne 1 ]; then
+  printf 'expected exactly one gzip redeploy archive, found %s\n' "${#archives[@]}"
+  find "$SMOKE_DEPLOY_ROOT/runtime/backups/redeploy" -maxdepth 1 -type f -print
+  exit 1
+fi
+gzip -t "${archives[0]}"
+tar -tf "${archives[0]}" >"$SMOKE_TMP_DIR/archive-list.txt"
+grep -qx 'deploy-root/compose.yaml' "$SMOKE_TMP_DIR/archive-list.txt"
+grep -qx 'deploy-root/runtime/secrets/example.env' "$SMOKE_TMP_DIR/archive-list.txt"
+if grep -q 'deploy-root/runtime/backups/' "$SMOKE_TMP_DIR/archive-list.txt"; then
+  echo "archive unexpectedly includes runtime/backups"
+  exit 1
+fi
+if grep -q 'deploy-root/out/' "$SMOKE_TMP_DIR/archive-list.txt"; then
+  echo "archive unexpectedly includes out/"
+  exit 1
+fi
+pass "deploy-if-safe backup-only created verified gzip archive"
+info "archive: ${archives[0]}"
+endsection
+
+section "Clean shutdown"
+docker stop --time 30 "$CONTAINER_NAME" >/dev/null
+CONTAINER_STOPPED=1
+EXIT_CODE="$(docker inspect -f '{{.State.ExitCode}}' "$CONTAINER_NAME")"
+if [ "$EXIT_CODE" != "0" ]; then
+  echo "Expected clean container shutdown exit code 0, got $EXIT_CODE"
+  exit 1
+fi
+pass "container stopped cleanly with exit code 0"
 endsection
 
 echo "Monika runtime smoke test passed."
