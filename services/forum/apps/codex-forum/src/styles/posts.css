@@ -973,6 +973,17 @@
   }
 }
 
+
+.vb-trace-reasoning-inline {
+  margin-bottom: 8px;
+}
+
+.vb-trace-latest-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
 .vb-trace-latest--reasoning {
   background: var(--bg-surface);
   border: 1px solid var(--border-secondary);

@@ -68,76 +68,73 @@
           </div>
         </div>
 
-        <!-- ═══ SAVED MODE REASONING (parsed steps) ═══ -->
-        <div v-else-if="!live && latestStep" class="vb-trace-section">
-          <div class="vb-trace-section-header">
-            <span class="vb-live-turn-dot vb-live-turn-dot--success">●</span>
-            <span>Reasoning</span>
-          </div>
-          <!-- Older steps expandable -->
-          <div v-if="olderSteps.length > 0" class="vb-trace-history">
-            <button class="vb-trace-history-toggle" type="button" @click="showHistory = !showHistory">
-              <span class="vb-trace-dots">{{ showHistory ? '▼' : '•••' }}</span>
-              <span class="vb-trace-history-count">{{ olderSteps.length }} earlier</span>
-            </button>
-            <div v-if="showHistory" class="vb-trace-history-items">
-              <div
-                v-for="(step, stepIdx) in olderSteps"
-                :key="`saved-step-${stepIdx}`"
-                class="vb-trace-history-item vb-trace-history-item--reasoning"
-              >
-                <div class="vb-trace-history-row">
-                  <span class="vb-trace-history-bullet">○</span>
-                  <span class="vb-trace-history-title">{{ step.title }}</span>
-                  <button
-                    v-if="step.detail"
-                    type="button"
-                    class="vb-trace-history-expand"
-                    @click="toggleDetailExpand(stepIdx)"
-                  >
-                    {{ detailExpanded(stepIdx) ? 'Hide' : 'Show' }}
-                  </button>
-                </div>
+        <!-- ═══ SAVED MODE: UNIFIED TRACE (reasoning + tools in one stream) ═══ -->
+        <template v-if="!live">
+          <!-- Reasoning steps (collapsible if many) -->
+          <div v-if="latestStep" class="vb-trace-reasoning-inline">
+            <div v-if="olderSteps.length > 0" class="vb-trace-history">
+              <button class="vb-trace-history-toggle" type="button" @click="showHistory = !showHistory">
+                <span class="vb-live-turn-dot vb-live-turn-dot--success" style="font-size: 8px;">●</span>
+                <span class="vb-trace-dots">{{ showHistory ? '▼' : '•••' }}</span>
+                <span class="vb-trace-history-count">{{ olderSteps.length }} earlier reasoning step{{ olderSteps.length !== 1 ? 's' : '' }}</span>
+              </button>
+              <div v-if="showHistory" class="vb-trace-history-items">
                 <div
-                  v-if="step.detail && detailExpanded(stepIdx)"
-                  class="vb-trace-history-detail vb-rendered-content"
-                  v-html="renderMarkdown(step.detail)"
-                ></div>
+                  v-for="(step, stepIdx) in olderSteps"
+                  :key="`saved-step-${stepIdx}`"
+                  class="vb-trace-history-item vb-trace-history-item--reasoning"
+                >
+                  <div class="vb-trace-history-row">
+                    <span class="vb-trace-history-bullet">○</span>
+                    <span class="vb-trace-history-title">{{ step.title }}</span>
+                    <button
+                      v-if="step.detail"
+                      type="button"
+                      class="vb-trace-history-expand"
+                      @click="toggleDetailExpand(stepIdx)"
+                    >
+                      {{ detailExpanded(stepIdx) ? 'Hide' : 'Show' }}
+                    </button>
+                  </div>
+                  <div
+                    v-if="step.detail && detailExpanded(stepIdx)"
+                    class="vb-trace-history-detail vb-rendered-content"
+                    v-html="renderMarkdown(step.detail)"
+                  ></div>
+                </div>
               </div>
             </div>
+            <!-- Latest reasoning step -->
+            <div class="vb-trace-latest vb-trace-latest--reasoning">
+              <div class="vb-trace-latest-row">
+                <span class="vb-live-turn-dot vb-live-turn-dot--success" style="font-size: 8px;">●</span>
+                <span class="vb-trace-latest-title">{{ latestStep.title }}</span>
+              </div>
+              <div
+                v-if="latestStep.detail"
+                class="vb-trace-latest-detail vb-rendered-content"
+                v-html="renderMarkdown(latestStep.detail)"
+              ></div>
+            </div>
           </div>
-          <!-- Latest reasoning step -->
-          <div class="vb-trace-latest vb-trace-latest--reasoning">
-            <div class="vb-trace-latest-title">{{ latestStep.title }}</div>
-            <div
-              v-if="latestStep.detail"
-              class="vb-trace-latest-detail vb-rendered-content"
-              v-html="renderMarkdown(latestStep.detail)"
-            ></div>
-          </div>
-        </div>
 
-        <!-- ═══ SAVED MODE REASONING (fallback — raw plan HTML) ═══ -->
-        <div v-else-if="!live && reasoningFallbackHtml" class="vb-trace-section">
-          <div class="vb-trace-section-header">
-            <span class="vb-live-turn-dot vb-live-turn-dot--success">●</span>
-            <span>Reasoning</span>
+          <!-- Reasoning fallback (raw plan HTML) -->
+          <div v-else-if="reasoningFallbackHtml" class="vb-trace-reasoning-inline">
+            <div class="vb-trace-latest vb-trace-latest--reasoning">
+              <div class="vb-trace-latest-row">
+                <span class="vb-live-turn-dot vb-live-turn-dot--success" style="font-size: 8px;">●</span>
+                <span class="vb-trace-latest-title">Reasoning</span>
+              </div>
+              <div
+                class="vb-trace-latest-detail vb-rendered-content"
+                v-html="reasoningFallbackHtml"
+              ></div>
+            </div>
           </div>
-          <div
-            class="vb-trace-latest vb-trace-latest--reasoning vb-rendered-content"
-            v-html="reasoningFallbackHtml"
-          ></div>
-        </div>
 
-        <!-- ═══ TOOLS SECTION (both modes) ═══ -->
-        <div v-if="toolRuns.length > 0" class="vb-trace-section">
-          <div class="vb-trace-section-header">
-            <span class="vb-live-turn-dot vb-live-turn-dot--success">●</span>
-            <span>Tools</span>
-            <span class="vb-trace-section-count">{{ toolRuns.length }}</span>
-          </div>
-          <ToolTimeline :tools="toolRuns" />
-        </div>
+          <!-- Tools (directly in the stream, no section wrapper) -->
+          <ToolTimeline v-if="toolRuns.length > 0" :tools="toolRuns" />
+        </template>
 
       </div>
     </div>
