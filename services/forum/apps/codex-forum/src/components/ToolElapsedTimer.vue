@@ -3,10 +3,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 
 const props = defineProps<{
-  /** ISO timestamp when the tool started */
+  /** ISO timestamp when the tool started (server time) */
   startedAt: string;
   /** Configured timeout in milliseconds (from tool input) */
   timeoutMs: number;
@@ -15,16 +15,29 @@ const props = defineProps<{
 }>();
 
 const tick = ref(0);
+const mountedAt = ref(0);
 let timer: ReturnType<typeof setInterval> | null = null;
 
+function startTimer(): void {
+  if (timer) return;
+  mountedAt.value = Date.now();
+  tick.value = 0;
+  timer = setInterval(() => { tick.value += 1; }, 1000);
+}
+
+function stopTimer(): void {
+  if (timer) { clearInterval(timer); timer = null; }
+}
+
 onMounted(() => {
-  if (!props.finished) {
-    timer = setInterval(() => { tick.value += 1; }, 1000);
-  }
+  if (!props.finished) startTimer();
 });
 
-onUnmounted(() => {
-  if (timer) { clearInterval(timer); timer = null; }
+onUnmounted(() => { stopTimer(); });
+
+// Stop ticking if the tool finishes while we're mounted
+watch(() => props.finished, (fin) => {
+  if (fin) stopTimer();
 });
 
 function fmt(ms: number): string {
@@ -38,12 +51,16 @@ function fmt(ms: number): string {
 
 const label = computed(() => {
   void tick.value; // reactive dependency for ticking
-  const started = new Date(props.startedAt).getTime();
-  if (!Number.isFinite(started)) return `timeout ${fmt(props.timeoutMs)}`;
   if (props.finished) return `timeout ${fmt(props.timeoutMs)}`;
-  const elapsed = Math.max(0, Date.now() - started);
+
+  // Use client-relative timing: tick from when we first saw the tool.
+  // This avoids clock skew between server and browser — the timer ticks
+  // smoothly regardless of whether the clocks agree on absolute time.
+  const clientElapsed = mountedAt.value > 0
+    ? Math.max(0, Date.now() - mountedAt.value)
+    : 0;
   // Quantize to whole seconds for clean display
-  const elapsedSec = Math.floor(elapsed / 1000) * 1000;
+  const elapsedSec = Math.floor(clientElapsed / 1000) * 1000;
   return `${fmt(elapsedSec)} / ${fmt(props.timeoutMs)}`;
 });
 </script>
