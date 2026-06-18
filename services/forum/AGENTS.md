@@ -8,6 +8,10 @@ The forum remains a UI/API/projection layer. It must not embed Pi and must not
 talk directly to memstore. It talks to Monika through `agentd` using
 `MONIKA_AGENTD_BASE_URL`.
 
+Repo-level operating rules, live checkout/worktree discipline, container restart
+safety, and autodeploy policy live in the root `AGENTS.md`. Do not duplicate or
+override them here.
+
 Primary packages:
 - `@irrigationreal/codex-forum-core`
 - `@irrigationreal/codex-forum-contracts`

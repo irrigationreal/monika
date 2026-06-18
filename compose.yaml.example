@@ -21,6 +21,10 @@ services:
     stop_grace_period: 10m
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    ports:
+      # Host-side deployment automation uses agentd's quiescence/drain APIs.
+      # Bind to loopback only; agentd is not a public HTTP service.
+      - "127.0.0.1:${MONIKA_AGENTD_PORT:-7724}:7724"
     volumes:
       - ./runtime/data:/data
       - ./runtime/persona:/app/.pi/stateful-memory
