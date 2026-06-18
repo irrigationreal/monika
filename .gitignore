@@ -7,6 +7,7 @@ node_modules/
 /runtime/
 /compose.yaml
 /runner-runtime/
+/.codex-forum/
 
 # Local forum taxonomy/runtime configuration. Commit docs/examples/*.json instead.
 /runtime/forum/taxonomy*.json
