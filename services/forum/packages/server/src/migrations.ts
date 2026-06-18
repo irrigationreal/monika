@@ -1165,6 +1165,54 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 29,
+    name: 'assistant-turn-projection',
+    up: (db) => {
+      db.exec(`
+        create table if not exists assistant_turns (
+          id text primary key,
+          topic_id text not null,
+          session_id text not null,
+          parent_post_id text,
+          final_post_id text,
+          status text not null,
+          activity text,
+          model text,
+          reasoning_effort text,
+          draft_text text,
+          reasoning_text text,
+          error_message text,
+          started_at text not null,
+          updated_at text not null,
+          finished_at text,
+          foreign key (topic_id) references topics(id),
+          foreign key (session_id) references sessions(id),
+          foreign key (parent_post_id) references posts(id),
+          foreign key (final_post_id) references posts(id)
+        );
+        create index if not exists idx_assistant_turns_topic_updated on assistant_turns(topic_id, updated_at desc);
+        create index if not exists idx_assistant_turns_session_updated on assistant_turns(session_id, updated_at desc);
+        create index if not exists idx_assistant_turns_final_post on assistant_turns(final_post_id);
+
+        create table if not exists turn_events (
+          id text primary key,
+          turn_id text not null,
+          topic_id text not null,
+          seq integer not null,
+          type text not null,
+          visibility text not null,
+          payload_json text,
+          created_at text not null,
+          foreign key (turn_id) references assistant_turns(id),
+          foreign key (topic_id) references topics(id),
+          unique (turn_id, seq)
+        );
+        create index if not exists idx_turn_events_topic_created on turn_events(topic_id, created_at desc);
+        create index if not exists idx_turn_events_turn_seq on turn_events(turn_id, seq);
+      `);
+    },
+  },
 ];
 
 export const SCHEMA_VERSION: number = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;

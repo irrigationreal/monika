@@ -1,5 +1,6 @@
 import type {
   AccessRuleDto,
+  AssistantTurnDto,
   AdminCancelDeployOnFinishResponseDto,
   AdminDeployOnFinishResponseDto,
   AdminDeployResponseDto,
@@ -62,6 +63,7 @@ import type {
   SessionDto,
   SessionInspectorDto,
   ToolRunDto,
+  TurnEventDto,
   TopicDto,
   TopicMoveDto,
   UpdatePrivateEmailResponseDto,
@@ -85,6 +87,7 @@ import { BrowserTokenStorage, MemoryTokenStorage, type TokenStorage } from './st
 
 export type {
   AccessRuleDto,
+  AssistantTurnDto,
   AdminCancelDeployOnFinishResponseDto,
   AdminDeployOnFinishResponseDto,
   AdminDeployResponseDto,
@@ -147,6 +150,7 @@ export type {
   SessionDto,
   SessionInspectorDto,
   ToolRunDto,
+  TurnEventDto,
   TopicDto,
   TopicMoveDto,
   UpdatePrivateEmailResponseDto,
@@ -762,6 +766,14 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
       if (opts?.view) params.set('view', opts.view);
       const suffix = params.toString() ? `?${params.toString()}` : '';
       return json<RobotStateDto | null>(`/topics/${topicId}/state${suffix}`);
+    },
+    getCurrentAssistantTurn: (topicId: string) => json<AssistantTurnDto | null>(`/topics/${topicId}/turns/current`),
+    listTurnEvents: (turnId: string, opts?: { after?: number; limit?: number }) => {
+      const params = new URLSearchParams();
+      if (opts?.after !== undefined) params.set('after', String(opts.after));
+      if (opts?.limit !== undefined) params.set('limit', String(opts.limit));
+      const suffix = params.toString() ? `?${params.toString()}` : '';
+      return json<{ items: TurnEventDto[] }>(`/turns/${turnId}/events${suffix}`);
     },
     getTopicAutoRun: (topicId: string) => json<TopicAutoRunDto>(`/topics/${topicId}/auto-run`),
     updateTopicAutoRun: (

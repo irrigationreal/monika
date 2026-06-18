@@ -1618,6 +1618,25 @@ export class EchsBridge {
         const data = event.data as any;
         ctx.currentTurnId = data?.message_id ?? data?.messageId ?? ctx.currentTurnId;
         ctx.turnStartedAt = Date.now();
+        if (ctx.currentTurnId) {
+          this.store.upsertAssistantTurn({
+            id: ctx.currentTurnId,
+            topicId: ctx.topicId,
+            sessionId: ctx.sessionId,
+            parentPostId: ctx.turnParentPostId ?? ctx.lastUserPostId,
+            status: 'running',
+            activity: 'thinking',
+            model: ctx.model,
+            reasoningEffort: ctx.reasoningEffort,
+          });
+          this.store.appendTurnEvent({
+            turnId: ctx.currentTurnId,
+            topicId: ctx.topicId,
+            type: 'turn_started',
+            payload: { thread_id: threadId, parent_post_id: ctx.turnParentPostId ?? ctx.lastUserPostId },
+            visibility: 'public',
+          });
+        }
         this.activeTurnThreads.add(threadId);
         this.store.upsertRobotState({
           topicId: ctx.topicId,
@@ -1633,6 +1652,15 @@ export class EchsBridge {
       case 'turn_delta': {
         const data = event.data as any;
         if (data?.content) {
+          if (ctx.currentTurnId) {
+            this.store.upsertAssistantTurn({
+              id: ctx.currentTurnId,
+              topicId: ctx.topicId,
+              sessionId: ctx.sessionId,
+              appendDraftDelta: data.content,
+              activity: 'thinking',
+            });
+          }
           this.bus.emit(ctx.topicId, { type: 'assistant_delta', data: { delta: data.content } });
         }
         break;
@@ -1666,6 +1694,20 @@ export class EchsBridge {
             this.toolRunByCallId.set(callId, toolRun.id);
           }
           if (ctx.currentTurnId !== null) {
+            this.store.upsertAssistantTurn({
+              id: ctx.currentTurnId,
+              topicId: ctx.topicId,
+              sessionId: ctx.sessionId,
+              status: 'running',
+              activity: 'running_tools',
+            });
+            this.store.appendTurnEvent({
+              turnId: ctx.currentTurnId,
+              topicId: ctx.topicId,
+              type: 'tool_started',
+              payload: { call_id: callId, tool, command },
+              visibility: 'internal',
+            });
             this.store.upsertRobotState({
               topicId: ctx.topicId,
               sessionId: ctx.sessionId,
@@ -1676,6 +1718,25 @@ export class EchsBridge {
             });
             this.emitState(ctx.topicId);
           }
+        }
+        break;
+      }
+      case 'tool_update': {
+        const data = event.data as any;
+        const callId = data?.call_id ?? data?.callId;
+        if (callId) {
+          const toolRunId = this.toolRunByCallId.get(callId);
+          if (toolRunId) {
+            const rawSummary = summarizeToolResult(data?.partial_result ?? data?.partialResult);
+            const { text: summary, redacted } = redactSensitiveData(rawSummary);
+            this.store.updateToolRun(toolRunId, {
+              output_summary: truncateText(summary, 500),
+              redactions_applied: redacted ? 1 : 0,
+            });
+          }
+        }
+        if (ctx.currentTurnId) {
+          this.emitState(ctx.topicId);
         }
         break;
       }
@@ -1706,6 +1767,20 @@ export class EchsBridge {
           }
         }
         if (ctx.currentTurnId !== null) {
+          this.store.upsertAssistantTurn({
+            id: ctx.currentTurnId,
+            topicId: ctx.topicId,
+            sessionId: ctx.sessionId,
+            status: 'running',
+            activity: 'thinking',
+          });
+          this.store.appendTurnEvent({
+            turnId: ctx.currentTurnId,
+            topicId: ctx.topicId,
+            type: 'tool_completed',
+            payload: { call_id: callId ?? null },
+            visibility: 'internal',
+          });
           this.store.upsertRobotState({
             topicId: ctx.topicId,
             sessionId: ctx.sessionId,
@@ -1743,9 +1818,28 @@ export class EchsBridge {
       case 'turn_completed': {
         const turnStartedAt = ctx.turnStartedAt;
         const turnParentPostId = ctx.turnParentPostId;
+        const completedTurnId = ctx.currentTurnId;
         ctx.currentTurnId = null;
         ctx.turnStartedAt = null;
         void this.forceReasoningBackfill(threadId);
+        if (completedTurnId) {
+          const finishedAt = new Date().toISOString();
+          this.store.upsertAssistantTurn({
+            id: completedTurnId,
+            topicId: ctx.topicId,
+            sessionId: ctx.sessionId,
+            status: 'completed',
+            activity: 'idle',
+            finishedAt,
+          });
+          this.store.appendTurnEvent({
+            turnId: completedTurnId,
+            topicId: ctx.topicId,
+            type: 'turn_completed',
+            payload: { thread_id: threadId },
+            visibility: 'public',
+          });
+        }
         this.store.upsertRobotState({
           topicId: ctx.topicId,
           sessionId: ctx.sessionId,
@@ -1763,8 +1857,27 @@ export class EchsBridge {
         break;
       }
       case 'turn_interrupted': {
+        const interruptedTurnId = ctx.currentTurnId;
         ctx.currentTurnId = null;
         ctx.turnStartedAt = null;
+        if (interruptedTurnId) {
+          const finishedAt = new Date().toISOString();
+          this.store.upsertAssistantTurn({
+            id: interruptedTurnId,
+            topicId: ctx.topicId,
+            sessionId: ctx.sessionId,
+            status: 'interrupted',
+            activity: 'idle',
+            finishedAt,
+          });
+          this.store.appendTurnEvent({
+            turnId: interruptedTurnId,
+            topicId: ctx.topicId,
+            type: 'turn_interrupted',
+            payload: { thread_id: threadId },
+            visibility: 'public',
+          });
+        }
         this.store.upsertRobotState({
           topicId: ctx.topicId,
           sessionId: ctx.sessionId,
@@ -1818,6 +1931,25 @@ export class EchsBridge {
         const failedTurnId = ctx.currentTurnId;
         ctx.currentTurnId = null;
         ctx.turnStartedAt = null;
+        if (failedTurnId) {
+          const finishedAt = new Date().toISOString();
+          this.store.upsertAssistantTurn({
+            id: failedTurnId,
+            topicId: ctx.topicId,
+            sessionId: ctx.sessionId,
+            status: 'failed',
+            activity: 'error',
+            errorMessage: errorMsg,
+            finishedAt,
+          });
+          this.store.appendTurnEvent({
+            turnId: failedTurnId,
+            topicId: ctx.topicId,
+            type: 'turn_error',
+            payload: { error: errorMsg, thread_id: threadId },
+            visibility: 'public',
+          });
+        }
         this.store.setRobotTurnError(ctx.topicId, {
           message: errorMsg,
           postId: ctx.turnParentPostId ?? ctx.lastUserPostId ?? null,
@@ -1952,6 +2084,15 @@ export class EchsBridge {
   private handleReasoningDelta(ctx: ThreadContext, delta: string): void {
     ctx.reasoningSummary += delta;
     this.ensurePlanForSummary(ctx, ctx.reasoningSummary);
+    if (ctx.currentTurnId) {
+      this.store.upsertAssistantTurn({
+        id: ctx.currentTurnId,
+        topicId: ctx.topicId,
+        sessionId: ctx.sessionId,
+        appendReasoningDelta: delta,
+        activity: 'thinking',
+      });
+    }
     this.emitState(ctx.topicId);
     this.bus.emit(ctx.topicId, { type: 'reasoning_delta', data: { delta } });
   }
@@ -2037,6 +2178,7 @@ export class EchsBridge {
       return;
     }
     const plan = state.current_plan_id ? this.store.getPlan(state.current_plan_id) : null;
+    const currentTurn = this.store.getCurrentAssistantTurn(topicId);
     const toolRuns = this.store.listToolRuns(topicId, 10).map((run) => ({
       id: run.id,
       tool: run.tool,
@@ -2091,6 +2233,25 @@ export class EchsBridge {
               visibility: plan.visibility,
               createdAt: plan.created_at,
               updatedAt: plan.updated_at,
+            }
+          : null,
+        currentTurn: currentTurn
+          ? {
+              id: currentTurn.id,
+              topicId: currentTurn.topic_id,
+              sessionId: currentTurn.session_id,
+              parentPostId: currentTurn.parent_post_id,
+              finalPostId: currentTurn.final_post_id,
+              status: currentTurn.status,
+              activity: currentTurn.activity,
+              model: currentTurn.model,
+              reasoningEffort: currentTurn.reasoning_effort,
+              draftText: currentTurn.draft_text,
+              reasoningText: currentTurn.reasoning_text,
+              errorMessage: currentTurn.error_message,
+              startedAt: currentTurn.started_at,
+              updatedAt: currentTurn.updated_at,
+              finishedAt: currentTurn.finished_at,
             }
           : null,
         recentToolRuns: toolRuns,
@@ -2165,6 +2326,14 @@ export class EchsBridge {
           console.warn('Artifact attachment failed for post ' + duplicatePost.id + ': ' + (err instanceof Error ? err.message : String(err)));
         });
       }
+      if (ctx.currentTurnId) {
+        this.store.upsertAssistantTurn({
+          id: ctx.currentTurnId,
+          topicId: ctx.topicId,
+          sessionId: ctx.sessionId,
+          finalPostId: duplicatePost.id,
+        });
+      }
       ctx.lastAssistantAt = Date.now();
       return;
     }
@@ -2177,6 +2346,14 @@ export class EchsBridge {
       parentPostId: opts?.parentPostId ?? ctx.lastUserPostId,
       sourceMessageId: sessionMessage.id,
     });
+    if (ctx.currentTurnId) {
+      this.store.upsertAssistantTurn({
+        id: ctx.currentTurnId,
+        topicId: ctx.topicId,
+        sessionId: ctx.sessionId,
+        finalPostId: post.id,
+      });
+    }
     if (requested) {
       this.attachTtsToPost(post.id, cleanedText).catch(() => undefined);
     }

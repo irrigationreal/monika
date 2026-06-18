@@ -83,7 +83,9 @@ import type {
   TamperPluginDto,
   TamperTestResultDto,
   TamperTrailEntryDto,
+  AssistantTurnDto,
   ToolRunDto,
+  TurnEventDto,
   TopicDto,
   TopicMoveDto,
   UpdatePrivateEmailResponseDto,
@@ -563,6 +565,37 @@ export const ToolRunDtoSchema: z.ZodType<ToolRunDto> = z.object({
   visibility: ToolRunVisibilitySchema
 });
 
+export const AssistantTurnStatusSchema = z.enum(['queued', 'running', 'completed', 'failed', 'interrupted']);
+
+export const AssistantTurnDtoSchema: z.ZodType<AssistantTurnDto> = z.object({
+  id: z.string(),
+  topicId: z.string(),
+  sessionId: z.string(),
+  parentPostId: optionalNullableString,
+  finalPostId: optionalNullableString,
+  status: AssistantTurnStatusSchema,
+  activity: RobotActivitySchema.nullable().optional(),
+  model: optionalNullableString,
+  reasoningEffort: optionalNullableString,
+  draftText: optionalNullableString,
+  reasoningText: optionalNullableString,
+  errorMessage: optionalNullableString,
+  startedAt: z.string(),
+  updatedAt: z.string(),
+  finishedAt: optionalNullableString
+});
+
+export const TurnEventDtoSchema: z.ZodType<TurnEventDto> = z.object({
+  id: z.string(),
+  turnId: z.string(),
+  topicId: z.string(),
+  seq: z.number(),
+  type: z.string(),
+  visibility: ToolRunVisibilitySchema,
+  payload: z.record(z.unknown()).nullable(),
+  createdAt: z.string()
+});
+
 export const RobotStateDtoSchema: z.ZodType<RobotStateDto> = z.object({
   topicId: z.string(),
   sessionId: z.string(),
@@ -577,6 +610,7 @@ export const RobotStateDtoSchema: z.ZodType<RobotStateDto> = z.object({
     turnId: optionalNullableString
   }).nullable().optional(),
   currentPlan: PlanDtoSchema.nullable().optional(),
+  currentTurn: AssistantTurnDtoSchema.nullable().optional(),
   recentToolRuns: z.array(ToolRunDtoSchema)
 });
 

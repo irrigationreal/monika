@@ -410,6 +410,37 @@ export interface ToolRunDto {
   visibility: 'public' | 'internal' | 'private';
 }
 
+export type AssistantTurnStatus = 'queued' | 'running' | 'completed' | 'failed' | 'interrupted';
+
+export interface AssistantTurnDto {
+  id: string;
+  topicId: string;
+  sessionId: string;
+  parentPostId?: string | null;
+  finalPostId?: string | null;
+  status: AssistantTurnStatus;
+  activity?: RobotStateDto['activity'] | null;
+  model?: string | null;
+  reasoningEffort?: string | null;
+  draftText?: string | null;
+  reasoningText?: string | null;
+  errorMessage?: string | null;
+  startedAt: string;
+  updatedAt: string;
+  finishedAt?: string | null;
+}
+
+export interface TurnEventDto {
+  id: string;
+  turnId: string;
+  topicId: string;
+  seq: number;
+  type: string;
+  visibility: 'public' | 'internal' | 'private';
+  payload: Record<string, unknown> | null;
+  createdAt: string;
+}
+
 export interface RobotStateDto {
   topicId: string;
   sessionId: string;
@@ -424,6 +455,7 @@ export interface RobotStateDto {
     turnId?: string | null;
   } | null;
   currentPlan?: PlanDto | null;
+  currentTurn?: AssistantTurnDto | null;
   recentToolRuns: ToolRunDto[];
 }
 

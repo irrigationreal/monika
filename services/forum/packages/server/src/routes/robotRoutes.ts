@@ -68,6 +68,49 @@ function mapTopicAutoRun(row: TopicAutoRunRow | null, topicId: string) {
   };
 }
 
+function mapAssistantTurn(row: ReturnType<ForumStore['getCurrentAssistantTurn']>) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    topicId: row.topic_id,
+    sessionId: row.session_id,
+    parentPostId: row.parent_post_id,
+    finalPostId: row.final_post_id,
+    status: row.status,
+    activity: row.activity,
+    model: row.model,
+    reasoningEffort: row.reasoning_effort,
+    draftText: row.draft_text,
+    reasoningText: row.reasoning_text,
+    errorMessage: row.error_message,
+    startedAt: row.started_at,
+    updatedAt: row.updated_at,
+    finishedAt: row.finished_at,
+  };
+}
+
+function mapTurnEvent(row: ReturnType<ForumStore['getTurnEvent']>) {
+  if (!row) return null;
+  let payload: Record<string, unknown> | null = null;
+  if (row.payload_json) {
+    try {
+      payload = JSON.parse(row.payload_json) as Record<string, unknown>;
+    } catch {
+      payload = null;
+    }
+  }
+  return {
+    id: row.id,
+    turnId: row.turn_id,
+    topicId: row.topic_id,
+    seq: row.seq,
+    type: row.type,
+    visibility: row.visibility,
+    payload,
+    createdAt: row.created_at,
+  };
+}
+
 export function registerRobotRoutes({
   app,
   store,
@@ -112,6 +155,7 @@ export function registerRobotRoutes({
       return null;
     }
     const plan = includePlan && state.current_plan_id ? store.getPlan(state.current_plan_id) : null;
+    const currentTurn = store.getCurrentAssistantTurn(topicId);
     const toolRuns = includeToolRuns ? store.listToolRuns(topicId, 10) : [];
     return {
       topicId: state.topic_id,
@@ -139,6 +183,7 @@ export function registerRobotRoutes({
             updatedAt: plan.updated_at,
           }
         : null,
+      currentTurn: mapAssistantTurn(currentTurn),
       context,
       recentToolRuns: includeToolRuns
         ? toolRuns.map((run) => ({
@@ -155,6 +200,25 @@ export function registerRobotRoutes({
           }))
         : [],
     };
+  });
+
+  app.get('/topics/:topicId/turns/current', async (request) => {
+    const { topicId } = request.params as { topicId: string };
+    requireTopicVisible(topicId, request);
+    return mapAssistantTurn(store.getCurrentAssistantTurn(topicId));
+  });
+
+  app.get('/turns/:turnId/events', async (request) => {
+    const { turnId } = request.params as { turnId: string };
+    const query = request.query as { after?: string; limit?: string };
+    const turn = store.getAssistantTurn(turnId);
+    if (!turn) {
+      throw app.httpErrors.notFound('turn not found');
+    }
+    requireTopicVisible(turn.topic_id, request);
+    const after = Math.max(0, Number(query.after ?? 0) || 0);
+    const limit = Math.min(500, Math.max(1, Number(query.limit ?? 200) || 200));
+    return { items: store.listTurnEvents(turnId, after, limit).map(mapTurnEvent).filter(Boolean) };
   });
 
   app.get('/topics/:topicId/auto-run', async (request) => {

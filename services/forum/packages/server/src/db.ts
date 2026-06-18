@@ -264,6 +264,35 @@ export interface ToolRunRow {
   visibility: string;
 }
 
+export interface AssistantTurnRow {
+  id: string;
+  topic_id: string;
+  session_id: string;
+  parent_post_id: string | null;
+  final_post_id: string | null;
+  status: string;
+  activity: string | null;
+  model: string | null;
+  reasoning_effort: string | null;
+  draft_text: string | null;
+  reasoning_text: string | null;
+  error_message: string | null;
+  started_at: string;
+  updated_at: string;
+  finished_at: string | null;
+}
+
+export interface TurnEventRow {
+  id: string;
+  turn_id: string;
+  topic_id: string;
+  seq: number;
+  type: string;
+  visibility: string;
+  payload_json: string | null;
+  created_at: string;
+}
+
 export interface RobotStateRow {
   topic_id: string;
   session_id: string;

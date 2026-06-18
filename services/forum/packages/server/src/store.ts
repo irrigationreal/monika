@@ -20,6 +20,7 @@ import type Database from 'better-sqlite3';
 import type {
   AccessRuleRow,
   ApiKeyRow,
+  AssistantTurnRow,
   AttachmentRow,
   PendingAttachmentRow,
   AuthSessionRow,
@@ -51,6 +52,7 @@ import type {
   TenantRow,
   ToolRunRow,
   TopicAutoRunRow,
+  TurnEventRow,
   TopicMoveRow,
   TopicReadRow,
   TopicRow,
@@ -225,6 +227,32 @@ export interface RobotPersonaRecord {
   soul: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface UpsertAssistantTurnInput {
+  id: string;
+  topicId: string;
+  sessionId: string;
+  parentPostId?: string | null;
+  finalPostId?: string | null;
+  status?: string;
+  activity?: string | null;
+  model?: string | null;
+  reasoningEffort?: string | null;
+  draftText?: string | null;
+  appendDraftDelta?: string;
+  reasoningText?: string | null;
+  appendReasoningDelta?: string;
+  errorMessage?: string | null;
+  finishedAt?: string | null;
+}
+
+export interface AppendTurnEventInput {
+  turnId: string;
+  topicId: string;
+  type: string;
+  payload?: Record<string, unknown> | null;
+  visibility?: 'public' | 'internal' | 'private';
 }
 
 export interface CreatePlanInput {
@@ -1973,6 +2001,126 @@ export class ForumStore {
     return row ?? null;
   }
 
+  upsertAssistantTurn(input: UpsertAssistantTurnInput): AssistantTurnRow {
+    const now = nowIso();
+    const existing = this.getAssistantTurn(input.id);
+    if (!existing) {
+      const startedAt = now;
+      this.db
+        .prepare(
+          `insert into assistant_turns
+            (id, topic_id, session_id, parent_post_id, final_post_id, status, activity, model, reasoning_effort, draft_text, reasoning_text, error_message, started_at, updated_at, finished_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          input.id,
+          input.topicId,
+          input.sessionId,
+          input.parentPostId ?? null,
+          input.finalPostId ?? null,
+          input.status ?? 'running',
+          input.activity ?? null,
+          input.model ?? null,
+          input.reasoningEffort ?? null,
+          input.draftText ?? input.appendDraftDelta ?? null,
+          input.reasoningText ?? input.appendReasoningDelta ?? null,
+          input.errorMessage ?? null,
+          startedAt,
+          now,
+          input.finishedAt ?? null
+        );
+      return this.getAssistantTurn(input.id) as AssistantTurnRow;
+    }
+
+    const draftText = input.draftText !== undefined
+      ? input.draftText
+      : input.appendDraftDelta !== undefined
+        ? `${existing.draft_text ?? ''}${input.appendDraftDelta}`
+        : existing.draft_text;
+    const reasoningText = input.reasoningText !== undefined
+      ? input.reasoningText
+      : input.appendReasoningDelta !== undefined
+        ? `${existing.reasoning_text ?? ''}${input.appendReasoningDelta}`
+        : existing.reasoning_text;
+
+    this.db
+      .prepare(
+        `update assistant_turns set
+          parent_post_id = ?,
+          final_post_id = ?,
+          status = ?,
+          activity = ?,
+          model = ?,
+          reasoning_effort = ?,
+          draft_text = ?,
+          reasoning_text = ?,
+          error_message = ?,
+          updated_at = ?,
+          finished_at = ?
+        where id = ?`
+      )
+      .run(
+        input.parentPostId !== undefined ? input.parentPostId : existing.parent_post_id,
+        input.finalPostId !== undefined ? input.finalPostId : existing.final_post_id,
+        input.status ?? existing.status,
+        input.activity !== undefined ? input.activity : existing.activity,
+        input.model !== undefined ? input.model : existing.model,
+        input.reasoningEffort !== undefined ? input.reasoningEffort : existing.reasoning_effort,
+        draftText,
+        reasoningText,
+        input.errorMessage !== undefined ? input.errorMessage : existing.error_message,
+        now,
+        input.finishedAt !== undefined ? input.finishedAt : existing.finished_at,
+        input.id
+      );
+    return this.getAssistantTurn(input.id) as AssistantTurnRow;
+  }
+
+  getAssistantTurn(turnId: string): AssistantTurnRow | null {
+    const row = this.db.prepare('select * from assistant_turns where id = ?').get(turnId) as AssistantTurnRow | undefined;
+    return row ?? null;
+  }
+
+  getCurrentAssistantTurn(topicId: string): AssistantTurnRow | null {
+    const row = this.db
+      .prepare("select * from assistant_turns where topic_id = ? and status in ('queued', 'running') order by updated_at desc limit 1")
+      .get(topicId) as AssistantTurnRow | undefined;
+    return row ?? null;
+  }
+
+  getLatestAssistantTurnForPost(postId: string): AssistantTurnRow | null {
+    const row = this.db
+      .prepare('select * from assistant_turns where final_post_id = ? order by updated_at desc limit 1')
+      .get(postId) as AssistantTurnRow | undefined;
+    return row ?? null;
+  }
+
+  appendTurnEvent(input: AppendTurnEventInput): TurnEventRow {
+    const id = randomUUID();
+    const now = nowIso();
+    const seqRow = this.db
+      .prepare('select coalesce(max(seq), 0) + 1 as seq from turn_events where turn_id = ?')
+      .get(input.turnId) as { seq: number };
+    const payloadJson = input.payload ? JSON.stringify(input.payload) : null;
+    this.db
+      .prepare(
+        'insert into turn_events (id, turn_id, topic_id, seq, type, visibility, payload_json, created_at) values (?, ?, ?, ?, ?, ?, ?, ?)'
+      )
+      .run(id, input.turnId, input.topicId, seqRow.seq, input.type, input.visibility ?? 'internal', payloadJson, now);
+    return this.getTurnEvent(id) as TurnEventRow;
+  }
+
+  getTurnEvent(id: string): TurnEventRow | null {
+    const row = this.db.prepare('select * from turn_events where id = ?').get(id) as TurnEventRow | undefined;
+    return row ?? null;
+  }
+
+  listTurnEvents(turnId: string, afterSeq = 0, limit = 200): TurnEventRow[] {
+    return this.db
+      .prepare('select * from turn_events where turn_id = ? and seq > ? order by seq asc limit ?')
+      .all(turnId, afterSeq, limit) as TurnEventRow[];
+  }
+
   createPlan(input: CreatePlanInput): PlanRow {
     const id = randomUUID();
     const now = nowIso();
@@ -2027,7 +2175,7 @@ export class ForumStore {
         input.tool,
         input.parentPostId ?? null,
         now,
-        now,
+        null,
         null,
         input.command ?? null,
         null,
