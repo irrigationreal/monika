@@ -4,7 +4,7 @@
 # decides whether the expensive job should run, the build job can fail, and a
 # stable checks job is the required branch-rule gate.
 
-name: CI / Forum
+name: CI / Forum Container
 
 on:
   pull_request:
@@ -12,14 +12,14 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ci-forum-${{ github.ref }}
+  group: ci-forum-container-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  forum-changes:
+  forum-container-changes:
     runs-on: ubuntu-latest
     outputs:
       changed: ${{ steps.check.outputs.changed }}
@@ -50,7 +50,7 @@ jobs:
               'services/forum/packages/' \
               'services/forum/tsconfig.json' \
               'tests/forum/' \
-              '.github/workflows/ci-forum.yml' \
+              '.github/workflows/ci-forum-container.yml' \
               '.github/workflows/image-forum.yml' \
             | grep -qvE '\.md$'; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
@@ -58,9 +58,9 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
-  forum-build:
-    needs: forum-changes
-    if: needs.forum-changes.outputs.changed == 'true'
+  forum-container-build:
+    needs: forum-container-changes
+    if: needs.forum-container-changes.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -84,15 +84,15 @@ jobs:
         run: docker build -f services/forum/Containerfile -t monika-forum-test ./services/forum
 
   # Gate job — branch protection should require this check.
-  forum-checks:
+  forum-container-checks:
     if: always()
-    needs: [forum-changes, forum-build]
+    needs: [forum-container-changes, forum-container-build]
     runs-on: ubuntu-latest
     steps:
       - name: Evaluate result
         shell: bash
         run: |
-          if [ "${{ needs.forum-build.result }}" = "failure" ] || [ "${{ needs.forum-build.result }}" = "cancelled" ]; then
+          if [ "${{ needs.forum-container-build.result }}" = "failure" ] || [ "${{ needs.forum-container-build.result }}" = "cancelled" ]; then
             echo "Forum build/tests failed or were cancelled"
             exit 1
           fi
