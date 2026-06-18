@@ -2138,3 +2138,111 @@
   /* Matrix chars have different widths - use tabular nums for stability */
   font-variant-numeric: tabular-nums;
 }
+
+/* Linear live assistant trace */
+.vb-live-turn {
+  border-color: var(--vb-accent, #8fbcbb);
+}
+
+.vb-live-turn-body {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: 1rem;
+}
+
+.vb-live-turn-content {
+  min-width: 0;
+}
+
+.vb-live-turn-heading {
+  align-items: center;
+}
+
+.vb-live-turn-stream {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding-top: 0.25rem;
+}
+
+.vb-live-turn-item {
+  border-left: 2px solid var(--vb-border-subtle, rgba(255, 255, 255, 0.18));
+  padding-left: 0.75rem;
+}
+
+.vb-live-turn-item-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.vb-live-turn-dot {
+  font-size: 0.85rem;
+  line-height: 1;
+}
+
+.vb-live-turn-dot--running {
+  color: var(--vb-accent, #8fbcbb);
+}
+
+.vb-live-turn-dot--success {
+  color: var(--vb-success, #a3be8c);
+}
+
+.vb-live-turn-dot--error {
+  color: var(--vb-danger, #bf616a);
+}
+
+.vb-live-turn-title {
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.vb-live-turn-meta {
+  color: var(--vb-muted, #8a8f98);
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.vb-live-turn-detail {
+  margin: 0.35rem 0 0 1.35rem;
+  color: var(--vb-text, inherit);
+}
+
+.vb-live-turn-detail--pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 18rem;
+  overflow: auto;
+  background: var(--vb-code-bg, rgba(0, 0, 0, 0.16));
+  padding: 0.5rem;
+  border-radius: 4px;
+}
+
+.vb-live-turn-assistant {
+  border-left: 2px solid var(--vb-accent, #8fbcbb);
+  padding-left: 0.75rem;
+}
+
+@media (max-width: 720px) {
+  .vb-live-turn-body {
+    grid-template-columns: 1fr;
+  }
+}
+
+.vb-live-turn-page-hint {
+  margin: 0.75rem 0;
+  padding: 0.75rem;
+  border: 1px solid var(--vb-border-subtle, rgba(255, 255, 255, 0.18));
+  background: var(--vb-panel-bg, rgba(0, 0, 0, 0.08));
+}
+
+.vb-inline-link {
+  margin-left: 0.5rem;
+  border: 0;
+  background: transparent;
+  color: var(--vb-link, #88c0d0);
+  text-decoration: underline;
+  cursor: pointer;
+}

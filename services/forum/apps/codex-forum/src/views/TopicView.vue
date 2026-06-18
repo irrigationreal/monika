@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
 import DecryptText from '../components/DecryptText.vue';
+import LiveAssistantTurn from '../components/LiveAssistantTurn.vue';
 import PostTracePanel from '../components/PostTracePanel.vue';
 import ToolMiniView from '../components/ToolMiniView.vue';
 import { useForumState } from '../composables/useForumState';
@@ -21,6 +22,17 @@ import type {
   ToolRunDto,
 } from '../lib/apiClient';
 import type { ReasoningStep } from '../lib/reasoning';
+
+type LiveTurnItem = {
+  id: string;
+  type: 'status' | 'reasoning' | 'tool' | 'assistant_text' | 'error';
+  title: string;
+  status: 'running' | 'success' | 'error' | 'done';
+  meta?: string | null;
+  detail?: string | null;
+  markdown?: string | null;
+  text?: string | null;
+};
 
 const { renderContent, renderBBCode } = useMarkdown();
 const apiAny = api as any;
@@ -134,13 +146,11 @@ const autoRunStatusLabel = computed(() => {
 const canEditAutoRun = computed(() => isAdmin.value);
 const autoRunBusy = computed(() => state.autoRunLoading.value);
 
-const showRobotDraft = computed(() => {
-  if (!topicRobotMode.value) return false;
-  if (topicRobotMode.value === 'off') return false;
-  if (state.assistantDraft.value.trim()) return true;
-  const activity = state.robotState.value?.activity ?? 'idle';
-  return activity !== 'idle';
-});
+const showRobotDraft = computed(() => state.hasPendingAssistantTurn.value);
+
+const liveTurnPostNumber = computed(() => state.sortedPosts.value.length + 1);
+const liveTurnPage = computed(() => pageForPostNumber(liveTurnPostNumber.value));
+const showRobotDraftOnCurrentPage = computed(() => showRobotDraft.value && state.currentPage.value === liveTurnPage.value);
 
 const liveActivityEvents = computed<RobotActivityEvent[]>(() => state.activityLog.value);
 
@@ -212,6 +222,68 @@ const liveToolRuns = computed(() => {
 });
 
 const liveToolRunDtos = computed(() => liveToolRuns.value.map((e) => e.toolRun));
+
+function compact(value: string | null | undefined, max = 400): string | null {
+  const text = String(value ?? '').trim();
+  if (!text) return null;
+  if (text.length <= max) return text;
+  return `${text.slice(0, max)}…`;
+}
+
+function liveToolTitle(tool: ToolRunDto): string {
+  const mini = toolMini(tool);
+  const command = tool.command?.trim();
+  if (mini.kind === 'exec' && command) return compact(command, 120) ?? command;
+  return mini.name || tool.tool || 'tool';
+}
+
+function liveToolDetail(tool: ToolRunDto): string | null {
+  const parts = [compact(tool.command, 1000), compact(tool.outputSummary, 900)].filter(Boolean);
+  return parts.length > 0 ? parts.join('\n\n') : null;
+}
+
+const liveTurnItems = computed<LiveTurnItem[]>(() => {
+  const items: LiveTurnItem[] = [];
+  const activity = state.robotState.value?.activity ?? 'idle';
+  if (activity !== 'idle') {
+    const statusTitle = activity === 'running_tools' ? 'Running tools' : activity === 'waiting' ? 'Waiting' : activity === 'error' ? 'Error' : 'Thinking';
+    items.push({ id: 'status:activity', type: 'status', title: statusTitle, status: activity === 'error' ? 'error' : 'running' });
+  }
+
+  for (const event of liveActivityEvents.value) {
+    if (event.type === 'reasoning_step') {
+      items.push({
+        id: event.id,
+        type: 'reasoning',
+        title: event.title || 'Thinking',
+        status: event.status === 'running' ? 'running' : 'done',
+        markdown: event.detail ?? null,
+      });
+      continue;
+    }
+    const tool = event.toolRun;
+    const status = !tool.finishedAt ? 'running' : (toolExitCodeValue(tool) ?? 0) === 0 ? 'success' : 'error';
+    const timeoutHint = tool.command?.match(/timeout(?:Ms)?[=:]\s*(\d+)/i)?.[1] ?? null;
+    items.push({
+      id: event.id,
+      type: 'tool',
+      title: liveToolTitle(tool),
+      status,
+      meta: [tool.tool, toolStatusLabel(tool), timeoutHint ? `timeout ${timeoutHint}ms` : null].filter(Boolean).join(' · '),
+      detail: liveToolDetail(tool),
+    });
+  }
+
+  const lastError = state.robotState.value?.lastTurnError?.message ?? null;
+  if (lastError && activity === 'error') {
+    items.push({ id: 'error:last-turn', type: 'error', title: 'Turn error', status: 'error', detail: lastError });
+  }
+
+  if (state.assistantDraft.value.trim()) {
+    items.push({ id: 'assistant:live', type: 'assistant_text', title: 'Writing response', status: 'running', text: state.assistantDraft.value });
+  }
+  return items;
+});
 
 function toolExitCodeValue(tool: { exitCode?: number | null; outputSummary?: string | null }): number | null {
   if (tool.exitCode !== null && tool.exitCode !== undefined) return tool.exitCode;
@@ -1656,6 +1728,11 @@ onUnmounted(() => {
         >
       </div>
 
+      <div v-if="showRobotDraft && !showRobotDraftOnCurrentPage && !threadSearchQuery" class="vb-live-turn-page-hint">
+        Monika is responding on page {{ liveTurnPage }}.
+        <button type="button" class="vb-inline-link" @click="goToPage(liveTurnPage)">Jump to live trace</button>
+      </div>
+
       <div v-if="threadSearchQuery && filteredPosts.length === 0" class="vb-empty">No posts match your search.</div>
 
       <div
@@ -1941,100 +2018,16 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <div v-if="showRobotDraft" class="vb-post vb-post--draft">
-        <div class="vb-post-header">
-          <div>● Drafting…</div>
-          <div class="vb-post-draft-pill">LIVE</div>
-        </div>
-        <div
-          class="vb-post-body"
-          :class="{ 'vb-post-body--multipost': hasMultipostSegments(state.assistantDraft.value) }"
-        >
-          <template v-if="hasMultipostSegments(state.assistantDraft.value)">
-            <div class="vb-post-content vb-post-content--multipost">
-              <div class="vb-post-heading">
-                <span>Monika Draft (live)</span>
-                <span class="vb-spinner vb-spinner-dark"></span>
-              </div>
-              <PostTracePanel
-                :reasoningSteps="previousReasoningSteps.map((s: any) => ({ title: s.title, detail: s.detail ?? null }))"
-                :latestReasoningTitle="latestReasoningStep?.title"
-                :latestReasoningDetail="latestReasoningStep?.detail"
-                :toolRuns="liveToolRunDtos"
-                :live="true"
-                :active="isRobotThinking"
-                traceId="draft"
-                :topicId="routeTopicId"
-              />
-              <div class="vb-multipost">
-                <div
-                  v-for="(segment, segIdx) in parseMultipostSegments(state.assistantDraft.value)"
-                  :key="`draft:${segIdx}`"
-                  class="vb-post-body vb-post-body--virtual"
-                  :id="`draft-s${segIdx}`"
-                >
-                  <aside class="vb-post-user">
-                    <div class="vb-user-name" :style="personaNameStyle(segment.personaKey)">
-                      {{ personaDisplayName(segment.personaKey) }}
-                    </div>
-                    <div class="vb-user-title">{{ personaTitle(segment.personaKey) }}</div>
-                    <img class="vb-avatar" :src="personaAvatar(segment.personaKey)" alt="" />
-                    <div class="vb-user-meta">
-                      <div><span>Persona:</span> {{ segment.personaKey ?? 'narration' }}</div>
-                      <div><span>Status:</span> Responding</div>
-                    </div>
-                  </aside>
-                  <div class="vb-post-content">
-                    <div class="vb-multipost-segment-header">
-                      <a class="vb-segment-link" :href="`#draft-s${segIdx}`">#</a>
-                    </div>
-                    <div class="vb-post-text vb-decrypt-content">
-                      <DecryptText :text="segment.body" mode="append" />
-                    </div>
-                    <div v-if="personaSignature(segment.personaKey)" class="vb-post-signature">
-                      <div class="vb-signature-line"></div>
-                      <div
-                        class="vb-signature-text vb-rendered-content"
-                        v-html="renderSignature(personaSignature(segment.personaKey))"
-                      ></div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </template>
-          <template v-else>
-            <aside class="vb-post-user">
-              <div class="vb-user-name">Monika</div>
-              <div class="vb-user-title">Drafting Reply</div>
-              <img class="vb-avatar" src="/avatars/monika.png" alt="" />
-              <div class="vb-user-meta">
-                <div><span>Status:</span> {{ state.robotState.value?.activity ?? 'responding' }}</div>
-                <div><span>Thread:</span> {{ state.selectedTopic.value?.title }}</div>
-              </div>
-            </aside>
-            <div class="vb-post-content">
-              <div class="vb-post-heading">
-                <span>Monika Draft (live)</span>
-                <span class="vb-spinner vb-spinner-dark"></span>
-              </div>
-              <PostTracePanel
-                :reasoningSteps="previousReasoningSteps.map((s: any) => ({ title: s.title, detail: s.detail ?? null }))"
-                :latestReasoningTitle="latestReasoningStep?.title"
-                :latestReasoningDetail="latestReasoningStep?.detail"
-                :toolRuns="liveToolRunDtos"
-                :live="true"
-                :active="isRobotThinking"
-                traceId="draft-regular"
-                :topicId="routeTopicId"
-              />
-              <div v-if="state.assistantDraft.value" class="vb-post-text vb-decrypt-content">
-                <DecryptText :text="state.assistantDraft.value" mode="append" />
-              </div>
-            </div>
-          </template>
-        </div>
-      </div>
+      <LiveAssistantTurn
+        v-if="showRobotDraftOnCurrentPage"
+        :items="liveTurnItems"
+        :activity="state.robotState.value?.activity ?? null"
+        :model="state.robotState.value?.model ?? null"
+        :reasoning="state.robotState.value?.reasoningEffort ?? null"
+        :active="isRobotThinking"
+        :topicId="routeTopicId"
+        :id="String(liveTurnPostNumber)"
+      />
     </div>
 
     <div class="vb-controls vb-controls-bottom">

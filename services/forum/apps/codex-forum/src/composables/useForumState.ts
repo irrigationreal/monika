@@ -221,7 +221,17 @@ export function useForumState() {
 
   const sortedPosts = computed(() => posts.value.slice().sort((a, b) => a.createdAt.localeCompare(b.createdAt)));
 
-  const totalPages = computed(() => Math.max(1, Math.ceil(sortedPosts.value.length / POSTS_PER_PAGE)));
+  const hasPendingAssistantTurn = computed(() => {
+    if (!selectedTopic.value?.robotMode || selectedTopic.value.robotMode === 'off') return false;
+    if (assistantDraft.value.trim()) return true;
+    const activity = robotState.value?.activity ?? 'idle';
+    return activity !== 'idle';
+  });
+
+  const totalPages = computed(() => {
+    const timelineLength = sortedPosts.value.length + (hasPendingAssistantTurn.value ? 1 : 0);
+    return Math.max(1, Math.ceil(timelineLength / POSTS_PER_PAGE));
+  });
 
   const currentPosts = computed(() => {
     const start = (currentPage.value - 1) * POSTS_PER_PAGE;
@@ -1290,6 +1300,7 @@ export function useForumState() {
     sortedPosts,
     totalPages,
     currentPosts,
+    hasPendingAssistantTurn,
     latestToolRun,
     isRobotBusy,
     isLoggedIn,
