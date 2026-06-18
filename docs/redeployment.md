@@ -2,6 +2,8 @@
 
 Monika runtime redeploys are gated on application-level quiescence rather than Docker process state alone. The runtime must not replace containers while Pi is producing a turn, while forum robot dispatch is queued/running, or while memstore/forum persistence work is active.
 
+For the generic operator runbook and autodeploy lifecycle, see [`docs/autodeploy.md`](autodeploy.md).
+
 ## Safety contract
 
 ### Monika / agentd
@@ -14,7 +16,16 @@ Monika runtime redeploys are gated on application-level quiescence rather than D
 
 `/v1/admin/quiescence` reports active turns, loaded conversations, memstore save queue state, and whether the container is immediately safe to stop. Active turns and busy/unreachable memstore are hard blockers. Idle loaded conversations are not hard blockers, but they require a drain because closing them triggers Pi session shutdown and memory save.
 
-`/v1/admin/drain` marks agentd as draining, rejects new conversation/message requests, closes idle loaded conversations, and reports the resulting quiescence state. Automation should defer if the response still contains blockers.
+`/v1/admin/drain` marks agentd as draining, rejects new conversation/message requests, closes idle loaded conversations, and reports the resulting quiescence state. Automation should defer if the response still contains blockers. If automation drains agentd but does not proceed to restart the runtime, it should call `/v1/admin/drain/cancel` before exiting.
+
+Host-side deploy automation reaches agentd through the loopback-only compose binding:
+
+```yaml
+ports:
+  - "127.0.0.1:${MONIKA_AGENTD_PORT:-7724}:7724"
+```
+
+Do not publish agentd on a non-loopback host address unless the service has gained an external authentication/authorization boundary.
 
 ### memstore
 
@@ -32,11 +43,24 @@ Forum deploy blockers include active robot turns, queued turns, non-idle robot s
 
 ## Host script
 
-`scripts/deploy-if-safe` is the repo-tracked orchestration entry point for stanza-style deployments. It:
+`scripts/deploy-if-safe` is the repo-tracked orchestration entry point for host-side safe deployments. It:
 
-1. Checks forum quiescence.
-2. Drains agentd idle conversations.
-3. Defers with exit code `75` (`EX_TEMPFAIL`) if either service is blocked.
-4. Pulls and applies the `:main` Monika and forum images with Docker Compose.
+1. Fetches and inspects the live git checkout without modifying it.
+2. Defers if the checkout is dirty, detached, lacks an upstream, cannot fetch, or is behind upstream.
+3. Pulls the configured Monika and forum images.
+4. Exits cleanly if the pulled image IDs already match the running containers.
+5. Checks forum quiescence.
+6. Drains agentd idle conversations.
+7. Defers with exit code `75` (`EX_TEMPFAIL`) if either service is blocked.
+8. Creates and verifies a whole-repo `.tar.zst` runtime capsule backup.
+9. Pulls and applies the configured Monika and forum images with Docker Compose.
+10. Prunes old redeploy backups by tiered retention bucket.
+11. Prunes old dangling Docker image layers conservatively.
 
 The script intentionally orchestrates only Docker and image tags. The knowledge of whether stopping is safe lives in agentd/forum APIs so the same contract can be reused by admin UI, timers, Watchtower hooks, or future tooling.
+
+Use `--backup-only` to create a quiescence-gated backup without applying images:
+
+```bash
+./scripts/deploy-if-safe --backup-only
+```

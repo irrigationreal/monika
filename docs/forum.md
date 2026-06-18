@@ -63,7 +63,7 @@ Container wiring:
 - `Containerfile` installs agentd into `/opt/agentd`.
 - `entrypoint.sh` starts memstore first, then starts agentd unless
   `MONIKA_AGENTD_ENABLED=0`.
-- Deployment compose binds agentd to `0.0.0.0:7724` inside the Docker network.
+- Deployment compose binds agentd to `0.0.0.0:7724` inside the Monika container and exposes it to the host on loopback only for deploy automation.
 - The Pi agent dir is `/app/.pi/agent` via `PI_CODING_AGENT_DIR`.
 
 Implemented endpoints:
@@ -166,12 +166,15 @@ cp compose.yaml.example compose.yaml
 docker compose up -d --build
 ```
 
+For safe unattended or operator-driven redeploys, use the root deployment runbook in [`docs/autodeploy.md`](autodeploy.md). That document owns the live checkout/worktree rules, image-only autodeploy policy, backup behavior, and host timer model.
+
 Default paths and URLs:
 
 - Forum URL: `http://localhost:4310` unless `CODEX_FORUM_BASE_URL` is overridden.
 - Forum DB/uploads: `runtime/forum/data.db` and `runtime/forum/uploads/`.
 - agentd binding in the Monika container: `0.0.0.0:7724`.
-- Forum-to-agentd URL: `http://monika:7724`.
+- agentd host binding for deploy automation: `127.0.0.1:${MONIKA_AGENTD_PORT:-7724}:7724`.
+- Forum-to-agentd URL inside Docker: `http://monika:7724`.
 - Default work directory: `/workspace/monika`.
 - Runtime secrets: `runtime/secrets/forum.env` and `runtime/secrets/secrets.env`.
 

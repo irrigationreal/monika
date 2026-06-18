@@ -1,18 +1,39 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Pull and apply the Monika + forum :main images only when the runtime reports
-# that stopping containers is safe. Exit 75 (EX_TEMPFAIL) when a deploy should
-# be retried later rather than forced.
+# Pull and apply the Monika + forum images only when the runtime reports that
+# stopping containers is safe. Exit 75 (EX_TEMPFAIL) when a deploy should be
+# retried later rather than forced.
+#
+# By default, this script only drains/backs up/recreates containers when a pull
+# changes the target image ID for at least one managed service. Use
+# --backup-only to create a quiescence-gated backup without deploying.
+
+MODE="deploy"
+if [ "${1:-}" = "--backup-only" ]; then
+  MODE="backup-only"
+  shift
+fi
+if [ "$#" -ne 0 ]; then
+  echo "usage: $0 [--backup-only]" >&2
+  exit 64
+fi
 
 ROOT="${MONIKA_DEPLOY_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 COMPOSE_FILE="${MONIKA_DEPLOY_COMPOSE_FILE:-$ROOT/compose.yaml}"
 AGENTD_URL="${MONIKA_AGENTD_BASE_URL:-http://127.0.0.1:7724}"
 FORUM_URL="${MONIKA_FORUM_BASE_URL:-http://127.0.0.1:4310/api}"
 AGENTD_DRAIN_TIMEOUT_MS="${MONIKA_AGENTD_DRAIN_TIMEOUT_MS:-0}"
+BACKUP_DIR="${MONIKA_DEPLOY_BACKUP_DIR:-$ROOT/runtime/backups/redeploy}"
+BACKUP_ZSTD_LEVEL="${MONIKA_DEPLOY_BACKUP_ZSTD_LEVEL:-3}"
+DOCKER_PRUNE_UNTIL="${MONIKA_DEPLOY_DOCKER_PRUNE_UNTIL:-168h}"
+REQUIRE_GIT_CURRENT="${MONIKA_DEPLOY_REQUIRE_GIT_CURRENT:-1}"
 
 export MONIKA_IMAGE="${MONIKA_IMAGE:-ghcr.io/irrigationreal/monika:main}"
 export MONIKA_FORUM_IMAGE="${MONIKA_FORUM_IMAGE:-ghcr.io/irrigationreal/monika-forum:main}"
+
+DRAIN_STARTED=0
+CANCEL_DRAIN_ON_EXIT=0
 
 json_field() {
   python3 -c 'import json,sys; data=json.load(sys.stdin); expr=sys.argv[1].split("."); v=data
@@ -25,6 +46,13 @@ tempfail() {
   echo "deploy deferred: $*" >&2
   exit 75
 }
+
+cancel_agentd_drain() {
+  if [ "$DRAIN_STARTED" = "1" ] && [ "$CANCEL_DRAIN_ON_EXIT" = "1" ]; then
+    curl -fsS -X POST "$AGENTD_URL/v1/admin/drain/cancel" >/dev/null 2>&1 || true
+  fi
+}
+trap cancel_agentd_drain EXIT
 
 require_safe_forum() {
   local state safe
@@ -44,14 +72,183 @@ drain_agentd() {
     state="$(curl -fsS -X POST "$AGENTD_URL/v1/admin/drain" \
       -H 'content-type: application/json' \
       --data "{\"timeout_ms\":${AGENTD_DRAIN_TIMEOUT_MS}}")" || tempfail "agentd drain failed"
+    DRAIN_STARTED=1
+    CANCEL_DRAIN_ON_EXIT=1
   fi
   safe="$(printf '%s' "$state" | json_field ok)"
   [ "$safe" = "true" ] || tempfail "agentd is not safe to stop after drain: $state"
 }
 
+require_git_current() {
+  if [ "$REQUIRE_GIT_CURRENT" != "1" ]; then
+    return 0
+  fi
+  if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    tempfail "deploy root is not a git worktree"
+  fi
+
+  local branch upstream_remote upstream_ref behind
+  branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null)" || tempfail "live checkout is detached or has no branch"
+  upstream_remote="$(git config "branch.$branch.remote" || true)"
+  [ -n "$upstream_remote" ] || tempfail "live checkout branch $branch has no upstream remote"
+  upstream_ref="$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null)" || tempfail "live checkout branch $branch has no upstream"
+
+  git fetch --quiet "$upstream_remote" || tempfail "could not fetch git state from $upstream_remote"
+  git diff --quiet --ignore-submodules -- || tempfail "live checkout has unstaged tracked changes"
+  git diff --cached --quiet --ignore-submodules -- || tempfail "live checkout has staged changes"
+  behind="$(git rev-list --count "HEAD..$upstream_ref")"
+  [ "$behind" = "0" ] || tempfail "live checkout is behind $upstream_ref by $behind commits; pull/reconcile before deploying images"
+}
+
+container_image_id() {
+  local service="$1" cid
+  cid="$(docker compose -f "$COMPOSE_FILE" ps -q "$service" 2>/dev/null || true)"
+  if [ -z "$cid" ]; then
+    return 0
+  fi
+  docker inspect -f '{{.Image}}' "$cid"
+}
+
+image_id() {
+  local image="$1"
+  docker image inspect -f '{{.Id}}' "$image" 2>/dev/null || true
+}
+
+pull_images() {
+  docker compose -f "$COMPOSE_FILE" pull monika forum
+}
+
+update_needed() {
+  local monika_current forum_current monika_target forum_target
+  monika_current="$(container_image_id monika)"
+  forum_current="$(container_image_id forum)"
+  monika_target="$(image_id "$MONIKA_IMAGE")"
+  forum_target="$(image_id "$MONIKA_FORUM_IMAGE")"
+
+  if [ -z "$monika_current" ] || [ -z "$forum_current" ]; then
+    echo "container missing; deploy needed"
+    return 0
+  fi
+  if [ -z "$monika_target" ] || [ -z "$forum_target" ]; then
+    echo "target image missing after pull; deploy needed"
+    return 0
+  fi
+  if [ "$monika_current" != "$monika_target" ] || [ "$forum_current" != "$forum_target" ]; then
+    echo "image update detected"
+    return 0
+  fi
+  echo "images already current; no deploy needed"
+  return 1
+}
+
+create_backup() {
+  local ts repo_parent repo_name tmp archive compressor
+  ts="$(date -u +%Y%m%dT%H%M%SZ)"
+  repo_parent="$(cd "$ROOT/.." && pwd)"
+  repo_name="$(basename "$ROOT")"
+  mkdir -p "$BACKUP_DIR"
+  chmod 700 "$BACKUP_DIR"
+  archive="$BACKUP_DIR/monika-redeploy-$ts.tar.zst"
+  tmp="$archive.tmp"
+  compressor="zstd -T0 -$BACKUP_ZSTD_LEVEL"
+
+  echo "creating backup: $archive"
+  rm -f "$tmp"
+  tar \
+    --exclude="$repo_name/runtime/backups" \
+    --exclude="$repo_name/out" \
+    -I "$compressor" \
+    -cf "$tmp" \
+    -C "$repo_parent" \
+    "$repo_name"
+  zstd -t "$tmp" >/dev/null
+  tar -tf "$tmp" >/dev/null
+  mv "$tmp" "$archive"
+  chmod 600 "$archive"
+  echo "backup complete: $archive"
+}
+
+prune_backups() {
+  mkdir -p "$BACKUP_DIR"
+  python3 - "$BACKUP_DIR" <<'PY'
+from __future__ import annotations
+
+import datetime as dt
+import os
+import sys
+from pathlib import Path
+
+backup_dir = Path(sys.argv[1])
+files = sorted(
+    [p for p in backup_dir.glob("monika-redeploy-*.tar.zst") if p.is_file()],
+    key=lambda p: p.stat().st_mtime,
+    reverse=True,
+)
+if not files:
+    sys.exit(0)
+
+now = dt.datetime.now(dt.timezone.utc)
+today = now.date()
+yesterday = today - dt.timedelta(days=1)
+seven_days_ago = now - dt.timedelta(days=7)
+
+def mtime(p: Path) -> dt.datetime:
+    return dt.datetime.fromtimestamp(p.stat().st_mtime, dt.timezone.utc)
+
+keep: set[Path] = set()
+keep.update(files[:1])  # Always retain at least one backup.
+
+current_day = [p for p in files if mtime(p).date() == today]
+keep.update(current_day[:2])
+
+previous_day = [p for p in files if mtime(p).date() == yesterday]
+if previous_day:
+    keep.add(previous_day[0])
+else:
+    previous_bucket = [p for p in files if today > mtime(p).date() and mtime(p) >= now - dt.timedelta(hours=48)]
+    if previous_bucket:
+        keep.add(previous_bucket[0])
+
+weekly_bucket = [p for p in files if mtime(p) >= seven_days_ago and mtime(p).date() not in {today, yesterday}]
+if weekly_bucket:
+    keep.add(weekly_bucket[0])
+
+for path in files:
+    if path not in keep:
+        print(f"pruning backup: {path}")
+        path.unlink()
+PY
+}
+
+prune_docker_images() {
+  docker image prune -f --filter "until=$DOCKER_PRUNE_UNTIL"
+}
+
 cd "$ROOT"
+require_git_current
+
+if [ "$MODE" = "deploy" ]; then
+  pull_images
+  if ! update_needed; then
+    exit 0
+  fi
+fi
+
 require_safe_forum
 drain_agentd
+create_backup
 
-docker compose -f "$COMPOSE_FILE" pull monika forum
+if [ "$MODE" = "backup-only" ]; then
+  prune_backups
+  echo "backup-only mode complete"
+  exit 0
+fi
+
+# From here onward the containers are expected to restart, so do not cancel the
+# agentd drain state on exit.
+CANCEL_DRAIN_ON_EXIT=0
+
 docker compose -f "$COMPOSE_FILE" up -d --remove-orphans monika forum
+docker compose -f "$COMPOSE_FILE" ps monika forum
+prune_backups
+prune_docker_images

@@ -17,6 +17,9 @@ This repo builds Monika's runtime containers and supporting services.
 ## Operating rules
 
 - Your current active session is likely running out of the live `monika` container, so do not restart the live `monika` container from inside an active Pi session. Instead, make sure everything is ready for the user to restart it.
+- Treat the live deployment checkout (on stanza: `/home/monika/repos/monika`) as deployment state, not a development worktree. Keep it on the intended live branch, normally `main`; do not do feature work there; do not point host autodeploy automation at another worktree.
+- Use separate worktrees/directories for development branches. The autodeploy path must never run `git pull`; it may fetch/read git state to defer when the live checkout is dirty or behind upstream, but checkout updates remain deliberate operator actions.
+- Be careful editing `compose.yaml`, `scripts/deploy-if-safe`, `runtime/`, or anything bind-mounted into live containers from the live checkout. These files can affect the active runtime even before a container restart.
 - The runtime is standalone/container-owned. Do not reintroduce host mode, automatic host-shell execution, host-network deployment, or bind-mounted host `~/.pi` as canonical state.
 - Host/infra work should use explicit SSH relocation, not implicit host execution.
 - When testing throwaway Monika containers, do **not** mount the live/in-use memstore database. Use ephemeral memstore state so two containers cannot lock or mutate the same SQLite DB.
