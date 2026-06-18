@@ -120,6 +120,8 @@ out/
 
 `runtime/backups/` is excluded to prevent recursive backup growth. `out/` is generated output and not part of the runtime capsule.
 
+Some runtime files are deliberately root-owned inside the live checkout because they are mounted into containers as credentials. The backup step therefore runs the archive read through non-interactive `sudo` when the deploy user is not root, then returns ownership of the finished archive to the deploy user. Hosts using this runbook must either run the deploy service as root or allow the deploy user passwordless sudo for the backup read path.
+
 ### Retention policy
 
 Pruning happens only after a new backup has been created and verified. The retention buckets keep:
