@@ -20,6 +20,20 @@ live memstore database or host-mode Monika mounts.
 - **Readable** — logs should show the image under test, what was verified, and the
 first useful diagnostic on failure without dumping large raw payloads.
 
+## Forum tests
+
+Forum source tests live under `services/forum/`. Repo-level wrappers live in
+`tests/forum/` so CI can call scripts rather than embedding test logic directly
+in workflow YAML.
+
+```bash
+tests/forum/unit.sh
+tests/forum/e2e.sh
+```
+
+See `tests/forum/README.md` for the split between Vitest, mocked Playwright E2E,
+and opt-in live backend canaries.
+
 ## Smoke tests
 
 ### `smoke/monika-runtime.sh`

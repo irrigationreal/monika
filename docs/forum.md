@@ -34,10 +34,11 @@ repository is retained as historical provenance.
 
 ## Forum CI and image publishing
 
-Forum container changes are checked by `CI / Forum Container`, which follows the
-Vesper branch-gate pattern: `forum-container-changes` decides whether the build is
-relevant, `forum-container-build` runs the smoke build, and
-`forum-container-checks` is the stable required branch-protection check.
+Forum changes are checked by `CI / Forum Container`, which follows the Vesper
+branch-gate pattern: `forum-container-changes` decides whether the build is
+relevant, `forum-container-build` runs the forum unit/E2E tests and container
+build, and `forum-container-checks` is the stable required branch-protection
+check.
 
 Forum/agentd compatibility belongs in `CI / Integration`. That workflow is
 currently a passing placeholder so branch protection can require
