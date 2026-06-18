@@ -25,10 +25,16 @@ AGENTD_URL="${MONIKA_AGENTD_BASE_URL:-http://127.0.0.1:7724}"
 FORUM_URL="${MONIKA_FORUM_BASE_URL:-http://127.0.0.1:4310/api}"
 AGENTD_DRAIN_TIMEOUT_MS="${MONIKA_AGENTD_DRAIN_TIMEOUT_MS:-0}"
 BACKUP_DIR="${MONIKA_DEPLOY_BACKUP_DIR:-$ROOT/runtime/backups/redeploy}"
+BACKUP_COMPRESSION="${MONIKA_DEPLOY_BACKUP_COMPRESSION:-auto}"
 BACKUP_ZSTD_LEVEL="${MONIKA_DEPLOY_BACKUP_ZSTD_LEVEL:-3}"
+BACKUP_GZIP_LEVEL="${MONIKA_DEPLOY_BACKUP_GZIP_LEVEL:-6}"
 DOCKER_PRUNE_UNTIL="${MONIKA_DEPLOY_DOCKER_PRUNE_UNTIL:-168h}"
 REQUIRE_GIT_CURRENT="${MONIKA_DEPLOY_REQUIRE_GIT_CURRENT:-1}"
 SUDO_BIN="${MONIKA_DEPLOY_SUDO_BIN:-/run/wrappers/bin/sudo}"
+TAR_BIN="${MONIKA_DEPLOY_TAR_BIN:-}"
+BACKUP_COMPRESSOR=""
+BACKUP_COMPRESSION_RESOLVED=""
+BACKUP_ARCHIVE_EXTENSION=""
 
 export MONIKA_IMAGE="${MONIKA_IMAGE:-ghcr.io/irrigationreal/monika:main}"
 export MONIKA_FORUM_IMAGE="${MONIKA_FORUM_IMAGE:-ghcr.io/irrigationreal/monika-forum:main}"
@@ -125,6 +131,135 @@ run_as_backup_reader() {
   fi
 }
 
+is_gnu_tar() {
+  "$1" --version 2>/dev/null | grep -q 'GNU tar'
+}
+
+resolve_tar_bin() {
+  if [ -n "$TAR_BIN" ]; then
+    if ! command -v "$TAR_BIN" >/dev/null 2>&1; then
+      echo "configured MONIKA_DEPLOY_TAR_BIN is not executable: $TAR_BIN" >&2
+      exit 69
+    fi
+    TAR_BIN="$(command -v "$TAR_BIN")"
+    if ! is_gnu_tar "$TAR_BIN"; then
+      echo "configured MONIKA_DEPLOY_TAR_BIN is not GNU tar: $TAR_BIN" >&2
+      exit 69
+    fi
+    return 0
+  fi
+
+  if command -v tar >/dev/null 2>&1 && is_gnu_tar tar; then
+    TAR_BIN="$(command -v tar)"
+    return 0
+  fi
+  if command -v gtar >/dev/null 2>&1 && is_gnu_tar gtar; then
+    TAR_BIN="$(command -v gtar)"
+    return 0
+  fi
+
+  echo "GNU tar is required for redeploy backups." >&2
+  echo "Install it on macOS with: brew install gnu-tar zstd" >&2
+  echo "Or set MONIKA_DEPLOY_TAR_BIN to a GNU tar executable." >&2
+  exit 69
+}
+
+require_command() {
+  local command_name="$1"
+  local install_hint="$2"
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    echo "$command_name is required for redeploy backups." >&2
+    echo "$install_hint" >&2
+    exit 69
+  fi
+}
+
+resolve_backup_compression() {
+  case "$BACKUP_COMPRESSION" in
+    auto)
+      if command -v zstd >/dev/null 2>&1; then
+        BACKUP_COMPRESSION_RESOLVED="zstd"
+      else
+        BACKUP_COMPRESSION_RESOLVED="gzip"
+      fi
+      ;;
+    zstd|gzip)
+      BACKUP_COMPRESSION_RESOLVED="$BACKUP_COMPRESSION"
+      ;;
+    *)
+      echo "unsupported MONIKA_DEPLOY_BACKUP_COMPRESSION: $BACKUP_COMPRESSION" >&2
+      echo "Supported values: auto, zstd, gzip" >&2
+      exit 64
+      ;;
+  esac
+
+  case "$BACKUP_COMPRESSION_RESOLVED" in
+    zstd)
+      require_command zstd "Install it on macOS with: brew install zstd"
+      BACKUP_COMPRESSOR="zstd -T0 -$BACKUP_ZSTD_LEVEL"
+      BACKUP_ARCHIVE_EXTENSION="tar.zst"
+      ;;
+    gzip)
+      require_command gzip "gzip is normally available by default; install gzip or set MONIKA_DEPLOY_BACKUP_COMPRESSION=zstd."
+      BACKUP_COMPRESSOR="gzip -n -$BACKUP_GZIP_LEVEL"
+      BACKUP_ARCHIVE_EXTENSION="tar.gz"
+      ;;
+  esac
+}
+
+verify_backup_compression() {
+  case "$BACKUP_COMPRESSION_RESOLVED" in
+    zstd) zstd -t "$1" >/dev/null ;;
+    gzip) gzip -t "$1" >/dev/null ;;
+  esac
+}
+
+backup_needs_sudo() {
+  if [ "$(id -u)" = "0" ]; then
+    return 1
+  fi
+
+  python3 - "$ROOT" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+excluded = {
+    (root / "runtime" / "backups").resolve(),
+    (root / "out").resolve(),
+}
+
+stack = [root]
+while stack:
+    current = stack.pop().resolve()
+    if current in excluded:
+        continue
+    if not os.access(current, os.R_OK | os.X_OK):
+        sys.exit(0)
+    try:
+        entries = list(os.scandir(current))
+    except OSError:
+        sys.exit(0)
+    for entry in entries:
+        path = Path(entry.path).resolve()
+        if path in excluded:
+            continue
+        try:
+            is_dir = entry.is_dir(follow_symlinks=False)
+        except OSError:
+            sys.exit(0)
+        if is_dir:
+            if not os.access(path, os.R_OK | os.X_OK):
+                sys.exit(0)
+            stack.append(path)
+        elif not os.access(path, os.R_OK):
+            sys.exit(0)
+
+sys.exit(1)
+PY
+}
+
 pull_images() {
   docker compose -f "$COMPOSE_FILE" pull monika forum
 }
@@ -153,28 +288,47 @@ update_needed() {
 }
 
 create_backup() {
-  local ts repo_parent repo_name tmp archive compressor
+  local ts repo_parent repo_name tmp archive needs_sudo
   ts="$(date -u +%Y%m%dT%H%M%SZ)"
   repo_parent="$(cd "$ROOT/.." && pwd)"
   repo_name="$(basename "$ROOT")"
+
+  resolve_tar_bin
+  resolve_backup_compression
+
   mkdir -p "$BACKUP_DIR"
   chmod 700 "$BACKUP_DIR"
-  archive="$BACKUP_DIR/monika-redeploy-$ts.tar.zst"
+  archive="$BACKUP_DIR/monika-redeploy-$ts.$BACKUP_ARCHIVE_EXTENSION"
   tmp="$archive.tmp"
-  compressor="zstd -T0 -$BACKUP_ZSTD_LEVEL"
+
+  needs_sudo=0
+  if backup_needs_sudo; then
+    needs_sudo=1
+  fi
 
   echo "creating backup: $archive"
   rm -f "$tmp"
-  run_as_backup_reader tar \
-    --exclude="$repo_name/runtime/backups" \
-    --exclude="$repo_name/out" \
-    -I "$compressor" \
-    -cf "$tmp" \
-    -C "$repo_parent" \
-    "$repo_name"
-  run_as_backup_reader chown "$(id -u):$(id -g)" "$tmp"
-  zstd -t "$tmp" >/dev/null
-  tar -tf "$tmp" >/dev/null
+  if [ "$needs_sudo" = "1" ]; then
+    echo "backup contains files not readable by $(id -un); using non-interactive sudo for archive read"
+    run_as_backup_reader "$TAR_BIN" \
+      --exclude="$repo_name/runtime/backups" \
+      --exclude="$repo_name/out" \
+      -I "$BACKUP_COMPRESSOR" \
+      -cf "$tmp" \
+      -C "$repo_parent" \
+      "$repo_name"
+    run_as_backup_reader chown "$(id -u):$(id -g)" "$tmp"
+  else
+    "$TAR_BIN" \
+      --exclude="$repo_name/runtime/backups" \
+      --exclude="$repo_name/out" \
+      -I "$BACKUP_COMPRESSOR" \
+      -cf "$tmp" \
+      -C "$repo_parent" \
+      "$repo_name"
+  fi
+  verify_backup_compression "$tmp"
+  "$TAR_BIN" -tf "$tmp" >/dev/null
   mv "$tmp" "$archive"
   chmod 600 "$archive"
   echo "backup complete: $archive"
@@ -192,7 +346,7 @@ from pathlib import Path
 
 backup_dir = Path(sys.argv[1])
 files = sorted(
-    [p for p in backup_dir.glob("monika-redeploy-*.tar.zst") if p.is_file()],
+    [p for pattern in ("monika-redeploy-*.tar.zst", "monika-redeploy-*.tar.gz") for p in backup_dir.glob(pattern) if p.is_file()],
     key=lambda p: p.stat().st_mtime,
     reverse=True,
 )

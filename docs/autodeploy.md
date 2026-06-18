@@ -103,13 +103,10 @@ Archive format:
 
 ```text
 monika-redeploy-YYYYmmddTHHMMSSZ.tar.zst
+monika-redeploy-YYYYmmddTHHMMSSZ.tar.gz
 ```
 
-Compression uses zstd level 3 with all CPUs:
-
-```text
-zstd -T0 -3
-```
+Compression defaults to `auto`: zstd level 3 with all CPUs when `zstd` is available, otherwise gzip level 6. Override with `MONIKA_DEPLOY_BACKUP_COMPRESSION=zstd` or `MONIKA_DEPLOY_BACKUP_COMPRESSION=gzip`. zstd and gzip levels can be adjusted with `MONIKA_DEPLOY_BACKUP_ZSTD_LEVEL` and `MONIKA_DEPLOY_BACKUP_GZIP_LEVEL`.
 
 The archive excludes:
 
@@ -120,7 +117,9 @@ out/
 
 `runtime/backups/` is excluded to prevent recursive backup growth. `out/` is generated output and not part of the runtime capsule.
 
-Some runtime files are deliberately root-owned inside the live checkout because they are mounted into containers as credentials. The backup step therefore runs the archive read through non-interactive `sudo` when the deploy user is not root, then returns ownership of the finished archive to the deploy user. Hosts using this runbook must either run the deploy service as root or allow the deploy user passwordless sudo for the backup read path.
+Some runtime files may be root-owned inside the live checkout because they are mounted into containers as credentials. The backup step first checks whether the deploy user can read and traverse the whole runtime capsule, excluding `runtime/backups/` and `out/`. If the capsule is readable, the archive is created without privilege escalation. If unreadable paths are present and the deploy user is not root, the script runs only the archive read through non-interactive `sudo`, then returns ownership of the finished temporary archive to the deploy user.
+
+Hosts using unattended deploys should either keep the runtime capsule readable by the deploy user or allow that user passwordless sudo for the backup read path. The deploy script is still intended to run as the runtime owner with Docker access, not as root; sudo is only a fallback for reading root-owned files during backup creation.
 
 ### Retention policy
 
@@ -146,7 +145,7 @@ Restore the latest archive:
 ```bash
 cd /home/monika/repos
 mv monika monika.broken.$(date -u +%Y%m%dT%H%M%SZ)
-tar --zstd -xf /path/to/monika-redeploy-YYYYmmddTHHMMSSZ.tar.zst -C /home/monika/repos
+tar -xf /path/to/monika-redeploy-YYYYmmddTHHMMSSZ.tar.zst -C /home/monika/repos
 cd /home/monika/repos/monika
 docker compose up -d --remove-orphans monika forum
 ```
@@ -187,6 +186,28 @@ docker image prune -f --filter "until=168h"
 ```
 
 This removes old dangling image layers while avoiding the destructive behavior of `docker image prune -a`. Do not use `-a` automatically; it can remove rollback candidates and unrelated images.
+
+## macOS / launchd notes
+
+`deploy-if-safe` requires GNU tar for backup archives. macOS ships BSD tar as `/usr/bin/tar`, which is not compatible with the script's GNU tar invocation. Install GNU tar with Homebrew. zstd is recommended for smaller/faster backups, but the script falls back to gzip when `MONIKA_DEPLOY_BACKUP_COMPRESSION=auto` and zstd is unavailable:
+
+```bash
+brew install gnu-tar zstd
+```
+
+The script automatically uses `gtar` when `tar` is not GNU tar. You can also set an explicit path:
+
+```bash
+MONIKA_DEPLOY_TAR_BIN=/opt/homebrew/bin/gtar ./scripts/deploy-if-safe --backup-only
+```
+
+For `launchd`, make sure the job environment can find Homebrew tools and Docker/OrbStack's CLI. A wrapper should normally set a PATH similar to:
+
+```bash
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+```
+
+If the runtime capsule is readable by the deploy user, macOS launchd deploys do not need sudo for backup creation. If root-owned runtime files are present, configure passwordless sudo for the narrow backup-read path or fix host-side ownership/permissions before enabling unattended deploys.
 
 ## systemd timer model
 
