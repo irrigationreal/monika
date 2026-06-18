@@ -62,6 +62,8 @@ const showInspectorTools = ref(false);
 const expandedInspectorTools = ref(new Set<string>());
 const showInspectorMessages = ref(false);
 const showScrollTop = ref(false);
+const liveTick = ref(0);
+let liveTickTimer: ReturnType<typeof setInterval> | null = null;
 const isReplying = ref(false);
 const isUploadingReply = ref(false);
 const replyFiles = ref<File[]>([]);
@@ -255,6 +257,8 @@ function liveToolDurationLabel(tool: ToolRunDto): string | null {
 }
 
 function liveToolTimeoutLabel(tool: ToolRunDto): string | null {
+  // Touch liveTick to force re-evaluation every second while tools are running
+  void liveTick.value;
   const mini = toolMini(tool);
   const timeoutMs = mini.meta.timeoutMs;
   if (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs)) return null;
@@ -1375,12 +1379,23 @@ watch(
   { immediate: true }
 );
 
+// --- Elapsed timer tick for running tools ---
+watch(isRobotBusy, (busy) => {
+  if (busy && !liveTickTimer) {
+    liveTickTimer = setInterval(() => { liveTick.value += 1; }, 1000);
+  } else if (!busy && liveTickTimer) {
+    clearInterval(liveTickTimer);
+    liveTickTimer = null;
+  }
+}, { immediate: true });
+
 onMounted(() => {
   window.addEventListener('scroll', handleScroll);
 });
 
 onUnmounted(() => {
   state.closeStream();
+  if (liveTickTimer) { clearInterval(liveTickTimer); liveTickTimer = null; }
   window.removeEventListener('scroll', handleScroll);
 });
 </script>

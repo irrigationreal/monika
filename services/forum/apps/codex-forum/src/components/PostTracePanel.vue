@@ -3,7 +3,7 @@
     <!-- Collapsible header (saved mode only) -->
     <button v-if="!live" class="vb-trace-toggle" type="button" @click="expanded = !expanded">
       <span class="vb-trace-toggle-icon">{{ expanded ? '&#9660;' : '&#9654;' }}</span>
-      <span>Reasoning and Tools</span>
+      <span>Trace History</span>
       <span class="vb-trace-summary" v-if="!expanded">
         ({{ toolRuns.length }} tool{{ toolRuns.length !== 1 ? 's' : '' }})
       </span>
@@ -49,7 +49,7 @@
                 class="vb-live-reasoning-history-item"
               >
                 <div class="vb-live-reasoning-history-row">
-                  <span class="vb-live-reasoning-history-bullet">✓</span>
+                  <span class="vb-live-reasoning-history-bullet">●</span>
                   <span class="vb-live-reasoning-history-title">{{ step.title }}</span>
                   <button
                     v-if="step.detail"
@@ -71,7 +71,7 @@
         <!-- ═══ SAVED MODE REASONING (parsed steps) ═══ -->
         <div v-else-if="!live && latestStep" class="vb-trace-section">
           <div class="vb-trace-section-header">
-            <span class="vb-live-turn-dot vb-live-turn-dot--success">✓</span>
+            <span class="vb-live-turn-dot vb-live-turn-dot--success">●</span>
             <span>Reasoning</span>
           </div>
           <!-- Older steps expandable -->
@@ -120,7 +120,7 @@
         <!-- ═══ SAVED MODE REASONING (fallback — raw plan HTML) ═══ -->
         <div v-else-if="!live && reasoningFallbackHtml" class="vb-trace-section">
           <div class="vb-trace-section-header">
-            <span class="vb-live-turn-dot vb-live-turn-dot--success">✓</span>
+            <span class="vb-live-turn-dot vb-live-turn-dot--success">●</span>
             <span>Reasoning</span>
           </div>
           <div
@@ -132,7 +132,7 @@
         <!-- ═══ TOOLS SECTION (both modes) ═══ -->
         <div v-if="toolRuns.length > 0" class="vb-trace-section">
           <div class="vb-trace-section-header">
-            <span class="vb-trace-section-icon">🔧</span>
+            <span class="vb-live-turn-dot vb-live-turn-dot--success">●</span>
             <span>Tools</span>
             <span class="vb-trace-section-count">{{ toolRuns.length }}</span>
           </div>

@@ -242,6 +242,51 @@
   border-radius: 2px;
   border: 1px solid var(--border-secondary);
 }
+/* Structured detail lines (parsed from ToolMiniModel) */
+.vb-timeline-detail-structured {
+  font-family: 'Menlo', 'Monaco', 'Consolas', monospace;
+  font-size: 10px;
+  line-height: 1.5;
+  padding: 4px 6px;
+  background: var(--bg-surface-alt);
+  border-radius: 2px;
+  border: 1px solid var(--border-secondary);
+}
+
+.vb-timeline-detail-line {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.vb-timeline-detail-line--command {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.vb-timeline-detail-line--meta {
+  color: var(--text-muted);
+}
+
+.vb-timeline-detail-line--file {
+  color: var(--text-secondary);
+}
+
+.vb-timeline-raw-toggle {
+  background: none;
+  border: 1px solid var(--border-default);
+  border-radius: 3px;
+  padding: 2px 8px;
+  font-size: 9px;
+  color: var(--text-muted);
+  cursor: pointer;
+  margin-top: 4px;
+}
+
+.vb-timeline-raw-toggle:hover {
+  color: var(--text-primary);
+  border-color: var(--text-muted);
+}
+
 
 /* ---------------------------------------------------------------------------
    Burst / Session node
