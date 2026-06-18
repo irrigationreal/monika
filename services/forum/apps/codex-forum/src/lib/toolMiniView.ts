@@ -165,10 +165,21 @@ function normalizeInput(inputJson: unknown, rawInput: string | null): string | n
 function extractTimeoutMs(inputJson: unknown): number | null {
   if (!inputJson || typeof inputJson !== 'object') return null;
   const record = inputJson as Record<string, unknown>;
-  const raw = record.timeoutMs ?? record.timeout_ms ?? record.timeout ?? null;
-  if (raw === null || raw === undefined) return null;
-  const value = typeof raw === 'number' ? raw : Number(raw);
-  return Number.isFinite(value) && value > 0 ? value : null;
+  // timeoutMs / timeout_ms are already in milliseconds.
+  // timeout is in seconds (Pi's Bash tool uses this convention).
+  if (record.timeoutMs !== null && record.timeoutMs !== undefined) {
+    const v = typeof record.timeoutMs === 'number' ? record.timeoutMs : Number(record.timeoutMs);
+    return Number.isFinite(v) && v > 0 ? v : null;
+  }
+  if (record.timeout_ms !== null && record.timeout_ms !== undefined) {
+    const v = typeof record.timeout_ms === 'number' ? record.timeout_ms : Number(record.timeout_ms);
+    return Number.isFinite(v) && v > 0 ? v : null;
+  }
+  if (record.timeout !== null && record.timeout !== undefined) {
+    const v = typeof record.timeout === 'number' ? record.timeout : Number(record.timeout);
+    return Number.isFinite(v) && v > 0 ? v * 1000 : null;  // seconds → ms
+  }
+  return null;
 }
 
 function extractCommand(inputJson: unknown, rawInput: string | null): string | null {
