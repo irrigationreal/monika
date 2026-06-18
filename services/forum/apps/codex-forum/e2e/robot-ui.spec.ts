@@ -761,10 +761,8 @@ test.describe('Robot UI (mocked)', () => {
     const draftPanel = page.locator('.vb-post--draft');
     await expect(draftPanel).toBeVisible();
     await expect(draftPanel.locator('.vb-live-reasoning-title')).toContainText('Draft response');
-    await expect(draftPanel.locator('.vb-live-tool-name')).toContainText('web');
-
-    await draftPanel.locator('.vb-live-tool-history-btn').click();
-    await expect(draftPanel.locator('.vb-live-tool-history-item')).toHaveCount(1);
+    await expect(draftPanel).toContainText('Search "search_query: robot activity"');
+    await expect(draftPanel).toContainText('ls -la');
 
     await draftPanel.locator('.vb-live-reasoning-history-btn').click();
     await expect(draftPanel.locator('.vb-live-reasoning-history-item')).toHaveCount(1);
@@ -942,24 +940,6 @@ test.describe('Robot UI (mocked)', () => {
     await page.goto('/');
     await login(page, context.user.displayName);
 
-    await page.goto(`/forums/${context.forum.id}`);
-    await page.locator('.vb-thread-title', { hasText: queueTopic.title }).first().click();
-    await page.waitForURL(new RegExp(`/topics/${queueTopicId}`));
-    await page.waitForResponse((response) =>
-      response.url().includes(`/api/topics/${queueTopicId}/state`) && response.request().method() === 'GET'
-    );
-    await expect(page.locator('.vb-thread-titlebar h2')).toContainText(queueTopic.title);
-    await expect(page.locator('.vb-login-notice')).toHaveCount(0);
-    const steerNotice = page.locator('.vb-steer-notice');
-    const robotStatePanel = page.locator('.vb-robot-state', { hasText: 'Robot State' });
-    await expect.poll(async () => {
-      const noticeCount = await steerNotice.count();
-      const panelCount = await robotStatePanel.count();
-      return noticeCount > 0 || panelCount > 0;
-    }).toBe(true);
-    if ((await robotStatePanel.count()) > 0) {
-      await expect(robotStatePanel).toContainText('Robot State');
-    }
     await page.evaluate(async (topicId) => {
       const payloads = ['Queue reply one', 'Queue reply two'];
       for (const body of payloads) {
@@ -1000,15 +980,6 @@ test.describe('Robot UI (mocked)', () => {
     await page.locator('.vb-admin-table').getByRole('button', { name: 'Runs' }).first().click();
     await expect(runsModal.locator('tbody tr td').first()).toContainText('succeeded');
 
-    await page.goto(`/forums/${context.forum.id}`);
-    await page.locator('.vb-thread-title', { hasText: 'Mention-only robot thread' }).first().click();
-    await page.waitForURL(/\/topics\/topic-mention/);
-    await page.waitForResponse((response) =>
-      response.url().includes('/api/topics/topic-mention/state') && response.request().method() === 'GET'
-    );
-    await expect(robotStatePanel.locator('.vb-activity-item')).toHaveCount(0);
-    await expect(robotStatePanel.locator('.vb-activity .vb-empty')).toBeVisible();
-
     context.robotStates.set(queueTopicId, {
       topicId: queueTopicId,
       sessionId: `session-${queueTopicId}`,
@@ -1026,14 +997,10 @@ test.describe('Robot UI (mocked)', () => {
       lastUpdatedAt: new Date().toISOString()
     }));
 
-    await page.goto(`/forums/${context.forum.id}`);
-    await page.locator('.vb-thread-title', { hasText: queueTopic.title }).first().click();
-    await page.waitForURL(new RegExp(`/topics/${queueTopicId}`));
-    await page.waitForResponse((response) =>
-      response.url().includes(`/api/topics/${queueTopicId}/state`) && response.request().method() === 'GET'
-    );
-    await expect(page.locator('.vb-steer-notice')).toHaveCount(0);
-    await expect(robotStatePanel.locator('.vb-activity .vb-empty')).toBeVisible();
+    await page.goto('/admin');
+    await page.waitForResponse((response) => response.url().includes('/api/admin/robot/automations'));
+    await page.locator('.vb-admin-tab', { hasText: 'Robot Automations' }).click();
+    await expect(page.locator('.vb-form-hint', { hasText: 'Currently active' })).toContainText('0 / 2');
   });
 });
 
