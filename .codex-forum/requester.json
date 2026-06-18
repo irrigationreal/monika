@@ -1,0 +1,23 @@
+{
+  "requestedAt": "2026-06-18T16:04:32.460Z",
+  "topicId": "49f68ab2-8f9b-4e80-8508-fc7bf9897571",
+  "parentPostId": "19852427-d7a0-4752-ab59-471bfbf0b157",
+  "nonRobotParticipants": [
+    {
+      "identityId": "adc7a7e0-b016-410f-9b85-2416176653c3",
+      "displayName": "Test Admin",
+      "username": "test-admin",
+      "kind": "admin",
+      "hasRobotOnlyEmail": false,
+      "robotOnlyEmail": null
+    }
+  ],
+  "requester": {
+    "identityId": "adc7a7e0-b016-410f-9b85-2416176653c3",
+    "displayName": "Test Admin",
+    "username": "test-admin",
+    "kind": "admin",
+    "hasRobotOnlyEmail": false,
+    "robotOnlyEmail": null
+  }
+}

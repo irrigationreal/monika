@@ -22,7 +22,7 @@
           }"
         >
           <div class="vb-live-reasoning-header">
-            <span class="vb-live-reasoning-icon">🧠</span>
+            <span class="vb-live-turn-dot vb-live-turn-dot--running">◉</span>
             <span class="vb-live-reasoning-title"><DecryptText :text="latestReasoningTitle ?? 'Thinking'" /></span>
             <div v-if="active" class="vb-live-reasoning-indicator">
               <span class="vb-live-reasoning-dot"></span>
@@ -71,7 +71,7 @@
         <!-- ═══ SAVED MODE REASONING (parsed steps) ═══ -->
         <div v-else-if="!live && latestStep" class="vb-trace-section">
           <div class="vb-trace-section-header">
-            <span class="vb-trace-section-icon">🧠</span>
+            <span class="vb-live-turn-dot vb-live-turn-dot--success">✓</span>
             <span>Reasoning</span>
           </div>
           <!-- Older steps expandable -->
@@ -120,7 +120,7 @@
         <!-- ═══ SAVED MODE REASONING (fallback — raw plan HTML) ═══ -->
         <div v-else-if="!live && reasoningFallbackHtml" class="vb-trace-section">
           <div class="vb-trace-section-header">
-            <span class="vb-trace-section-icon">🧠</span>
+            <span class="vb-live-turn-dot vb-live-turn-dot--success">✓</span>
             <span>Reasoning</span>
           </div>
           <div

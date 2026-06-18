@@ -171,6 +171,13 @@
   flex: 0 0 auto;
 }
 
+.vb-timeline-timeout {
+  font-size: 9px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  opacity: 0.75;
+}
+
 /* Status pill on event card */
 .vb-timeline-status {
   font-size: 9px;

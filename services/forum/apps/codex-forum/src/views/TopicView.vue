@@ -11,6 +11,7 @@ import { useMarkdown } from '../composables/useMarkdown';
 import { api } from '../lib/apiClient';
 import { parseReasoningSteps } from '../lib/reasoning';
 import { getToolMiniModel, toolKindIcon, traceToneForKind } from '../lib/toolMiniView';
+import { toolHumanTitle } from '../lib/toolTimeline';
 
 import type { RobotActivityEvent } from '../composables/useForumState';
 import type {
@@ -232,8 +233,7 @@ function compact(value: string | null | undefined, max = 400): string | null {
 
 function liveToolTitle(tool: ToolRunDto): string {
   const mini = toolMini(tool);
-  if (mini.kind === 'exec' && mini.summary) return mini.summary;
-  return mini.name || tool.tool || 'tool';
+  return toolHumanTitle(tool, mini) || mini.name || tool.tool || 'tool';
 }
 
 function liveToolDetail(tool: ToolRunDto): string | null {
@@ -252,6 +252,18 @@ function liveToolDurationLabel(tool: ToolRunDto): string | null {
   const ms = Math.max(0, end - start);
   if (ms < 1000) return `${ms}ms`;
   return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function liveToolTimeoutLabel(tool: ToolRunDto): string | null {
+  const mini = toolMini(tool);
+  const timeoutMs = mini.meta.timeoutMs;
+  if (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs)) return null;
+  if (tool.finishedAt) return `timeout ${formatDuration(timeoutMs)}`;
+  if (!tool.startedAt) return `timeout ${formatDuration(timeoutMs)}`;
+  const started = new Date(tool.startedAt).getTime();
+  if (!Number.isFinite(started)) return `timeout ${formatDuration(timeoutMs)}`;
+  const elapsed = Math.max(0, Date.now() - started);
+  return `${formatDuration(elapsed)} / ${formatDuration(timeoutMs)}`;
 }
 
 const liveTurnItems = computed<LiveTurnItem[]>(() => {
@@ -275,13 +287,13 @@ const liveTurnItems = computed<LiveTurnItem[]>(() => {
     }
     const tool = event.toolRun;
     const status = !tool.finishedAt ? 'running' : (toolExitCodeValue(tool) ?? 0) === 0 ? 'success' : 'error';
-    const timeoutHint = tool.command?.match(/timeout(?:Ms)?[=:]\s*(\d+)/i)?.[1] ?? null;
+    const timeoutLabel = liveToolTimeoutLabel(tool);
     items.push({
       id: event.id,
       type: 'tool',
       title: liveToolTitle(tool),
       status,
-      meta: [tool.tool, toolStatusLabel(tool), liveToolDurationLabel(tool), timeoutHint ? `timeout ${timeoutHint}ms` : null].filter(Boolean).join(' · '),
+      meta: [tool.tool, toolStatusLabel(tool), liveToolDurationLabel(tool), timeoutLabel].filter(Boolean).join(' · '),
       detail: liveToolDetail(tool),
     });
   }
@@ -2355,7 +2367,7 @@ onUnmounted(() => {
               :class="{ 'vb-activity-item--tool': event.type === 'tool_run' }"
             >
               <template v-if="event.type === 'reasoning_step'">
-                <div class="vb-activity-icon">🧠</div>
+                <div class="vb-activity-icon">●</div>
                 <div class="vb-activity-content">
                   <div class="vb-activity-head">
                     <span class="vb-activity-title">{{ event.title }}</span>

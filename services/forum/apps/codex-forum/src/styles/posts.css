@@ -2194,7 +2194,10 @@
 }
 
 .vb-live-turn-item--assistant_text .vb-live-turn-card {
-  border-color: var(--vb-accent-muted, rgba(143, 188, 187, 0.35));
+  border: none;
+  background: transparent;
+  padding-left: 0;
+  padding-right: 0;
 }
 
 .vb-live-turn-item-head {
@@ -2268,6 +2271,10 @@
 
 .vb-live-turn-assistant {
   padding-left: 0;
+}
+
+.vb-live-turn-item--assistant_text .vb-live-turn-dot {
+  visibility: hidden;
 }
 
 @media (max-width: 720px) {

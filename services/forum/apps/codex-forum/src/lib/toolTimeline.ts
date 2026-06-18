@@ -20,6 +20,7 @@ export interface TimelineEvent {
   status: TimelineStatus;
   durationMs: number | null;
   durationLabel: string | null;
+  timeoutLabel: string | null;
 }
 
 export interface TimelineBurst {
@@ -143,10 +144,11 @@ function basename(path: string): string {
 
 export function toolHumanTitle(tool: ToolRunDto, model?: ToolMiniModel): string {
   const m = model ?? getToolMiniModel(tool);
+  const lowerName = (m.name ?? '').toLowerCase();
 
   switch (m.kind) {
     case 'exec': {
-      if (m.name === 'write_stdin') {
+      if (lowerName === 'write_stdin') {
         const raw = m.summary ?? '';
         if (!raw) return 'stdin: <enter>';
         return `stdin: ${truncate(raw, 60)}`;
@@ -156,11 +158,11 @@ export function toolHumanTitle(tool: ToolRunDto, model?: ToolMiniModel): string 
       return m.name;
     }
     case 'read': {
-      if (m.name === 'list_dir') {
+      if (lowerName === 'list_dir' || lowerName === 'ls') {
         const dir = m.summary ?? '';
         return dir ? `List ${truncate(dir, 80)}` : 'List directory';
       }
-      if (m.name === 'grep_files') {
+      if (lowerName === 'grep_files' || lowerName === 'grep') {
         const pattern = m.summary ?? '';
         return pattern ? `Grep "${truncate(pattern, 60)}"` : 'Grep files';
       }
@@ -183,12 +185,12 @@ export function toolHumanTitle(tool: ToolRunDto, model?: ToolMiniModel): string 
       return m.summary ? `Patch: ${truncate(m.summary, 80)}` : 'Apply patch';
     }
     case 'web': {
-      if (m.name === 'webfetch' || m.name === 'open') {
+      if (lowerName === 'webfetch' || lowerName === 'open') {
         return m.summary ? `Fetch ${truncate(m.summary, 80)}` : 'Web fetch';
       }
-      if (m.name === 'screenshot') return 'Screenshot';
-      if (m.name === 'click') return m.summary ? `Click ${truncate(m.summary, 60)}` : 'Click';
-      if (m.name === 'find') return m.summary ? `Find "${truncate(m.summary, 60)}"` : 'Find element';
+      if (lowerName === 'screenshot') return 'Screenshot';
+      if (lowerName === 'click') return m.summary ? `Click ${truncate(m.summary, 60)}` : 'Click';
+      if (lowerName === 'find') return m.summary ? `Find "${truncate(m.summary, 60)}"` : 'Find element';
       // web_search / websearch / search_query
       return m.summary ? `Search "${truncate(m.summary, 60)}"` : 'Web search';
     }
@@ -196,11 +198,11 @@ export function toolHumanTitle(tool: ToolRunDto, model?: ToolMiniModel): string 
       return m.summary ? `Image: ${truncate(m.summary, 60)}` : 'Image query';
     }
     case 'agent': {
-      if (m.name === 'spawn_agent') return m.summary ? `Subagent: ${truncate(m.summary, 60)}` : 'Spawn agent';
-      if (m.name === 'send_input') return m.summary ? `Send input (${truncate(m.summary, 40)})` : 'Send input';
-      if (m.name === 'wait') return m.summary ? `Wait (${truncate(m.summary, 40)})` : 'Wait for agents';
-      if (m.name === 'close_agent') return m.summary ? `Close agent (${truncate(m.summary, 40)})` : 'Close agent';
-      if (m.name.startsWith('blackboard_')) return m.summary ? `Blackboard ${truncate(m.summary, 40)}` : m.name;
+      if (lowerName === 'spawn_agent') return m.summary ? `Subagent: ${truncate(m.summary, 60)}` : 'Spawn agent';
+      if (lowerName === 'send_input') return m.summary ? `Send input (${truncate(m.summary, 40)})` : 'Send input';
+      if (lowerName === 'wait') return m.summary ? `Wait (${truncate(m.summary, 40)})` : 'Wait for agents';
+      if (lowerName === 'close_agent') return m.summary ? `Close agent (${truncate(m.summary, 40)})` : 'Close agent';
+      if (lowerName.startsWith('blackboard_')) return m.summary ? `Blackboard ${truncate(m.summary, 40)}` : m.name;
       return m.summary ? truncate(m.summary, 80) : m.name;
     }
     case 'forum': {
@@ -260,6 +262,7 @@ function buildEvent(tool: ToolRunDto): TimelineEvent {
     status,
     durationMs,
     durationLabel: durationMs !== null ? formatDuration(durationMs) : null,
+    timeoutLabel: typeof model.meta.timeoutMs === 'number' && Number.isFinite(model.meta.timeoutMs) ? `timeout ${formatDuration(model.meta.timeoutMs as number)}` : null,
   };
 }
 

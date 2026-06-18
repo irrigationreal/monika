@@ -13,6 +13,7 @@
         class="vb-timeline-status vb-timeline-status--error"
       >error</span>
       <span v-if="event.durationLabel" class="vb-timeline-duration">{{ event.durationLabel }}</span>
+      <span v-if="event.timeoutLabel" class="vb-timeline-timeout">{{ event.timeoutLabel }}</span>
       <span class="vb-timeline-toggle-icon">{{ expanded ? '−' : '+' }}</span>
     </button>
     <div v-if="event.subtitle && !expanded" class="vb-timeline-subtitle">{{ event.subtitle }}</div>

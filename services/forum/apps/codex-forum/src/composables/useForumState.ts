@@ -107,11 +107,13 @@ let assistantMessagePending = false;
 let topicLoadCounter = 0;
 let topicHydrationEnabled = true;
 let liveTurnStartedAt: number | null = null;
+let reasoningSegmentBase = 0; // tracks ID offset for reasoning entries across tool boundaries
 
 function resetRobotActivity(): void {
   reasoningSteps.value = [];
   activityLog.value = [];
   reasoningStepCount = 0;
+  reasoningSegmentBase = 0;
 }
 
 function syncReasoningActivity(statusOverride?: { status: 'running' | 'done' }): void {
@@ -130,12 +132,30 @@ function syncReasoningActivity(statusOverride?: { status: 'running' | 'done' }):
     // We do not expect the reasoning stream to shrink, but if it does, treat it as a reset.
     activityLog.value = activityLog.value.filter((event) => event.type !== 'reasoning_step');
     reasoningStepCount = 0;
+    reasoningSegmentBase = 0;
+  }
+
+  // If there are tool events after the last known reasoning step, bump the segment base
+  // so new reasoning steps get fresh IDs and appear after the tools.
+  if (parsed.length > reasoningStepCount && reasoningStepCount > 0) {
+    const lastReasoningId = `reasoning:${reasoningSegmentBase + reasoningStepCount - 1}`;
+    const lastReasoningIdx = activityLog.value.findIndex(
+      (event) => event.type === 'reasoning_step' && event.id === lastReasoningId
+    );
+    const hasToolAfterLastReasoning =
+      lastReasoningIdx >= 0 &&
+      activityLog.value.slice(lastReasoningIdx + 1).some((event) => event.type === 'tool_run');
+    if (hasToolAfterLastReasoning) {
+      // Advance the segment base so new steps get IDs that don't collide
+      // with existing entries, causing them to be appended at the end.
+      reasoningSegmentBase += reasoningStepCount;
+    }
   }
 
   for (let i = 0; i < parsed.length; i++) {
     const step = parsed[i];
     if (!step) continue;
-    const id = `reasoning:${String(i)}`;
+    const id = `reasoning:${String(reasoningSegmentBase + i)}`;
     const existing = activityLog.value.find((event) => event.type === 'reasoning_step' && event.id === id) as
       | Extract<RobotActivityEvent, { type: 'reasoning_step' }>
       | undefined;
@@ -162,7 +182,9 @@ function syncReasoningActivity(statusOverride?: { status: 'running' | 'done' }):
     const match = /^reasoning:(\d+)$/.exec(event.id);
     const idx = match ? Number(match[1]) : NaN;
     if (!Number.isFinite(idx)) continue;
-    if (idx < lastIndex) {
+    // Only touch entries in the current segment
+    const segmentIdx = idx - reasoningSegmentBase;
+    if (segmentIdx >= 0 && segmentIdx < lastIndex) {
       event.status = 'done';
     }
   }
