@@ -360,6 +360,8 @@ const liveTurnItems = computed<LiveTurnItem[]>(() => {
     items.push({ id: 'assistant:live', type: 'assistant_text', title: '', status: 'running', text: pendingAssistant });
   }
 
+  if (typeof window !== 'undefined' && items.length > 0) {
+  }
   return items;
 });
 
@@ -2107,6 +2109,7 @@ onUnmounted(() => {
         :model="state.robotState.value?.model ?? null"
         :reasoning="state.robotState.value?.reasoningEffort ?? null"
         :active="isRobotThinking"
+        :interrupted="state.interruptedTrace.value"
         :topicId="routeTopicId"
         :id="String(liveTurnPostNumber)"
       />

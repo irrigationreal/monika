@@ -1,8 +1,8 @@
 <template>
   <div class="vb-live-turn vb-post vb-post--draft">
     <div class="vb-post-header vb-live-turn-header">
-      <div>● Monika is responding</div>
-      <div class="vb-post-draft-pill">LIVE</div>
+      <div>{{ interrupted ? '■ Response stopped' : '● Monika is responding' }}</div>
+      <div class="vb-post-draft-pill">{{ interrupted ? 'STOPPED' : 'LIVE' }}</div>
     </div>
 
     <div class="vb-live-turn-body">
@@ -109,9 +109,11 @@ const props = defineProps<{
   reasoning?: string | null;
   active?: boolean;
   topicId?: string | null;
+  interrupted?: boolean;
 }>();
 
 const { renderContent } = useMarkdown();
+
 const expanded = ref(new Set<string>());
 
 const activityLabel = computed(() => {

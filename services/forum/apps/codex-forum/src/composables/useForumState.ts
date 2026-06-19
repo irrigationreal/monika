@@ -52,6 +52,8 @@ const reasoningDraft = ref('');
 const assistantDraft = ref('');
 const reasoningSteps = ref<ReasoningStep[]>([]);
 const committedSegments = ref<TraceSegment[]>([]);
+/** True when the response was interrupted — keeps the trace visible as frozen. */
+const interruptedTrace = ref(false);
 
 export type RobotActivityEvent =
   | {
@@ -155,21 +157,19 @@ function syncToolActivity(toolRuns: RobotStateDto['recentToolRuns']): void {
   const runsOldestFirst = toolRuns.slice().reverse();
 
   for (const run of runsOldestFirst) {
-    // No timestamp filter — the append-only model handles turn boundaries
-    // via assistant_reset clearing committedSegments. A clock-skew-sensitive
-    // filter here was causing tools to be silently dropped for remote users.
     const id = `tool:${run.id}`;
     const existing = activityLog.value.find((event) => event.type === 'tool_run' && event.id === id) as
       | Extract<RobotActivityEvent, { type: 'tool_run' }>
       | undefined;
     if (existing) {
-      existing.toolRun = run;
+      // Immutable update so Vue re-triggers computed dependencies
+      activityLog.value = activityLog.value.map(e =>
+        e.type === 'tool_run' && e.id === id ? { ...e, toolRun: run } : e
+      );
       continue;
     }
-    // Flush all buffered deltas so checkpoints reflect everything that
-    // arrived before this tool event.
-    flushPendingDeltas();
-    activityLog.value.push({ type: 'tool_run', id, seq: 0, toolRun: run });
+    // Immutable append so Vue re-triggers computed dependencies
+    activityLog.value = [...activityLog.value, { type: 'tool_run', id, seq: 0, toolRun: run }];
   }
 }
 function getTopicActivityTime(topic: TopicDto): number {
@@ -209,6 +209,7 @@ export function useForumState() {
 
   const hasPendingAssistantTurn = computed(() => {
     if (!selectedTopic.value?.robotMode || selectedTopic.value.robotMode === 'off') return false;
+    if (interruptedTrace.value) return true;
     if (assistantDraft.value.trim()) return true;
     if (committedSegments.value.length > 0) return true;
     const activity = robotState.value?.activity ?? 'idle';
@@ -512,7 +513,9 @@ export function useForumState() {
 
   /** Reconstruct committed segments from server state (for refresh/reconnect resilience). */
   function reconstructSegmentsFromState(state: RobotStateDto | null): void {
-    if (!state) {
+    if (!state || state.activity === 'idle') {
+      // Don't reconstruct when idle — prevents stale data from
+      // repopulating the trace after interrupt or completed response.
       reasoningDraft.value = '';
       assistantDraft.value = '';
       return;
@@ -822,14 +825,28 @@ export function useForumState() {
       pendingAssistantDelta += payload.delta;
       scheduleStreamFlush();
     });
-    stream.addEventListener('assistant_reset', () => {
-      assistantDraft.value = '';
-      reasoningDraft.value = '';
-      pendingAssistantDelta = '';
-      pendingReasoningDelta = '';
-      activePlanId = null;
-      liveTurnStartedAt = Date.now();
-      resetRobotActivity();
+    stream.addEventListener('assistant_reset', (event: MessageEvent<string>) => {
+      const payload = JSON.parse(event.data) as { reason?: string };
+      if (payload.reason === 'interrupted' && committedSegments.value.length > 0) {
+        // Keep committed segments visible as a frozen "stopped" trace.
+        // Don't clear segments — just stop accumulating new content.
+        assistantDraft.value = '';
+        reasoningDraft.value = '';
+        pendingAssistantDelta = '';
+        pendingReasoningDelta = '';
+        activePlanId = null;
+        interruptedTrace.value = true;
+      } else {
+        // New turn: clear everything for a fresh start.
+        assistantDraft.value = '';
+        reasoningDraft.value = '';
+        pendingAssistantDelta = '';
+        pendingReasoningDelta = '';
+        activePlanId = null;
+        liveTurnStartedAt = Date.now();
+        interruptedTrace.value = false;
+        resetRobotActivity();
+      }
     });
     stream.addEventListener('assistant_message', () => {
       if (assistantMessagePending) return;
@@ -1361,6 +1378,7 @@ export function useForumState() {
     assistantDraft,
     reasoningSteps,
     committedSegments,
+    interruptedTrace,
     activityLog,
     sessionInfo,
     sessionInspector,
