@@ -326,12 +326,13 @@ const liveTurnItems = computed<LiveTurnItem[]>(() => {
       } else {
         // Tool segment committed but state event hasn't arrived yet.
         // Show a placeholder so the trace doesn't appear to hang.
+        // Use tool:${id} format so Vue transitions smoothly when real data arrives.
         items.push({
-          id: `tool:pending:${seg.toolRunId}`,
+          id: `tool:${seg.toolRunId}`,
           type: 'tool',
           title: 'Running tool\u2026',
           status: 'running',
-          meta: null,
+          meta: 'starting',
           detail: null,
           startedAt: null,
           timeoutMs: null,
