@@ -133,10 +133,12 @@ function contrastRatio(colorA: string, colorB: string): number {
   return (bright + 0.05) / (dark + 0.05);
 }
 
-async function loadThemeVars(theme: 'classic-light' | 'classic-dark'): Promise<Record<string, string>> {
+type ThemeUnderTest = 'classic-light' | 'classic-dark' | 'vmonika';
+
+async function loadThemeVars(theme: ThemeUnderTest): Promise<Record<string, string>> {
   const css = await readFile(path.join(__dirname, 'theme.css'), 'utf8');
   const rootVars = parseVarsFromBlock(css, ':root');
-  const themeSelector = theme === 'classic-dark' ? '[data-theme="classic-dark"]' : '[data-theme="classic-light"]';
+  const themeSelector = theme === 'classic-light' ? '[data-theme="classic-light"]' : `[data-theme="${theme}"]`;
   const themeVars = parseVarsFromBlock(css, themeSelector);
   return { ...rootVars, ...themeVars };
 }
@@ -167,6 +169,19 @@ describe('theme contrast baselines', () => {
       const ratio = contrastRatio(text, background);
 
       expect(ratio, `classic-dark ${pairKey} contrast`).toBeGreaterThanOrEqual(baseline - EPSILON);
+    }
+  });
+
+  it('keeps vMonika core contrast comfortably above WCAG AA text thresholds', async () => {
+    const vars = await loadThemeVars('vmonika');
+
+    for (const [textKey, bgKey] of CONTRAST_PAIRS) {
+      const pairKey = `${textKey} on ${bgKey}`;
+      const text = resolveVarValue(vars, `--${textKey}`);
+      const background = resolveVarValue(vars, `--${bgKey}`);
+      const ratio = contrastRatio(text, background);
+
+      expect(ratio, `vMonika ${pairKey} contrast`).toBeGreaterThanOrEqual(4.5);
     }
   });
 });
