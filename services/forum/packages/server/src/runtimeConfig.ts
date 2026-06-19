@@ -62,6 +62,11 @@ function readCommaListEnv(name: string): string[] | null {
   return items.length ? items : null;
 }
 
+function readStringEnv(name: string): string | null {
+  const value = process.env[name]?.trim();
+  return value || null;
+}
+
 export const PORT: number = Number(process.env['CODEX_FORUM_PORT'] ?? 4310);
 export const DB_PATH: string = process.env['CODEX_FORUM_DB'] ?? '/var/lib/codex-forum/data.db';
 export const MODEL: string =
@@ -151,9 +156,13 @@ export const OIDC_PROMPT: string | null = process.env['CODEX_FORUM_OIDC_PROMPT']
 export const OIDC_REDIRECT_URL: string | null = process.env['CODEX_FORUM_OIDC_REDIRECT_URL'] ?? null;
 export const CORS_ORIGINS: string[] | null = readCommaListEnv('CODEX_FORUM_CORS_ORIGINS');
 export const CORS_CREDENTIALS: boolean = process.env['CODEX_FORUM_CORS_CREDENTIALS'] === '1';
-export const BOOTSTRAP_ADMIN_USERNAME: string | null = process.env['CODEX_FORUM_BOOTSTRAP_ADMIN_USERNAME'] ?? null;
+export const BOOTSTRAP_ADMIN_USERNAME: string | null = readStringEnv('CODEX_FORUM_BOOTSTRAP_ADMIN_USERNAME');
 export const BOOTSTRAP_ADMIN_PASSWORD: string | null = process.env['CODEX_FORUM_BOOTSTRAP_ADMIN_PASSWORD'] ?? null;
-export const BOOTSTRAP_ADMIN_DISPLAY_NAME: string = process.env['CODEX_FORUM_BOOTSTRAP_ADMIN_DISPLAY_NAME'] ?? 'Admin';
+export const BOOTSTRAP_ADMIN_DISPLAY_NAME: string = readStringEnv('CODEX_FORUM_BOOTSTRAP_ADMIN_DISPLAY_NAME') ?? 'Admin';
+export const DEFAULT_WEB_IDENTITY_ID: string | null = readStringEnv('CODEX_FORUM_DEFAULT_WEB_IDENTITY_ID');
+export const DEFAULT_WEB_IDENTITY_USERNAME: string | null = readStringEnv('CODEX_FORUM_DEFAULT_WEB_IDENTITY_USERNAME');
+export const DEFAULT_WEB_IDENTITY_DISPLAY_NAME: string = readStringEnv('CODEX_FORUM_DEFAULT_WEB_IDENTITY_DISPLAY_NAME') ?? 'Web User';
+export const DEFAULT_WEB_IDENTITY_AVATAR_URL: string = readStringEnv('CODEX_FORUM_DEFAULT_WEB_IDENTITY_AVATAR_URL') ?? '/avatars/user.svg';
 const DEFAULT_STORE_STATS_CACHE_TTL_MS = 2_000;
 const DEFAULT_STORE_ENTITY_CACHE_TTL_MS = 30_000;
 const DEFAULT_STORE_CACHE_MAX_ENTRIES = 5_000;
