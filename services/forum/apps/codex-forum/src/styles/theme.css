@@ -303,6 +303,156 @@
   --spoiler-summary-hover-end: #2a2520;
 }
 
+[data-theme="vmonika"] {
+  /* Fonts */
+  --font-body: Verdana, Tahoma, Trebuchet MS, sans-serif;
+  --font-heading: Trebuchet MS, Verdana, Tahoma, sans-serif;
+  --font-mono: Consolas, Monaco, monospace;
+
+  /* vMonika tokens — Classic Dark hue-shifted +93° */
+  --vmonika-bg-page: #0a0a0a;
+  --vmonika-bg-surface: #111111;
+  --vmonika-bg-surface-alt: #1a1a1a;
+  --vmonika-bg-surface-muted: #151515;
+  --vmonika-bg-surface-hover: #202523;
+  --vmonika-bg-input: #1a1a1a;
+  --vmonika-bg-code: #0d0d0d;
+  --vmonika-bg-quote: #151a16;
+  --vmonika-bg-highlight: #203d28;
+
+  --vmonika-text-primary: #d3f0d9;
+  --vmonika-text-secondary: #a8d4b0;
+  --vmonika-text-muted: #80a886;
+  --vmonika-text-subtle: #506b54;
+  --vmonika-text-disabled: #404a40;
+  --vmonika-text-inverse: #ffffff;
+  --vmonika-text-code: #c0e0c7;
+  --vmonika-text-code-inline: #74f08e;
+
+  --vmonika-brand-primary: #37d468;
+  --vmonika-brand-primary-light: #60f08f;
+  --vmonika-brand-primary-hover: #00ff64;
+  --vmonika-brand-secondary: #558b5b;
+  --vmonika-brand-accent: #50c96a;
+
+  --vmonika-border-default: #313d30;
+  --vmonika-border-subtle: #202a21;
+  --vmonika-border-strong: #405a44;
+  --vmonika-border-muted: #283328;
+  --vmonika-border-primary: #37d468;
+  --vmonika-border-nav-item: #304a34;
+
+  /* Backgrounds - Deep black with cool green warmth */
+  --bg-page: var(--vmonika-bg-page);
+  --bg-surface: var(--vmonika-bg-surface);
+  --bg-surface-alt: var(--vmonika-bg-surface-alt);
+  --bg-surface-muted: var(--vmonika-bg-surface-muted);
+  --bg-surface-hover: var(--vmonika-bg-surface-hover);
+  --bg-input: var(--vmonika-bg-input);
+  --bg-code: var(--vmonika-bg-code);
+  --bg-quote: var(--vmonika-bg-quote);
+  --bg-highlight: var(--vmonika-bg-highlight);
+
+  /* Text */
+  --text-primary: var(--vmonika-text-primary);
+  --text-secondary: var(--vmonika-text-secondary);
+  --text-muted: var(--vmonika-text-muted);
+  --text-subtle: var(--vmonika-text-subtle);
+  --text-disabled: var(--vmonika-text-disabled);
+  --text-inverse: var(--vmonika-text-inverse);
+  --text-code: var(--vmonika-text-code);
+  --text-code-inline: var(--vmonika-text-code-inline);
+
+  /* Brand - vivid Monika green */
+  --brand-primary: var(--vmonika-brand-primary);
+  --brand-primary-light: var(--vmonika-brand-primary-light);
+  --brand-primary-hover: var(--vmonika-brand-primary-hover);
+  --brand-secondary: var(--vmonika-brand-secondary);
+  --brand-accent: var(--vmonika-brand-accent);
+
+  /* Borders */
+  --border-default: var(--vmonika-border-default);
+  --border-subtle: var(--vmonika-border-subtle);
+  --border-strong: var(--vmonika-border-strong);
+  --border-muted: var(--vmonika-border-muted);
+  --border-primary: var(--vmonika-border-primary);
+  --border-nav-item: var(--vmonika-border-nav-item);
+
+  /* Status */
+  --status-success: #505ec8;
+  --status-success-bg: #1a232f;
+  --status-success-light: #2a384a;
+  --status-error: #91e050;
+  --status-error-bg: #232f1a;
+  --status-error-light: #384a2a;
+  --status-warning: #30f052;
+  --status-warning-bg: #102f17;
+  --status-info: #ce60d0;
+  --status-info-bg: #301a2f;
+
+  /* Gradients - black and green */
+  --grad-nav-start: #202a21;
+  --grad-nav-end: #101a10;
+  --grad-btn-start: #313d30;
+  --grad-btn-end: #101a10;
+  --grad-btn-hover-start: #304a34;
+  --grad-btn-hover-end: #202a21;
+  --grad-header-start: #202a21;
+  --grad-header-end: #101a10;
+  --grad-tools-start: #313d30;
+  --grad-tools-end: #202a21;
+  --grad-page-start: #151515;
+  --grad-page-end: #0a0a0a;
+  --grad-section-start: #202523;
+  --grad-section-end: #151a16;
+  --grad-trace-collapsed-start: #313d30;
+  --grad-trace-collapsed-end: #202a21;
+  --grad-secondary-start: #313d30;
+  --grad-secondary-end: #202a21;
+  --grad-danger-start: #62a030;
+  --grad-danger-end: #447020;
+  --grad-success-start: #303480;
+  --grad-success-end: #232060;
+
+  /* Trace cards */
+  --trace-reasoning-start: #7a4d70;
+  --trace-reasoning-end: #592e50;
+  --trace-reasoning-border: #99608a;
+  --trace-tool-start: #476d40;
+  --trace-tool-end: #2b3f28;
+  --trace-tool-border: #448c3d;
+  --trace-search-start: #603f69;
+  --trace-search-end: #3c2442;
+  --trace-search-border: #7f4b8c;
+  --trace-image-start: #734d4b;
+  --trace-image-end: #4d3132;
+  --trace-image-border: #8c4e4b;
+  --trace-read-start: #3f426b;
+  --trace-read-end: #2c2b4b;
+  --trace-read-border: #4c4b8c;
+  --trace-exec-start: #536b3f;
+  --trace-exec-end: #344526;
+  --trace-exec-border: #688c4b;
+
+  /* Shadows */
+  --shadow-color: rgba(0, 0, 0, 0.5);
+  --shadow-strong: rgba(0, 0, 0, 0.7);
+  --overlay-color: rgba(0, 0, 0, 0.8);
+
+  /* Specific UI Elements */
+  --topbar-bg: #0d0d0d;
+  --post-header-bg: #202523;
+  --table-section-bg: #202523;
+  --notice-bg: #102a14;
+  --notice-border: #205a2b;
+  --notice-text: #60f07f;
+  --inline-code-bg: #202523;
+  --spoiler-summary-start: #202a21;
+  --spoiler-summary-end: #151a16;
+  --spoiler-summary-hover-start: #313d30;
+  --spoiler-summary-hover-end: #202a21;
+}
+
 [data-theme="lunar-horse"] {
   /* A Lunar New Year inspired theme: auspicious reds, warm paper, and gold trim. */
   --font-body: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", Verdana, Tahoma, Trebuchet MS, sans-serif;

@@ -49,6 +49,13 @@ export const FORUM_THEMES: readonly ForumThemeDefinition[] = [
     tone: 'dark'
   },
   {
+    key: 'vmonika',
+    label: 'vMonika',
+    era: 'Classic',
+    description: 'Classic RoboBB Dark hue-shifted into a vivid blue-green palette — familiar forum chrome, but tuned for Monika.',
+    tone: 'dark'
+  },
+  {
     key: 'lunar-horse',
     label: 'Lunar New Year (Horse)',
     era: 'Seasonal',
