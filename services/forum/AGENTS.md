@@ -120,36 +120,44 @@ trace rendering.
 
 ### Footguns to know before modifying trace code
 
-1. **Flush before checkpoint.** `reasoning_delta` and `assistant_delta` are rAF-buffered.
-   `tool_started` events process synchronously. Call `flushPendingDeltas()` before
-   recording any checkpoint or the text lengths will be stale.
+1. **Append-only segments.** The live trace uses committed segments that never
+   change once pushed. When `tool_started` fires, current drafts are committed
+   as frozen segments and cleared. New content only appears at the tail. Never
+   retroactively modify or reorder committed segments.
 
-2. **Use `tool_started`, not `recentToolRuns`.** The `state` SSE event carries all
-   recent tools at once — there's no incremental tool-by-tool progression. Checkpoints
-   must be triggered by per-tool `tool_started` events.
+2. **Flush before commit.** `reasoning_delta` and `assistant_delta` are
+   rAF-buffered. `tool_started` events process synchronously. Call
+   `flushPendingDeltas()` before committing segments or the text will be stale.
 
-3. **Use `kind` for formatting, not tool names.** Pi tool names are capitalised
+3. **Use `tool_started`, not `recentToolRuns`.** The `state` SSE event carries all
+   recent tools at once — there's no incremental tool-by-tool progression. Tool
+   segments must be committed from per-tool `tool_started` events.
+
+4. **Immutable `activityLog` updates.** Use `activityLog.value = [...]` not
+   `.push()`. In-place mutations may not trigger Vue computed re-evaluation
+   reliably through intermediate computed refs.
+
+5. **Use `kind` for formatting, not tool names.** Pi tool names are capitalised
    (`Bash`, `Read`). The `tool` DB column is normalised lowercase (`exec`, `read`).
-   The `command` column preserves the original. Branch on `kind` (from
-   `toolKindFromName`), and lowercase names before sub-type checks.
+   Branch on `kind` (from `toolKindFromName`), and lowercase names for sub-type checks.
 
-4. **Timeout is seconds from Pi, milliseconds elsewhere.** `extractTimeoutMs`
+6. **Timeout is seconds from Pi, milliseconds elsewhere.** `extractTimeoutMs`
    handles both. Don't add new timeout extraction without checking units.
 
-5. **Elapsed timers must use client-relative time.** Server timestamps differ from
-   browser clocks. `ToolElapsedTimer` records `Date.now()` at mount and ticks from
-   there. Never use `Date.now() - serverTimestamp` for live countdown display.
+7. **Elapsed timers must use client-relative time.** `ToolElapsedTimer` records
+   `Date.now()` at mount. Never use `Date.now() - serverTimestamp` for live display.
 
-6. **`assistant_reset` fires once per dispatch, not per Pi turn.** A single reply
-   spans multiple Pi turns (think → tools → think → tools → final text). Don't add
-   mid-response resets.
+8. **`assistant_reset` fires once per dispatch or interrupt.** `reason: 'new_turn'`
+   clears everything. `reason: 'interrupted'` preserves committed segments as a
+   frozen trace. A single reply spans multiple Pi turns — don't add mid-response resets.
 
-7. **`parseReasoningSteps` is positional, not temporal.** It splits on `**bold**`
-   markers. Adding text to an existing step's detail doesn't change the step count.
-   Checkpoints use raw text length, not step count.
+9. **`parseReasoningSteps` only splits at line starts.** Inline bold like
+   `- **Gold** as currency` is NOT a step boundary. Only `**...**` at the start
+   of a line (after newline + optional whitespace) creates a new step.
 
-8. **Saved trace checkpoints are nullable.** Old data and imported sessions won't
-   have `reasoning_checkpoints_json`. Always handle the fallback path.
+10. **Saved trace checkpoints are nullable.** Old data and imported sessions won't
+    have `reasoning_checkpoints_json`. Always handle the fallback path.
+
 
 See `docs/forum.md` § "Live trace and saved trace architecture" for the full event
 pipeline and checkpoint design.

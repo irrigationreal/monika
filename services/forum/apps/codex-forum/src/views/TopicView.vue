@@ -260,27 +260,16 @@ function liveToolDurationLabel(tool: ToolRunDto): string | null {
 const liveTurnItems = computed<LiveTurnItem[]>(() => {
   const items: LiveTurnItem[] = [];
   const activity = state.robotState.value?.activity ?? 'idle';
-  if (activity !== 'idle') {
+  const isIdle = activity === 'idle';
+
+  // 1. Status item
+  if (!isIdle) {
     const statusTitle = activity === 'running_tools' ? 'Running tools' : activity === 'waiting' ? 'Waiting' : activity === 'error' ? 'Error' : 'Thinking';
     items.push({ id: 'status:activity', type: 'status', title: statusTitle, status: activity === 'error' ? 'error' : 'running' });
   }
 
-  // Checkpoints record the character lengths of reasoningDraft and assistantDraft
-  // at the moment each tool event first appeared. We split both texts at those
-  // boundaries and parse/render each segment independently, interleaving them
-  // with tool cards in chronological order.
-  const toolEvents = liveActivityEvents.value.filter(
-    (e): e is Extract<RobotActivityEvent, { type: 'tool_run' }> => e.type === 'tool_run'
-  );
-  const rCheckpoints = state.reasoningCheckpoints.value;
-  const aCheckpoints = state.assistantCheckpoints.value;
-  const fullReasoning = state.reasoningDraft.value;
-  const fullDraft = state.assistantDraft.value;
-  const isIdle = activity === 'idle';
-  let rCursor = 0;
-  let aCursor = 0;
-
-  function pushReasoningSegment(text: string, segId: string, isLast: boolean): void {
+  // Helper to push parsed reasoning steps from a text segment
+  function pushReasoningSegment(text: string, segId: string, isLive: boolean): void {
     const steps = parseReasoningSteps(text);
     for (let i = 0; i < steps.length; i++) {
       const step = steps[i];
@@ -289,68 +278,89 @@ const liveTurnItems = computed<LiveTurnItem[]>(() => {
         id: `${segId}:${i}`,
         type: 'reasoning',
         title: step.title || 'Thinking',
-        status: i === steps.length - 1 && isLast && !isIdle ? 'running' : 'done',
+        status: i === steps.length - 1 && isLive && !isIdle ? 'running' : 'done',
         markdown: step.detail ?? null,
       });
     }
   }
 
-  function pushAssistantSlice(from: number, to: number, sliceId: string): void {
-    const slice = fullDraft.slice(from, to).trim();
-    if (!slice) return;
-    items.push({
-      id: sliceId,
-      type: 'assistant_text',
-      title: '',
-      status: 'done',
-      text: slice,
-    });
+  // Helper to look up a tool run from activityLog by toolRunId
+  const toolRunIndex = new Map<string, Extract<RobotActivityEvent, { type: 'tool_run' }>>();
+  for (const event of state.activityLog.value) {
+    if (event.type === 'tool_run') {
+      // The activityLog id is `tool:${run.id}`, but we match on the toolRun.id
+      toolRunIndex.set(event.toolRun.id, event);
+    }
   }
 
-  for (let t = 0; t < toolEvents.length; t++) {
-    // Emit reasoning that existed before this tool
-    const rCp = rCheckpoints[t] ?? fullReasoning.length;
-    const rSegment = fullReasoning.slice(rCursor, rCp).trim();
-    if (rSegment) pushReasoningSegment(rSegment, `reasoning:seg${t}`, false);
-    rCursor = rCp;
-
-    // Emit assistant text that existed before this tool
-    const aCp = aCheckpoints[t] ?? fullDraft.length;
-    pushAssistantSlice(aCursor, aCp, `assistant:mid:${t}`);
-    aCursor = aCp;
-
-    // Emit the tool card
-    const tool = toolEvents[t].toolRun;
-    const status = !tool.finishedAt ? 'running' : (toolExitCodeValue(tool) ?? 0) === 0 ? 'success' : 'error';
-    const mini = toolMini(tool);
-    const toolTimeoutMs = typeof mini.meta.timeoutMs === 'number' && Number.isFinite(mini.meta.timeoutMs) ? (mini.meta.timeoutMs as number) : null;
-    const finishedTimeoutLabel = (tool.finishedAt && toolTimeoutMs) ? `timeout ${formatDuration(toolTimeoutMs)}` : null;
-    items.push({
-      id: toolEvents[t].id,
-      type: 'tool',
-      title: liveToolTitle(tool),
-      status,
-      meta: [tool.tool, toolStatusLabel(tool), liveToolDurationLabel(tool), finishedTimeoutLabel].filter(Boolean).join(' \u00b7 '),
-      detail: liveToolDetail(tool),
-      startedAt: tool.startedAt ?? null,
-      timeoutMs: !tool.finishedAt ? toolTimeoutMs : null,
-      finished: Boolean(tool.finishedAt),
-    });
+  // 2. Iterate committed segments (frozen, append-only)
+  const segments = state.committedSegments.value;
+  for (let s = 0; s < segments.length; s++) {
+    const seg = segments[s]!;
+    if (seg.kind === 'reasoning') {
+      pushReasoningSegment(seg.text, `seg:r:${s}`, false);
+    } else if (seg.kind === 'assistant_text') {
+      const text = seg.text.trim();
+      if (text) {
+        items.push({ id: `seg:a:${s}`, type: 'assistant_text', title: '', status: 'done', text });
+      }
+    } else if (seg.kind === 'tool') {
+      const toolEvent = toolRunIndex.get(seg.toolRunId);
+      if (toolEvent) {
+        const tool = toolEvent.toolRun;
+        const status = !tool.finishedAt ? 'running' : (toolExitCodeValue(tool) ?? 0) === 0 ? 'success' : 'error';
+        const mini = toolMini(tool);
+        const toolTimeoutMs = typeof mini.meta.timeoutMs === 'number' && Number.isFinite(mini.meta.timeoutMs) ? (mini.meta.timeoutMs as number) : null;
+        const finishedTimeoutLabel = (tool.finishedAt && toolTimeoutMs) ? `timeout ${formatDuration(toolTimeoutMs)}` : null;
+        items.push({
+          id: toolEvent.id,
+          type: 'tool',
+          title: liveToolTitle(tool),
+          status,
+          meta: [tool.tool, toolStatusLabel(tool), liveToolDurationLabel(tool), finishedTimeoutLabel].filter(Boolean).join(' \u00b7 '),
+          detail: liveToolDetail(tool),
+          startedAt: tool.startedAt ?? null,
+          timeoutMs: !tool.finishedAt ? toolTimeoutMs : null,
+          finished: Boolean(tool.finishedAt),
+        });
+      } else {
+        // Tool segment committed but state event hasn't arrived yet.
+        // Show a placeholder so the trace doesn't appear to hang.
+        // Use tool:${id} format so Vue transitions smoothly when real data arrives.
+        items.push({
+          id: `tool:${seg.toolRunId}`,
+          type: 'tool',
+          title: 'Running tool\u2026',
+          status: 'running',
+          meta: 'starting',
+          detail: null,
+          startedAt: null,
+          timeoutMs: null,
+          finished: false,
+        });
+      }
+    }
   }
 
-  // Emit any remaining reasoning after the last tool
-  const remainingReasoning = fullReasoning.slice(rCursor).trim();
-  if (remainingReasoning) pushReasoningSegment(remainingReasoning, 'reasoning:tail', true);
+  // 3. Pending reasoning tail (live, growing)
+  const pendingReasoning = state.reasoningDraft.value.trim();
+  if (pendingReasoning) {
+    pushReasoningSegment(pendingReasoning, 'reasoning:tail', true);
+  }
 
+  // 4. Error
   const lastError = state.robotState.value?.lastTurnError?.message ?? null;
   if (lastError && activity === 'error') {
     items.push({ id: 'error:last-turn', type: 'error', title: 'Turn error', status: 'error', detail: lastError });
   }
 
-  // Emit remaining assistant text after the last tool
-  const remainingText = fullDraft.slice(aCursor).trim();
-  if (remainingText) {
-    items.push({ id: 'assistant:live', type: 'assistant_text', title: '', status: 'running', text: remainingText });
+  // 5. Pending assistant text tail (live, growing)
+  const pendingAssistant = state.assistantDraft.value.trim();
+  if (pendingAssistant) {
+    items.push({ id: 'assistant:live', type: 'assistant_text', title: '', status: 'running', text: pendingAssistant });
+  }
+
+  if (typeof window !== 'undefined' && items.length > 0) {
   }
   return items;
 });
@@ -2099,6 +2109,7 @@ onUnmounted(() => {
         :model="state.robotState.value?.model ?? null"
         :reasoning="state.robotState.value?.reasoningEffort ?? null"
         :active="isRobotThinking"
+        :interrupted="state.interruptedTrace.value"
         :topicId="routeTopicId"
         :id="String(liveTurnPostNumber)"
       />

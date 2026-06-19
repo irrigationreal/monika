@@ -26,6 +26,11 @@ import type {
 } from '../lib/apiClient';
 import type { ReasoningStep } from '../lib/reasoning';
 
+export type TraceSegment =
+  | { kind: 'reasoning'; text: string }
+  | { kind: 'assistant_text'; text: string }
+  | { kind: 'tool'; toolRunId: string };
+
 const forums = ref<ForumDto[]>([]);
 const archivedForums = ref<ForumDto[]>([]);
 const topics = ref<TopicDto[]>([]);
@@ -46,6 +51,9 @@ const robotControlPending = ref(false);
 const reasoningDraft = ref('');
 const assistantDraft = ref('');
 const reasoningSteps = ref<ReasoningStep[]>([]);
+const committedSegments = ref<TraceSegment[]>([]);
+/** True when the response was interrupted — keeps the trace visible as frozen. */
+const interruptedTrace = ref(false);
 
 export type RobotActivityEvent =
   | {
@@ -109,20 +117,15 @@ let assistantMessagePending = false;
 let topicLoadCounter = 0;
 let topicHydrationEnabled = true;
 let liveTurnStartedAt: number | null = null;
-// Reasoning checkpoints: when each tool event first appears, record how many
-// parsed reasoning steps existed at that moment. This lets liveTurnItems
-// interleave reasoning blocks between tool cards chronologically.
-const reasoningCheckpoints = ref<number[]>([]);
-// Same idea for assistant text: snapshot assistantDraft.length when each tool appears
-// so mid-turn text segments can be interleaved with tool cards.
-const assistantCheckpoints = ref<number[]>([]);
+// --- Committed segments (append-only trace model) ---
+// No longer using client-side checkpoints for trace interleaving.
+// Instead, tool_started events flush pending drafts into committedSegments.
 
 function resetRobotActivity(): void {
   reasoningSteps.value = [];
   activityLog.value = [];
   reasoningStepCount = 0;
-  reasoningCheckpoints.value = [];
-  assistantCheckpoints.value = [];
+  committedSegments.value = [];
 }
 
 function syncReasoningActivity(statusOverride?: { status: 'running' | 'done' }): void {
@@ -154,22 +157,19 @@ function syncToolActivity(toolRuns: RobotStateDto['recentToolRuns']): void {
   const runsOldestFirst = toolRuns.slice().reverse();
 
   for (const run of runsOldestFirst) {
-    if (liveTurnStartedAt !== null) {
-      const startedAt = new Date(run.startedAt).getTime();
-      if (Number.isFinite(startedAt) && startedAt < liveTurnStartedAt - 2000) continue;
-    }
     const id = `tool:${run.id}`;
     const existing = activityLog.value.find((event) => event.type === 'tool_run' && event.id === id) as
       | Extract<RobotActivityEvent, { type: 'tool_run' }>
       | undefined;
     if (existing) {
-      existing.toolRun = run;
+      // Immutable update so Vue re-triggers computed dependencies
+      activityLog.value = activityLog.value.map(e =>
+        e.type === 'tool_run' && e.id === id ? { ...e, toolRun: run } : e
+      );
       continue;
     }
-    // Flush all buffered deltas so checkpoints reflect everything that
-    // arrived before this tool event.
-    flushPendingDeltas();
-    activityLog.value.push({ type: 'tool_run', id, seq: 0, toolRun: run });
+    // Immutable append so Vue re-triggers computed dependencies
+    activityLog.value = [...activityLog.value, { type: 'tool_run', id, seq: 0, toolRun: run }];
   }
 }
 function getTopicActivityTime(topic: TopicDto): number {
@@ -209,7 +209,9 @@ export function useForumState() {
 
   const hasPendingAssistantTurn = computed(() => {
     if (!selectedTopic.value?.robotMode || selectedTopic.value.robotMode === 'off') return false;
+    if (interruptedTrace.value) return true;
     if (assistantDraft.value.trim()) return true;
+    if (committedSegments.value.length > 0) return true;
     const activity = robotState.value?.activity ?? 'idle';
     return activity !== 'idle';
   });
@@ -509,6 +511,54 @@ export function useForumState() {
     topics.value = [];
   }
 
+  /** Reconstruct committed segments from server state (for refresh/reconnect resilience). */
+  function reconstructSegmentsFromState(state: RobotStateDto | null): void {
+    if (!state) {
+      reasoningDraft.value = '';
+      assistantDraft.value = '';
+      return;
+    }
+    const planSummary = state.currentPlan?.summary ?? '';
+    const rCheckpoints = state.currentPlan?.reasoningCheckpoints ?? [];
+    // assistantCheckpoints and assistantText come from live state emission
+    const aCheckpoints = (state as any).assistantCheckpoints ?? [];
+    const aFullText = (state as any).assistantText ?? '';
+    const toolRuns = state.recentToolRuns.slice().reverse(); // oldest first
+
+    // If no tools, just set the reasoning draft and assistant draft as tails
+    if (toolRuns.length === 0) {
+      reasoningDraft.value = planSummary;
+      assistantDraft.value = aFullText;
+      return;
+    }
+
+    const segments: TraceSegment[] = [];
+    let rCursor = 0;
+    let aCursor = 0;
+
+    for (let t = 0; t < toolRuns.length; t++) {
+      const rCp = rCheckpoints[t] ?? planSummary.length;
+      const rSegment = planSummary.slice(rCursor, rCp).trim();
+      if (rSegment) segments.push({ kind: 'reasoning', text: rSegment });
+      rCursor = rCp;
+
+      const aCp = aCheckpoints[t] ?? aFullText.length;
+      const aSegment = aFullText.slice(aCursor, aCp).trim();
+      if (aSegment) segments.push({ kind: 'assistant_text', text: aSegment });
+      aCursor = aCp;
+
+      const toolRun = toolRuns[t];
+      if (toolRun) {
+        segments.push({ kind: 'tool', toolRunId: toolRun.id });
+      }
+    }
+
+    committedSegments.value = segments;
+    // Set remaining text as the live tail
+    reasoningDraft.value = planSummary.slice(rCursor);
+    assistantDraft.value = aFullText.slice(aCursor);
+  }
+
   function resetTopicState(): void {
     robotState.value = null;
     topicAutoRun.value = null;
@@ -561,11 +611,13 @@ export function useForumState() {
     if (!isActiveTopic(topicId)) return;
     robotState.value = nextState;
     activePlanId = nextState?.currentPlan?.id ?? null;
-    reasoningDraft.value = nextState?.currentPlan?.summary ?? '';
     resetRobotActivity();
     if (nextState) {
       syncToolActivity(nextState.recentToolRuns);
     }
+    // Reconstruct committed segments from server-provided plan/checkpoints
+    // so a page refresh shows the trace built so far.
+    reconstructSegmentsFromState(nextState);
     syncReasoningActivity();
   }
 
@@ -735,16 +787,31 @@ export function useForumState() {
       // Flush buffered reasoning before processing tools so checkpoints are accurate.
       flushPendingDeltas();
       syncToolActivity(payload.recentToolRuns);
+      // If we have tool runs from the server but no committed segments yet
+      // (reconnect/refresh mid-turn), reconstruct from server state.
+      if (committedSegments.value.length === 0 && payload.recentToolRuns.length > 0 && payload.activity !== 'idle') {
+        reconstructSegmentsFromState(payload);
+      }
       syncReasoningActivity();
     });
-    stream.addEventListener('tool_started', () => {
-      // A new tool just started on the server. Record checkpoints NOW,
-      // before the state event arrives with the tool in recentToolRuns.
-      // This is the only reliable moment to snapshot draft lengths because
-      // by the time the state event arrives, multiple tools may already exist.
+    stream.addEventListener('tool_started', (event: MessageEvent<string>) => {
+      // A new tool just started. Flush buffered deltas, then commit any
+      // accumulated reasoning/assistant text as frozen segments. This is
+      // the append-only model: committed segments never change once pushed.
       flushPendingDeltas();
-      reasoningCheckpoints.value = [...reasoningCheckpoints.value, reasoningDraft.value.length];
-      assistantCheckpoints.value = [...assistantCheckpoints.value, assistantDraft.value.length];
+      const payload = JSON.parse(event.data) as { toolRunId: string; tool?: string; callId?: string | null };
+      const rText = reasoningDraft.value;
+      if (rText) {
+        committedSegments.value = [...committedSegments.value, { kind: 'reasoning', text: rText }];
+        reasoningDraft.value = '';
+        syncReasoningActivity();
+      }
+      const aText = assistantDraft.value;
+      if (aText) {
+        committedSegments.value = [...committedSegments.value, { kind: 'assistant_text', text: aText }];
+        assistantDraft.value = '';
+      }
+      committedSegments.value = [...committedSegments.value, { kind: 'tool', toolRunId: payload.toolRunId }];
     });
     stream.addEventListener('reasoning_delta', (event: MessageEvent<string>) => {
       const payload = JSON.parse(event.data) as { delta: string };
@@ -756,14 +823,28 @@ export function useForumState() {
       pendingAssistantDelta += payload.delta;
       scheduleStreamFlush();
     });
-    stream.addEventListener('assistant_reset', () => {
-      assistantDraft.value = '';
-      reasoningDraft.value = '';
-      pendingAssistantDelta = '';
-      pendingReasoningDelta = '';
-      activePlanId = null;
-      liveTurnStartedAt = Date.now();
-      resetRobotActivity();
+    stream.addEventListener('assistant_reset', (event: MessageEvent<string>) => {
+      const payload = JSON.parse(event.data) as { reason?: string };
+      if (payload.reason === 'interrupted' && committedSegments.value.length > 0) {
+        // Keep committed segments visible as a frozen "stopped" trace.
+        // Don't clear segments — just stop accumulating new content.
+        assistantDraft.value = '';
+        reasoningDraft.value = '';
+        pendingAssistantDelta = '';
+        pendingReasoningDelta = '';
+        activePlanId = null;
+        interruptedTrace.value = true;
+      } else {
+        // New turn: clear everything for a fresh start.
+        assistantDraft.value = '';
+        reasoningDraft.value = '';
+        pendingAssistantDelta = '';
+        pendingReasoningDelta = '';
+        activePlanId = null;
+        liveTurnStartedAt = Date.now();
+        interruptedTrace.value = false;
+        resetRobotActivity();
+      }
     });
     stream.addEventListener('assistant_message', () => {
       if (assistantMessagePending) return;
@@ -794,6 +875,16 @@ export function useForumState() {
   }
 
   async function handleAssistantMessage(): Promise<void> {
+    // Commit any remaining pending tail before clearing
+    flushPendingDeltas();
+    const rText = reasoningDraft.value;
+    if (rText) {
+      committedSegments.value = [...committedSegments.value, { kind: 'reasoning', text: rText }];
+    }
+    const aText = assistantDraft.value;
+    if (aText) {
+      committedSegments.value = [...committedSegments.value, { kind: 'assistant_text', text: aText }];
+    }
     assistantDraft.value = '';
     reasoningDraft.value = '';
     liveTurnStartedAt = null;
@@ -1284,8 +1375,8 @@ export function useForumState() {
     reasoningDraft,
     assistantDraft,
     reasoningSteps,
-    reasoningCheckpoints,
-    assistantCheckpoints,
+    committedSegments,
+    interruptedTrace,
     activityLog,
     sessionInfo,
     sessionInspector,

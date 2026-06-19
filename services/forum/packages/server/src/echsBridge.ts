@@ -419,6 +419,10 @@ interface ThreadContext {
   lastStreamEventAt: number | null;
   /** Character offsets into reasoningSummary recorded at each tool start. */
   reasoningCheckpoints: number[];
+  /** Accumulated assistant (turn_delta) text for checkpoint/refresh resilience. */
+  assistantText: string;
+  /** Character offsets into assistantText recorded at each tool start. */
+  assistantCheckpoints: number[];
 }
 
 interface PlanContext {
@@ -764,6 +768,8 @@ export class EchsBridge {
         activeSubagents: new Map(),
         lastStreamEventAt: null,
         reasoningCheckpoints: [],
+        assistantText: '',
+        assistantCheckpoints: [],
       });
       await this.ensureSubscribed(threadId);
       // Update stale last_dispatched_post_id if missing.
@@ -1442,6 +1448,8 @@ export class EchsBridge {
         activeSubagents: existingCtx?.activeSubagents ?? new Map(),
         lastStreamEventAt: existingCtx?.lastStreamEventAt ?? null,
         reasoningCheckpoints: [],
+        assistantText: '',
+        assistantCheckpoints: [],
       };
       this.threadMap.set(threadId, threadCtx);
 
@@ -1638,6 +1646,7 @@ export class EchsBridge {
         const data = event.data as any;
         if (data?.content) {
           this.bus.emit(ctx.topicId, { type: 'assistant_delta', data: { delta: data.content } });
+          ctx.assistantText += data.content;
         }
         break;
       }
@@ -1678,6 +1687,7 @@ export class EchsBridge {
           });
           // Record a server-side reasoning checkpoint for saved-trace interleaving
           ctx.reasoningCheckpoints.push(ctx.reasoningSummary.length);
+          ctx.assistantCheckpoints.push(ctx.assistantText.length);
           if (ctx.currentTurnId !== null) {
             this.store.upsertRobotState({
               topicId: ctx.topicId,
@@ -2085,12 +2095,16 @@ export class EchsBridge {
     let totalInputTokens: number | undefined;
     let totalOutputTokens: number | undefined;
     let subagentCount: number | undefined;
+    let liveAssistantCheckpoints: number[] | undefined;
+    let liveAssistantText: string | undefined;
     for (const ctx of this.threadMap.values()) {
       if (ctx.topicId === topicId) {
         usage = ctx.lastUsage ?? undefined;
         totalInputTokens = ctx.totalInputTokens || undefined;
         totalOutputTokens = ctx.totalOutputTokens || undefined;
         subagentCount = ctx.activeSubagents.size || undefined;
+        liveAssistantCheckpoints = ctx.assistantCheckpoints.length > 0 ? ctx.assistantCheckpoints : undefined;
+        liveAssistantText = ctx.assistantText || undefined;
         break;
       }
     }
@@ -2128,6 +2142,8 @@ export class EchsBridge {
         totalInputTokens,
         totalOutputTokens,
         subagentCount,
+        assistantCheckpoints: liveAssistantCheckpoints,
+        assistantText: liveAssistantText,
       },
     });
   }

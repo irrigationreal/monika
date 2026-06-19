@@ -346,7 +346,7 @@ async function attachMockApi(page: Page, context: MockContext) {
       };
       context.postsByTopic.set(topicId, [post]);
 
-      const planSummary = '**Collect context** Reviewing the thread. **Draft response** Assemble reply.';
+      const planSummary = '**Collect context** Reviewing the thread.\n**Draft response** Assemble reply.';
       const toolRuns: ToolRunDto[] = [
         {
           id: `tool-${topicId}-2`,

@@ -2255,6 +2255,12 @@
   overflow-wrap: anywhere;
 }
 
+.vb-live-turn-spinner {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+
 .vb-live-turn-elapsed {
   color: var(--vb-muted, #8a8f98);
   font-size: 0.8rem;

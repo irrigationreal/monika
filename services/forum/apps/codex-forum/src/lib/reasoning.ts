@@ -12,11 +12,37 @@ function cleanDetail(raw: string): string {
 }
 
 /**
+ * Check whether a `**...**` marker at position `start` is a step boundary
+ * (a new reasoning step title) rather than inline emphasis.
+ *
+ * A step boundary is `**Title**` at the start of the text or at the start
+ * of a line (after a newline + optional whitespace). Inline emphasis is
+ * `**word**` preceded by non-whitespace on the same line, such as:
+ *   - `- **Gold** as currency`  (list item bold)
+ *   - `the **important** thing` (mid-sentence bold)
+ *   - `> **Note**`             (blockquote bold)
+ */
+function isStepBoundary(text: string, start: number): boolean {
+  if (start === 0) return true;
+
+  // Walk backward from start to find the preceding newline or start of text.
+  // If only whitespace exists between the newline and the `**`, it's a step.
+  for (let i = start - 1; i >= 0; i--) {
+    const ch = text[i];
+    if (ch === '\n') return true;
+    if (ch !== ' ' && ch !== '\t') return false;
+  }
+  // Reached start of text through only whitespace
+  return true;
+}
+
+/**
  * Parse robot "summary reasoning" streams that look like:
  *   **Step title** optional detail... **Next title** ...
  *
- * The current robot output uses markdown `**...**` as *step boundaries*, not for
- * arbitrary bolding. The UI should treat these as a feed of discrete steps.
+ * Only `**...**` markers at the start of a line are treated as step
+ * boundaries. Inline bold (e.g. `- **Gold** as currency`) is left as
+ * part of the current step's detail text.
  */
 export function parseReasoningSteps(input: string | null | undefined): ReasoningStep[] {
   const text = input ?? '';
@@ -34,6 +60,12 @@ export function parseReasoningSteps(input: string | null | undefined): Reasoning
     if (start === -1) break;
     const end = text.indexOf(marker, start + marker.length);
     if (end === -1) break;
+
+    // Skip inline bold that isn't at the start of a line
+    if (!isStepBoundary(text, start)) {
+      cursor = end + marker.length;
+      continue;
+    }
 
     if (activeStep) {
       const detail = cleanDetail(text.slice(detailStart, start));
@@ -61,7 +93,7 @@ export function parseReasoningSteps(input: string | null | undefined): Reasoning
   } else {
     const fallback = cleanDetail(text);
     if (fallback) {
-      steps.push({ title: 'Activity', detail: fallback });
+      steps.push({ title: 'Thinking', detail: fallback });
     }
   }
 

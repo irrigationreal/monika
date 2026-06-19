@@ -1,8 +1,8 @@
 <template>
   <div class="vb-live-turn vb-post vb-post--draft">
     <div class="vb-post-header vb-live-turn-header">
-      <div>● Monika is responding</div>
-      <div class="vb-post-draft-pill">LIVE</div>
+      <div>{{ interrupted ? '■ Response stopped' : '● Monika is responding' }}</div>
+      <div class="vb-post-draft-pill">{{ interrupted ? 'STOPPED' : 'LIVE' }}</div>
     </div>
 
     <div class="vb-live-turn-body">
@@ -35,6 +35,7 @@
               <div v-if="item.type !== 'assistant_text'" class="vb-live-turn-item-head">
                 <span class="vb-live-turn-title">{{ item.title }}</span>
                 <span v-if="item.meta" class="vb-live-turn-meta">{{ item.meta }}</span>
+                <span v-if="item.type === 'tool' && item.status === 'running'" class="vb-spinner vb-spinner-dark vb-live-turn-spinner"></span>
                 <ToolElapsedTimer
                   v-if="item.startedAt && item.timeoutMs"
                   :startedAt="item.startedAt"
@@ -108,9 +109,11 @@ const props = defineProps<{
   reasoning?: string | null;
   active?: boolean;
   topicId?: string | null;
+  interrupted?: boolean;
 }>();
 
 const { renderContent } = useMarkdown();
+
 const expanded = ref(new Set<string>());
 
 const activityLabel = computed(() => {
