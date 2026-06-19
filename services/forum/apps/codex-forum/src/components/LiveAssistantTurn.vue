@@ -35,6 +35,7 @@
               <div v-if="item.type !== 'assistant_text'" class="vb-live-turn-item-head">
                 <span class="vb-live-turn-title">{{ item.title }}</span>
                 <span v-if="item.meta" class="vb-live-turn-meta">{{ item.meta }}</span>
+                <span v-if="item.type === 'tool' && item.status === 'running'" class="vb-spinner vb-spinner-dark vb-live-turn-spinner"></span>
                 <ToolElapsedTimer
                   v-if="item.startedAt && item.timeoutMs"
                   :startedAt="item.startedAt"

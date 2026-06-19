@@ -323,6 +323,20 @@ const liveTurnItems = computed<LiveTurnItem[]>(() => {
           timeoutMs: !tool.finishedAt ? toolTimeoutMs : null,
           finished: Boolean(tool.finishedAt),
         });
+      } else {
+        // Tool segment committed but state event hasn't arrived yet.
+        // Show a placeholder so the trace doesn't appear to hang.
+        items.push({
+          id: `tool:pending:${seg.toolRunId}`,
+          type: 'tool',
+          title: 'Running tool\u2026',
+          status: 'running',
+          meta: null,
+          detail: null,
+          startedAt: null,
+          timeoutMs: null,
+          finished: false,
+        });
       }
     }
   }
