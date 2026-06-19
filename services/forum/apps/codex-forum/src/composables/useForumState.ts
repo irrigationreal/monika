@@ -211,6 +211,7 @@ export function useForumState() {
   const hasPendingAssistantTurn = computed(() => {
     if (!selectedTopic.value?.robotMode || selectedTopic.value.robotMode === 'off') return false;
     if (assistantDraft.value.trim()) return true;
+    if (committedSegments.value.length > 0) return true;
     const activity = robotState.value?.activity ?? 'idle';
     return activity !== 'idle';
   });
