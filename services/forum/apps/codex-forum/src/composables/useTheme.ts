@@ -3,12 +3,12 @@ import { FORUM_THEME_KEYS, type ForumThemeKey } from '@irrigationreal/codex-foru
 import { themeTone } from '../themes/forumThemes';
 
 const STORAGE_KEY = 'forum-theme';
-const theme = ref<ForumThemeKey>('system');
-const resolvedTheme = ref<ForumThemeKey>('classic-light');
-const resolvedTone = ref<'light' | 'dark'>('light');
+const theme = ref<ForumThemeKey>('vmonika');
+const resolvedTheme = ref<ForumThemeKey>('vmonika');
+const resolvedTone = ref<'light' | 'dark'>('dark');
 
 function getSystemTheme(): ForumThemeKey {
-  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'classic-dark' : 'classic-light';
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'vmonika' : 'vmonika-light';
 }
 
 function applyTheme(t: ForumThemeKey): void {
@@ -26,11 +26,14 @@ export function useTheme() {
   }
 
   function cycleTheme(): void {
-    const order: ForumThemeKey[] = ['system', 'classic-light', 'classic-dark'];
-    const currentIndex = order.indexOf(theme.value);
-    const nextIndex = (currentIndex === -1 ? 0 : currentIndex + 1) % order.length;
-    const next = order[nextIndex] ?? 'system';
-    setTheme(next);
+    const pairs: Partial<Record<ForumThemeKey, ForumThemeKey>> = {
+      vmonika: 'vmonika-light',
+      'vmonika-light': 'vmonika',
+      'classic-dark': 'classic-light',
+      'classic-light': 'classic-dark',
+      system: 'vmonika-light'
+    };
+    setTheme(pairs[theme.value] ?? 'vmonika');
   }
 
   function initTheme(): void {

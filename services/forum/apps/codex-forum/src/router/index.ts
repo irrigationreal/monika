@@ -16,7 +16,7 @@ import DeveloperPortalView from '../views/DeveloperPortalView.vue';
 import ChatView from '../views/ChatView.vue';
 import ApiDocsView from '../views/ApiDocsView.vue';
 
-const SITE_NAME = 'RoboBB Forum';
+const SITE_NAME = 'vMonika';
 
 const routes: RouteRecordRaw[] = [
   { path: '/', name: 'forum.home', component: ForumHomeView, meta: { title: 'Forum Home' } },

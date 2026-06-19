@@ -29,8 +29,8 @@ const isUploading = ref(false);
 const fileInputRef = ref<HTMLInputElement | null>(null);
 const selectedFile = ref<File | null>(null);
 const selectedFilePreview = ref<string | null>(null);
-const selectedTheme = ref<ForumThemeKey>('system');
-const originalTheme = ref<ForumThemeKey>('system');
+const selectedTheme = ref<ForumThemeKey>('vmonika');
+const originalTheme = ref<ForumThemeKey>('vmonika');
 
 type ExternalIdentityLink = {
   id: string;
@@ -148,7 +148,7 @@ function startEdit(): void {
   signature.value = currentUser.value.signature || '';
   privateEmail.value = '';
   clearPrivateEmail.value = false;
-  selectedTheme.value = currentUser.value.theme ?? 'system';
+  selectedTheme.value = currentUser.value.theme ?? 'vmonika';
   originalTheme.value = selectedTheme.value;
   editMode.value = true;
   errorMessage.value = '';
@@ -462,7 +462,7 @@ onMounted(async () => {
             </div>
             <div class="vb-profile-row">
               <span class="vb-profile-label">Theme:</span>
-              <span class="vb-profile-value">{{ FORUM_THEME_BY_KEY[currentUser.theme ?? 'system']?.label }}</span>
+              <span class="vb-profile-value">{{ FORUM_THEME_BY_KEY[currentUser.theme ?? 'vmonika']?.label }}</span>
             </div>
             <div class="vb-modal-actions">
               <button class="vb-btn" @click="startEdit">Edit Profile</button>

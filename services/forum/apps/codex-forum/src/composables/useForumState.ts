@@ -304,7 +304,7 @@ export function useForumState() {
       const res = await api.me();
       currentUser.value = res.identity;
       if (res.identity) {
-        const preferredTheme: ForumThemeKey = res.identity.theme ?? 'system';
+        const preferredTheme: ForumThemeKey = res.identity.theme ?? 'vmonika';
         setTheme(preferredTheme);
       }
       await loadCurrentPermissions();
@@ -356,7 +356,7 @@ export function useForumState() {
       setAuthToken(result.token);
       setRefreshToken(result.refreshToken ?? null);
       currentUser.value = result.identity;
-      setTheme(result.identity.theme ?? 'system');
+      setTheme(result.identity.theme ?? 'vmonika');
       await loadCurrentPermissions();
     }
     return result;
@@ -367,7 +367,7 @@ export function useForumState() {
     setAuthToken(result.token);
     setRefreshToken(result.refreshToken ?? null);
     currentUser.value = result.identity;
-    setTheme(result.identity.theme ?? 'system');
+    setTheme(result.identity.theme ?? 'vmonika');
     await loadCurrentPermissions();
     return { displayName: result.identity.displayName };
   }

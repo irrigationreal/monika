@@ -49,12 +49,18 @@
   line-height: 1;
   display: inline-flex;
   align-items: center;
+  gap: 6px;
 }
 
-.vb-logo span {
-  font-size: 11px;
-  color: var(--text-subtle);
-  margin-left: 6px;
+.vb-logo-mark {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  display: block;
+}
+
+.vb-logo-text {
+  color: var(--brand-primary);
 }
 
 .vb-welcome {
@@ -284,6 +290,17 @@
   border: 1px solid var(--status-error);
 }
 
+.vb-btn-danger:hover:not(:disabled) {
+  background: linear-gradient(
+    var(--grad-danger-hover-start, var(--grad-danger-start)),
+    var(--grad-danger-hover-end, var(--grad-danger-end))
+  );
+}
+
+.vb-btn-danger:active:not(:disabled) {
+  background: linear-gradient(var(--grad-danger-end), var(--grad-danger-start));
+}
+
 .vb-small-btn {
   /* vb-small-btn is used on both <button> and link elements (e.g. <router-link>). */
   display: inline-flex;
@@ -322,6 +339,17 @@
 .vb-danger-btn {
   background: linear-gradient(var(--grad-danger-start), var(--grad-danger-end));
   border: 1px solid var(--status-error);
+}
+
+.vb-danger-btn:hover:not(:disabled) {
+  background: linear-gradient(
+    var(--grad-danger-hover-start, var(--grad-danger-start)),
+    var(--grad-danger-hover-end, var(--grad-danger-end))
+  );
+}
+
+.vb-danger-btn:active:not(:disabled) {
+  background: linear-gradient(var(--grad-danger-end), var(--grad-danger-start));
 }
 
 .vb-link-btn {
@@ -631,6 +659,15 @@
 
 .vb-footer-copy {
   color: var(--text-muted);
+}
+
+.vb-footer-copy a {
+  color: var(--brand-primary-light);
+  text-decoration: none;
+}
+
+.vb-footer-copy a:hover {
+  text-decoration: underline;
 }
 
 .vb-footer-build a {
