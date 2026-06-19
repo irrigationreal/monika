@@ -45,6 +45,10 @@ import {
   CORS_CREDENTIALS,
   CORS_ORIGINS,
   DB_PATH,
+  DEFAULT_WEB_IDENTITY_AVATAR_URL,
+  DEFAULT_WEB_IDENTITY_DISPLAY_NAME,
+  DEFAULT_WEB_IDENTITY_ID,
+  DEFAULT_WEB_IDENTITY_USERNAME,
   DEVELOPER_INSTRUCTIONS,
   DISCORD_BOT_TOKEN,
   DISCORD_GUILD_ID,
@@ -90,7 +94,12 @@ import type { FastifyPluginAsync } from 'fastify';
 const featureFlags = loadFeatureFlags();
 const { db } = openDb({ path: DB_PATH });
 migrate(db);
-const bootstrapResult = bootstrap(db);
+const bootstrapResult = bootstrap(db, {
+  defaultWebIdentityId: DEFAULT_WEB_IDENTITY_ID,
+  defaultWebIdentityUsername: DEFAULT_WEB_IDENTITY_USERNAME,
+  defaultWebIdentityDisplayName: DEFAULT_WEB_IDENTITY_DISPLAY_NAME,
+  defaultWebIdentityAvatarUrl: DEFAULT_WEB_IDENTITY_AVATAR_URL,
+});
 const store = new ForumStore(db);
 void createCoreServices(db);
 void new ForumQueries(db);

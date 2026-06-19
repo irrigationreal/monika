@@ -542,6 +542,13 @@ export interface DbBootstrapResult {
   chatRootForumId: string;
 }
 
+export interface DbBootstrapOptions {
+  defaultWebIdentityId?: string | null;
+  defaultWebIdentityDisplayName?: string | null;
+  defaultWebIdentityUsername?: string | null;
+  defaultWebIdentityAvatarUrl?: string | null;
+}
+
 export function nowIso(): string {
   return new Date().toISOString();
 }
@@ -563,7 +570,7 @@ export function migrate(db: Database.Database): void {
   runMigrations(db);
 }
 
-export function bootstrap(db: Database.Database): DbBootstrapResult {
+export function bootstrap(db: Database.Database, options: DbBootstrapOptions = {}): DbBootstrapResult {
   const bootstrapForumKey = 'bootstrapForumId';
   const chatRootForumKey = 'chatRootForumId';
   const storedBootstrap = db.prepare('select value from system_settings where key = ?').get(bootstrapForumKey) as
@@ -721,31 +728,48 @@ export function bootstrap(db: Database.Database): DbBootstrapResult {
     );
   }
 
-  // Monika deployment default human identity. Older codex-forum databases seeded
-  // a placeholder `pp` identity; for this deployment, rename that placeholder to
-  // neon rather than creating a duplicate human.
-  const neonIdentity = db.prepare("select id from identities where display_name = 'neon' limit 1").get() as
-    | { id: string }
-    | undefined;
-  const ppIdentity = db.prepare("select id from identities where display_name = 'pp' limit 1").get() as
-    | { id: string }
-    | undefined;
-  const webIdentity =
-    neonIdentity ??
-    ppIdentity ??
-    (db.prepare('select id from identities where kind = ? limit 1').get('human') as { id: string } | undefined);
+  const defaultWebIdentityId = options.defaultWebIdentityId?.trim() || null;
+  const defaultWebIdentityUsername = options.defaultWebIdentityUsername?.trim() || null;
+  const defaultWebIdentityDisplayName = options.defaultWebIdentityDisplayName?.trim() || 'Web User';
+  const defaultWebIdentityAvatarUrl = options.defaultWebIdentityAvatarUrl?.trim() || '/avatars/user.svg';
+
+  const configuredWebIdentity = defaultWebIdentityId
+    ? (db.prepare('select id from identities where id = ? limit 1').get(defaultWebIdentityId) as
+        | { id: string }
+        | undefined)
+    : undefined;
+  const configuredWebIdentityByUsername = defaultWebIdentityUsername
+    ? (db.prepare('select id from identities where username = ? limit 1').get(defaultWebIdentityUsername) as
+        | { id: string }
+        | undefined)
+    : undefined;
+  const existingHumanIdentity = db
+    .prepare('select id from identities where kind = ? order by created_at asc limit 1')
+    .get('human') as { id: string } | undefined;
+  const webIdentity = configuredWebIdentity ?? configuredWebIdentityByUsername ?? existingHumanIdentity;
   let webIdentityId = webIdentity?.id;
 
   if (!webIdentityId) {
-    webIdentityId = randomUUID();
+    webIdentityId = defaultWebIdentityId ?? randomUUID();
     const now = nowIso();
     db.prepare(
-      'insert into identities (id, tenant_id, display_name, kind, parent_identity_id, avatar_url, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)'
-    ).run(webIdentityId, null, 'neon', 'human', null, '/avatars/user.svg', now, now);
+      'insert into identities (id, tenant_id, display_name, kind, parent_identity_id, avatar_url, username, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      webIdentityId,
+      null,
+      defaultWebIdentityDisplayName,
+      'human',
+      null,
+      defaultWebIdentityAvatarUrl,
+      defaultWebIdentityUsername,
+      now,
+      now
+    );
   } else {
-    db.prepare(
-      "update identities set display_name = 'neon', kind = 'human', avatar_url = coalesce(avatar_url, ?) where id = ?"
-    ).run('/avatars/user.svg', webIdentityId);
+    db.prepare('update identities set avatar_url = coalesce(avatar_url, ?) where id = ?').run(
+      defaultWebIdentityAvatarUrl,
+      webIdentityId
+    );
   }
 
   const piCliIdentity = db.prepare("select id from identities where display_name = 'Pi CLI' limit 1").get() as
