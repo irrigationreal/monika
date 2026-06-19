@@ -18,6 +18,16 @@ const loginError = ref('');
 const loggingIn = ref(false);
 const mobileMenuOpen = ref(false);
 
+const buildCommit = import.meta.env.VITE_BUILD_COMMIT?.trim() ?? '';
+const buildSource = import.meta.env.VITE_BUILD_SOURCE?.trim() ?? '';
+const commitPattern = /^[0-9a-f]{7,40}$/i;
+const buildLabel = buildCommit && commitPattern.test(buildCommit)
+  ? buildCommit.slice(0, 7)
+  : 'local';
+const buildHref = buildSource && buildCommit && /^[0-9a-f]{40}$/i.test(buildCommit)
+  ? `${buildSource.replace(/\/$/, '')}/commit/${buildCommit}`
+  : '';
+
 function toggleMobileMenu(): void {
   mobileMenuOpen.value = !mobileMenuOpen.value;
 }
@@ -246,7 +256,14 @@ onMounted(async () => {
           <router-link class="vb-footer-link" :to="{ name: 'developer.portal' }">Developers</router-link>
           <router-link class="vb-footer-link" :to="{ name: 'api.docs' }">API Docs</router-link>
         </div>
-        <div class="vb-footer-copy">Powered by RoboBB 𝛼</div>
+        <div class="vb-footer-copy">
+          Powered by RoboBB 𝛼
+          <span class="vb-footer-build">
+            · Build
+            <a v-if="buildHref" :href="buildHref" target="_blank" rel="noreferrer">{{ buildLabel }}</a>
+            <span v-else>{{ buildLabel }}</span>
+          </span>
+        </div>
       </footer>
     </div>
   </div>

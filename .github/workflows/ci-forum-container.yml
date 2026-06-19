@@ -81,7 +81,14 @@ jobs:
         run: tests/forum/e2e.sh
 
       - name: Build forum image
-        run: docker build -f services/forum/Containerfile -t monika-forum-test ./services/forum
+        run: |
+          docker build \
+            -f services/forum/Containerfile \
+            --build-arg MONIKA_BUILD_COMMIT=${{ github.sha }} \
+            --build-arg MONIKA_BUILD_SOURCE=${{ github.server_url }}/${{ github.repository }} \
+            --build-arg MONIKA_BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+            -t monika-forum-test \
+            ./services/forum
 
   # Gate job — branch protection should require this check.
   forum-container-checks:
