@@ -111,6 +111,8 @@
   --grad-secondary-end: #a0a0a0;
   --grad-danger-start: #ef4444;
   --grad-danger-end: #b91c1c;
+  --grad-danger-hover-start: #f87171;
+  --grad-danger-hover-end: #dc2626;
   --grad-success-start: #5c9e5c;
   --grad-success-end: #3d7a3d;
 
@@ -262,6 +264,8 @@
   --grad-secondary-end: #2a2520;
   --grad-danger-start: #a03030;
   --grad-danger-end: #702020;
+  --grad-danger-hover-start: #b84040;
+  --grad-danger-hover-end: #8a2a2a;
   --grad-success-start: #308050;
   --grad-success-end: #206040;
 
@@ -388,8 +392,8 @@
   --status-error-light: #4a1f2b;
   --status-warning: #ce60d0;
   --status-warning-bg: #301a2f;
-  --status-info: #2a384a;
-  --status-info-bg: #505ec8;
+  --status-info: #505ec8;
+  --status-info-bg: #2a384a;
 
   /* Gradients - black and green */
   --grad-nav-start: #202a21;
@@ -412,6 +416,8 @@
   --grad-secondary-end: #202a21;
   --grad-danger-start: #b81445;
   --grad-danger-end: #7a0f2f;
+  --grad-danger-hover-start: #d91a55;
+  --grad-danger-hover-end: #9c1238;
   --grad-success-start: #62a030;
   --grad-success-end: #447020;
 

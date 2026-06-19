@@ -1568,6 +1568,13 @@
   color: var(--text-primary);
   resize: vertical;
   min-height: 120px;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.vb-modal-textarea:focus {
+  outline: none;
+  border-color: var(--textarea-focus-color);
+  box-shadow: 0 0 0 3px rgba(74, 144, 217, 0.2);
 }
 
 .vb-modal-actions {
