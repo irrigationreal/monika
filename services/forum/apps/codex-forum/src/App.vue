@@ -259,7 +259,7 @@ onMounted(async () => {
           <router-link class="vb-footer-link" :to="{ name: 'api.docs' }">API Docs</router-link>
         </div>
         <div class="vb-footer-copy">
-          Powered by Monika
+          Powered by <a class="vb-footer-link" href="https://github.com/irrigationreal/monika" target="_blank" rel="noreferrer">Monika</a>
           <span class="vb-footer-build">
             · Build
             <a v-if="buildHref" :href="buildHref" target="_blank" rel="noreferrer">{{ buildLabel }}</a>

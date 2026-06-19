@@ -661,6 +661,15 @@
   color: var(--text-muted);
 }
 
+.vb-footer-copy a {
+  color: var(--brand-primary-light);
+  text-decoration: none;
+}
+
+.vb-footer-copy a:hover {
+  text-decoration: underline;
+}
+
 .vb-footer-build a {
   color: inherit;
   text-decoration: none;
