@@ -93,7 +93,7 @@ export function parseReasoningSteps(input: string | null | undefined): Reasoning
   } else {
     const fallback = cleanDetail(text);
     if (fallback) {
-      steps.push({ title: 'Activity', detail: fallback });
+      steps.push({ title: 'Thinking', detail: fallback });
     }
   }
 

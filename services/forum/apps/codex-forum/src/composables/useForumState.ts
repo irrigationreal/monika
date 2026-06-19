@@ -155,10 +155,9 @@ function syncToolActivity(toolRuns: RobotStateDto['recentToolRuns']): void {
   const runsOldestFirst = toolRuns.slice().reverse();
 
   for (const run of runsOldestFirst) {
-    if (liveTurnStartedAt !== null) {
-      const startedAt = new Date(run.startedAt).getTime();
-      if (Number.isFinite(startedAt) && startedAt < liveTurnStartedAt - 2000) continue;
-    }
+    // No timestamp filter — the append-only model handles turn boundaries
+    // via assistant_reset clearing committedSegments. A clock-skew-sensitive
+    // filter here was causing tools to be silently dropped for remote users.
     const id = `tool:${run.id}`;
     const existing = activityLog.value.find((event) => event.type === 'tool_run' && event.id === id) as
       | Extract<RobotActivityEvent, { type: 'tool_run' }>
