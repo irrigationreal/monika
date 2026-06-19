@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import VMonikaLogo from './components/VMonikaLogo.vue';
 import { useForumState } from './composables/useForumState';
 import { useTheme } from './composables/useTheme';
 import { themeLabel } from './themes/forumThemes';
@@ -154,8 +155,9 @@ onMounted(async () => {
 
     <div class="vb-shell">
       <header class="vb-header">
-        <button class="vb-logo" type="button" @click="goHome">
-          RoboBB <span>𝛼</span>
+        <button class="vb-logo" type="button" aria-label="Go to forum home" @click="goHome">
+          <VMonikaLogo aria-hidden="true" />
+          <span class="vb-logo-text">ⱱMonika</span>
         </button>
         <div class="vb-welcome">
           <div class="vb-welcome-summary">
@@ -257,7 +259,7 @@ onMounted(async () => {
           <router-link class="vb-footer-link" :to="{ name: 'api.docs' }">API Docs</router-link>
         </div>
         <div class="vb-footer-copy">
-          Powered by RoboBB 𝛼
+          Powered by Monika
           <span class="vb-footer-build">
             · Build
             <a v-if="buildHref" :href="buildHref" target="_blank" rel="noreferrer">{{ buildLabel }}</a>

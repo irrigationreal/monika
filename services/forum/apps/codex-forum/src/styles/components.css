@@ -49,12 +49,18 @@
   line-height: 1;
   display: inline-flex;
   align-items: center;
+  gap: 6px;
 }
 
-.vb-logo span {
-  font-size: 11px;
-  color: var(--text-subtle);
-  margin-left: 6px;
+.vb-logo-mark {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  display: block;
+}
+
+.vb-logo-text {
+  color: var(--brand-primary);
 }
 
 .vb-welcome {
