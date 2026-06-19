@@ -151,6 +151,7 @@
   --spoiler-summary-end: #d1d4e2;
   --spoiler-summary-hover-start: #d8dbe8;
   --spoiler-summary-hover-end: #c8cbe0;
+  --textarea-focus-color: var(--status-info);
 }
 
 [data-theme="classic-dark"] {
@@ -379,16 +380,16 @@
   --border-nav-item: var(--vmonika-border-nav-item);
 
   /* Status */
-  --status-success: #505ec8;
+  --status-success: #30f052;
   --status-success-bg: #1a232f;
-  --status-success-light: #2a384a;
-  --status-error: #91e050;
-  --status-error-bg: #232f1a;
-  --status-error-light: #384a2a;
-  --status-warning: #30f052;
-  --status-warning-bg: #102f17;
-  --status-info: #ce60d0;
-  --status-info-bg: #301a2f;
+  --status-success-light: #102f17;
+  --status-error: #ff1f5e;
+  --status-error-bg: #2f101a;
+  --status-error-light: #4a1f2b;
+  --status-warning: #ce60d0;
+  --status-warning-bg: #301a2f;
+  --status-info: #2a384a;
+  --status-info-bg: #505ec8;
 
   /* Gradients - black and green */
   --grad-nav-start: #202a21;
@@ -409,10 +410,10 @@
   --grad-trace-collapsed-end: #202a21;
   --grad-secondary-start: #313d30;
   --grad-secondary-end: #202a21;
-  --grad-danger-start: #62a030;
-  --grad-danger-end: #447020;
-  --grad-success-start: #303480;
-  --grad-success-end: #232060;
+  --grad-danger-start: #b81445;
+  --grad-danger-end: #7a0f2f;
+  --grad-success-start: #62a030;
+  --grad-success-end: #447020;
 
   /* Trace cards */
   --trace-reasoning-start: #7a4d70;
@@ -451,6 +452,7 @@
   --spoiler-summary-end: #151a16;
   --spoiler-summary-hover-start: #313d30;
   --spoiler-summary-hover-end: #202a21;
+  --textarea-focus-color: #60a0d0;
 }
 
 [data-theme="lunar-horse"] {
@@ -2600,6 +2602,7 @@
 }
 
 [data-theme="classic-light"],
+[data-theme="vmonika-light"],
 [data-theme="lunar-horse"],
 [data-theme="cn-portal-2000s"],
 [data-theme="cn-im-2000s"],

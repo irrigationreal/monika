@@ -31,7 +31,7 @@ export const FORUM_THEMES: readonly ForumThemeDefinition[] = [
     key: 'system',
     label: 'System (Auto)',
     era: 'Classic',
-    description: 'Follows your OS light/dark preference using the classic RoboBB palette.',
+    description: 'Follows your OS light/dark preference using the vMonika palette pair.',
     tone: 'light'
   },
   {
@@ -54,6 +54,13 @@ export const FORUM_THEMES: readonly ForumThemeDefinition[] = [
     era: 'Classic',
     description: 'Classic RoboBB Dark hue-shifted into a vivid blue-green palette — familiar forum chrome, but tuned for Monika.',
     tone: 'dark'
+  },
+  {
+    key: 'vmonika-light',
+    label: 'vMonika Light',
+    era: 'Classic',
+    description: 'The Classic RoboBB Light palette paired with vMonika so the quick theme toggle has a bright counterpart.',
+    tone: 'light'
   },
   {
     key: 'lunar-horse',

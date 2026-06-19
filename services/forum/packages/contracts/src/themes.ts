@@ -5,6 +5,7 @@ export const FORUM_THEME_KEYS = [
   'classic-light',
   'classic-dark',
   'vmonika',
+  'vmonika-light',
   // seasonal / special
   'lunar-horse',
   // china internet (2000s)

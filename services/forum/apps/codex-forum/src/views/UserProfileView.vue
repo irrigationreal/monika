@@ -36,10 +36,10 @@ const avatarUrl = computed(() => {
 });
 
 const themeLabel = computed(() => {
-  const key = (profile.value?.theme ?? 'system') as keyof typeof FORUM_THEME_BY_KEY;
+  const key = (profile.value?.theme ?? 'vmonika') as keyof typeof FORUM_THEME_BY_KEY;
   const theme = FORUM_THEME_BY_KEY[key];
-  if (!theme) return String(profile.value?.theme ?? 'system');
-  return `${theme.name} (${String(key)})`;
+  if (!theme) return String(profile.value?.theme ?? 'vmonika');
+  return `${theme.label} (${String(key)})`;
 });
 
 const totalHistoryPages = computed(() => Math.max(1, Math.ceil(historyTotal.value / historyPageSize.value)));
