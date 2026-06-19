@@ -20,6 +20,7 @@ jobs:
       should_build: ${{ steps.check.outputs.should_build }}
       short_sha: ${{ steps.check.outputs.short_sha }}
       date: ${{ steps.check.outputs.date }}
+      build_date: ${{ steps.check.outputs.build_date }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,8 +31,10 @@ jobs:
         shell: bash
         run: |
           DATE=$(date -u +%Y.%m.%d)
+          BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           SHORT_SHA=$(git rev-parse --short HEAD)
           echo "date=${DATE}" >> "$GITHUB_OUTPUT"
+          echo "build_date=${BUILD_DATE}" >> "$GITHUB_OUTPUT"
           echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
 
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
@@ -88,6 +91,11 @@ jobs:
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.created=${{ needs.check-changes.outputs.build_date }}
+          build-args: |
+            MONIKA_BUILD_COMMIT=${{ github.sha }}
+            MONIKA_BUILD_SOURCE=${{ github.server_url }}/${{ github.repository }}
+            MONIKA_BUILD_DATE=${{ needs.check-changes.outputs.build_date }}
           cache-from: type=gha,scope=monika-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=monika-${{ matrix.arch }}
 
@@ -146,6 +154,11 @@ jobs:
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.created=${{ needs.check-changes.outputs.build_date }}
+          build-args: |
+            MONIKA_BUILD_COMMIT=${{ github.sha }}
+            MONIKA_BUILD_SOURCE=${{ github.server_url }}/${{ github.repository }}
+            MONIKA_BUILD_DATE=${{ needs.check-changes.outputs.build_date }}
           cache-from: type=gha,scope=forum-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=forum-${{ matrix.arch }}
 

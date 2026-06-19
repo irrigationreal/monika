@@ -44,6 +44,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Prepare build metadata
+        id: build-meta
+        run: echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       - uses: docker/metadata-action@v5
         id: meta
         with:
@@ -60,6 +64,10 @@ jobs:
           provenance: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            MONIKA_BUILD_COMMIT=${{ github.sha }}
+            MONIKA_BUILD_SOURCE=${{ github.server_url }}/${{ github.repository }}
+            MONIKA_BUILD_DATE=${{ steps.build-meta.outputs.date }}
           cache-from: type=gha,scope=monika-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=monika-${{ matrix.arch }}
 

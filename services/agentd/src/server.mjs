@@ -2,7 +2,7 @@ import http from 'node:http';
 import net from 'node:net';
 import { createHash, randomUUID } from 'node:crypto';
 import { completeSimple } from '@earendil-works/pi-ai';
-import { promises as fs } from 'node:fs';
+import { existsSync, readFileSync, promises as fs } from 'node:fs';
 import path from 'node:path';
 import {
   createAgentSessionFromServices,
@@ -36,6 +36,20 @@ const ARTIFACT_ALLOWED_ROOTS = (process.env.MONIKA_AGENTD_ARTIFACT_ALLOWED_ROOTS
   .map((root) => path.resolve(root.trim()))
   .filter(Boolean);
 const ARTIFACT_EXPORT_MAX_BYTES = Number(process.env.MONIKA_AGENTD_ARTIFACT_EXPORT_MAX_BYTES ?? 50 * 1024 * 1024);
+const BUILD_INFO_PATH = '/opt/monika/build-info.json';
+
+let cachedBuildInfo;
+function buildInfo() {
+  if (cachedBuildInfo !== undefined) return cachedBuildInfo;
+  try {
+    cachedBuildInfo = existsSync(BUILD_INFO_PATH)
+      ? JSON.parse(readFileSync(BUILD_INFO_PATH, 'utf8'))
+      : { commit: null, source: null, date: null, label: 'local build' };
+  } catch {
+    cachedBuildInfo = { commit: null, source: null, date: null, label: 'local build' };
+  }
+  return cachedBuildInfo;
+}
 
 const DEFAULT_HANDOFF_SYSTEM_PROMPT = `You are a context transfer assistant. Given a conversation history and the user's goal for a new thread, generate a focused prompt that:
 
@@ -988,7 +1002,7 @@ const server = http.createServer(async (req, res) => {
     const method = req.method ?? 'GET';
 
     if (method === 'GET' && url.pathname === '/healthz') {
-      return json(res, 200, { ok: true, status: draining ? 'draining' : 'healthy', active_threads: [...conversations.values()].filter((c) => c.current).length, loaded_conversations: conversations.size, idle_reap_enabled: IDLE_REAP_ENABLED, queue_depth: 0 });
+      return json(res, 200, { ok: true, status: draining ? 'draining' : 'healthy', active_threads: [...conversations.values()].filter((c) => c.current).length, loaded_conversations: conversations.size, idle_reap_enabled: IDLE_REAP_ENABLED, queue_depth: 0, build: buildInfo() });
     }
     if (method === 'GET' && url.pathname === '/v1/admin/quiescence') return json(res, 200, await deployState());
     if (method === 'POST' && url.pathname === '/v1/admin/drain') {

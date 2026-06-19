@@ -66,7 +66,14 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build Monika runtime image
-        run: docker build -f Containerfile -t monika-test .
+        run: |
+          docker build \
+            -f Containerfile \
+            --build-arg MONIKA_BUILD_COMMIT=${{ github.sha }} \
+            --build-arg MONIKA_BUILD_SOURCE=${{ github.server_url }}/${{ github.repository }} \
+            --build-arg MONIKA_BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+            -t monika-test \
+            .
 
       - name: Smoke-test Monika runtime image
         run: tests/smoke/monika-runtime.sh monika-test

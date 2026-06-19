@@ -7,6 +7,14 @@ RUN CGO_ENABLED=1 go build -tags fts5 -o /memstore .
 # ── Stage 2: Runtime ─────────────────────────────────────
 FROM debian:bookworm-slim
 
+ARG MONIKA_BUILD_COMMIT=""
+ARG MONIKA_BUILD_SOURCE=""
+ARG MONIKA_BUILD_DATE=""
+
+LABEL org.opencontainers.image.revision=$MONIKA_BUILD_COMMIT
+LABEL org.opencontainers.image.source=$MONIKA_BUILD_SOURCE
+LABEL org.opencontainers.image.created=$MONIKA_BUILD_DATE
+
 # System deps — base + Chromium headless requirements
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates git curl bash openssh-client \
@@ -27,6 +35,14 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 
 # Force npm global installs to /usr/local/bin (in PATH)
 ENV NPM_CONFIG_PREFIX=/usr/local
+
+# Build metadata is baked into the image for runtime introspection. It is
+# intentionally stored in a file rather than supplied as mutable runtime env.
+RUN mkdir -p /opt/monika && \
+    MONIKA_BUILD_COMMIT="$MONIKA_BUILD_COMMIT" \
+    MONIKA_BUILD_SOURCE="$MONIKA_BUILD_SOURCE" \
+    MONIKA_BUILD_DATE="$MONIKA_BUILD_DATE" \
+    node -e "const fs=require('fs'); const info={commit:process.env.MONIKA_BUILD_COMMIT||null,source:process.env.MONIKA_BUILD_SOURCE||null,date:process.env.MONIKA_BUILD_DATE||null,label:process.env.MONIKA_BUILD_COMMIT?process.env.MONIKA_BUILD_COMMIT.slice(0,12):'local build'}; fs.writeFileSync('/opt/monika/build-info.json', JSON.stringify(info,null,2)+'\\n');"
 
 # Use the image-owned Chrome installed below, rather than a browser under
 # /home/monika, which is bind-mounted from the host in production.

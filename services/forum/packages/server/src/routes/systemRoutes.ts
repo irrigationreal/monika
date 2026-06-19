@@ -23,9 +23,15 @@ export function registerSystemRoutes({
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
   const openApiSpecPath = join(repoRoot, 'docs', 'openapi.json');
   const postmanCollectionPath = join(repoRoot, 'docs', 'postman', 'codex-forum.postman_collection.json');
+  const buildInfoPath = join(repoRoot, 'build-info.json');
 
   let cachedOpenApi: unknown | null = null;
   let cachedPostmanCollection: unknown | null = null;
+  let cachedBuildInfo: unknown | null | undefined;
+
+  function defaultBuildInfo(): unknown {
+    return { commit: null, source: null, date: null, label: 'local build' };
+  }
 
   function loadJsonFile(path: string): unknown | null {
     try {
@@ -76,11 +82,18 @@ export function registerSystemRoutes({
 
   app.get('/healthz', async () => {
     const echs = echsClient ? await echsClient.checkHealth() : undefined;
+    cachedBuildInfo ??= loadJsonFile(buildInfoPath) ?? defaultBuildInfo();
     return {
       ok: true,
       echs: echs ?? { status: 'unreachable' },
-      deployment: deploymentStatus?.() ?? null
+      deployment: deploymentStatus?.() ?? null,
+      build: cachedBuildInfo
     };
+  });
+
+  app.get('/build', async () => {
+    cachedBuildInfo ??= loadJsonFile(buildInfoPath) ?? defaultBuildInfo();
+    return cachedBuildInfo;
   });
 
   app.get('/deploy/quiescence', async () => {

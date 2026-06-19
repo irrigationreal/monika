@@ -5,6 +5,10 @@
 # -----------------------------------------------------------------------------
 # Stage 1: Base image with pnpm
 # -----------------------------------------------------------------------------
+ARG MONIKA_BUILD_COMMIT=""
+ARG MONIKA_BUILD_SOURCE=""
+ARG MONIKA_BUILD_DATE=""
+
 FROM node:20-slim AS base
 
 # Install pnpm
@@ -41,6 +45,10 @@ RUN pnpm install --frozen-lockfile
 # -----------------------------------------------------------------------------
 FROM base AS builder
 
+ARG MONIKA_BUILD_COMMIT
+ARG MONIKA_BUILD_SOURCE
+ARG MONIKA_BUILD_DATE
+
 # Copy source files
 COPY packages/ ./packages/
 COPY apps/ ./apps/
@@ -49,13 +57,31 @@ COPY tsconfig.json ./
 # Build packages first (dependencies for apps)
 RUN pnpm run build:packages
 
+# Build metadata is baked into the image and frontend bundle. CI passes these
+# as Docker build args; local builds fall back to an explicit local label.
+RUN MONIKA_BUILD_COMMIT="$MONIKA_BUILD_COMMIT" \
+    MONIKA_BUILD_SOURCE="$MONIKA_BUILD_SOURCE" \
+    MONIKA_BUILD_DATE="$MONIKA_BUILD_DATE" \
+    node -e "const fs=require('fs'); const info={commit:process.env.MONIKA_BUILD_COMMIT||null,source:process.env.MONIKA_BUILD_SOURCE||null,date:process.env.MONIKA_BUILD_DATE||null,label:process.env.MONIKA_BUILD_COMMIT?process.env.MONIKA_BUILD_COMMIT.slice(0,12):'local build'}; fs.writeFileSync('/app/build-info.json', JSON.stringify(info,null,2)+'\\n');"
+
 # Build frontend application
-RUN pnpm run build:apps
+RUN VITE_BUILD_COMMIT="$MONIKA_BUILD_COMMIT" \
+    VITE_BUILD_SOURCE="$MONIKA_BUILD_SOURCE" \
+    VITE_BUILD_DATE="$MONIKA_BUILD_DATE" \
+    pnpm run build:apps
 
 # -----------------------------------------------------------------------------
 # Stage 3: Production runtime
 # -----------------------------------------------------------------------------
 FROM node:20-slim AS runtime
+
+ARG MONIKA_BUILD_COMMIT
+ARG MONIKA_BUILD_SOURCE
+ARG MONIKA_BUILD_DATE
+
+LABEL org.opencontainers.image.revision=$MONIKA_BUILD_COMMIT
+LABEL org.opencontainers.image.source=$MONIKA_BUILD_SOURCE
+LABEL org.opencontainers.image.created=$MONIKA_BUILD_DATE
 
 # Install pnpm for running the server
 RUN corepack enable && corepack prepare pnpm@10.26.2 --activate
@@ -94,7 +120,8 @@ COPY --from=builder /app/packages/core/ ./packages/core/
 COPY --from=builder /app/packages/adapters/ ./packages/adapters/
 COPY --from=builder /app/packages/server/ ./packages/server/
 
-# Copy built frontend to be served as static files
+# Copy baked build metadata and built frontend to be served as static files
+COPY --from=builder /app/build-info.json ./build-info.json
 COPY --from=builder /app/apps/codex-forum/dist/ ./public/
 
 # Create data directories with proper ownership

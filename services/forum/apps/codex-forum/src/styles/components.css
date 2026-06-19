@@ -633,6 +633,15 @@
   color: var(--text-muted);
 }
 
+.vb-footer-build a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.vb-footer-build a:hover {
+  text-decoration: underline;
+}
+
 /* Scroll to top button */
 .vb-scroll-top {
   position: fixed;
