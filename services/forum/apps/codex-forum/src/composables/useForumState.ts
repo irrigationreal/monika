@@ -516,8 +516,7 @@ export function useForumState() {
     if (!state || state.activity === 'idle') {
       // Don't reconstruct when idle — prevents stale data from
       // repopulating the trace after interrupt or completed response.
-      reasoningDraft.value = '';
-      assistantDraft.value = '';
+      // Don't clear drafts either (interrupted trace may be showing).
       return;
     }
     const planSummary = state.currentPlan?.summary ?? '';
