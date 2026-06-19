@@ -158,8 +158,6 @@ trace rendering.
 10. **Saved trace checkpoints are nullable.** Old data and imported sessions won't
     have `reasoning_checkpoints_json`. Always handle the fallback path.
 
-11. **`reconstructSegmentsFromState` only runs when non-idle.** Prevents stale
-    data from repopulating the trace after interrupts or completed responses.
 
 See `docs/forum.md` § "Live trace and saved trace architecture" for the full event
 pipeline and checkpoint design.

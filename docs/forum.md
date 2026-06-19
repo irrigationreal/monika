@@ -419,10 +419,6 @@ intermediate computed refs.
 or on interrupt (`interrupted`). Does NOT fire between Pi turns within the same
 agent loop. A single forum reply spans multiple Pi turns.
 
-**`reconstructSegmentsFromState` guard:** Only reconstructs when
-`activity !== 'idle'`. Prevents stale data from repopulating the trace after
-interrupts or completed responses.
-
 **Tool name casing:** Pi sends capitalised names (`Bash`, `Read`, `Edit`). The
 DB `tool` column is normalised lowercase (`exec`, `read`, `apply_patch`). The
 `command` column preserves the original. Use `kind` for formatting branches and

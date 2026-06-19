@@ -513,10 +513,9 @@ export function useForumState() {
 
   /** Reconstruct committed segments from server state (for refresh/reconnect resilience). */
   function reconstructSegmentsFromState(state: RobotStateDto | null): void {
-    if (!state || state.activity === 'idle') {
-      // Don't reconstruct when idle — prevents stale data from
-      // repopulating the trace after interrupt or completed response.
-      // Don't clear drafts either (interrupted trace may be showing).
+    if (!state) {
+      reasoningDraft.value = '';
+      assistantDraft.value = '';
       return;
     }
     const planSummary = state.currentPlan?.summary ?? '';
