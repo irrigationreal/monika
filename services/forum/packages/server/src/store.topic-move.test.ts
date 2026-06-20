@@ -29,7 +29,7 @@ describe('Topic move', () => {
     });
 
     const session = store.ensureSession({ topicId: topic.id });
-    store.setSessionPersonasSyncedAt(session.id, new Date().toISOString());
+    store.setSessionPersonasSyncedAt(session.id, new Date().toISOString(), forumA.id);
 
     const external = store.createExternalRef({
       surfaceId: 'discord',
@@ -60,9 +60,71 @@ describe('Topic move', () => {
 
     const updatedSession = store.getSession(session.id);
     expect(updatedSession?.personas_synced_at).toBeNull();
+    expect(updatedSession?.context_synced_forum_id).toBeNull();
 
     const updatedExternal = store.getExternalRef(external.id);
     expect(updatedExternal?.mapped_forum_id).toBe(forumB.id);
+  });
+
+  it('silently moves a topic without marker post or session prompt reset', () => {
+    const forumA = store.createForum('Forum A');
+    const forumB = store.createForum('Forum B');
+    const admin = store.createIdentity('Admin', 'admin');
+    const { topic } = store.createTopic({
+      forumId: forumA.id,
+      title: 'Test topic',
+      body: 'Initial body',
+      authorId: admin.id
+    });
+    const session = store.ensureSession({ topicId: topic.id });
+    const syncedAt = new Date().toISOString();
+    store.setSessionPersonasSyncedAt(session.id, syncedAt, forumA.id);
+    const beforePosts = store.listPosts(topic.id, 1, 50);
+
+    const result = store.moveTopic({
+      topicId: topic.id,
+      toForumId: forumB.id,
+      movedBy: admin.id,
+      silent: true
+    });
+
+    expect(result.markerPost).toBeNull();
+    expect(result.move.markerPostId).toBeNull();
+    expect(result.move.needsReprompt).toBe(false);
+    expect(result.move.silent).toBe(true);
+    expect(store.getPendingTopicMove(topic.id)).toBeNull();
+    expect(store.listPosts(topic.id, 1, 50)).toHaveLength(beforePosts.length);
+
+    const updatedSession = store.getSession(session.id);
+    expect(updatedSession?.personas_synced_at).toBe(syncedAt);
+    expect(updatedSession?.context_synced_forum_id).toBe(forumA.id);
+  });
+
+  it('silent move back leaves session context unchanged when no dispatch happened between moves', () => {
+    const forumA = store.createForum('Forum A');
+    const forumB = store.createForum('Forum B');
+    const admin = store.createIdentity('Admin', 'admin');
+    const { topic } = store.createTopic({
+      forumId: forumA.id,
+      title: 'Test topic',
+      body: 'Initial body',
+      authorId: admin.id
+    });
+    const session = store.ensureSession({ topicId: topic.id });
+    const syncedAt = new Date().toISOString();
+    store.setSessionPersonasSyncedAt(session.id, syncedAt, forumA.id);
+    const beforePostIds = store.listPosts(topic.id, 1, 50).map((post) => post.id);
+
+    store.moveTopic({ topicId: topic.id, toForumId: forumB.id, movedBy: admin.id, silent: true });
+    store.moveTopic({ topicId: topic.id, toForumId: forumA.id, movedBy: admin.id, silent: true });
+
+    expect(store.getTopic(topic.id)?.forum_id).toBe(forumA.id);
+    expect(store.getPendingTopicMove(topic.id)).toBeNull();
+    expect(store.listPosts(topic.id, 1, 50).map((post) => post.id)).toEqual(beforePostIds);
+
+    const updatedSession = store.getSession(session.id);
+    expect(updatedSession?.personas_synced_at).toBe(syncedAt);
+    expect(updatedSession?.context_synced_forum_id).toBe(forumA.id);
   });
 
   it('clears pending move prompts', () => {

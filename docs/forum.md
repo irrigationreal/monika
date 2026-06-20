@@ -20,6 +20,31 @@ reactions, sync state, and UI metadata.
 Host mode has been removed. Pi tools operate inside the container by default; host
 or infrastructure access should be explicit through SSH/`relocate`.
 
+## Thread moves
+
+Admins can move a topic between forums through `POST /admin/topics/:topicId/move`.
+Moves are rejected with `409 Conflict` while an assistant response is active for
+that topic; changing the forum/workspace underneath an in-flight Pi turn would
+leave the forum metadata and canonical Pi session in different contexts.
+
+Normal moves create a visible marker post, record a pending topic-move prompt,
+reset the session's forum-context sync marker, and inject a `[THREAD MOVED
+NOTICE]` into the next assistant turn so Pi receives the new forum instructions
+and persona index.
+
+Silent moves pass `silent: true`. They update the topic forum and external
+surface mapping, but they do not create a marker post and do not queue a moved
+notice. They also leave the Pi session/context sync fields untouched until a
+later assistant turn actually runs in the new forum. If the topic is silently
+moved away and then silently moved back before any assistant turn runs, the Pi
+session context remains unchanged. If a later turn runs while the topic is in a
+new forum, the bridge injects an internal `[FORUM CONTEXT REFRESH]` with the
+current forum instructions and persona index before the user post.
+
+Do not implement silent moves by inserting a `posts.silent = 1` marker. Silent
+posts are still included in assistant catch-up context, so that would still alter
+the canonical session.
+
 ## Provenance
 
 The forum service lives at `services/forum`. It was imported from the archived

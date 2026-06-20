@@ -670,21 +670,28 @@ export function registerAdminRoutes({
       throw app.httpErrors.notFound('destination forum not found');
     }
 
-    await codex.interruptTopic(topicId);
+    const activeTurn = codex.listActiveTurns().find((turn) => turn.topicId === topicId);
+    if (activeTurn) {
+      throw app.httpErrors.conflict('cannot move thread while an assistant response is in progress');
+    }
 
+    const silent = Boolean(body.silent);
     const adminIdentity = store.getIdentity(admin.identityId);
     const adminName = adminIdentity?.display_name ?? 'admin';
     const movedAt = new Date().toISOString();
-    const markerBody = [
-      `Automatic post: This thread was moved from "${fromForum.name}" to "${toForum.name}" by ${adminName} on ${movedAt}.`,
-      'AI agents: the working directory context has changed. Files that were previously available may no longer exist in the new forum workspace.'
-    ].join('\n');
+    const markerBody = silent
+      ? null
+      : [
+          `Automatic post: This thread was moved from "${fromForum.name}" to "${toForum.name}" by ${adminName} on ${movedAt}.`,
+          'AI agents: the working directory context has changed. Files that were previously available may no longer exist in the new forum workspace.'
+        ].join('\n');
 
     const result = store.moveTopic({
       topicId,
       toForumId: body.forumId,
       movedBy: admin.identityId,
-      markerBody
+      markerBody,
+      silent
     });
 
     const movedTopic = mapTopicRowToDomain(result.topic);

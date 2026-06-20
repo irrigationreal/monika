@@ -851,8 +851,8 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
       json<{ items: AccessRuleDto[] }>(`/admin/topics/${topicId}/access`),
     createTopicAccessRule: (topicId: string, input: { principalKind: 'all' | 'logged_in' | 'identity' | 'role'; principalId?: string | null; action: 'view' | 'post' | 'topic.create' | 'moderate'; effect: 'allow' | 'deny' }) =>
       json<AccessRuleDto>(`/admin/topics/${topicId}/access`, { method: 'POST', body: JSON.stringify(input) }),
-    moveTopic: (topicId: string, forumId: string) =>
-      json<{ topic: TopicDto; move: TopicMoveDto }>(`/admin/topics/${topicId}/move`, { method: 'POST', body: JSON.stringify({ forumId }) }),
+    moveTopic: (topicId: string, forumId: string, opts?: { silent?: boolean }) =>
+      json<{ topic: TopicDto; move: TopicMoveDto }>(`/admin/topics/${topicId}/move`, { method: 'POST', body: JSON.stringify({ forumId, ...(opts?.silent !== undefined ? { silent: opts.silent } : {}) }) }),
     deleteAccessRule: (ruleId: string) =>
       json<{ ok: boolean }>(`/admin/access/${ruleId}`, { method: 'DELETE' }),
 

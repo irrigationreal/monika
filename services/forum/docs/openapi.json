@@ -190,6 +190,8 @@
                             "system",
                             "classic-light",
                             "classic-dark",
+                            "vmonika",
+                            "vmonika-light",
                             "lunar-horse",
                             "cn-portal-2000s",
                             "cn-im-2000s",
@@ -322,6 +324,8 @@
                             "system",
                             "classic-light",
                             "classic-dark",
+                            "vmonika",
+                            "vmonika-light",
                             "lunar-horse",
                             "cn-portal-2000s",
                             "cn-im-2000s",
@@ -493,6 +497,8 @@
                             "system",
                             "classic-light",
                             "classic-dark",
+                            "vmonika",
+                            "vmonika-light",
                             "lunar-horse",
                             "cn-portal-2000s",
                             "cn-im-2000s",
@@ -624,6 +630,8 @@
                             "system",
                             "classic-light",
                             "classic-dark",
+                            "vmonika",
+                            "vmonika-light",
                             "lunar-horse",
                             "cn-portal-2000s",
                             "cn-im-2000s",
@@ -873,6 +881,111 @@
                   },
                   "required": [
                     "token"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/oidc/links": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "List linked OIDC identities for the current user",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "providerKey": {
+                            "type": "string"
+                          },
+                          "issuer": {
+                            "type": "string"
+                          },
+                          "subject": {
+                            "type": "string"
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          },
+                          "lastLoginAt": {
+                            "type": "string",
+                            "nullable": true
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "providerKey",
+                          "issuer",
+                          "subject",
+                          "createdAt"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/oidc/unlink": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Unlink an OIDC identity from the current forum account",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "externalIdentityId": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "externalIdentityId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok"
                   ]
                 }
               }
@@ -3918,6 +4031,8 @@
                         "system",
                         "classic-light",
                         "classic-dark",
+                        "vmonika",
+                        "vmonika-light",
                         "lunar-horse",
                         "cn-portal-2000s",
                         "cn-im-2000s",
@@ -4012,6 +4127,8 @@
                       "system",
                       "classic-light",
                       "classic-dark",
+                      "vmonika",
+                      "vmonika-light",
                       "lunar-horse",
                       "cn-portal-2000s",
                       "cn-im-2000s",
@@ -4091,6 +4208,8 @@
                         "system",
                         "classic-light",
                         "classic-dark",
+                        "vmonika",
+                        "vmonika-light",
                         "lunar-horse",
                         "cn-portal-2000s",
                         "cn-im-2000s",
@@ -4278,6 +4397,8 @@
                         "system",
                         "classic-light",
                         "classic-dark",
+                        "vmonika",
+                        "vmonika-light",
                         "lunar-horse",
                         "cn-portal-2000s",
                         "cn-im-2000s",
@@ -4529,6 +4650,8 @@
                               "system",
                               "classic-light",
                               "classic-dark",
+                              "vmonika",
+                              "vmonika-light",
                               "lunar-horse",
                               "cn-portal-2000s",
                               "cn-im-2000s",
@@ -4748,6 +4871,30 @@
                     "lastUpdatedAt": {
                       "type": "string"
                     },
+                    "lastTurnError": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "at": {
+                          "type": "string"
+                        },
+                        "postId": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "turnId": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "message",
+                        "at"
+                      ]
+                    },
                     "currentPlan": {
                       "type": "object",
                       "nullable": true,
@@ -4765,6 +4912,13 @@
                         "parentPostId": {
                           "type": "string",
                           "nullable": true
+                        },
+                        "reasoningCheckpoints": {
+                          "type": "array",
+                          "nullable": true,
+                          "items": {
+                            "type": "number"
+                          }
                         },
                         "visibility": {
                           "type": "string",
@@ -5510,6 +5664,13 @@
                           "parentPostId": {
                             "type": "string",
                             "nullable": true
+                          },
+                          "reasoningCheckpoints": {
+                            "type": "array",
+                            "nullable": true,
+                            "items": {
+                              "type": "number"
+                            }
                           },
                           "visibility": {
                             "type": "string",
@@ -8988,6 +9149,9 @@
                 "properties": {
                   "forumId": {
                     "type": "string"
+                  },
+                  "silent": {
+                    "type": "boolean"
                   }
                 },
                 "required": [
@@ -9110,6 +9274,9 @@
                         },
                         "needsReprompt": {
                           "type": "boolean"
+                        },
+                        "silent": {
+                          "type": "boolean"
                         }
                       },
                       "required": [
@@ -9119,7 +9286,8 @@
                         "toForumId",
                         "movedBy",
                         "movedAt",
-                        "needsReprompt"
+                        "needsReprompt",
+                        "silent"
                       ]
                     }
                   },

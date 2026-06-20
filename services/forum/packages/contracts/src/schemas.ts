@@ -245,7 +245,8 @@ export const TopicMoveDtoSchema: z.ZodType<TopicMoveDto> = z.object({
   movedBy: z.string(),
   movedAt: z.string(),
   markerPostId: optionalNullableString,
-  needsReprompt: z.boolean()
+  needsReprompt: z.boolean(),
+  silent: z.boolean()
 });
 
 export const ReactionCountDtoSchema: z.ZodType<ReactionCountDto> = z.object({
@@ -1043,7 +1044,8 @@ export const UpdateTopicTagsRequestSchema: z.ZodType<UpdateTopicTagsRequest> = z
   });
 
 export const MoveTopicRequestSchema: z.ZodType<MoveTopicRequest> = z.object({
-  forumId: z.string()
+  forumId: z.string(),
+  silent: z.boolean().optional()
 });
 
 export const CreateInviteRequestSchema: z.ZodType<CreateInviteRequest> = z.object({
@@ -1156,7 +1158,8 @@ export const AdminAccessRuleRequestSchema: z.ZodType<AdminAccessRuleRequest> = z
 });
 
 export const AdminMoveTopicRequestSchema: z.ZodType<AdminMoveTopicRequest> = z.object({
-  forumId: z.string({ required_error: 'forumId is required' }).min(1, 'forumId is required')
+  forumId: z.string({ required_error: 'forumId is required' }).min(1, 'forumId is required'),
+  silent: z.boolean().optional()
 });
 
 export const AdminCreatePersonaRequestSchema: z.ZodType<AdminCreatePersonaRequest> = z.object({

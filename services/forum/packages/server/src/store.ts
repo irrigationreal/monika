@@ -285,7 +285,8 @@ export interface MoveTopicInput {
   topicId: string;
   toForumId: string;
   movedBy: string;
-  markerBody: string;
+  markerBody?: string | null;
+  silent?: boolean;
 }
 
 export interface TopicMoveRecord {
@@ -297,6 +298,7 @@ export interface TopicMoveRecord {
   movedAt: string;
   markerPostId: string | null;
   needsReprompt: boolean;
+  silent: boolean;
 }
 
 export interface UpdateRobotStateInput {
@@ -1108,10 +1110,11 @@ export class ForumStore {
     return { topic, post };
   }
 
-  moveTopic(input: MoveTopicInput): { topic: TopicRow; move: TopicMoveRecord; markerPost: PostRow } {
+  moveTopic(input: MoveTopicInput): { topic: TopicRow; move: TopicMoveRecord; markerPost: PostRow | null } {
     const now = nowIso();
     const moveId = randomUUID();
-    const markerPostId = randomUUID();
+    const silent = Boolean(input.silent);
+    const markerPostId = silent ? null : randomUUID();
     let moveRecord: TopicMoveRecord | null = null;
     let updatedTopic: TopicRow | null = null;
     let markerPost: PostRow | null = null;
@@ -1134,31 +1137,35 @@ export class ForumStore {
       this.db
         .prepare('update topics set forum_id = ?, updated_at = ? where id = ?')
         .run(input.toForumId, now, input.topicId);
-      this.db
-        .prepare('update sessions set personas_synced_at = ?, updated_at = ? where topic_id = ?')
-        .run(null, now, input.topicId);
+      if (!silent) {
+        this.db
+          .prepare('update sessions set personas_synced_at = ?, context_synced_forum_id = ?, updated_at = ? where topic_id = ?')
+          .run(null, null, now, input.topicId);
+      }
       this.db
         .prepare('update external_refs set mapped_forum_id = ? where mapped_topic_id = ?')
         .run(input.toForumId, input.topicId);
       this.db.prepare('update topic_moves set needs_reprompt = 0 where topic_id = ?').run(input.topicId);
 
-      this.db
-        .prepare(
-          'insert into posts (id, topic_id, tenant_id, parent_post_id, author_id, body, source_message_id, silent, created_at, edited_at, deleted_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-        )
-        .run(markerPostId, input.topicId, null, null, input.movedBy, input.markerBody, null, 0, now, null, null);
+      if (markerPostId) {
+        this.db
+          .prepare(
+            'insert into posts (id, topic_id, tenant_id, parent_post_id, author_id, body, source_message_id, silent, created_at, edited_at, deleted_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+          )
+          .run(markerPostId, input.topicId, null, null, input.movedBy, input.markerBody ?? '', null, 0, now, null, null);
+      }
 
       this.db
         .prepare(
-          'insert into topic_moves (id, topic_id, from_forum_id, to_forum_id, moved_by, moved_at, marker_post_id, needs_reprompt) values (?, ?, ?, ?, ?, ?, ?, ?)'
+          'insert into topic_moves (id, topic_id, from_forum_id, to_forum_id, moved_by, moved_at, marker_post_id, needs_reprompt, silent) values (?, ?, ?, ?, ?, ?, ?, ?, ?)'
         )
-        .run(moveId, input.topicId, topic.forum_id, input.toForumId, input.movedBy, now, markerPostId, 1);
+        .run(moveId, input.topicId, topic.forum_id, input.toForumId, input.movedBy, now, markerPostId, silent ? 0 : 1, silent ? 1 : 0);
 
       this.invalidateTopicCache(input.topicId);
       updatedTopic = this.getTopic(input.topicId) as TopicRow;
       const row = this.getTopicMove(moveId);
       moveRecord = row;
-      markerPost = this.getPost(markerPostId) as PostRow;
+      markerPost = markerPostId ? (this.getPost(markerPostId) as PostRow) : null;
     })();
 
     this.invalidateTopicCache(input.topicId);
@@ -1168,7 +1175,7 @@ export class ForumStore {
     }
     this.invalidateForumStatsCache(input.toForumId);
 
-    if (!updatedTopic || !moveRecord || !markerPost) {
+    if (!updatedTopic || !moveRecord) {
       throw new Error('moveTopic: transaction did not produce expected results');
     }
     return {
@@ -1190,6 +1197,7 @@ export class ForumStore {
       movedAt: row.moved_at,
       markerPostId: row.marker_post_id,
       needsReprompt: Boolean(row.needs_reprompt),
+      silent: Boolean(row.silent),
     };
   }
 
@@ -1208,6 +1216,7 @@ export class ForumStore {
       movedAt: row.moved_at,
       markerPostId: row.marker_post_id,
       needsReprompt: Boolean(row.needs_reprompt),
+      silent: Boolean(row.silent),
     }));
   }
 
@@ -1228,6 +1237,7 @@ export class ForumStore {
       movedAt: row.moved_at,
       markerPostId: row.marker_post_id,
       needsReprompt: true,
+      silent: Boolean(row.silent),
     };
   }
 
@@ -1763,11 +1773,17 @@ export class ForumStore {
     return this.getSession(sessionId) as SessionRow;
   }
 
-  setSessionPersonasSyncedAt(sessionId: string, syncedAtIso: string | null): SessionRow {
+  setSessionPersonasSyncedAt(sessionId: string, syncedAtIso: string | null, contextForumId?: string | null): SessionRow {
     const now = nowIso();
-    this.db
-      .prepare('update sessions set personas_synced_at = ?, updated_at = ? where id = ?')
-      .run(syncedAtIso, now, sessionId);
+    if (contextForumId !== undefined) {
+      this.db
+        .prepare('update sessions set personas_synced_at = ?, context_synced_forum_id = ?, updated_at = ? where id = ?')
+        .run(syncedAtIso, contextForumId, now, sessionId);
+    } else {
+      this.db
+        .prepare('update sessions set personas_synced_at = ?, updated_at = ? where id = ?')
+        .run(syncedAtIso, now, sessionId);
+    }
     return this.getSession(sessionId) as SessionRow;
   }
 
