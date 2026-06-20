@@ -180,7 +180,7 @@ prevent duplicate runs; `pull_request`, `merge_group`, and manual dispatch provi
 fresh checks for PRs and merge queue candidates.
 
 - `CI / Monika Container` builds the Monika image and runs `tests/smoke/monika-runtime.sh`.
-- `CI / Forum Container` builds the forum image when forum-relevant files change.
+- `CI / Forum Container` runs the forum unit/E2E test wrappers and builds the forum image when forum-relevant files change.
 - `CI / Integration` is currently a placeholder gate for future agentd/forum compatibility checks.
 
 Publishing workflows are intentionally separate from CI gates:
