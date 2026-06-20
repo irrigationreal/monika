@@ -807,9 +807,35 @@ onMounted(async () => {
     width: 100%;
     border-left: none;
     border-top: 1px solid var(--border-default);
-    flex-direction: row;
-    gap: 8px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(112px, 42%);
+    align-items: center;
+    column-gap: 12px;
     padding: 8px 12px;
+  }
+
+  .vb-lastpost-title {
+    min-width: 0;
+    margin-bottom: 0;
+    text-align: left;
+  }
+
+  .vb-lastpost-meta {
+    min-width: 0;
+    text-align: right;
+  }
+
+  .vb-lastpost-time {
+    white-space: nowrap;
+  }
+
+  .vb-lastpost-by {
+    justify-content: flex-end;
+  }
+
+  .vb-no-posts {
+    grid-column: 1 / -1;
+    justify-self: center;
   }
 
   .vb-recent-head {
