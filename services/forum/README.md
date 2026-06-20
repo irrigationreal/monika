@@ -146,6 +146,8 @@ Key env vars (see `packages/server/src/runtimeConfig.ts` for the full list):
 
 `CODEX_FORUM_ENABLE_AUTH=1` does not open registration by itself. Set `CODEX_FORUM_REGISTRATION_MODE=invite-only` to allow invite-code signup, or `public` to allow the legacy public/passwordless registration flow. Internet-facing deployments should keep the default `disabled` mode unless account creation is deliberately open.
 
+Search is visibility-aware when `CODEX_FORUM_ENABLE_SEARCH=1`: unauthenticated callers only search public-visible forums, authenticated members can also search members-only forums, and admin-only results require admin visibility. Forum pages search the current forum by default; the UI can opt into searching all visible forums. Public search should be paired with `CODEX_FORUM_ENABLE_RATE_LIMITING=1` so the route-specific search limiter is active.
+
 For full deployment guidance, see `docs/DEPLOYMENT.md`.
 
 ## Development notes

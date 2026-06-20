@@ -424,6 +424,12 @@ CODEX_FORUM_ENABLE_SEARCH=1
 
 When registration is disabled, invite-code lookup also returns not found so public callers cannot probe invite codes.
 
+#### Public search policy
+
+`CODEX_FORUM_ENABLE_SEARCH=1` exposes `GET /search` to public readers. The search query applies forum visibility in SQL before result ordering and limits, so private or admin-only matches cannot consume the public result limit. The API accepts `scope=all|topics|posts`, an optional `forumId` to restrict search to one visible forum, and a clamped `limit` from 1 to 100. The web forum page searches the current forum by default and lets users opt into searching all visible forums.
+
+For internet-facing deployments, keep `CODEX_FORUM_ENABLE_RATE_LIMITING=1` enabled with search. The search route has its own limiter keyed by authenticated identity when present and by client IP for anonymous readers.
+
 ### Redis for Horizontal Scaling
 
 When running multiple instances:

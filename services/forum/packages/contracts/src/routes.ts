@@ -108,8 +108,9 @@ const recentPostsQuerySchema = z.object({
 
 const searchQuerySchema = z.object({
   q: z.string(),
-  scope: z.string().optional(),
-  limit: z.number().optional()
+  scope: z.enum(['all', 'topics', 'posts']).optional(),
+  forumId: z.string().optional(),
+  limit: z.number().min(1).max(100).optional()
 });
 
 const attachmentContentSchema = z.string();
