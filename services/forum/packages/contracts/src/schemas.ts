@@ -6,6 +6,7 @@ import {
   ForumVisibilityValues,
   RobotModeValues
 } from '@irrigationreal/codex-forum-core';
+import { RegistrationModeValues } from './dto';
 import { z } from 'zod';
 import {
   OidcEnabledResponseDtoSchema,
@@ -65,6 +66,7 @@ import type {
   PostDto,
   ReactionCountDto,
   RecentPostDto,
+  RegistrationModeDto,
   RegisterResponseDto,
   RobotAutomationDto,
   RobotAutomationRunDto,
@@ -164,6 +166,7 @@ export const RobotActivitySchema = z.enum(['idle', 'thinking', 'running_tools', 
 export const RobotAutomationWorkerSchema = z.enum(['echs']);
 export const RobotAutomationRunModeSchema = z.enum(['manual', 'interval']);
 export const TopicAutoRunStatusSchema = z.enum(['idle', 'running', 'stopped', 'error']);
+export const RegistrationModeSchema = z.enum(RegistrationModeValues);
 
 export const ForumLastPostDtoSchema: z.ZodType<ForumLastPostDto> = z.object({
   postId: z.string(),
@@ -792,6 +795,13 @@ export const AuthIdentityDtoSchema: z.ZodType<AuthIdentityDto> = z.object({
   signature: optionalNullableString,
   theme: ForumThemeKeySchema.nullable().optional(),
   hasPrivateEmail: z.boolean().optional()
+});
+
+export const RegistrationModeDtoSchema: z.ZodType<RegistrationModeDto> = z.object({
+  mode: RegistrationModeSchema,
+  registrationEnabled: z.boolean(),
+  inviteRegistrationEnabled: z.boolean(),
+  publicRegistrationEnabled: z.boolean()
 });
 
 export const AuthUserDtoSchema: z.ZodType<AuthUserDto> = z.object({

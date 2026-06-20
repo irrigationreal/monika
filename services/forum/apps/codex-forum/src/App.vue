@@ -176,7 +176,7 @@ onMounted(async () => {
               <button class="vb-link-btn" type="button" @click="handleLogout">Log Out</button>
             </template>
             <template v-else>
-              <router-link :to="{ name: 'auth.register' }">Register</router-link>
+              <router-link v-if="state.canShowRegisterLink.value" :to="{ name: 'auth.register' }">Register</router-link>
               <button class="vb-link-btn" type="button" @click="openLoginForm">Log In</button>
             </template>
             <button class="vb-theme-toggle" type="button" @click="cycleTheme" :title="`Theme: ${themeLabel(theme)}`">
@@ -224,7 +224,7 @@ onMounted(async () => {
           <router-link class="vb-nav-item" :to="{ name: 'developer.portal' }" @click="closeMobileMenu">Developers</router-link>
           <router-link class="vb-nav-item" :to="{ name: 'api.docs' }" @click="closeMobileMenu">API Docs</router-link>
           <router-link v-if="isAdmin" class="vb-nav-item" :to="{ name: 'admin' }" @click="closeMobileMenu">Admin</router-link>
-          <router-link v-if="!state.isLoggedIn.value" class="vb-nav-item" :to="{ name: 'auth.register' }" @click="closeMobileMenu">Register</router-link>
+          <router-link v-if="!state.isLoggedIn.value && state.canShowRegisterLink.value" class="vb-nav-item" :to="{ name: 'auth.register' }" @click="closeMobileMenu">Register</router-link>
           <button v-if="!state.isLoggedIn.value" class="vb-nav-item" type="button" @click="closeMobileMenu(); openLoginForm()">Log In</button>
           <button v-if="state.isLoggedIn.value" class="vb-nav-item" type="button" @click="closeMobileMenu(); handleLogout()">Log Out</button>
         </div>

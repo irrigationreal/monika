@@ -18,6 +18,10 @@ const successData = ref<{ verifyUrl: string; expiresAt: string } | null>(null);
 const inviteValid = ref<boolean | null>(null);
 const inviteChecking = ref(false);
 
+const registrationClosed = computed(() => !state.registrationSettingsLoading.value && !state.canShowRegisterLink.value);
+const registrationRequiresInvite = computed(() => state.canInviteRegister.value && !state.canPublicRegister.value);
+const registrationAllowsPublic = computed(() => state.canPublicRegister.value);
+
 // Show credential fields when invite code is valid
 const showCredentialFields = computed(() => inviteValid.value === true);
 
@@ -46,6 +50,16 @@ async function handleSubmit(): Promise<void> {
 
   if (displayName.value.trim().length < 2) {
     errorMessage.value = 'Display name must be at least 2 characters.';
+    return;
+  }
+
+  if (registrationClosed.value) {
+    errorMessage.value = 'Registration is currently closed.';
+    return;
+  }
+
+  if (registrationRequiresInvite.value && showCredentialFields.value !== true) {
+    errorMessage.value = 'Please enter a valid invite code.';
     return;
   }
 
@@ -103,6 +117,8 @@ async function handleSubmit(): Promise<void> {
         errorMessage.value = 'This display name or username is already taken. Please choose another.';
       } else if (err.message.toLowerCase().includes('username') || err.message.toLowerCase().includes('password')) {
         errorMessage.value = err.message;
+      } else if (err.message.includes('403') || err.message.toLowerCase().includes('registration disabled')) {
+        errorMessage.value = 'Registration is currently closed.';
       } else if (err.message.includes('400') || err.message.toLowerCase().includes('invite')) {
         errorMessage.value = 'Invalid invite code.';
       } else {
@@ -148,8 +164,29 @@ onMounted(() => {
       </div>
     </div>
 
+    <div v-else-if="state.registrationSettingsLoading.value" class="vb-register-form">
+      Loading registration settings...
+    </div>
+
+    <div v-else-if="registrationClosed" class="vb-register-form">
+      <div class="vb-success-message">
+        <h3>Registration Closed</h3>
+        <p>Public account registration is currently closed. If you already have an account, use the Log In button in the header.</p>
+        <div class="vb-modal-actions">
+          <button class="vb-btn" @click="goHome">Return to Forum</button>
+        </div>
+      </div>
+    </div>
+
     <div v-else class="vb-register-form">
       <div v-if="errorMessage" class="vb-login-error">{{ errorMessage }}</div>
+
+      <div v-if="registrationRequiresInvite" class="vb-register-note vb-register-note-top">
+        Registration is invite-only. Enter a valid invite code to create an account.
+      </div>
+      <div v-else-if="registrationAllowsPublic" class="vb-register-note vb-register-note-top">
+        You can register with an invite code, or continue without one to create a passwordless account using a verification link.
+      </div>
 
       <div class="vb-form-row">
         <label for="displayName">Display Name:</label>
@@ -179,7 +216,7 @@ onMounted(() => {
           <span v-else-if="inviteValid === true" class="vb-invite-status vb-valid">Valid</span>
           <span v-else-if="inviteValid === false" class="vb-invite-status vb-invalid">Invalid</span>
         </div>
-        <span class="vb-form-hint">Required to create an account</span>
+        <span class="vb-form-hint">{{ registrationRequiresInvite ? 'Required to create an account' : 'Optional; invite registration creates a password login' }}</span>
       </div>
 
       <template v-if="showCredentialFields">

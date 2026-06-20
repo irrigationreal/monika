@@ -557,6 +557,13 @@ export const apiRoutes: ApiRoute[] = [
     response: { schema: refreshResponseSchema }
   },
   {
+    method: 'get',
+    path: '/auth/registration',
+    summary: 'Get registration mode',
+    tags: ['auth'],
+    response: { schema: schemas.RegistrationModeDtoSchema }
+  },
+  {
     method: 'post',
     path: '/auth/register',
     summary: 'Register',

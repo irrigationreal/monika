@@ -140,6 +140,7 @@ services:
   codex-forum:
     environment:
       - CODEX_FORUM_ENABLE_AUTH=1
+      - CODEX_FORUM_REGISTRATION_MODE=disabled
       - CODEX_FORUM_ENABLE_RATE_LIMITING=1
     deploy:
       resources:
@@ -401,12 +402,27 @@ For production environments:
 # Enable authentication
 CODEX_FORUM_ENABLE_AUTH=1
 
+# Keep self-registration closed for public internet launch
+CODEX_FORUM_REGISTRATION_MODE=disabled
+
 # Enable rate limiting to prevent abuse
 CODEX_FORUM_ENABLE_RATE_LIMITING=1
 
 # Enable search functionality
 CODEX_FORUM_ENABLE_SEARCH=1
 ```
+
+#### Registration policy
+
+`CODEX_FORUM_ENABLE_AUTH=1` enables login/session handling, but it does not imply that visitors can create accounts. Self-registration is controlled separately with `CODEX_FORUM_REGISTRATION_MODE`:
+
+| Mode | Behavior |
+| --- | --- |
+| `disabled` | All `/auth/register` attempts are rejected. This is the default and the recommended mode for an internet-facing launch. |
+| `invite-only` | Only invite-code registration with `inviteCode`, `username`, and `password` succeeds. Public/passwordless registration is rejected. |
+| `public` | Preserves the legacy public registration flow, including passwordless verification-link registration and invite registration. |
+
+When registration is disabled, invite-code lookup also returns not found so public callers cannot probe invite codes.
 
 ### Redis for Horizontal Scaling
 

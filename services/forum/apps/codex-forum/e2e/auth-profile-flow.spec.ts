@@ -1,5 +1,5 @@
 import { expect, test, type BrowserContext, type Page, type Request } from '@playwright/test';
-import type { AuthIdentityDto, IdentityDto, InviteInfoDto } from '@irrigationreal/codex-forum-contracts';
+import type { AuthIdentityDto, IdentityDto, InviteInfoDto, RegistrationModeDto } from '@irrigationreal/codex-forum-contracts';
 
 type IdentityRecord = IdentityDto & {
   username?: string;
@@ -32,9 +32,11 @@ class MockAuthApi {
   private verificationTokens = new Map<string, VerificationRecord>();
   private baseUrl: string;
   private refreshCallCount = 0;
+  private registrationMode: RegistrationModeDto['mode'];
 
-  constructor(baseUrl: string) {
+  constructor(baseUrl: string, registrationMode: RegistrationModeDto['mode'] = 'public') {
     this.baseUrl = baseUrl;
+    this.registrationMode = registrationMode;
   }
 
   createInvite(code = `INVITE-${this.identityCounter}`): InviteRecord {
@@ -76,6 +78,18 @@ class MockAuthApi {
 
     if (method === 'GET' && path === '/posts/recent') {
       return { status: 200, body: [] };
+    }
+
+    if (method === 'GET' && path === '/auth/registration') {
+      return {
+        status: 200,
+        body: {
+          mode: this.registrationMode,
+          registrationEnabled: this.registrationMode !== 'disabled',
+          inviteRegistrationEnabled: this.registrationMode !== 'disabled',
+          publicRegistrationEnabled: this.registrationMode === 'public'
+        } satisfies RegistrationModeDto
+      };
     }
 
     if (method === 'GET' && path.startsWith('/auth/invite/')) {
@@ -452,6 +466,45 @@ test.describe('Auth registration and profile flows', () => {
     await page.locator('button', { hasText: 'Save Changes' }).click();
     await expect(page.locator('.vb-profile-row', { hasText: 'Location:' })).toContainText('Portland, OR');
     expect(api.refreshCalls).toBeGreaterThan(0);
+  });
+
+  test('disabled registration hides register UI and shows closed state', async ({ page }) => {
+    const baseUrl = test.info().project.use.baseURL ?? 'http://localhost:5173';
+    const api = new MockAuthApi(baseUrl, 'disabled');
+    await attachMockApi(page.context(), api);
+
+    await page.goto('/');
+    await expect(page.locator('.vb-welcome-links').getByText('Register', { exact: true })).toHaveCount(0);
+    await expect(page.locator('.vb-nav').getByText('Register', { exact: true })).toHaveCount(0);
+
+    await page.goto('/register');
+    await expect(page.locator('.vb-register-form')).toContainText('Registration Closed');
+    await expect(page.locator('#displayName')).toHaveCount(0);
+    await expect(page.getByText('Public account registration is currently closed')).toBeVisible();
+  });
+
+  test('invite-only registration requires a valid invite before credential signup', async ({ page }) => {
+    const baseUrl = test.info().project.use.baseURL ?? 'http://localhost:5173';
+    const api = new MockAuthApi(baseUrl, 'invite-only');
+    const invite = api.createInvite('INVITE-ONLY');
+    await attachMockApi(page.context(), api);
+
+    await page.goto('/register');
+    await expect(page.locator('.vb-register-note-top')).toContainText('Registration is invite-only');
+    await page.locator('#displayName').fill('Invite Only Tester');
+    await page.locator('.vb-modal-actions .vb-btn', { hasText: 'Register' }).click();
+    await expect(page.locator('.vb-login-error')).toContainText('Please enter a valid invite code.');
+
+    await page.locator('#inviteCode').fill(invite.code);
+    await expect(page.locator('.vb-invite-status.vb-valid')).toBeVisible();
+    await expect(page.locator('#username')).toBeVisible();
+    await page.locator('#username').fill('invite-only-user');
+    await page.locator('#password').fill('password123');
+    await page.locator('#confirmPassword').fill('password123');
+    await page.locator('.vb-modal-actions .vb-btn', { hasText: 'Register' }).click();
+
+    await expect(page).toHaveURL(/\/$/);
+    await expect(page.locator('.vb-welcome-main')).toContainText('Invite Only Tester');
   });
 
   test('invite registration and login modal error handling', async ({ page }) => {

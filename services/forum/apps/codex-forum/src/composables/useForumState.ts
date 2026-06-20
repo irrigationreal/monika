@@ -16,6 +16,7 @@ import type {
   ModelInfoDto,
   PostDto,
   RecentPostDto,
+  RegistrationModeDto,
   RegisterResponseDto,
   RobotPersonaDto,
   RobotStateDto,
@@ -88,11 +89,20 @@ const fallbackModelCatalog: ModelCatalogDto = {
 const modelCatalog = ref<ModelCatalogDto | null>(null);
 const modelCatalogLoading = ref(false);
 const modelCatalogError = ref<string | null>(null);
+const registrationSettings = ref<RegistrationModeDto>({
+  mode: 'disabled',
+  registrationEnabled: false,
+  inviteRegistrationEnabled: false,
+  publicRegistrationEnabled: false
+});
+const registrationSettingsLoading = ref(false);
+const registrationSettingsError = ref<string | null>(null);
 
 const LAST_REPLY_MODEL_KEY = 'codex-forum:last-reply-model';
 const LAST_REPLY_REASONING_KEY = 'codex-forum:last-reply-reasoning';
 let lastReplyDefaultsLoaded = false;
 let modelCatalogLoaded = false;
+let registrationSettingsLoaded = false;
 
 const currentUser = ref<AuthUserDto['identity']>(null);
 const currentPermissions = ref<string[]>([]);
@@ -214,6 +224,9 @@ export function useForumState() {
     modelCatalogLoaded = true;
     void loadModelCatalog();
   }
+  if (!registrationSettingsLoaded) {
+    void loadRegistrationSettings();
+  }
   const selectedTopicId = computed(() => selectedTopic.value?.id ?? null);
 
   const sortedPosts = computed(() => posts.value.slice().sort((a, b) => a.createdAt.localeCompare(b.createdAt)));
@@ -279,6 +292,9 @@ export function useForumState() {
 
   const isLoggedIn = computed(() => currentUser.value !== null);
   const isAdmin = computed(() => currentUser.value?.kind === 'admin');
+  const canPublicRegister = computed(() => registrationSettings.value.publicRegistrationEnabled);
+  const canInviteRegister = computed(() => registrationSettings.value.inviteRegistrationEnabled);
+  const canShowRegisterLink = computed(() => registrationSettings.value.registrationEnabled);
   const canModerate = computed(() => {
     const kind = currentUser.value?.kind;
     if (kind === 'admin') return true;
@@ -468,6 +484,21 @@ export function useForumState() {
   function formatToolTime(iso?: string | null): string {
     if (!iso) return '';
     return new Date(iso).toLocaleTimeString();
+  }
+
+  async function loadRegistrationSettings(force = false): Promise<void> {
+    if (registrationSettingsLoading.value) return;
+    if (registrationSettingsLoaded && !force) return;
+    registrationSettingsLoading.value = true;
+    registrationSettingsError.value = null;
+    try {
+      registrationSettings.value = await api.registrationMode();
+      registrationSettingsLoaded = true;
+    } catch (err) {
+      registrationSettingsError.value = err instanceof Error ? err.message : 'Failed to load registration settings.';
+    } finally {
+      registrationSettingsLoading.value = false;
+    }
   }
 
   async function loadModelCatalog(force = false): Promise<void> {
@@ -1415,6 +1446,9 @@ export function useForumState() {
     modelCatalog,
     modelCatalogLoading,
     modelCatalogError,
+    registrationSettings,
+    registrationSettingsLoading,
+    registrationSettingsError,
 
     // Computed
     sortedPosts,
@@ -1424,6 +1458,9 @@ export function useForumState() {
     latestToolRun,
     isRobotBusy,
     isLoggedIn,
+    canPublicRegister,
+    canInviteRegister,
+    canShowRegisterLink,
     canModerate,
     modelItems,
     modelSupportsReasoning,
@@ -1456,6 +1493,7 @@ export function useForumState() {
     loadAutoRun,
     loadSession,
     loadSessionInspector,
+    loadRegistrationSettings,
     loadModelCatalog,
     interruptRobot,
     continueRobot,

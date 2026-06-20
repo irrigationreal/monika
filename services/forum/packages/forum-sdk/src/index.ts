@@ -34,6 +34,7 @@ import type {
   LoginResponseDto,
   ImpersonationTokenCreateResponseDto,
   RecentPostDto,
+  RegistrationModeDto,
   ForumThemeKey,
   IdentityDto,
   IdentityPermissionsDto,
@@ -119,6 +120,7 @@ export type {
   LoginResponseDto,
   ImpersonationTokenCreateResponseDto,
   RecentPostDto,
+  RegistrationModeDto,
   ForumThemeKey,
   IdentityDto,
   IdentityPermissionsDto,
@@ -238,6 +240,8 @@ function createApi({
       json<ImpersonationTokenCreateResponseDto>('/impersonation-tokens', { method: 'POST', body: JSON.stringify(input) }),
     revokeImpersonationToken: (id: string) =>
       json<{ ok: boolean }>(`/impersonation-tokens/${id}`, { method: 'DELETE' }),
+    registrationMode: () =>
+      json<RegistrationModeDto>('/auth/registration'),
     register: (displayName: string, inviteCode?: string, username?: string, password?: string) =>
       json<RegisterResponseDto>('/auth/register', {
         method: 'POST',

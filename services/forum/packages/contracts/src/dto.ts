@@ -691,6 +691,16 @@ export interface AuthIdentityDto {
   hasPrivateEmail?: boolean;
 }
 
+export const RegistrationModeValues = ['disabled', 'invite-only', 'public'] as const;
+export type RegistrationMode = (typeof RegistrationModeValues)[number];
+
+export interface RegistrationModeDto {
+  mode: RegistrationMode;
+  registrationEnabled: boolean;
+  inviteRegistrationEnabled: boolean;
+  publicRegistrationEnabled: boolean;
+}
+
 export interface AuthUserDto {
   identity: AuthIdentityDto | null;
 }
