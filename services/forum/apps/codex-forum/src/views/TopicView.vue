@@ -58,6 +58,7 @@ const showMoveTopicModal = ref(false);
 const moveForumOptions = ref<ForumDto[]>([]);
 const selectedMoveForumId = ref('');
 const moveConfirmChecked = ref(false);
+const moveSilentChecked = ref(false);
 const moveError = ref('');
 const moveLoading = ref(false);
 const expandedTools = ref(new Set<string>());
@@ -558,6 +559,7 @@ async function openMoveTopicModal(): Promise<void> {
   showMoveTopicModal.value = true;
   moveError.value = '';
   moveConfirmChecked.value = false;
+  moveSilentChecked.value = false;
   selectedMoveForumId.value = state.selectedTopic.value?.forumId ?? '';
   if (moveForumOptions.value.length === 0) {
     try {
@@ -572,6 +574,7 @@ function closeMoveTopicModal(): void {
   showMoveTopicModal.value = false;
   moveError.value = '';
   moveConfirmChecked.value = false;
+  moveSilentChecked.value = false;
 }
 
 async function confirmMoveTopic(): Promise<void> {
@@ -586,7 +589,7 @@ async function confirmMoveTopic(): Promise<void> {
   moveLoading.value = true;
   moveError.value = '';
   try {
-    await state.moveTopicToForum(selectedMoveForumId.value);
+    await state.moveTopicToForum(selectedMoveForumId.value, { silent: moveSilentChecked.value });
     showMoveTopicModal.value = false;
   } catch (err) {
     moveError.value = err instanceof Error ? err.message : 'Failed to move thread.';
@@ -1509,10 +1512,14 @@ onUnmounted(() => {
         <div class="vb-modal-warning">
           <p>Warning:</p>
           <ul>
-            <li>In-flight robot responses will be interrupted.</li>
+            <li>The move will fail if an assistant response is currently in progress.</li>
             <li>Working directory context will change; previous files may no longer exist.</li>
             <li>Topic visibility (and attachment access) will follow the destination forum.</li>
           </ul>
+          <label class="vb-modal-checkbox">
+            <input type="checkbox" v-model="moveSilentChecked" />
+            Move silently without posting a move notice in the thread.
+          </label>
           <label class="vb-modal-checkbox">
             <input type="checkbox" v-model="moveConfirmChecked" />
             I understand and want to proceed.

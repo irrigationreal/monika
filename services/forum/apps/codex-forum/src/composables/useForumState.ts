@@ -1198,14 +1198,14 @@ export function useForumState() {
     }
   }
 
-  async function moveTopicToForum(forumId: string): Promise<TopicDto> {
+  async function moveTopicToForum(forumId: string, opts?: { silent?: boolean }): Promise<TopicDto> {
     if (!selectedTopic.value) {
       throw new Error('No topic selected');
     }
     loading.value = true;
     error.value = null;
     try {
-      const result = await api.moveTopic(selectedTopic.value.id, forumId);
+      const result = await api.moveTopic(selectedTopic.value.id, forumId, opts);
       selectedTopic.value = result.topic;
       await loadTopics();
       await loadPosts(result.topic.id);
