@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { test, expect, type Page, type Route } from '@playwright/test';
+import { test, expect, type Locator, type Page, type Route } from '@playwright/test';
 import type { AttachmentDto, ForumDto, IdentityDto, TopicDto, PostDto, UserFileDto } from '../../src/lib/apiClient';
 
 declare global {
@@ -433,6 +433,10 @@ async function gotoNewThreadComposer(page: Page, url: string): Promise<void> {
   await expect(page.locator('#thread-title')).toBeVisible();
 }
 
+async function expectFileInputCleared(fileInput: Locator): Promise<void> {
+  await expect.poll(async () => fileInput.evaluate((input) => (input as HTMLInputElement).files?.length ?? 0)).toBe(0);
+}
+
 test.describe('Attachment lifecycle', () => {
   test('creates thread with pending attachments and supports quick reply uploads', async ({ page }) => {
     const largeFileSize = 90 * 1024 * 1024 + 4;
@@ -534,6 +538,8 @@ test.describe('Attachment lifecycle', () => {
 
       await expect(page.locator('.vb-post-attachments .vb-attachment-link', { hasText: 'reply-a.txt' })).toBeVisible();
       await expect(page.locator('.vb-post-attachments .vb-attachment-link', { hasText: 'reply-b.txt' })).toBeVisible();
+      await expectFileInputCleared(quickReply.locator('.vb-attachment-input'));
+      await expect(quickReply.locator('.vb-attachment-selected')).toHaveCount(0);
     } finally {
       await page.evaluate(() => {
         const overrides = window.__codexFileOverrides;
@@ -610,7 +616,33 @@ test.describe('Attachment lifecycle', () => {
     await quickReply.locator('.vb-btn', { hasText: 'Post Quick Reply' }).click();
 
     await expect(page.locator('.vb-banner')).toContainText('Upload failed');
+    await expectFileInputCleared(quickReply.locator('.vb-attachment-input'));
+    await expect(quickReply.locator('.vb-attachment-selected')).toHaveCount(0);
     await expect(page.locator('.vb-post-attachments .vb-attachment-link', { hasText: 'broken.txt' })).toHaveCount(0);
+  });
+
+  test('clears the new thread file input after a failed attachment upload', async ({ page }) => {
+    const mock = createMockApi({
+      failAttachmentUploads: new Set(['too-large.txt']),
+      attachmentUploadDelayMs: 40
+    });
+    await mock.attach(page);
+
+    await gotoNewThreadComposer(page, '/forums/forum-1/newthread');
+    await page.locator('#thread-title').fill('New thread failure');
+    await page.locator('.vb-editor-textarea').fill('This thread upload is expected to fail.');
+
+    const fileInput = page.locator('.vb-newthread-form .vb-attachment-input');
+    await fileInput.setInputFiles([
+      { name: 'too-large.txt', mimeType: 'text/plain', buffer: Buffer.from('too large') }
+    ]);
+    await expect(page.locator('.vb-attachment-selected')).toContainText('too-large.txt');
+
+    await page.locator('.vb-form-actions .vb-btn-primary').click();
+
+    await expect(page.locator('.vb-login-error')).toContainText('Upload failed');
+    await expectFileInputCleared(fileInput);
+    await expect(page.locator('.vb-attachment-selected')).toHaveCount(0);
   });
 
   test('uploads user files, copies links, and updates totals', async ({ page }) => {

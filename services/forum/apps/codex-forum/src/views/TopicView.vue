@@ -68,6 +68,7 @@ const showScrollTop = ref(false);
 const isReplying = ref(false);
 const isUploadingReply = ref(false);
 const replyFiles = ref<File[]>([]);
+const replyFileInputRef = ref<HTMLInputElement | null>(null);
 const deletingByAttachment = ref<Record<string, boolean>>({});
 const ttsLoadingByPost = ref<Record<string, boolean>>({});
 const ttsErrorsByPost = ref<Record<string, string>>({});
@@ -1133,6 +1134,7 @@ async function handleDelete(postId: string): Promise<void> {
 
 async function reply(): Promise<void> {
   if (!replyBody.value.trim()) return;
+  const shouldClearReplyFiles = replyFiles.value.length > 0;
   isReplying.value = true;
   try {
     const attachmentsPending = replyFiles.value.length > 0;
@@ -1152,7 +1154,7 @@ async function reply(): Promise<void> {
           reasoningEffort: supportsReasoning.value ? selectedReasoning.value : null,
         });
       }
-      replyFiles.value = [];
+      clearReplyFiles();
     }
     replyBody.value = '';
 
@@ -1168,6 +1170,9 @@ async function reply(): Promise<void> {
   } catch (err) {
     state.setError(err instanceof Error ? err.message : 'Failed to post reply.');
   } finally {
+    if (shouldClearReplyFiles) {
+      clearReplyFiles();
+    }
     isReplying.value = false;
     isUploadingReply.value = false;
   }
@@ -1222,6 +1227,13 @@ function handleReplyFiles(event: Event): void {
   const input = event.target as HTMLInputElement | null;
   const files = input?.files ? Array.from(input.files) : [];
   replyFiles.value = files;
+}
+
+function clearReplyFiles(): void {
+  replyFiles.value = [];
+  if (replyFileInputRef.value) {
+    replyFileInputRef.value.value = '';
+  }
 }
 
 async function removeAttachment(postId: string, attachmentId: string): Promise<void> {
@@ -2309,7 +2321,7 @@ onUnmounted(() => {
         <textarea v-model="replyBody" rows="6" placeholder="Type your reply here..."></textarea>
         <div class="vb-reply-attachments">
           <label class="vb-attachment-label">Attachments:</label>
-          <input class="vb-attachment-input" type="file" multiple @change="handleReplyFiles" />
+          <input ref="replyFileInputRef" class="vb-attachment-input" type="file" multiple @change="handleReplyFiles" />
           <div v-if="replyFiles.length > 0" class="vb-attachment-selected">
             <span>Selected:</span>
             <ul>
