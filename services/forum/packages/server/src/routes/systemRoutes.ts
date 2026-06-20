@@ -1,10 +1,13 @@
 import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { FastifyInstance } from 'fastify';
-import type { ModelCatalogSnapshot } from '../modelCatalog';
-import type { EchsClient } from '../echsClient';
+
 import { contentTypeForPath, resolveRobotAttachmentPath } from '../utils/attachments';
+
+import type { FastifyInstance } from 'fastify';
+
+import type { EchsClient } from '../echsClient';
+import type { ModelCatalogSnapshot } from '../modelCatalog';
 import type { AccessHelpers } from '../utils/access';
 
 export function registerSystemRoutes({
@@ -12,12 +15,12 @@ export function registerSystemRoutes({
   modelCatalog,
   echsClient,
   access,
-  deploymentStatus
+  deploymentStatus,
 }: {
   app: FastifyInstance;
   modelCatalog?: { listModels: () => Promise<ModelCatalogSnapshot> } | null;
   echsClient?: EchsClient | null;
-  access?: Pick<AccessHelpers, 'requireTopicVisible'> | null;
+  access?: Pick<AccessHelpers, 'getCurrentUser' | 'requireScope' | 'requireTopicVisible'> | null;
   deploymentStatus?: (() => unknown) | null;
 }): void {
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
@@ -87,7 +90,7 @@ export function registerSystemRoutes({
       ok: true,
       echs: echs ?? { status: 'unreachable' },
       deployment: deploymentStatus?.() ?? null,
-      build: cachedBuildInfo
+      build: cachedBuildInfo,
     };
   });
 
@@ -107,7 +110,11 @@ export function registerSystemRoutes({
     return modelCatalog.listModels();
   });
 
-  app.get('/openapi.json', async (_request, reply) => {
+  app.get('/openapi.json', async (request, reply) => {
+    if (!access?.getCurrentUser || !access.requireScope) {
+      throw app.httpErrors.internalServerError('access helpers not available');
+    }
+    access.requireScope(access.getCurrentUser(request), 'read');
     cachedOpenApi ??= loadJsonFile(openApiSpecPath);
     if (!cachedOpenApi) {
       throw app.httpErrors.notFound('OpenAPI spec not found');
@@ -116,7 +123,11 @@ export function registerSystemRoutes({
     return cachedOpenApi;
   });
 
-  app.get('/postman/collection.json', async (_request, reply) => {
+  app.get('/postman/collection.json', async (request, reply) => {
+    if (!access?.getCurrentUser || !access.requireScope) {
+      throw app.httpErrors.internalServerError('access helpers not available');
+    }
+    access.requireScope(access.getCurrentUser(request), 'read');
     cachedPostmanCollection ??= loadJsonFile(postmanCollectionPath);
     if (!cachedPostmanCollection) {
       throw app.httpErrors.notFound('Postman collection not found');

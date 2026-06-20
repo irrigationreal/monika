@@ -1,17 +1,21 @@
 import { randomUUID } from 'node:crypto';
-import type { FastifyInstance } from 'fastify';
+
 import {
   ChatTypingRequestSchema,
   CreateChatCategoryRequestSchema,
   CreateChatMessageRequestSchema,
-  CreateChatRoomRequestSchema
+  CreateChatRoomRequestSchema,
 } from '@irrigationreal/codex-forum-contracts';
-import type { ChatPresenceDto } from '@irrigationreal/codex-forum-contracts';
-import type { AccessHelpers } from '../utils/access';
-import type { ForumStore } from '../store';
-import type { StreamBusInterface } from '../streamBus';
+
 import { mapChatCategoryRowToDto, mapChatMessageRowToDto, mapChatRoomRowToDto } from '../mappers/dto';
 import { parseBody } from '../utils/validation';
+
+import type { ChatPresenceDto } from '@irrigationreal/codex-forum-contracts';
+import type { FastifyInstance } from 'fastify';
+
+import type { ForumStore } from '../store';
+import type { StreamBusInterface } from '../streamBus';
+import type { AccessHelpers } from '../utils/access';
 
 type PresenceIdentity = {
   id: string;
@@ -49,9 +53,9 @@ function joinPresence(roomId: string, identity: PresenceIdentity, connectionId: 
         id: identity.id,
         displayName: identity.displayName?.trim() || 'Unknown',
         avatarUrl: identity.avatarUrl ?? null,
-        joinedAt: new Date().toISOString()
+        joinedAt: new Date().toISOString(),
       },
-      connections: new Set()
+      connections: new Set(),
     };
     roomPresence.set(identity.id, entry);
   }
@@ -99,7 +103,7 @@ export function registerChatRoutes({
   app,
   store,
   access,
-  bus
+  bus,
 }: {
   app: FastifyInstance;
   store: ForumStore;
@@ -108,28 +112,31 @@ export function registerChatRoutes({
 }): void {
   const { getCurrentUser, requireScope, requireAdmin, canViewForum } = access;
 
-  function getIdentityForRequest(request: { headers: Record<string, unknown>; query?: unknown }) {
-    const user = getCurrentUser(request);
-    if (!user) return null;
-    return store.getIdentity(user.identityId);
+  function requireReadIdentity(request: { headers: Record<string, unknown>; query?: unknown }) {
+    const user = requireScope(getCurrentUser(request), 'read');
+    const identity = store.getIdentity(user.identityId);
+    if (!identity) {
+      throw app.httpErrors.unauthorized('Authentication required');
+    }
+    return identity;
   }
 
   function toAccessVisibility(visibility: string) {
     return { visibility, tenant_id: null };
   }
 
-  function canWrite(visibility: string, identity: ReturnType<typeof getIdentityForRequest>) {
+  function canWrite(visibility: string, identity: ReturnType<ForumStore['getIdentity']>) {
     if (!identity) return false;
     return canViewForum(toAccessVisibility(visibility), identity);
   }
 
   app.get('/chat/categories', async (request) => {
-    const identity = getIdentityForRequest(request);
+    const identity = requireReadIdentity(request);
     const categories = store.listChatCategoriesWithCounts();
     const visible = categories.filter((category) => canViewForum(toAccessVisibility(category.visibility), identity));
     return {
       rootForumId: visible[0]?.id ?? '',
-      items: visible.map((category) => mapChatCategoryRowToDto(category))
+      items: visible.map((category) => mapChatCategoryRowToDto(category)),
     };
   });
 
@@ -139,7 +146,7 @@ export function registerChatRoutes({
     const category = store.createChatCategory({
       name: body.name.trim(),
       description: body.description ?? null,
-      visibility: body.visibility ?? 'members'
+      visibility: body.visibility ?? 'members',
     });
     return mapChatCategoryRowToDto({ ...category, room_count: 0 });
   });
@@ -150,7 +157,7 @@ export function registerChatRoutes({
     if (!categoryId) {
       throw app.httpErrors.badRequest('categoryId is required');
     }
-    const identity = getIdentityForRequest(request);
+    const identity = requireReadIdentity(request);
     const category = store.getChatCategory(categoryId);
     if (!category) {
       throw app.httpErrors.notFound('category not found');
@@ -162,7 +169,7 @@ export function registerChatRoutes({
     const visibleRooms = rooms.filter((room) => canViewForum(toAccessVisibility(room.visibility), identity));
     return {
       categoryId,
-      items: visibleRooms.map((room) => mapChatRoomRowToDto(room))
+      items: visibleRooms.map((room) => mapChatRoomRowToDto(room)),
     };
   });
 
@@ -192,7 +199,7 @@ export function registerChatRoutes({
       categoryId: category.id,
       name: roomName,
       topic: body.topic?.trim() || null,
-      visibility: category.visibility as 'admin' | 'public' | 'members'
+      visibility: category.visibility as 'admin' | 'public' | 'members',
     });
     return mapChatRoomRowToDto(room);
   });
@@ -206,7 +213,7 @@ export function registerChatRoutes({
     if (!room) {
       throw app.httpErrors.notFound('room not found');
     }
-    const identity = getIdentityForRequest(request);
+    const identity = requireReadIdentity(request);
     if (!canViewForum(toAccessVisibility(room.visibility), identity)) {
       throw app.httpErrors.notFound('room not found');
     }
@@ -223,25 +230,25 @@ export function registerChatRoutes({
         const trimmed = hasMore ? fallbackRows.slice(0, limit) : fallbackRows;
         const chronological = trimmed.slice().reverse();
         const items = chronological.map((row) => mapChatMessageRowToDto(row));
-        const nextBefore = hasMore ? chronological[0]?.id ?? null : null;
+        const nextBefore = hasMore ? (chronological[0]?.id ?? null) : null;
         return {
           roomId,
           items,
           hasMore,
           nextBefore,
-          nextAfter: null
+          nextAfter: null,
         };
       }
       const hasMore = rows.length > limit;
       const trimmed = hasMore ? rows.slice(0, limit) : rows;
       const items = trimmed.map((row) => mapChatMessageRowToDto(row));
-      const nextAfter = hasMore ? trimmed[trimmed.length - 1]?.id ?? null : null;
+      const nextAfter = hasMore ? (trimmed[trimmed.length - 1]?.id ?? null) : null;
       return {
         roomId,
         items,
         hasMore,
         nextBefore: null,
-        nextAfter
+        nextAfter,
       };
     }
 
@@ -251,14 +258,14 @@ export function registerChatRoutes({
     const chronological = trimmed.slice().reverse();
     const items = chronological.map((row) => mapChatMessageRowToDto(row));
 
-    const nextBefore = hasMore ? chronological[0]?.id ?? null : null;
+    const nextBefore = hasMore ? (chronological[0]?.id ?? null) : null;
 
     return {
       roomId,
       items,
       hasMore,
       nextBefore,
-      nextAfter: null
+      nextAfter: null,
     };
   });
 
@@ -297,7 +304,7 @@ export function registerChatRoutes({
       authorName: identity.display_name ?? 'Unknown',
       authorAvatarUrl: identity.avatar_url ?? null,
       body: trimmedBody,
-      expiresAt
+      expiresAt,
     });
     const message = mapChatMessageRowToDto(messageRow);
 
@@ -328,8 +335,8 @@ export function registerChatRoutes({
         roomId,
         identityId: user.identityId,
         displayName: identity.display_name ?? 'Unknown',
-        isTyping: body.isTyping
-      }
+        isTyping: body.isTyping,
+      },
     });
 
     return { ok: true };
@@ -341,7 +348,7 @@ export function registerChatRoutes({
     if (!room) {
       throw app.httpErrors.notFound('room not found');
     }
-    const identity = getIdentityForRequest(request);
+    const identity = requireReadIdentity(request);
     if (!canViewForum(toAccessVisibility(room.visibility), identity)) {
       throw app.httpErrors.notFound('room not found');
     }
@@ -354,7 +361,7 @@ export function registerChatRoutes({
         {
           id: identity.id,
           displayName: identity.display_name,
-          avatarUrl: identity.avatar_url ?? null
+          avatarUrl: identity.avatar_url ?? null,
         },
         connectionId
       );
@@ -400,8 +407,8 @@ export function registerChatRoutes({
               roomId: leave.roomId,
               identityId: leave.member.id,
               displayName: leave.member.displayName,
-              isTyping: false
-            }
+              isTyping: false,
+            },
           });
         }
       }

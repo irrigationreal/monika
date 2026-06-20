@@ -69,6 +69,8 @@ curl -sS \
 
 ## API keys
 
+API key management is admin-only. Use an admin session token for the examples in this section.
+
 ### Create API key (token returned once)
 
 ```bash
@@ -103,5 +105,18 @@ curl -sS \
 
 ## Downloads
 
-- OpenAPI spec: `GET /api/openapi.json` — **manual reference only**; the contracts in `packages/contracts/src/schemas.ts` are the canonical API boundary.
+These documentation assets require authenticated read access:
+
+```bash
+curl -sS \
+  -H "Authorization: Bearer $CODEX_FORUM_TOKEN" \
+  "$CODEX_FORUM_BASE_URL/api/openapi.json"
+
+curl -sS \
+  -H "Authorization: Bearer $CODEX_FORUM_TOKEN" \
+  "$CODEX_FORUM_BASE_URL/api/postman/collection.json"
+```
+
+- OpenAPI spec: `GET /api/openapi.json` — **manual reference only**; the contracts in
+  `packages/contracts/src/schemas.ts` are the canonical API boundary.
 - Postman collection: `GET /api/postman/collection.json`
