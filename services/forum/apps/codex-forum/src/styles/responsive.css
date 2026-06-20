@@ -10,6 +10,10 @@
     height: auto;
   }
 
+  .vb-welcome {
+    width: 100%;
+  }
+
   .vb-post-body {
     flex-direction: column;
   }
