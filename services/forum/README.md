@@ -133,6 +133,7 @@ Key env vars (see `packages/server/src/runtimeConfig.ts` for the full list):
 | `CODEX_FORUM_BOOTSTRAP_ADMIN_PASSWORD` | Bootstrap admin password | unset |
 | `CODEX_FORUM_BOOTSTRAP_ADMIN_DISPLAY_NAME` | Bootstrap admin display name | `Admin` |
 | `CODEX_FORUM_UPLOADS_DIR` | Attachments path | `/mnt/storage/forum-attachments` |
+| `CODEX_FORUM_INTERNAL_API_TOKEN` | Shared secret required for internal agent pending-attachment uploads; send as `x-internal-token` or `Authorization: Bearer ...` | unset |
 | `CODEX_FORUM_REDIS_STREAM_BUS` | Redis stream bus toggle | `0` |
 | `CODEX_FORUM_ENABLE_AUTH` | Auth toggle | `0` |
 | `CODEX_FORUM_ENABLE_RATE_LIMITING` | Rate limit toggle | `0` |

@@ -53,7 +53,7 @@ runtime/
     models.json        optional model definitions
     keybindings.json   optional Pi keybindings
     secrets.env        optional provider/API env vars sourced at startup
-    forum.env          optional forum bootstrap/auth settings
+    forum.env          optional forum bootstrap/auth settings and shared internal API token
     git-identity.env   optional git identity (GIT_USER_NAME/GIT_USER_EMAIL)
     gitconfig          optional full git config, including signing settings
     ssh/               optional SSH config/keys for git and manual relocate
@@ -97,6 +97,9 @@ container, project paths should use `/workspace/...`.
 
 The forum is part of the main compose deployment and listens on port 4310 by
 default. It talks to `agentd` at `http://monika:7724` on the Docker network.
+Copy `docs/examples/forum.env.example` to `runtime/secrets/forum.env` and set a
+random `CODEX_FORUM_INTERNAL_API_TOKEN`; the same env file is loaded by both the
+`monika` and `forum` containers so internal generated-file uploads can authenticate.
 
 ## Git, SSH, and signing state
 

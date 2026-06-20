@@ -41,6 +41,8 @@ services:
     env_file:
       - path: ./runtime/secrets/secrets.env
         required: false
+      # Shares CODEX_FORUM_INTERNAL_API_TOKEN with the forum so Pi can upload
+      # generated files through the internal pending-attachment endpoint.
       - path: ./runtime/secrets/forum.env
         required: false
     environment:
@@ -76,6 +78,8 @@ services:
       - ./runtime/forum:/forum
       - ${MONIKA_WORKSPACE:-/home/monika/repos}:/workspace
     env_file:
+      # Must include CODEX_FORUM_INTERNAL_API_TOKEN for internal Monika/forum
+      # pending-attachment uploads. Generate it with: openssl rand -base64 32
       - path: ./runtime/secrets/forum.env
         required: false
     environment:

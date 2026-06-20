@@ -181,6 +181,12 @@ Default paths and URLs:
 - Default work directory: `/workspace/monika`.
 - Runtime secrets: `runtime/secrets/forum.env` and `runtime/secrets/secrets.env`.
 
+`runtime/secrets/forum.env` should include a generated
+`CODEX_FORUM_INTERNAL_API_TOKEN` shared by the `monika` and `forum` containers.
+The forum's internal pending-attachment upload endpoint fails closed when this
+secret is unset; generate one with `openssl rand -base64 32` or copy the shape
+from `docs/examples/forum.env.example`.
+
 Health checks:
 
 ```bash
@@ -259,11 +265,14 @@ Preferred outbound upload flow:
 
 - Pi extension `forum-attachments.ts` registers `forum_upload_attachment(path, filename?, mimeType?)`.
 - The tool reads `.codex-forum/requester.json` for the current topic id, uploads
-  the local file to the forum internal pending attachment endpoint, and returns
-  the exact standalone `[forum-attachment id="..."]` reference to include in the
-  final response.
-- Forum route `POST /api/agent/topics/:topicId/pending-attachments` stores the
-  file in forum upload storage as a pending attachment with SHA-256 and TTL.
+  the local file to the forum internal pending attachment endpoint with the
+  shared `CODEX_FORUM_INTERNAL_API_TOKEN`, and returns the exact standalone
+  `[forum-attachment id="..."]` reference to include in the final response.
+- Forum route `POST /api/agent/topics/:topicId/pending-attachments` requires
+  that shared token via `x-internal-token` (preferred) or `Authorization: Bearer
+  ...` (compatibility), then stores the file in forum upload storage as a pending
+  attachment with SHA-256 and TTL. If the server token is unset, the route returns
+  a configuration error instead of accepting unauthenticated uploads.
 - Robot post persistence consumes standalone `[forum-attachment id="..."]` lines
   outside fenced code blocks, links matching pending attachments to the post as
   normal attachments, and strips the reference line from the rendered body.
