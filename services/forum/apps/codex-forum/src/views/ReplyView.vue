@@ -350,8 +350,13 @@ onMounted(async () => {
 
       <div v-if="!state.isLoggedIn.value" class="vb-login-notice">
         You must be logged in to reply.
-        <router-link to="/login">Log in</router-link> or
-        <router-link to="/register">register</router-link>.
+        <template v-if="state.canShowRegisterLink.value">
+          <router-link to="/login">Log in</router-link> or
+          <router-link to="/register">register</router-link>.
+        </template>
+        <template v-else>
+          <router-link to="/login">Log in</router-link>.
+        </template>
       </div>
 
       <div v-if="errorMessage" class="vb-login-error">

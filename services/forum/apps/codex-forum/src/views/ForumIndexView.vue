@@ -461,8 +461,13 @@ onMounted(() => {
     <div class="vb-quick-post">
       <div class="vb-table-header">Quick Post</div>
       <div v-if="!state.isLoggedIn.value" class="vb-login-notice">
-        <router-link to="/login">Log in</router-link> or
-        <router-link to="/register">register</router-link> to create a thread.
+        <template v-if="state.canShowRegisterLink.value">
+          <router-link to="/login">Log in</router-link> or
+          <router-link to="/register">register</router-link> to create a thread.
+        </template>
+        <template v-else>
+          <router-link to="/login">Log in</router-link> to create a thread.
+        </template>
       </div>
       <div v-else class="vb-quick-post-body">
         <p>Want to post a new thread?</p>

@@ -2298,8 +2298,13 @@ onUnmounted(() => {
         This topic is {{ state.selectedTopic.value?.status }}. No new replies can be posted.
       </div>
       <div v-else-if="!state.isLoggedIn.value" class="vb-login-notice">
-        <router-link to="/login">Log in</router-link> or <router-link to="/register">register</router-link> to post a
-        reply.
+        <template v-if="state.canShowRegisterLink.value">
+          <router-link to="/login">Log in</router-link> or <router-link to="/register">register</router-link> to post a
+          reply.
+        </template>
+        <template v-else>
+          <router-link to="/login">Log in</router-link> to post a reply.
+        </template>
       </div>
       <div v-else class="vb-new-body">
         <div v-if="quickReplyWillSteerRobot" class="vb-steer-notice">
