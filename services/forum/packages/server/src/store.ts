@@ -2616,22 +2616,31 @@ export class ForumStore {
   search(
     query: string,
     scope: 'all' | 'topics' | 'posts' = 'all',
-    limit = 50
+    limit = 50,
+    options?: { forumIds?: string[] }
   ): { topics: TopicRow[]; posts: PostRow[] } {
     const searchTerm = `%${query}%`;
+    const forumIds = options?.forumIds;
+    if (forumIds && forumIds.length === 0) {
+      return { topics: [], posts: [] };
+    }
+    const forumFilter = forumIds ? ` and t.forum_id in (${forumIds.map(() => '?').join(', ')})` : '';
+    const forumParams = forumIds ?? [];
     let topics: TopicRow[] = [];
     let posts: PostRow[] = [];
 
     if (scope === 'all' || scope === 'topics') {
       topics = this.db
-        .prepare('select * from topics where title like ? order by created_at desc limit ?')
-        .all(searchTerm, limit) as TopicRow[];
+        .prepare(`select t.* from topics t where t.title like ?${forumFilter} order by t.created_at desc limit ?`)
+        .all(searchTerm, ...forumParams, limit) as TopicRow[];
     }
 
     if (scope === 'all' || scope === 'posts') {
       posts = this.db
-        .prepare('select * from posts where body like ? and deleted_at is null order by created_at desc limit ?')
-        .all(searchTerm, limit) as PostRow[];
+        .prepare(
+          `select p.* from posts p join topics t on t.id = p.topic_id where p.body like ? and p.deleted_at is null${forumFilter} order by p.created_at desc limit ?`
+        )
+        .all(searchTerm, ...forumParams, limit) as PostRow[];
     }
 
     return { topics, posts };

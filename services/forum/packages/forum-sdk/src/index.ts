@@ -583,8 +583,12 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
       json<{ ok: boolean }>(`/attachments/${attachmentId}`, { method: 'DELETE' }),
     generatePostTts: (postId: string) =>
       json<AttachmentDto>(`/posts/${postId}/tts`, { method: 'POST' }),
-    search: (q: string, scope: 'all' | 'topics' | 'posts' = 'all') =>
-      json<SearchResultsDto>(`/search?q=${encodeURIComponent(q)}&scope=${scope}`),
+    search: (q: string, scope: 'all' | 'topics' | 'posts' = 'all', options?: { forumId?: string; limit?: number }) => {
+      const query = new URLSearchParams({ q, scope });
+      if (options?.forumId) query.set('forumId', options.forumId);
+      if (options?.limit !== undefined) query.set('limit', String(options.limit));
+      return json<SearchResultsDto>(`/search?${query.toString()}`);
+    },
     listForums: (params?: ListForumsParams) => {
       if (!params) {
         return json<ForumDto[]>('/forums');

@@ -11,6 +11,7 @@ const state = useForumState();
 const searchQuery = ref('');
 const searchResults = ref<{ topics: TopicDto[]; posts: PostDto[] } | null>(null);
 const isSearching = ref(false);
+const searchAllVisibleForums = ref(false);
 
 const routeForumId = computed(() => (route.params['forumId'] as string | undefined) ?? null);
 const stickyThreads = computed(() => state.topics.value.filter((t) => t.tags.includes('sticky')));
@@ -80,7 +81,9 @@ async function handleSearch(): Promise<void> {
   }
   isSearching.value = true;
   try {
-    searchResults.value = await api.search(searchQuery.value.trim());
+    searchResults.value = await api.search(searchQuery.value.trim(), 'all', {
+      forumId: searchAllVisibleForums.value ? undefined : routeForumId.value ?? undefined
+    });
   } catch (err) {
     state.setError(err instanceof Error ? err.message : 'Search failed.');
   } finally {
@@ -162,6 +165,10 @@ onMounted(() => {
         />
         <button class="vb-small-btn" :disabled="isSearching" @click="handleSearch">Search</button>
         <button v-if="searchQuery" class="vb-small-btn" @click="clearSearch">Clear</button>
+        <label class="vb-search-scope">
+          <input v-model="searchAllVisibleForums" type="checkbox" />
+          Search all visible forums
+        </label>
       </div>
     </div>
 
@@ -478,6 +485,15 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.vb-search-scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
 .vb-topic-list-mobile {
   display: none;
 }
