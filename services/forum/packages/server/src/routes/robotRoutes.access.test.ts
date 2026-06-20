@@ -117,6 +117,23 @@ describe('Robot routes access controls', () => {
     expect(authBody.recentToolRuns[0].outputSummary).toBe('secret output');
   });
 
+  it('does not expose stale idle current plans to authenticated readers', async () => {
+    const app = await buildApp();
+    const { topic } = createTopicWithTrace();
+    db.prepare("update robot_state set activity = 'idle' where topic_id = ?").run(topic.id);
+
+    const authRes = await app.inject({
+      method: 'GET',
+      url: `/topics/${topic.id}/state?view=full&include=plan,toolRuns`,
+      headers: { authorization: 'Bearer author-token' }
+    });
+
+    expect(authRes.statusCode).toBe(200);
+    const body = authRes.json() as any;
+    expect(body.activity).toBe('idle');
+    expect(body.currentPlan).toBeNull();
+  });
+
   it('does not expose robot state for private topics to unauthenticated readers', async () => {
     const app = await buildApp();
     const adminForum = store.createForum('Admin', null, null, null, null, 'active', 'admin');

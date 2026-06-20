@@ -1084,15 +1084,13 @@ export class EchsBridge {
 
     const model = turn.options?.model ?? this.config.model;
     const reasoningEffort = turn.options?.reasoningEffort ?? this.config.reasoningEffort ?? null;
-    const currentPlanId = this.store.getRobotState(turn.topicId)?.current_plan_id ?? null;
-
     this.store.upsertRobotState({
       topicId: turn.topicId,
       sessionId: turn.sessionId,
       activity: 'waiting',
       model,
       reasoningEffort,
-      currentPlanId,
+      currentPlanId: null,
     });
     this.emitState(turn.topicId);
     void this.processTurnQueue();

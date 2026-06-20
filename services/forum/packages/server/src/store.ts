@@ -2226,7 +2226,7 @@ export class ForumStore {
     if (!existing) return null;
     const now = nowIso();
     this.db
-      .prepare(`update robot_state set activity = 'idle', last_error_message = ?, last_error_at = ?, last_error_post_id = ?, last_error_turn_id = ?, last_updated_at = ? where topic_id = ?`)
+      .prepare(`update robot_state set activity = 'idle', current_plan_id = null, last_error_message = ?, last_error_at = ?, last_error_post_id = ?, last_error_turn_id = ?, last_updated_at = ? where topic_id = ?`)
       .run(input.message.slice(0, 1000), now, input.postId ?? null, input.turnId ?? null, now, topicId);
     return this.getRobotState(topicId);
   }
@@ -2243,16 +2243,19 @@ export class ForumStore {
     if (!existing) {
       return null;
     }
+    const currentPlanIdExpr = activity === 'idle' ? 'null' : 'current_plan_id';
     this.db
-      .prepare('update robot_state set activity = ?, last_updated_at = ? where topic_id = ?')
+      .prepare(`update robot_state set activity = ?, current_plan_id = ${currentPlanIdExpr}, last_updated_at = ? where topic_id = ?`)
       .run(activity, nowIso(), topicId);
     return this.getRobotState(topicId) as RobotStateRow;
   }
 
   resetRobotActivities(activity = 'idle'): number {
     const now = nowIso();
+    const currentPlanIdExpr = activity === 'idle' ? 'null' : 'current_plan_id';
+    const whereClause = activity === 'idle' ? "activity != ? or current_plan_id is not null" : 'activity != ?';
     const result = this.db
-      .prepare('update robot_state set activity = ?, last_updated_at = ? where activity != ?')
+      .prepare(`update robot_state set activity = ?, current_plan_id = ${currentPlanIdExpr}, last_updated_at = ? where ${whereClause}`)
       .run(activity, now, activity);
     return result.changes;
   }
@@ -2636,6 +2639,7 @@ export class ForumStore {
 
   upsertRobotState(input: UpdateRobotStateInput): RobotStateRow {
     const now = nowIso();
+    const currentPlanId = input.activity === 'idle' ? null : input.currentPlanId ?? null;
     const existing = this.getRobotState(input.topicId);
     if (existing) {
       this.db
@@ -2654,7 +2658,7 @@ export class ForumStore {
           input.model ?? null,
           input.reasoningEffort ?? null,
           now,
-          input.currentPlanId ?? null,
+          currentPlanId,
           input.activity,
           input.activity,
           input.activity,
@@ -2675,7 +2679,7 @@ export class ForumStore {
           input.model ?? null,
           input.reasoningEffort ?? null,
           now,
-          input.currentPlanId ?? null
+          currentPlanId
         );
     }
     return this.getRobotState(input.topicId) as RobotStateRow;
