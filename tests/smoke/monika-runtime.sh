@@ -224,6 +224,11 @@ const http = require('node:http');
 const portFile = process.env.MOCK_FORUM_PORT_FILE;
 const server = http.createServer((req, res) => {
   if (req.method === 'GET' && req.url === '/api/deploy/quiescence') {
+    if (req.headers.authorization !== 'Bearer smoke-deploy-token') {
+      res.writeHead(401, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ code: 'unauthorized' }));
+      return;
+    }
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ safeToStop: true, blockers: [] }));
     return;
@@ -255,6 +260,7 @@ MONIKA_DEPLOY_REQUIRE_GIT_CURRENT=0 \
 MONIKA_DEPLOY_BACKUP_COMPRESSION=gzip \
 MONIKA_AGENTD_BASE_URL="http://127.0.0.1:${AGENTD_PORT}" \
 MONIKA_FORUM_BASE_URL="http://127.0.0.1:${MOCK_FORUM_PORT}/api" \
+MONIKA_FORUM_DEPLOY_TOKEN="smoke-deploy-token" \
 ./scripts/deploy-if-safe --backup-only
 
 mapfile -t archives < <(find "$SMOKE_DEPLOY_ROOT/runtime/backups/redeploy" -maxdepth 1 -type f -name 'monika-redeploy-*.tar.gz' | sort)
