@@ -19,6 +19,7 @@ const showPreview = ref(false);
 const previewHtml = ref('');
 const previewSource = ref('');
 const threadFiles = ref<File[]>([]);
+const threadFileInputRef = ref<HTMLInputElement | null>(null);
 const selectedModel = ref(state.lastReplyModel.value ?? '');
 const selectedReasoning = ref(state.lastReplyReasoning.value ?? 'medium');
 const silentPost = ref(false);
@@ -119,6 +120,7 @@ function handlePreviewButton(): void {
 async function handleSubmit(): Promise<void> {
   if (!canSubmit.value) return;
 
+  const shouldClearThreadFiles = threadFiles.value.length > 0;
   errorMessage.value = '';
   isSubmitting.value = true;
 
@@ -147,12 +149,15 @@ async function handleSubmit(): Promise<void> {
           reasoningEffort: supportsReasoning.value ? selectedReasoning.value : null
         });
       }
-      threadFiles.value = [];
+      clearThreadFiles();
     }
     await router.push({ name: 'topic.view', params: { topicId: topic.id } });
   } catch (err) {
     errorMessage.value = err instanceof Error ? err.message : 'Failed to create thread.';
   } finally {
+    if (shouldClearThreadFiles) {
+      clearThreadFiles();
+    }
     isSubmitting.value = false;
     isUploading.value = false;
   }
@@ -170,6 +175,13 @@ function handleCancel(): void {
 function handleThreadFiles(event: Event): void {
   const input = event.target as HTMLInputElement | null;
   threadFiles.value = input?.files ? Array.from(input.files) : [];
+}
+
+function clearThreadFiles(): void {
+  threadFiles.value = [];
+  if (threadFileInputRef.value) {
+    threadFileInputRef.value.value = '';
+  }
 }
 
 async function loadForum(forumId: string): Promise<void> {
@@ -305,7 +317,7 @@ onMounted(async () => {
 
             <div class="vb-reply-attachments">
               <label class="vb-attachment-label">Attachments:</label>
-              <input class="vb-attachment-input" type="file" multiple @change="handleThreadFiles" />
+              <input ref="threadFileInputRef" class="vb-attachment-input" type="file" multiple @change="handleThreadFiles" />
               <div v-if="threadFiles.length > 0" class="vb-attachment-selected">
                 <span>Selected:</span>
                 <ul>
