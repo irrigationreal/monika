@@ -454,7 +454,7 @@ const forumDeploymentStatus = () => {
 };
 
 const registerApiRoutes: FastifyPluginAsync = async (api) => {
-  registerSystemRoutes({ app: api, modelCatalog, echsClient, access, deploymentStatus: forumDeploymentStatus });
+  registerSystemRoutes({ app: api, modelCatalog, access, deploymentStatus: forumDeploymentStatus });
   registerAuthRoutes({ app: api, store, featureFlags, linkIssuer, emailService, access });
   registerAdminRoutes({ app: api, store, db, access, codex, piSessionSync });
   registerForumRoutes({

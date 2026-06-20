@@ -220,10 +220,6 @@ export function useForumState() {
       }
     }
   }
-  if (!modelCatalogLoaded) {
-    modelCatalogLoaded = true;
-    void loadModelCatalog();
-  }
   if (!registrationSettingsLoaded) {
     void loadRegistrationSettings();
   }
@@ -335,6 +331,10 @@ export function useForumState() {
         setTheme(preferredTheme);
       }
       await loadCurrentPermissions();
+      if (res.identity && !modelCatalogLoaded) {
+        modelCatalogLoaded = true;
+        void loadModelCatalog();
+      }
     } catch {
       setAuthToken(null);
       setRefreshToken(null);
@@ -369,6 +369,8 @@ export function useForumState() {
     setRefreshToken(null);
     currentUser.value = null;
     currentPermissions.value = [];
+    modelCatalog.value = null;
+    modelCatalogLoaded = false;
   }
 
   async function register(
@@ -385,6 +387,10 @@ export function useForumState() {
       currentUser.value = result.identity;
       setTheme(result.identity.theme ?? 'vmonika');
       await loadCurrentPermissions();
+      if (!modelCatalogLoaded) {
+        modelCatalogLoaded = true;
+        void loadModelCatalog();
+      }
     }
     return result;
   }
@@ -396,6 +402,10 @@ export function useForumState() {
     currentUser.value = result.identity;
     setTheme(result.identity.theme ?? 'vmonika');
     await loadCurrentPermissions();
+    if (!modelCatalogLoaded) {
+      modelCatalogLoaded = true;
+      void loadModelCatalog();
+    }
     return { displayName: result.identity.displayName };
   }
 
