@@ -4,7 +4,7 @@ import type { AgentBridge } from '../agentBridge';
 import type { TopicAutoRunRow } from '../db';
 import type { AutoRunDirector } from '../services/autoRunDirector';
 import type { ForumStore } from '../store';
-import type { StreamBusInterface } from '../streamBus';
+import type { StreamBusInterface, StreamEvent } from '../streamBus';
 import type { AccessHelpers } from '../utils/access';
 
 const AUTO_RUN_DEFAULTS = {
@@ -36,6 +36,43 @@ function normalizeAutoRunReasoning(value: string | null): string | null {
   if (!trimmed) return null;
   if (trimmed.toLowerCase() === 'default') return null;
   return trimmed;
+}
+
+function mapPublicRobotActivity(activity: string | null | undefined): 'idle' | 'thinking' {
+  if (!activity || activity === 'idle' || activity === 'error') return 'idle';
+  return 'thinking';
+}
+
+export interface PublicRobotState {
+  topicId: string;
+  activity: 'idle' | 'thinking';
+  lastUpdatedAt: string | null;
+  currentPlan: null;
+  recentToolRuns: [];
+}
+
+export function redactRobotStateForPublic(state: Record<string, unknown> | null | undefined, topicId?: string): PublicRobotState | null {
+  if (!state) return null;
+  return {
+    topicId: String(state['topicId'] ?? state['topic_id'] ?? topicId ?? ''),
+    activity: mapPublicRobotActivity(typeof state['activity'] === 'string' ? state['activity'] : null),
+    lastUpdatedAt: (state['lastUpdatedAt'] ?? state['last_updated_at'] ?? null) as string | null,
+    currentPlan: null,
+    recentToolRuns: [],
+  };
+}
+
+export function redactStreamEventForPublic(event: StreamEvent): StreamEvent | null {
+  if (event.type === 'state') {
+    return { type: 'state', data: redactRobotStateForPublic(event.data as Record<string, unknown>) };
+  }
+  if (event.type === 'assistant_message') {
+    return { type: 'assistant_message', data: {} };
+  }
+  if (event.type === 'assistant_reset') {
+    return { type: 'assistant_reset', data: {} };
+  }
+  return null;
 }
 
 function mapTopicAutoRun(row: TopicAutoRunRow | null, topicId: string) {
@@ -83,7 +120,11 @@ export function registerRobotRoutes({
   access: AccessHelpers;
   autoRunDirector: AutoRunDirector;
 }): void {
-  const { getCurrentUser, requireScope, canPostTopic, requireTopicVisible, requireAdmin } = access;
+  const { getCurrentUser, requireScope, canPostTopic, requireTopicVisible, requireAdmin, getIdentityFromRequest } = access;
+
+  function canViewTraceDetails(request: Parameters<typeof getCurrentUser>[0]): boolean {
+    return Boolean(getIdentityFromRequest(request));
+  }
 
   function canManageAutoRun(request: Parameters<typeof getCurrentUser>[0]): boolean {
     const user = getCurrentUser(request);
@@ -95,6 +136,7 @@ export function registerRobotRoutes({
   app.get('/topics/:topicId/state', async (request) => {
     const { topicId } = request.params as { topicId: string };
     requireTopicVisible(topicId, request);
+    const canViewTrace = canViewTraceDetails(request);
     const query = request.query as { view?: string; include?: string };
     const view = query?.view?.toLowerCase();
     const include = (query?.include ?? '')
@@ -108,8 +150,11 @@ export function registerRobotRoutes({
     const state = store.getRobotState(topicId);
     const context = await codex.getTopicContext?.(topicId).catch(() => null) ?? null;
     if (!state) {
-      if (context) return { topicId, sessionId: null, activity: 'idle', model: (context as any).model ?? null, reasoningEffort: (context as any).thinkingLevel ?? null, lastUpdatedAt: null, stream: codex.getStreamLiveness(topicId), currentPlan: null, recentToolRuns: [], context };
+      if (context && canViewTrace) return { topicId, sessionId: null, activity: 'idle', model: (context as any).model ?? null, reasoningEffort: (context as any).thinkingLevel ?? null, lastUpdatedAt: null, stream: codex.getStreamLiveness(topicId), currentPlan: null, recentToolRuns: [], context };
       return null;
+    }
+    if (!canViewTrace) {
+      return redactRobotStateForPublic(state as unknown as Record<string, unknown>, topicId);
     }
     const plan = includePlan && state.current_plan_id ? store.getPlan(state.current_plan_id) : null;
     const toolRuns = includeToolRuns ? store.listToolRuns(topicId, 10) : [];
@@ -362,9 +407,12 @@ export function registerRobotRoutes({
       }
     }, keepAliveMs);
 
+    const canViewTrace = canViewTraceDetails(request);
     const unsubscribe = bus.subscribe(topicId, (event) => {
-      reply.raw.write(`event: ${event.type}\n`);
-      reply.raw.write(`data: ${JSON.stringify(event.data)}\n\n`);
+      const outboundEvent = canViewTrace ? event : redactStreamEventForPublic(event);
+      if (!outboundEvent) return;
+      reply.raw.write(`event: ${outboundEvent.type}\n`);
+      reply.raw.write(`data: ${JSON.stringify(outboundEvent.data)}\n\n`);
     });
 
     request.raw.on('close', () => {
