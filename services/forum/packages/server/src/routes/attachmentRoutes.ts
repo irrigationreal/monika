@@ -10,7 +10,7 @@ import {
   unlinkSync,
   writeFileSync
 } from 'node:fs';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import type { FastifyInstance } from 'fastify';
@@ -54,12 +54,28 @@ export function registerAttachmentRoutes({
 }): void {
   const { getCurrentUser, requireModerator, requireScope, requireTopicVisible, requirePostVisible } = access;
 
+  function tokenMatches(value: string | null): boolean {
+    if (!value || !INTERNAL_API_TOKEN) return false;
+    const expected = Buffer.from(INTERNAL_API_TOKEN);
+    const actual = Buffer.from(value);
+    return expected.length === actual.length && timingSafeEqual(expected, actual);
+  }
+
   function requireInternalAgent(request: any): void {
-    if (!INTERNAL_API_TOKEN) return;
-    const header = request.headers?.authorization;
-    if (header !== `Bearer ${INTERNAL_API_TOKEN}`) {
-      throw app.httpErrors.unauthorized('internal agent token required');
+    if (!INTERNAL_API_TOKEN) {
+      throw app.httpErrors.serviceUnavailable('internal agent uploads are not configured');
     }
+
+    const headers = request.headers ?? {};
+    const authorization = typeof headers.authorization === 'string' ? headers.authorization : null;
+    const bearerToken = authorization?.startsWith('Bearer ') ? authorization.slice('Bearer '.length) : null;
+    const internalToken = typeof headers['x-internal-token'] === 'string' ? headers['x-internal-token'] : null;
+
+    if (tokenMatches(internalToken) || tokenMatches(bearerToken)) {
+      return;
+    }
+
+    throw app.httpErrors.unauthorized('internal agent token required');
   }
 
   // Attachment endpoints

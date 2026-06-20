@@ -67,7 +67,7 @@ export default function forumAttachmentsExtension(pi: ExtensionAPI) {
 			const apiBase = (process.env.MONIKA_FORUM_API_BASE_URL ?? process.env.CODEX_FORUM_API_BASE_URL ?? "http://127.0.0.1:4310/api").replace(/\/$/, "");
 			const token = process.env.CODEX_FORUM_INTERNAL_API_TOKEN ?? process.env.MONIKA_FORUM_INTERNAL_API_TOKEN ?? "";
 			const headers: Record<string, string> = {};
-			if (token) headers["Authorization"] = `Bearer ${token}`;
+			if (token) headers["x-internal-token"] = token;
 
 			const response = await fetch(`${apiBase}/agent/topics/${encodeURIComponent(requester.topicId)}/pending-attachments`, {
 				method: "POST",
