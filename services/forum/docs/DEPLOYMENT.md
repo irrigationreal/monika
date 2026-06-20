@@ -142,6 +142,7 @@ services:
       - CODEX_FORUM_ENABLE_AUTH=1
       - CODEX_FORUM_REGISTRATION_MODE=disabled
       - CODEX_FORUM_ENABLE_RATE_LIMITING=1
+      - CODEX_FORUM_DEPLOY_TOKEN=${CODEX_FORUM_DEPLOY_TOKEN}
     deploy:
       resources:
         limits:
@@ -456,6 +457,15 @@ Health check endpoint:
 curl http://localhost:4310/healthz
 # Response: {"ok":true}
 ```
+
+The public health endpoints are intentionally minimal. Deployment quiescence is operational state and requires `CODEX_FORUM_DEPLOY_TOKEN`:
+
+```bash
+curl -H "authorization: Bearer $CODEX_FORUM_DEPLOY_TOKEN" \
+  http://localhost:4310/api/deploy/quiescence
+```
+
+The model catalog endpoint (`/api/models`) requires an authenticated forum session or API key.
 
 ### Logging
 

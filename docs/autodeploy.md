@@ -11,7 +11,7 @@ This runbook describes a host-side deployment lifecycle for standalone Monika ru
 | `compose.yaml` | Local deployment file for the live Monika runtime. Copied from `compose.yaml.example` and kept out of git. |
 | `scripts/deploy-if-safe` | Host-side deploy entry point. Pulls images, checks quiescence, creates backups, applies images, and prunes old artifacts. |
 | agentd quiescence API | Reports whether Pi work/memstore saves are safe to stop and performs deploy drain. |
-| forum deploy API | Reports whether forum robot dispatch, Pi sync, and robot state are safe to stop. |
+| forum deploy API | Reports whether forum robot dispatch, Pi sync, and robot state are safe to stop. Requires `CODEX_FORUM_DEPLOY_TOKEN`. |
 | systemd timer | Periodically invokes `scripts/deploy-if-safe` from the host. |
 
 The deployment source of truth for unattended updates is the container image tag, not the git checkout. The checkout still matters as the reviewed local deployment contract: compose files, deploy scripts, docs, and runtime layout live there. Autodeploy may fetch and inspect git state, but it must not pull or modify files.
@@ -43,6 +43,12 @@ http://127.0.0.1:7724/v1/admin/drain
 
 Do not bind agentd to `0.0.0.0` unless it has gained a proper external security model. For the intended host-side automation model, localhost is the trusted admin boundary; users with Docker access already have effective root-equivalent control over the runtime.
 
+The forum itself is user-facing, so its deploy-quiescence endpoint also requires an application-level deploy token. Store the token in `runtime/secrets/forum.env` as `CODEX_FORUM_DEPLOY_TOKEN`; the forum container reads it through Compose, and the host-side systemd unit should load the same file with `EnvironmentFile=` so `scripts/deploy-if-safe` can send it. Generate it separately from `CODEX_FORUM_INTERNAL_API_TOKEN`:
+
+```bash
+python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
+```
+
 ## Deploy lifecycle
 
 `scripts/deploy-if-safe` performs this sequence in normal deploy mode:
@@ -52,7 +58,7 @@ Do not bind agentd to `0.0.0.0` unless it has gained a proper external security 
 3. Pull the configured Monika and forum images.
 4. Compare the pulled image IDs with the currently running containers.
 5. Exit cleanly if no image change is available.
-6. Ask the forum whether it is safe to stop.
+6. Ask the forum whether it is safe to stop, authenticating with the deploy token.
 7. Ask agentd whether it is safe to stop; if only idle conversations are loaded, request deploy drain.
 8. Create and verify a whole-repo backup archive.
 9. Recreate only the `monika` and `forum` services with Docker Compose.
@@ -155,6 +161,9 @@ Verify:
 ```bash
 docker compose ps
 curl -fsS http://127.0.0.1:4310/api/healthz
+. /home/monika/repos/monika/runtime/secrets/forum.env
+curl -fsS -H "authorization: Bearer $CODEX_FORUM_DEPLOY_TOKEN" \
+  http://127.0.0.1:4310/api/deploy/quiescence
 curl -fsS http://127.0.0.1:7724/v1/admin/quiescence
 ```
 

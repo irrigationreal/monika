@@ -97,9 +97,10 @@ container, project paths should use `/workspace/...`.
 
 The forum is part of the main compose deployment and listens on port 4310 by
 default. It talks to `agentd` at `http://monika:7724` on the Docker network.
-Copy `docs/examples/forum.env.example` to `runtime/secrets/forum.env` and set a
-random `CODEX_FORUM_INTERNAL_API_TOKEN`; the same env file is loaded by both the
-`monika` and `forum` containers so internal generated-file uploads can authenticate.
+Copy `docs/examples/forum.env.example` to `runtime/secrets/forum.env` and set random
+`CODEX_FORUM_INTERNAL_API_TOKEN` and `CODEX_FORUM_DEPLOY_TOKEN` values. The same env
+file is loaded by both containers for generated-file uploads and by host-side deploy
+automation for forum quiescence checks.
 
 ## Git, SSH, and signing state
 
