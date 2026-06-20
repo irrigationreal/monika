@@ -346,8 +346,10 @@ been committed yet.
    buffers → current `reasoningDraft` committed as a reasoning segment → current
    `assistantDraft` committed as a text segment → tool segment pushed → both
    drafts cleared (fresh start for next inter-tool gap).
-3. `assistant_message` fires → any remaining tail text committed → segments
-   cleared (response complete, post takes over).
+3. `assistant_message` fires → any remaining tail text is flushed, then the
+   live trace is cleared (response complete, post takes over). The completion
+   reload opts out of trace reconstruction so stale idle state cannot resurrect
+   the just-finished plan or tool runs.
 
 **Rendering (`liveTurnItems` computed in `TopicView.vue`):**
 
@@ -384,10 +386,13 @@ with `parseReasoningSteps`, and interleaves with tools sorted by `startedAt`.
 Falls back to a compact non-interleaved view when checkpoints are absent
 (pre-existing data or imported sessions).
 
-**Refresh resilience:** On page refresh mid-response, `reconstructSegmentsFromState()`
-rebuilds committed segments from server state using the stored checkpoints and
-accumulated text. Only runs when `activity !== 'idle'` to prevent stale
-reconstruction after interrupts or completed responses.
+**Refresh resilience:** On page refresh or reconnect mid-response,
+`reconstructSegmentsFromState()` rebuilds committed segments from server state
+using the stored checkpoints and accumulated text. Live `state` SSE events only
+reconstruct while `activity !== 'idle'`. Explicit state loads may reconstruct for
+initial hydration, but the `assistant_message` completion path disables
+reconstruction and clears the live trace after reloading posts/state so stale
+idle state cannot keep the live panel visible after the completed post exists.
 
 ### `parseReasoningSteps` and markdown handling
 
