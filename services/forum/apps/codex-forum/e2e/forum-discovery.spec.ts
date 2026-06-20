@@ -1,8 +1,31 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
+
 import { createForumFixture } from './support/forum-fixture';
 
 test.describe('Forum discovery + navigation (read-only)', () => {
-  test('home renders forum summary, hides restricted forums, and navigates into forum/topic views', async ({ page }) => {
+  test('guest navigation hides authenticated tools and direct visits prompt login', async ({ page }) => {
+    const fixture = createForumFixture();
+    fixture.createForum({ name: 'E2E Public', visibility: 'public' });
+    await fixture.attach(page);
+
+    await page.goto('/');
+    await expect(page.locator('.vb-welcome-links')).not.toContainText('Chat');
+    await expect(page.locator('.vb-welcome-links')).not.toContainText('Developers');
+    await expect(page.locator('.vb-welcome-links')).not.toContainText('API Docs');
+    await expect(page.locator('.vb-nav-items')).not.toContainText('Chat');
+    await expect(page.locator('.vb-nav-items')).not.toContainText('Developers');
+    await expect(page.locator('.vb-nav-items')).not.toContainText('API Docs');
+    await expect(page.locator('.vb-footer-links')).not.toContainText('Developers');
+    await expect(page.locator('.vb-footer-links')).not.toContainText('API Docs');
+
+    await page.goto('/chat');
+    await expect(page).toHaveURL('/');
+    await expect(page.locator('.vb-modal')).toContainText('Log In');
+  });
+
+  test('home renders forum summary, hides restricted forums, and navigates into forum/topic views', async ({
+    page,
+  }) => {
     const fixture = createForumFixture();
     const author = fixture.createIdentity('E2E Reader');
     const secondAuthor = fixture.createIdentity('Second Poster');
@@ -12,19 +35,19 @@ test.describe('Forum discovery + navigation (read-only)', () => {
       name: 'E2E Public',
       description: 'Public read-only forum',
       category: 'E2E Category',
-      visibility: 'public'
+      visibility: 'public',
     });
     fixture.createForum({
       name: 'E2E Members',
       description: 'Members-only forum',
       category: 'E2E Category',
-      visibility: 'members'
+      visibility: 'members',
     });
     fixture.createForum({
       name: 'E2E Admin',
       description: 'Admin-only forum',
       category: 'E2E Category',
-      visibility: 'admin'
+      visibility: 'admin',
     });
 
     const stickyTopic = fixture.createTopic({
@@ -34,7 +57,7 @@ test.describe('Forum discovery + navigation (read-only)', () => {
       tags: ['sticky'],
       postCount: 2,
       bodyPrefix: 'Sticky post',
-      createdAt: new Date(baseTime - 180 * 60 * 1000).toISOString()
+      createdAt: new Date(baseTime - 180 * 60 * 1000).toISOString(),
     });
     const longTopic = fixture.createTopic({
       forumId: publicForum.id,
@@ -42,7 +65,7 @@ test.describe('Forum discovery + navigation (read-only)', () => {
       createdBy: secondAuthor.id,
       postCount: 60,
       bodyPrefix: 'Long post',
-      createdAt: new Date(baseTime - 120 * 60 * 1000).toISOString()
+      createdAt: new Date(baseTime - 120 * 60 * 1000).toISOString(),
     });
     const shortTopic = fixture.createTopic({
       forumId: publicForum.id,
@@ -50,7 +73,7 @@ test.describe('Forum discovery + navigation (read-only)', () => {
       createdBy: author.id,
       postCount: 3,
       bodyPrefix: 'Short post',
-      createdAt: new Date(baseTime - 10 * 60 * 1000).toISOString()
+      createdAt: new Date(baseTime - 10 * 60 * 1000).toISOString(),
     });
 
     await page.addInitScript(() => {
@@ -58,7 +81,7 @@ test.describe('Forum discovery + navigation (read-only)', () => {
         writeText: async (text: string) => {
           (window as { __lastClipboardText?: string }).__lastClipboardText = text;
         },
-        readText: async () => (window as { __lastClipboardText?: string }).__lastClipboardText ?? ''
+        readText: async () => (window as { __lastClipboardText?: string }).__lastClipboardText ?? '',
       };
       Object.defineProperty(navigator, 'clipboard', { value: clipboard, configurable: true });
     });
@@ -104,7 +127,9 @@ test.describe('Forum discovery + navigation (read-only)', () => {
 
     const firstPostLink = page.locator('.vb-post-footer .vb-control-btn', { hasText: 'Link' }).first();
     await firstPostLink.click();
-    const copiedText = await page.evaluate(() => (window as { __lastClipboardText?: string }).__lastClipboardText ?? '');
+    const copiedText = await page.evaluate(
+      () => (window as { __lastClipboardText?: string }).__lastClipboardText ?? ''
+    );
     expect(copiedText).toContain(`/topics/${longTopic.id}`);
 
     await page.locator('.vb-tools .vb-menu', { hasText: 'Search this Thread' }).click();
@@ -132,14 +157,14 @@ test.describe('Forum discovery + navigation (read-only)', () => {
     const publicForum = fixture.createForum({
       name: 'E2E Public',
       description: 'Public read-only forum',
-      visibility: 'public'
+      visibility: 'public',
     });
     fixture.createTopic({
       forumId: publicForum.id,
       title: 'Known Thread',
       createdBy: author.id,
       postCount: 1,
-      bodyPrefix: 'Known post'
+      bodyPrefix: 'Known post',
     });
 
     await fixture.attach(page);
@@ -172,7 +197,7 @@ test.describe('Forum discovery + navigation (read-only)', () => {
     const membersForum = fixture.createForum({
       name: 'E2E Members',
       description: 'Members-only forum',
-      visibility: 'members'
+      visibility: 'members',
     });
 
     await fixture.attach(page);
@@ -196,9 +221,12 @@ test.describe('Forum discovery + navigation (read-only)', () => {
     const adminToken = fixture.createSession(admin);
 
     await fixture.attach(page);
-    await page.addInitScript(([tokenKey, token]) => {
-      window.localStorage.setItem(tokenKey, token);
-    }, [fixture.AUTH_TOKEN_KEY, memberToken]);
+    await page.addInitScript(
+      ([tokenKey, token]) => {
+        window.localStorage.setItem(tokenKey, token);
+      },
+      [fixture.AUTH_TOKEN_KEY, memberToken]
+    );
     await page.goto('/');
 
     await expect(page.locator('.vb-forum-title', { hasText: publicForum.name })).toBeVisible();
@@ -207,9 +235,12 @@ test.describe('Forum discovery + navigation (read-only)', () => {
 
     const adminPage = await context.newPage();
     await fixture.attach(adminPage);
-    await adminPage.addInitScript(([tokenKey, token]) => {
-      window.localStorage.setItem(tokenKey, token);
-    }, [fixture.AUTH_TOKEN_KEY, adminToken]);
+    await adminPage.addInitScript(
+      ([tokenKey, token]) => {
+        window.localStorage.setItem(tokenKey, token);
+      },
+      [fixture.AUTH_TOKEN_KEY, adminToken]
+    );
     await adminPage.goto('/');
 
     await expect(adminPage.locator('.vb-forum-title', { hasText: publicForum.name })).toBeVisible();
@@ -223,14 +254,14 @@ test.describe('Forum discovery + navigation (read-only)', () => {
     const publicForum = fixture.createForum({
       name: 'E2E Public',
       description: 'Public read-only forum',
-      visibility: 'public'
+      visibility: 'public',
     });
     const starterTopic = fixture.createTopic({
       forumId: publicForum.id,
       title: 'Starter Thread',
       createdBy: author.id,
       postCount: 1,
-      bodyPrefix: 'Starter post'
+      bodyPrefix: 'Starter post',
     });
 
     await fixture.attach(page);
@@ -250,7 +281,7 @@ test.describe('Forum discovery + navigation (read-only)', () => {
       createdBy: author.id,
       postCount: 2,
       bodyPrefix: 'Seeded post',
-      createdAt: new Date(fixture.now.getTime() + 10 * 60 * 1000).toISOString()
+      createdAt: new Date(fixture.now.getTime() + 10 * 60 * 1000).toISOString(),
     });
 
     await secondPage.reload();

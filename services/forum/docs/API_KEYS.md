@@ -1,11 +1,14 @@
 # API Keys and Impersonation Tokens
 
-This forum supports first-class API keys for automation and impersonation tokens for managed personas.
+This forum supports first-class API keys for automation and impersonation tokens for managed personas. API key and
+impersonation-token management is currently admin-only.
 
 ## Integration assets
 
-- OpenAPI spec: `docs/openapi.json` (also served at `GET /api/openapi.json`) — **manual reference only**; the contracts in `packages/contracts/src/schemas.ts` are the canonical API boundary.
-- Postman collection: `docs/postman/codex-forum.postman_collection.json` (also served at `GET /api/postman/collection.json`)
+- OpenAPI spec: `docs/openapi.json` (also served at `GET /api/openapi.json` with authenticated read access) — **manual
+  reference only**; the contracts in `packages/contracts/src/schemas.ts` are the canonical API boundary.
+- Postman collection: `docs/postman/codex-forum.postman_collection.json` (also served at
+  `GET /api/postman/collection.json` with authenticated read access)
 - cURL examples: `docs/CURL_EXAMPLES.md`
 
 ## Authentication
@@ -25,7 +28,9 @@ Scopes control what the key can do:
 
 `write` implies `read`. `admin` implies all scopes.
 
-## API Keys
+## API Keys (Admin)
+
+Only admins can list, create, or revoke API keys through the management endpoints.
 
 ### List API keys
 
