@@ -46,6 +46,14 @@ export function registerAuthRoutes({
 }): void {
   const { getCurrentUser, requireAdmin, requireScope } = access;
 
+  const registrationMode = featureFlags.registrationMode ?? 'disabled';
+  const registrationSettings = {
+    mode: registrationMode,
+    registrationEnabled: featureFlags.enableAuth && registrationMode !== 'disabled',
+    inviteRegistrationEnabled: featureFlags.enableAuth && registrationMode !== 'disabled',
+    publicRegistrationEnabled: featureFlags.enableAuth && registrationMode === 'public'
+  };
+
   // OIDC endpoints (optional; enabled via env)
   registerOidcRoutes({ app, store, access });
 
@@ -302,6 +310,8 @@ export function registerAuthRoutes({
   });
 
   // Registration endpoints
+  app.get('/auth/registration', async () => registrationSettings);
+
   app.post(
     '/auth/register',
     {
@@ -310,7 +320,7 @@ export function registerAuthRoutes({
       }
     },
     async (request) => {
-      if (!featureFlags.enableAuth) {
+      if (!featureFlags.enableAuth || registrationMode === 'disabled') {
         throw app.httpErrors.forbidden('Registration disabled');
       }
       const body = parseBody(app, RegisterRequestSchema, request.body);
@@ -368,6 +378,10 @@ export function registerAuthRoutes({
       // Invite code present but missing credentials
       if (body.inviteCode) {
         throw app.httpErrors.badRequest('Username and password are required for invite registration');
+      }
+
+      if (registrationMode === 'invite-only') {
+        throw app.httpErrors.forbidden('Invite code, username, and password are required for registration');
       }
 
       // Create identity (without password)
@@ -460,6 +474,10 @@ export function registerAuthRoutes({
   });
 
   app.get('/auth/invite/:code', async (request) => {
+    if (!featureFlags.enableAuth || registrationMode === 'disabled') {
+      throw app.httpErrors.notFound('Invite not found');
+    }
+
     const { code } = request.params as { code: string };
     const invite = store.getInviteByCode(code);
 
