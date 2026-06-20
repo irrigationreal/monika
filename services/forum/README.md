@@ -11,7 +11,7 @@ Codex Forum is a vBulletin-style forum UI + API that treats a thread as the cano
 Key capabilities:
 
 - **Forum-native agent sessions**: each topic is a durable session with posts, attachments, and robot activity.
-- **Live robot state + tool trace**: see reasoning steps, tool runs, and outputs inline in a topic view.
+- **Live robot state + tool trace**: authenticated users can see reasoning steps, tool runs, and outputs inline in a topic view; public readers see only final posts and a neutral in-progress placeholder.
 - **Forums as folders**: organize workspaces with category + pre-prompt defaults per forum.
 - **Adapters as first-class citizens**: Discord/Matrix/Slack/web surfaces share the same contracts.
 - **API-first + CLI ready**: OpenAPI spec, Postman collection, and CLI command shapes are included.

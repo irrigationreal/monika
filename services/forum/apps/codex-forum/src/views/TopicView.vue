@@ -152,10 +152,13 @@ const canEditAutoRun = computed(() => isAdmin.value);
 const autoRunBusy = computed(() => state.autoRunLoading.value);
 
 const showRobotDraft = computed(() => state.hasPendingAssistantTurn.value);
+const canViewLiveTrace = computed(() => state.isLoggedIn.value);
 
 const liveTurnPostNumber = computed(() => state.sortedPosts.value.length + 1);
 const liveTurnPage = computed(() => pageForPostNumber(liveTurnPostNumber.value));
 const showRobotDraftOnCurrentPage = computed(() => showRobotDraft.value && state.currentPage.value === liveTurnPage.value);
+const showDetailedLiveTraceOnCurrentPage = computed(() => showRobotDraftOnCurrentPage.value && canViewLiveTrace.value);
+const showPublicRobotPlaceholderOnCurrentPage = computed(() => showRobotDraftOnCurrentPage.value && !canViewLiveTrace.value);
 
 const liveActivityEvents = computed<RobotActivityEvent[]>(() => state.activityLog.value);
 
@@ -1822,7 +1825,9 @@ onUnmounted(() => {
 
       <div v-if="showRobotDraft && !showRobotDraftOnCurrentPage && !threadSearchQuery" class="vb-live-turn-page-hint">
         Monika is responding on page {{ liveTurnPage }}.
-        <button type="button" class="vb-inline-link" @click="goToPage(liveTurnPage)">Jump to live trace</button>
+        <button type="button" class="vb-inline-link" @click="goToPage(liveTurnPage)">
+          {{ canViewLiveTrace ? 'Jump to live trace' : 'Jump to response in progress' }}
+        </button>
       </div>
 
       <div v-if="threadSearchQuery && filteredPosts.length === 0" class="vb-empty">No posts match your search.</div>
@@ -2115,7 +2120,7 @@ onUnmounted(() => {
       </div>
 
       <LiveAssistantTurn
-        v-if="showRobotDraftOnCurrentPage"
+        v-if="showDetailedLiveTraceOnCurrentPage"
         :items="liveTurnItems"
         :activity="state.robotState.value?.activity ?? null"
         :model="state.robotState.value?.model ?? null"
@@ -2125,6 +2130,21 @@ onUnmounted(() => {
         :topicId="routeTopicId"
         :id="String(liveTurnPostNumber)"
       />
+
+      <div
+        v-else-if="showPublicRobotPlaceholderOnCurrentPage"
+        :id="String(liveTurnPostNumber)"
+        class="vb-live-turn vb-post vb-post--draft vb-public-live-placeholder"
+      >
+        <div class="vb-post-header vb-live-turn-header">
+          <div>● Monika is responding</div>
+          <div class="vb-post-draft-pill">LIVE</div>
+        </div>
+        <div class="vb-public-live-placeholder-body" aria-live="polite">
+          <span class="vb-spinner vb-spinner-dark"></span>
+          <span>Response in progress…</span>
+        </div>
+      </div>
     </div>
 
     <div class="vb-controls vb-controls-bottom">

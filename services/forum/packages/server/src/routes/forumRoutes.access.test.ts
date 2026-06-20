@@ -59,6 +59,43 @@ describe('Forum routes access controls', () => {
     return app;
   }
 
+  it('returns public post content to guests without trace fields', async () => {
+    const app = await buildApp();
+    const forum = store.createForum('Forum', null, null, null, null, 'active', 'public');
+    const robot = store.createIdentity('Monika', 'robot');
+    const { topic, post } = store.createTopic({ forumId: forum.id, title: 'Topic', body: 'starter', authorId: robot.id });
+    const session = store.ensureSession({ topicId: topic.id });
+    store.createPlan({
+      topicId: topic.id,
+      sessionId: session.id,
+      content: 'secret plan content',
+      summary: 'secret plan summary',
+      parentPostId: post.id,
+      visibility: 'internal'
+    });
+    store.createToolRun({
+      topicId: topic.id,
+      sessionId: session.id,
+      tool: 'bash',
+      parentPostId: post.id,
+      command: 'cat /secret/path',
+      outputSummary: 'secret output',
+      visibility: 'internal'
+    });
+
+    const res = await app.inject({ method: 'GET', url: `/topics/${topic.id}/posts` });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as any;
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0].body).toBe('starter');
+    expect(body.items[0]).not.toHaveProperty('currentPlan');
+    expect(body.items[0]).not.toHaveProperty('recentToolRuns');
+    expect(body.items[0]).not.toHaveProperty('toolRuns');
+    expect(body.items[0]).not.toHaveProperty('plans');
+    expect(JSON.stringify(body)).not.toContain('secret plan content');
+    expect(JSON.stringify(body)).not.toContain('cat /secret/path');
+  });
+
   it('blocks guests from creating topics and posts (401)', async () => {
     const app = await buildApp();
     const forum = store.createForum('Forum', null, null, null, null, 'active', 'public');

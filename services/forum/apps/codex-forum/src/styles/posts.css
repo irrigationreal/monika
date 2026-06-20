@@ -2329,3 +2329,11 @@
   text-decoration: underline;
   cursor: pointer;
 }
+
+.vb-public-live-placeholder-body {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem;
+  color: var(--vb-text-muted, #53606c);
+}

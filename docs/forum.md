@@ -291,6 +291,18 @@ The forum renders two views of agent activity during and after a response:
 
 Both show reasoning, assistant text, and tool calls in chronological order.
 
+### Trace visibility boundary
+
+Topic visibility controls access to final conversation content. Trace visibility is a separate server-side policy because plans, reasoning, tool calls, commands, paths, usage metadata, and live assistant drafts are operational details, not public post content.
+
+Current policy:
+
+- Unauthenticated readers of public topics may see final posts and a neutral live placeholder only: "Response in progress…".
+- Authenticated users may receive detailed live state and stream events for visible topics.
+- Saved trace history remains behind the admin-only session inspector surface.
+
+The `/topics/:topicId/state` route redacts unauthenticated responses to a minimal busy/idle shape and ignores `view=full` / `include=plan,toolRuns` for public readers. The `/topics/:topicId/state/stream` route filters SSE events per subscriber: public readers receive redacted `state` events and stripped `assistant_message` completion signals, while reasoning deltas, assistant deltas, tool events, and error details are suppressed. Do not rely on Vue-only hiding for trace secrecy.
+
 ### Pi agent loop event flow
 
 A single forum reply triggers a Pi agent loop that may span multiple LLM turns:
