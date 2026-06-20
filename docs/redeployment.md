@@ -35,9 +35,10 @@ memstore reports save queue state through `memstore_status` and `queue_status`, 
 
 The forum reports deploy safety in:
 
-- `GET /api/deploy/quiescence`
-- `GET /api/healthz` under the `deployment` field
+- `GET /api/deploy/quiescence` for host-side deploy automation, authenticated with `CODEX_FORUM_DEPLOY_TOKEN`
 - `GET /api/admin/deploy/status` for authenticated admin views
+
+`GET /api/healthz` is intentionally minimal and public (`{ "ok": true }`) so Docker and reverse-proxy health checks do not expose operational state.
 
 Forum deploy blockers include active robot turns, queued turns, non-idle robot states, and a currently running Pi session sync. On SIGTERM/Fastify close, the server stops the Pi sync timer, waits for an in-flight sync to finish, stops robot/ECHS timers and SSE subscriptions, closes Redis if enabled, and closes the forum SQLite database.
 

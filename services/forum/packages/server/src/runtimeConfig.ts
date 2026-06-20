@@ -190,6 +190,7 @@ export const USER_FILES_DIR: string = join(UPLOADS_DIR, 'user-files');
 export const PENDING_ATTACHMENTS_DIR: string = join(UPLOADS_DIR, 'pending');
 export const PENDING_ATTACHMENT_TTL_MS: number = Number(process.env['CODEX_FORUM_PENDING_ATTACHMENT_TTL_MS'] ?? 24 * 60 * 60 * 1000);
 export const INTERNAL_API_TOKEN: string | null = readStringEnv('CODEX_FORUM_INTERNAL_API_TOKEN');
+export const DEPLOY_TOKEN: string | null = readStringEnv('CODEX_FORUM_DEPLOY_TOKEN');
 export const AVATARS_DIR: string = join(UPLOADS_DIR, 'avatars');
 export const ROBOT_ATTACHMENTS_DIR: string = process.env['CODEX_FORUM_ROBOT_ATTACHMENTS_DIR'] ?? join(WORK_DIR, 'out');
 export const DEFAULT_MAX_ATTACHMENT_BYTES: number = 250 * 1024 * 1024; // 250 MiB

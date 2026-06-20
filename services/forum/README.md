@@ -145,6 +145,7 @@ Key env vars (see `packages/server/src/runtimeConfig.ts` for the full list):
 | `CODEX_FORUM_BOOTSTRAP_ADMIN_DISPLAY_NAME` | Bootstrap admin display name                                                                                                    | `Admin`                          |
 | `CODEX_FORUM_UPLOADS_DIR`                  | Attachments path                                                                                                                | `/mnt/storage/forum-attachments` |
 | `CODEX_FORUM_INTERNAL_API_TOKEN`           | Shared secret required for internal agent pending-attachment uploads; send as `x-internal-token` or `Authorization: Bearer ...` | unset                            |
+| `CODEX_FORUM_DEPLOY_TOKEN`                 | Shared secret required for `/deploy/quiescence`; send as `x-deploy-token` or `Authorization: Bearer ...`                        | unset                            |
 | `CODEX_FORUM_REDIS_STREAM_BUS`             | Redis stream bus toggle                                                                                                         | `0`                              |
 | `CODEX_FORUM_ENABLE_AUTH`                  | Auth toggle                                                                                                                     | `0`                              |
 | `CODEX_FORUM_REGISTRATION_MODE`            | Self-registration policy: `disabled`, `invite-only`, or `public`                                                                | `disabled`                       |
@@ -160,6 +161,8 @@ allow invite-code signup, or `public` to allow the legacy public/passwordless re
 deployments should keep the default `disabled` mode unless account creation is deliberately open.
 
 Search is visibility-aware when `CODEX_FORUM_ENABLE_SEARCH=1`: unauthenticated callers only search public-visible forums, authenticated members can also search members-only forums, and admin-only results require admin visibility. Forum pages search the current forum by default; the UI can opt into searching all visible forums. Public search should be paired with `CODEX_FORUM_ENABLE_RATE_LIMITING=1` so the route-specific search limiter is active.
+
+Public `/healthz` and `/api/healthz` responses are intentionally minimal. Operational deploy state is available through `/api/deploy/quiescence` only with `CODEX_FORUM_DEPLOY_TOKEN`, while `/api/models` requires an authenticated forum user.
 
 For full deployment guidance, see `docs/DEPLOYMENT.md`.
 

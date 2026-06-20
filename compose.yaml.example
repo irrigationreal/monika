@@ -79,7 +79,8 @@ services:
       - ${MONIKA_WORKSPACE:-/home/monika/repos}:/workspace
     env_file:
       # Must include CODEX_FORUM_INTERNAL_API_TOKEN for internal Monika/forum
-      # pending-attachment uploads. Generate it with: openssl rand -base64 32
+      # pending-attachment uploads and CODEX_FORUM_DEPLOY_TOKEN for host-side
+      # deploy quiescence checks. Generate separate random values for each.
       - path: ./runtime/secrets/forum.env
         required: false
     environment:

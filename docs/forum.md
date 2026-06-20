@@ -206,19 +206,21 @@ Default paths and URLs:
 - Default work directory: `/workspace/monika`.
 - Runtime secrets: `runtime/secrets/forum.env` and `runtime/secrets/secrets.env`.
 
-`runtime/secrets/forum.env` should include a generated
-`CODEX_FORUM_INTERNAL_API_TOKEN` shared by the `monika` and `forum` containers.
-The forum's internal pending-attachment upload endpoint fails closed when this
-secret is unset; generate one with `openssl rand -base64 32` or copy the shape
-from `docs/examples/forum.env.example`.
+`runtime/secrets/forum.env` should include generated `CODEX_FORUM_INTERNAL_API_TOKEN`
+and `CODEX_FORUM_DEPLOY_TOKEN` values. The internal token is shared by the `monika`
+and `forum` containers for pending-attachment uploads. The deploy token is shared by
+the `forum` container and host-side deploy automation for quiescence checks. Both are
+fail-closed when unset; generate separate random values or copy the shape from
+`docs/examples/forum.env.example`.
 
 Health checks:
 
 ```bash
 docker compose exec monika curl -fsS http://forum:4310/healthz
 docker compose exec monika curl -fsS http://forum:4310/api/healthz
-docker compose exec monika curl -fsS http://forum:4310/api/models
 ```
+
+The model catalog endpoint (`/api/models`) requires an authenticated forum user.
 
 Do **not** restart the live `monika` container from inside an active Pi session;
 restarting the container terminates the session.

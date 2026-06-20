@@ -23,6 +23,7 @@ ROOT="${MONIKA_DEPLOY_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 COMPOSE_FILE="${MONIKA_DEPLOY_COMPOSE_FILE:-$ROOT/compose.yaml}"
 AGENTD_URL="${MONIKA_AGENTD_BASE_URL:-http://127.0.0.1:7724}"
 FORUM_URL="${MONIKA_FORUM_BASE_URL:-http://127.0.0.1:4310/api}"
+FORUM_DEPLOY_TOKEN="${MONIKA_FORUM_DEPLOY_TOKEN:-${CODEX_FORUM_DEPLOY_TOKEN:-}}"
 AGENTD_DRAIN_TIMEOUT_MS="${MONIKA_AGENTD_DRAIN_TIMEOUT_MS:-0}"
 BACKUP_DIR="${MONIKA_DEPLOY_BACKUP_DIR:-$ROOT/runtime/backups/redeploy}"
 BACKUP_COMPRESSION="${MONIKA_DEPLOY_BACKUP_COMPRESSION:-auto}"
@@ -61,9 +62,17 @@ cancel_agentd_drain() {
 }
 trap cancel_agentd_drain EXIT
 
+forum_curl() {
+  if [ -z "$FORUM_DEPLOY_TOKEN" ]; then
+    echo "MONIKA_FORUM_DEPLOY_TOKEN or CODEX_FORUM_DEPLOY_TOKEN is required for forum deploy API access" >&2
+    exit 78
+  fi
+  curl -fsS -H "authorization: Bearer $FORUM_DEPLOY_TOKEN" "$@"
+}
+
 require_safe_forum() {
   local state safe
-  state="$(curl -fsS "$FORUM_URL/deploy/quiescence")" || tempfail "forum quiescence endpoint unavailable"
+  state="$(forum_curl "$FORUM_URL/deploy/quiescence")" || tempfail "forum quiescence endpoint unavailable"
   safe="$(printf '%s' "$state" | json_field safeToStop)"
   [ "$safe" = "true" ] || tempfail "forum is not safe to stop: $state"
 }
