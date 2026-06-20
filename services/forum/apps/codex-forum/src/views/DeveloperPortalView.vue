@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { api, type ApiKeyDto, type ImpersonationTokenDto } from '../lib/apiClient';
+
 import { useForumState } from '../composables/useForumState';
+import { api } from '../lib/apiClient';
+
+import type { ApiKeyDto, ImpersonationTokenDto } from '../lib/apiClient';
 
 const router = useRouter();
 const state = useForumState();
@@ -41,9 +44,6 @@ const apiBase = computed(() => {
   return window.location.origin;
 });
 
-const openApiSpecUrl = computed(() => `${apiBase.value}/api/openapi.json`);
-const postmanCollectionUrl = computed(() => `${apiBase.value}/api/postman/collection.json`);
-
 const curlQuickstart = computed(() => {
   return [
     `# Base URL`,
@@ -58,7 +58,7 @@ const curlQuickstart = computed(() => {
     '  \"$BASE_URL/api/api-keys\"',
     '',
     '# Use API key',
-    'curl -sS -H \"Authorization: Bearer <API_KEY>\" \"$BASE_URL/api/forums\"'
+    'curl -sS -H \"Authorization: Bearer <API_KEY>\" \"$BASE_URL/api/forums\"',
   ].join('\\n');
 });
 
@@ -90,7 +90,7 @@ const llmContextPack = computed(() => {
     'Notes:',
     '- Use scopes: read, write, admin.',
     '- Keep API keys secret and rotate if leaked.',
-    '- Use markdown or BBCode for formatted posts.'
+    '- Use markdown or BBCode for formatted posts.',
   ].join('\n');
 });
 
@@ -198,7 +198,7 @@ async function createKey(): Promise<void> {
   try {
     const expiresAt = parseExpiresAt(newKeyExpiresDays.value);
     const payload: { label: string; scopes?: string[]; expiresAt?: string | null } = {
-      label: newKeyLabel.value.trim()
+      label: newKeyLabel.value.trim(),
     };
     if (newKeyScopes.value.length) payload.scopes = newKeyScopes.value;
     if (expiresAt !== null) payload.expiresAt = expiresAt;
@@ -241,7 +241,7 @@ async function createImpersonationToken(): Promise<void> {
       expiresAt?: string | null;
     } = {
       label: newImpersonationLabel.value.trim(),
-      displayName: newImpersonationDisplayName.value.trim()
+      displayName: newImpersonationDisplayName.value.trim(),
     };
     const avatarUrl = newImpersonationAvatarUrl.value.trim();
     if (avatarUrl) payload.avatarUrl = avatarUrl;
@@ -285,16 +285,12 @@ onMounted(async () => {
     <div class="vb-developer-hero">
       <div>
         <h2>Build on Codex Forum</h2>
-        <p>
-          Manage API keys, discover docs, and grab a ready-to-paste LLM context pack for integrations.
-        </p>
+        <p>Manage API keys, discover docs, and grab a ready-to-paste LLM context pack for integrations.</p>
       </div>
       <button class="vb-btn" type="button" @click="goHome">Back to Forum</button>
     </div>
 
-    <div v-if="!isLoggedIn" class="vb-admin-empty">
-      Log in to manage API keys and developer tools.
-    </div>
+    <div v-if="!isLoggedIn" class="vb-admin-empty">Log in to manage API keys and developer tools.</div>
 
     <div v-else class="vb-developer-grid">
       <section class="vb-developer-card">
@@ -368,9 +364,7 @@ onMounted(async () => {
           <button class="vb-btn" type="button" @click="openImpersonationModal">Create Token</button>
         </header>
 
-        <div v-if="impersonationTokens.length === 0" class="vb-admin-empty">
-          No impersonation tokens yet.
-        </div>
+        <div v-if="impersonationTokens.length === 0" class="vb-admin-empty">No impersonation tokens yet.</div>
         <table v-else class="vb-admin-table">
           <thead>
             <tr>
@@ -427,15 +421,11 @@ onMounted(async () => {
         <div class="vb-docs-list">
           <div class="vb-docs-item">
             <h4>OpenAPI Spec</h4>
-            <p>
-              <a class="vb-docs-link" :href="openApiSpecUrl" target="_blank" rel="noreferrer">/api/openapi.json</a>
-            </p>
+            <p><code>/api/openapi.json</code></p>
           </div>
           <div class="vb-docs-item">
             <h4>Postman Collection</h4>
-            <p>
-              <a class="vb-docs-link" :href="postmanCollectionUrl" target="_blank" rel="noreferrer">/api/postman/collection.json</a>
-            </p>
+            <p><code>/api/postman/collection.json</code></p>
           </div>
           <div class="vb-docs-item">
             <div class="vb-docs-item-header">
@@ -476,9 +466,7 @@ onMounted(async () => {
           </button>
         </header>
         <textarea class="vb-llm-pack" :value="llmContextPack" rows="16" readonly></textarea>
-        <div class="vb-llm-hint">
-          Keep this pack in your agent system prompt and rotate keys if they leak.
-        </div>
+        <div class="vb-llm-hint">Keep this pack in your agent system prompt and rotate keys if they leak.</div>
       </section>
     </div>
 

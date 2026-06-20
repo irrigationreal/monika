@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 
+import { getAuthToken } from '../lib/apiClient';
+
 type OpenApiSpec = {
   info?: { title?: string; version?: string; description?: string };
   servers?: { url: string }[];
@@ -95,7 +97,7 @@ const operations = computed<ApiOpEntry[]>(() => {
             code,
             description: response.description ?? '',
             contentType: 'application/json',
-            schema: {}
+            schema: {},
           });
         } else {
           for (const [contentType, body] of contentEntries) {
@@ -103,7 +105,7 @@ const operations = computed<ApiOpEntry[]>(() => {
               code,
               description: response.description ?? '',
               contentType,
-              schema: body.schema ?? {}
+              schema: body.schema ?? {},
             });
           }
         }
@@ -118,7 +120,7 @@ const operations = computed<ApiOpEntry[]>(() => {
         description,
         parameters,
         requestSchemas,
-        responses
+        responses,
       });
     }
   }
@@ -129,15 +131,7 @@ const filteredOperations = computed(() => {
   const term = search.value.trim().toLowerCase();
   if (!term) return operations.value;
   return operations.value.filter((entry) => {
-    const haystack = [
-      entry.path,
-      entry.method,
-      entry.summary,
-      entry.description,
-      entry.tag
-    ]
-      .join(' ')
-      .toLowerCase();
+    const haystack = [entry.path, entry.method, entry.summary, entry.description, entry.tag].join(' ').toLowerCase();
     return haystack.includes(term);
   });
 });
@@ -152,7 +146,7 @@ const groupedOperations = computed(() => {
   return Array.from(groups.entries()).map(([tag, items]) => ({
     tag,
     description: tagDescriptions.value.get(tag) ?? '',
-    items: items.slice().sort((a, b) => a.path.localeCompare(b.path))
+    items: items.slice().sort((a, b) => a.path.localeCompare(b.path)),
   }));
 });
 
@@ -168,7 +162,10 @@ async function loadSpec(): Promise<void> {
   isLoading.value = true;
   errorMessage.value = '';
   try {
-    const res = await fetch(openApiUrl.value);
+    const token = getAuthToken();
+    const res = await fetch(openApiUrl.value, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
     if (!res.ok) {
       throw new Error(`Failed to load OpenAPI: ${res.status}`);
     }
@@ -195,8 +192,10 @@ onMounted(() => {
         <p class="vb-api-version">Version {{ apiVersion }}</p>
         <p v-if="apiDescription" class="vb-api-description">{{ apiDescription }}</p>
         <div class="vb-api-links">
-          <a class="vb-api-link" :href="openApiUrl" target="_blank" rel="noreferrer">OpenAPI JSON</a>
-          <span class="vb-api-link">Base URL: <strong>{{ baseUrl }}</strong></span>
+          <span class="vb-api-link">OpenAPI JSON: <strong>/api/openapi.json</strong></span>
+          <span class="vb-api-link"
+            >Base URL: <strong>{{ baseUrl }}</strong></span
+          >
         </div>
       </div>
       <div class="vb-api-intro-right">
@@ -208,7 +207,7 @@ onMounted(() => {
     </div>
 
     <div v-if="isLoading" class="vb-api-loading">
-      <div class="vb-spinner vb-spinner-dark" style="width: 28px; height: 28px;"></div>
+      <div class="vb-spinner vb-spinner-dark" style="width: 28px; height: 28px"></div>
       <div>Loading API specification...</div>
     </div>
     <div v-else-if="errorMessage" class="vb-api-error">{{ errorMessage }}</div>
@@ -219,37 +218,27 @@ onMounted(() => {
         <div v-if="groupedOperations.length === 0" class="vb-api-empty">No endpoints match this search.</div>
         <div v-for="group in groupedOperations" :key="group.tag" class="vb-api-sidebar-group">
           <div class="vb-api-sidebar-tag">{{ group.tag }}</div>
-          <a
-            v-for="entry in group.items"
-            :key="entry.id"
-            :href="`#${entry.id}`"
-            class="vb-api-sidebar-link"
-          >
-            <span class="vb-api-method" :class="`vb-api-method--${entry.method.toLowerCase()}`">{{ entry.method }}</span>
+          <a v-for="entry in group.items" :key="entry.id" :href="`#${entry.id}`" class="vb-api-sidebar-link">
+            <span class="vb-api-method" :class="`vb-api-method--${entry.method.toLowerCase()}`">{{
+              entry.method
+            }}</span>
             <span class="vb-api-path">{{ entry.path }}</span>
           </a>
         </div>
       </aside>
 
       <div class="vb-api-content">
-        <div
-          v-for="group in groupedOperations"
-          :key="group.tag"
-          class="vb-api-group"
-        >
+        <div v-for="group in groupedOperations" :key="group.tag" class="vb-api-group">
           <div class="vb-api-group-header">
             <h3>{{ group.tag }}</h3>
             <p v-if="group.description">{{ group.description }}</p>
           </div>
 
-          <details
-            v-for="entry in group.items"
-            :key="entry.id"
-            class="vb-api-operation"
-            :id="entry.id"
-          >
+          <details v-for="entry in group.items" :key="entry.id" class="vb-api-operation" :id="entry.id">
             <summary class="vb-api-operation-summary">
-              <span class="vb-api-method" :class="`vb-api-method--${entry.method.toLowerCase()}`">{{ entry.method }}</span>
+              <span class="vb-api-method" :class="`vb-api-method--${entry.method.toLowerCase()}`">{{
+                entry.method
+              }}</span>
               <span class="vb-api-path">{{ entry.path }}</span>
               <span class="vb-api-summary">{{ entry.summary }}</span>
             </summary>
@@ -285,7 +274,11 @@ onMounted(() => {
 
               <div v-if="entry.responses.length" class="vb-api-section">
                 <h4>Responses</h4>
-                <div v-for="response in entry.responses" :key="`${entry.id}-${response.code}-${response.contentType}`" class="vb-api-schema">
+                <div
+                  v-for="response in entry.responses"
+                  :key="`${entry.id}-${response.code}-${response.contentType}`"
+                  class="vb-api-schema"
+                >
                   <div class="vb-api-schema-title">
                     <span class="vb-api-response-code">{{ response.code }}</span>
                     <span>{{ response.contentType }}</span>
