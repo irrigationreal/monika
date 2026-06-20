@@ -128,6 +128,17 @@ function resetRobotActivity(): void {
   committedSegments.value = [];
 }
 
+function clearCompletedAssistantTurnTrace(): void {
+  assistantDraft.value = '';
+  reasoningDraft.value = '';
+  pendingAssistantDelta = '';
+  pendingReasoningDelta = '';
+  interruptedTrace.value = false;
+  activePlanId = null;
+  liveTurnStartedAt = null;
+  resetRobotActivity();
+}
+
 function syncReasoningActivity(statusOverride?: { status: 'running' | 'done' }): void {
   const parsed = parseReasoningSteps(reasoningDraft.value);
   reasoningSteps.value = parsed;
@@ -606,7 +617,8 @@ export function useForumState() {
     }, {});
   }
 
-  async function loadState(topicId: string): Promise<void> {
+  async function loadState(topicId: string, opts: { reconstructTrace?: boolean } = {}): Promise<void> {
+    const { reconstructTrace = true } = opts;
     const nextState = await api.getRobotState(topicId, { include: ['plan', 'toolRuns'] });
     if (!isActiveTopic(topicId)) return;
     robotState.value = nextState;
@@ -616,8 +628,15 @@ export function useForumState() {
       syncToolActivity(nextState.recentToolRuns);
     }
     // Reconstruct committed segments from server-provided plan/checkpoints
-    // so a page refresh shows the trace built so far.
-    reconstructSegmentsFromState(nextState);
+    // so a page refresh shows the trace built so far. Completion reloads opt
+    // out because assistant_message is authoritative and stale idle state may
+    // still carry the just-finished plan/tool data.
+    if (reconstructTrace) {
+      reconstructSegmentsFromState(nextState);
+    } else {
+      reasoningDraft.value = '';
+      assistantDraft.value = '';
+    }
     syncReasoningActivity();
   }
 
@@ -885,23 +904,23 @@ export function useForumState() {
     if (aText) {
       committedSegments.value = [...committedSegments.value, { kind: 'assistant_text', text: aText }];
     }
-    assistantDraft.value = '';
-    reasoningDraft.value = '';
-    liveTurnStartedAt = null;
-    resetRobotActivity();
+    clearCompletedAssistantTurnTrace();
     if (selectedTopicId.value) {
       const topicId = selectedTopicId.value;
       await Promise.all([loadPosts(topicId), loadIdentities(topicId), loadRobotPersonas(topicId)]);
       await Promise.all([
         loadAttachmentsForPosts(posts.value.map((post) => post.id)),
         loadAutoRun(topicId),
-        loadState(topicId),
+        loadState(topicId, { reconstructTrace: false }),
         loadSessionInspector(),
       ]);
-      // assistant_message is authoritative — the turn is done. If the server
-      // state reload still shows busy (race with agentd transition), force idle
-      // locally so the live trace disappears.
-      if (robotState.value && robotState.value.activity !== 'idle') {
+      if (!isActiveTopic(topicId)) return;
+      // assistant_message is authoritative — the turn is done. A state reload
+      // can race with server cleanup and still include the just-finished plan,
+      // tool runs, assistant text, or non-idle activity. Keep the completed
+      // reply in the post list and make the live trace disappear locally.
+      clearCompletedAssistantTurnTrace();
+      if (robotState.value) {
         robotState.value = { ...robotState.value, activity: 'idle' };
       }
     }
