@@ -29,7 +29,11 @@ docs/forum.md
 ## SSE event types
 
 The forum server's SSE stream (`/api/topics/:topicId/state/stream`) relays events
-from the stream bus. Key event types for live trace rendering:
+from the stream bus. Event payloads are filtered per subscriber: unauthenticated
+public readers receive only redacted state and completion signals, while
+authenticated users receive the detailed live trace events below.
+
+Key event types for live trace rendering:
 
 | Event | Payload | When it fires |
 |---|---|---|
@@ -38,7 +42,7 @@ from the stream bus. Key event types for live trace rendering:
 | `assistant_delta` | `{ delta: string }` | Pi visible text tokens arrive |
 | `tool_started` | `{ toolRunId, tool, callId }` | Each tool run is created in the DB (before the corresponding `state` update) |
 | `assistant_reset` | `{ reason: string }` | New user message dispatched, or robot interrupted |
-| `assistant_message` | `{ text: string }` | Response complete; final text committed as a post |
+| `assistant_message` | `{ text: string }` for authenticated users; `{}` for public readers | Response complete; final text committed as a post |
 
 `tool_started` was added specifically for trace interleaving — it fires per-tool
 in real time, while `state.recentToolRuns` arrives batched with all tools already

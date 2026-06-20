@@ -98,8 +98,10 @@ Do not add new tests unless explicitly instructed, unless the change is large or
 ## Live trace and Trace History
 
 The forum renders robot responses as a chronological trace of reasoning, text,
-and tool calls. Understanding the event pipeline is essential before modifying
-trace rendering.
+and tool calls for authenticated users. Unauthenticated public readers must only
+see final public posts plus a neutral "Response in progress…" placeholder while
+a reply is active. Understanding the event pipeline and server-side redaction
+boundary is essential before modifying trace rendering.
 
 ### Key files
 
@@ -119,6 +121,12 @@ trace rendering.
 | `packages/server/src/streamBus.ts` | SSE event type registry |
 
 ### Footguns to know before modifying trace code
+
+1. **Trace visibility is server-side.** Topic visibility is not trace visibility.
+   Public unauthenticated readers must not receive plan, reasoning, tool, command,
+   usage, live assistant text, or error detail payloads from `/state` or
+   `/state/stream`. Hide details in Vue for UX, but enforce redaction in server
+   route/SSE serialization.
 
 1. **Append-only segments.** The live trace uses committed segments that never
    change once pushed. When `tool_started` fires, current drafts are committed
