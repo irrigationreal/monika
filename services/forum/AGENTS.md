@@ -151,11 +151,15 @@ trace rendering.
    clears everything. `reason: 'interrupted'` preserves committed segments as a
    frozen trace. A single reply spans multiple Pi turns — don't add mid-response resets.
 
-9. **`parseReasoningSteps` only splits at line starts.** Inline bold like
+9. **Completion suppresses reconstruction.** `assistant_message` is authoritative:
+   once the final post is committed, the live trace must disappear. Completion
+   reloads must not reconstruct committed segments from stale idle plan/tool state.
+
+10. **`parseReasoningSteps` only splits at line starts.** Inline bold like
    `- **Gold** as currency` is NOT a step boundary. Only `**...**` at the start
    of a line (after newline + optional whitespace) creates a new step.
 
-10. **Saved trace checkpoints are nullable.** Old data and imported sessions won't
+11. **Saved trace checkpoints are nullable.** Old data and imported sessions won't
     have `reasoning_checkpoints_json`. Always handle the fallback path.
 
 
