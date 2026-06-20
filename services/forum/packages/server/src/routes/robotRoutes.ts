@@ -156,7 +156,7 @@ export function registerRobotRoutes({
     if (!canViewTrace) {
       return redactRobotStateForPublic(state as unknown as Record<string, unknown>, topicId);
     }
-    const plan = includePlan && state.current_plan_id ? store.getPlan(state.current_plan_id) : null;
+    const plan = includePlan && state.activity !== 'idle' && state.current_plan_id ? store.getPlan(state.current_plan_id) : null;
     const toolRuns = includeToolRuns ? store.listToolRuns(topicId, 10) : [];
     return {
       topicId: state.topic_id,

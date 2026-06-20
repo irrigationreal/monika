@@ -434,11 +434,13 @@ Falls back to a compact non-interleaved view when checkpoints are absent
 
 **Refresh resilience:** On page refresh or reconnect mid-response,
 `reconstructSegmentsFromState()` rebuilds committed segments from server state
-using the stored checkpoints and accumulated text. Live `state` SSE events only
-reconstruct while `activity !== 'idle'`. Explicit state loads may reconstruct for
-initial hydration, but the `assistant_message` completion path disables
-reconstruction and clears the live trace after reloading posts/state so stale
-idle state cannot keep the live panel visible after the completed post exists.
+using the stored checkpoints and accumulated text. Reconstruction only runs while
+`activity !== 'idle'` and there is current live content (`currentPlan` or live
+assistant text), including explicit initial state loads. Server state treats
+`activity = 'idle'` as an invariant that clears `current_plan_id`; queued/waiting
+turns also start without inheriting the previous plan. This keeps stale completed
+plans from resurrecting the live panel or appearing at the start of the next live
+turn.
 
 ### `parseReasoningSteps` and markdown handling
 

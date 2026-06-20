@@ -553,6 +553,12 @@ export function useForumState() {
     topics.value = [];
   }
 
+  function shouldReconstructTraceFromState(state: RobotStateDto | null): boolean {
+    if (!state || state.activity === 'idle') return false;
+    const assistantText = (state as any).assistantText ?? '';
+    return Boolean(state.currentPlan || String(assistantText).trim());
+  }
+
   /** Reconstruct committed segments from server state (for refresh/reconnect resilience). */
   function reconstructSegmentsFromState(state: RobotStateDto | null): void {
     if (!state) {
@@ -662,7 +668,7 @@ export function useForumState() {
     // so a page refresh shows the trace built so far. Completion reloads opt
     // out because assistant_message is authoritative and stale idle state may
     // still carry the just-finished plan/tool data.
-    if (reconstructTrace) {
+    if (reconstructTrace && shouldReconstructTraceFromState(nextState)) {
       reconstructSegmentsFromState(nextState);
     } else {
       reasoningDraft.value = '';
@@ -839,7 +845,7 @@ export function useForumState() {
       syncToolActivity(payload.recentToolRuns);
       // If we have tool runs from the server but no committed segments yet
       // (reconnect/refresh mid-turn), reconstruct from server state.
-      if (committedSegments.value.length === 0 && payload.recentToolRuns.length > 0 && payload.activity !== 'idle') {
+      if (committedSegments.value.length === 0 && payload.recentToolRuns.length > 0 && shouldReconstructTraceFromState(payload)) {
         reconstructSegmentsFromState(payload);
       }
       syncReasoningActivity();

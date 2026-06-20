@@ -1188,6 +1188,13 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    version: 31,
+    name: 'clear-idle-current-plans',
+    up: (db) => {
+      db.prepare("update robot_state set current_plan_id = null where activity = 'idle' and current_plan_id is not null").run();
+    },
+  },
 ];
 
 export const SCHEMA_VERSION: number = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;
