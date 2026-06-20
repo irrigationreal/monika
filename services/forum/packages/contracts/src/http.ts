@@ -121,6 +121,7 @@ export interface UpdateTopicTagsRequest {
 
 export interface MoveTopicRequest {
   forumId: string;
+  silent?: boolean | undefined;
 }
 
 export interface CreateInviteRequest {
@@ -223,6 +224,7 @@ export interface AdminAccessRuleRequest {
 
 export interface AdminMoveTopicRequest {
   forumId: string;
+  silent?: boolean | undefined;
 }
 
 export interface AdminCreatePersonaRequest {

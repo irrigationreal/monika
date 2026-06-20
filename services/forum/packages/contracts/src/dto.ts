@@ -186,8 +186,9 @@ export interface TopicMoveDto {
   toForumId: string;
   movedBy: string;
   movedAt: string;
-  markerPostId?: string | null;
+  markerPostId?: string | null | undefined;
   needsReprompt: boolean;
+  silent: boolean;
 }
 
 export interface PostDto {

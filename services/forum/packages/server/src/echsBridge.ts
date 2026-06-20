@@ -89,6 +89,16 @@ function writePersonaSoulFiles(opts: { cwd: string; personas: Array<{ key: strin
   }
 }
 
+function renderForumInstructions(label: string, forumPrePrompt: string | null): string {
+  return forumPrePrompt?.trim() ? `${label}:\n${forumPrePrompt.trim()}` : `${label}: (none)`;
+}
+
+function renderPersonaIndex(personas: Array<{ key: string; displayName: string; description: string | null; soul: string | null }>): string {
+  return renderPersonaIndexMarkdown(
+    personas.map((p) => ({ key: p.key, displayName: p.displayName, description: p.description, soul: p.soul }))
+  ).trimEnd();
+}
+
 function buildThreadMoveOverlay(opts: {
   fromForumName: string;
   toForumName: string;
@@ -97,24 +107,34 @@ function buildThreadMoveOverlay(opts: {
   forumPrePrompt: string | null;
   personas: Array<{ key: string; displayName: string; description: string | null; soul: string | null }>;
 }): string {
-  const instructions = opts.forumPrePrompt?.trim()
-    ? `New forum instructions:\n${opts.forumPrePrompt.trim()}`
-    : 'New forum instructions: (none)';
-  const personaIndex = renderPersonaIndexMarkdown(
-    opts.personas.map((p) => ({ key: p.key, displayName: p.displayName, description: p.description, soul: p.soul }))
-  ).trimEnd();
-
   return [
     '[THREAD MOVED NOTICE]',
     `This thread was moved from "${opts.fromForumName}" to "${opts.toForumName}" by ${opts.movedBy} on ${opts.movedAt}.`,
     'AI agents: the working directory context has changed. Files that were previously available may no longer exist.',
     '',
-    instructions,
+    renderForumInstructions('New forum instructions', opts.forumPrePrompt),
     '',
     '[PERSONA INDEX]',
-    personaIndex,
+    renderPersonaIndex(opts.personas),
     '[/PERSONA INDEX]',
     '[/THREAD MOVED NOTICE]',
+  ].join('\n');
+}
+
+function buildForumContextRefreshOverlay(opts: {
+  forumPrePrompt: string | null;
+  personas: Array<{ key: string; displayName: string; description: string | null; soul: string | null }>;
+}): string {
+  return [
+    '[FORUM CONTEXT REFRESH]',
+    'The forum/workspace context for this thread has changed since the last assistant turn. Apply the current forum instructions and persona index below.',
+    '',
+    renderForumInstructions('Current forum instructions', opts.forumPrePrompt),
+    '',
+    '[PERSONA INDEX]',
+    renderPersonaIndex(opts.personas),
+    '[/PERSONA INDEX]',
+    '[/FORUM CONTEXT REFRESH]',
   ].join('\n');
 }
 
@@ -1273,7 +1293,7 @@ export class EchsBridge {
         this.store.setSessionAgentThread(session.id, 'echs', conversationId);
 
         if (forumId) {
-          this.store.setSessionPersonasSyncedAt(session.id, now);
+          this.store.setSessionPersonasSyncedAt(session.id, now, forumId);
         }
         if (pendingMove) {
           pendingMoveToClear = pendingMove.id;
@@ -1297,26 +1317,36 @@ export class EchsBridge {
               personas,
             });
             preludeText = moveOverlay;
-            this.store.setSessionPersonasSyncedAt(session.id, now);
+            this.store.setSessionPersonasSyncedAt(session.id, now, forumId);
             pendingMoveToClear = pendingMove.id;
           } else {
             const sessionRow = this.store.getSession(session.id);
             const lastSynced = sessionRow?.personas_synced_at ?? null;
-            const needsFullIndex = !lastSynced;
-            const updated = needsFullIndex ? personas : this.store.listRobotPersonasUpdatedSince(forumId, lastSynced);
-            if (updated.length > 0) {
-              const updateHeader = needsFullIndex ? '[PERSONA INDEX]' : '[PERSONA UPDATE]';
-              const updateFooter = needsFullIndex ? '[/PERSONA INDEX]' : '[/PERSONA UPDATE]';
-              const updateText = renderPersonaIndexMarkdown(
-                updated.map((p) => ({
-                  key: p.key,
-                  displayName: p.displayName,
-                  description: p.description,
-                  soul: p.soul,
-                }))
-              );
-              preludeText = `${updateHeader}\n${updateText}${updateFooter}`;
-              this.store.setSessionPersonasSyncedAt(session.id, now);
+            const contextSyncedForumId = sessionRow?.context_synced_forum_id ?? null;
+            const forumContextChanged = contextSyncedForumId !== forumId;
+            const needsFullIndex = !lastSynced || forumContextChanged;
+            if (forumContextChanged) {
+              preludeText = buildForumContextRefreshOverlay({
+                forumPrePrompt: forum?.pre_prompt ?? null,
+                personas,
+              });
+              this.store.setSessionPersonasSyncedAt(session.id, now, forumId);
+            } else {
+              const updated = needsFullIndex ? personas : this.store.listRobotPersonasUpdatedSince(forumId, lastSynced);
+              if (updated.length > 0) {
+                const updateHeader = needsFullIndex ? '[PERSONA INDEX]' : '[PERSONA UPDATE]';
+                const updateFooter = needsFullIndex ? '[/PERSONA INDEX]' : '[/PERSONA UPDATE]';
+                const updateText = renderPersonaIndexMarkdown(
+                  updated.map((p) => ({
+                    key: p.key,
+                    displayName: p.displayName,
+                    description: p.description,
+                    soul: p.soul,
+                  }))
+                );
+                preludeText = `${updateHeader}\n${updateText}${updateFooter}`;
+                this.store.setSessionPersonasSyncedAt(session.id, now, forumId);
+              }
             }
           }
         }

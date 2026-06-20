@@ -651,10 +651,15 @@ async function attachMockApi(target: Page | BrowserContext, state: MockState): P
       await fulfillJson(route, 200, {
         topic,
         move: {
+          id: `move-${topicId}`,
           topicId,
           fromForumId: oldForumId,
           toForumId: forumId,
-          movedAt: topic.updatedAt
+          movedBy: 'admin',
+          movedAt: topic.updatedAt,
+          markerPostId: null,
+          needsReprompt: !payload?.silent,
+          silent: Boolean(payload?.silent)
         }
       });
       return;

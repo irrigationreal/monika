@@ -80,6 +80,7 @@ const MIGRATION_001 = `
     moved_at text not null,
     marker_post_id text,
     needs_reprompt integer not null default 1,
+    silent integer not null default 0,
     foreign key (topic_id) references topics(id),
     foreign key (from_forum_id) references forums(id),
     foreign key (to_forum_id) references forums(id),
@@ -122,6 +123,7 @@ const MIGRATION_001 = `
     agent_thread_id text,
     agent_backend text,
     personas_synced_at text,
+    context_synced_forum_id text,
     last_dispatched_post_id text,
     created_at text not null,
     updated_at text not null,
@@ -1171,6 +1173,18 @@ export const MIGRATIONS: Migration[] = [
     up: (db) => {
       if (!hasColumn(db, 'plans', 'reasoning_checkpoints_json')) {
         db.prepare('alter table plans add column reasoning_checkpoints_json text').run();
+      }
+    },
+  },
+  {
+    version: 30,
+    name: 'silent-topic-moves',
+    up: (db) => {
+      if (!hasColumn(db, 'topic_moves', 'silent')) {
+        db.prepare('alter table topic_moves add column silent integer not null default 0').run();
+      }
+      if (!hasColumn(db, 'sessions', 'context_synced_forum_id')) {
+        db.prepare('alter table sessions add column context_synced_forum_id text').run();
       }
     },
   },

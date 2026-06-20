@@ -59,6 +59,7 @@ export interface TopicMoveRow {
   moved_at: string;
   marker_post_id: string | null;
   needs_reprompt: number;
+  silent: number;
 }
 
 export interface PostRow {
@@ -230,6 +231,7 @@ export interface SessionRow {
   agent_thread_id: string | null;
   agent_backend: string | null;
   personas_synced_at: string | null;
+  context_synced_forum_id: string | null;
   last_dispatched_post_id: string | null;
   created_at: string;
   updated_at: string;
