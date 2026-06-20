@@ -1517,11 +1517,11 @@ onUnmounted(() => {
             <li>Topic visibility (and attachment access) will follow the destination forum.</li>
           </ul>
           <label class="vb-modal-checkbox">
-            <input type="checkbox" v-model="moveSilentChecked" />
+            <input data-testid="move-silent-checkbox" type="checkbox" v-model="moveSilentChecked" />
             Move silently without posting a move notice in the thread.
           </label>
           <label class="vb-modal-checkbox">
-            <input type="checkbox" v-model="moveConfirmChecked" />
+            <input data-testid="move-confirm-checkbox" type="checkbox" v-model="moveConfirmChecked" />
             I understand and want to proceed.
           </label>
         </div>

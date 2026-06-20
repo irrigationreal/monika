@@ -44,6 +44,7 @@ type MockState = {
   permissionsByIdentity: Record<string, string[]>;
   tokens: Record<string, string>;
   fixture: FixtureResponse | null;
+  lastMoveRequest: { topicId: string; forumId: string; silent: boolean } | null;
 };
 
 const REGULAR_TOKEN = 'token-regular';
@@ -107,7 +108,8 @@ function createMockState(): MockState {
       [REGULAR_TOKEN]: REGULAR_ID,
       [MODERATOR_TOKEN]: MODERATOR_ID
     },
-    fixture: null
+    fixture: null,
+    lastMoveRequest: null
   };
 }
 
@@ -644,6 +646,7 @@ async function attachMockApi(target: Page | BrowserContext, state: MockState): P
         return;
       }
       const oldForumId = topic.forumId;
+      state.lastMoveRequest = { topicId, forumId, silent: Boolean(payload?.silent) };
       topic.forumId = forumId;
       topic.updatedAt = nextTimestamp(state);
       recomputeForumStats(state, oldForumId);
@@ -898,8 +901,11 @@ test.describe('Threading and reply flows', () => {
     // Move thread should update the forum breadcrumb to the destination forum for navigational clarity.
     await page.click('button:has-text("Move Thread")');
     await page.selectOption('#move-forum-select', fixture.secondaryForumId);
-    await page.check('.vb-modal-checkbox input[type="checkbox"]');
+    await expect(page.getByTestId('move-silent-checkbox')).not.toBeChecked();
+    await page.getByTestId('move-silent-checkbox').check();
+    await page.getByTestId('move-confirm-checkbox').check();
     await page.click('button:has-text("Move Thread")');
+    expect(state.lastMoveRequest).toEqual({ topicId: fixture.topicId, forumId: fixture.secondaryForumId, silent: true });
     await expect(page.locator('.vb-breadcrumb-link', { hasText: 'Help Desk' })).toBeVisible();
 
     await page.goto(`/forums/${fixture.secondaryForumId}`);
