@@ -833,6 +833,10 @@ onMounted(async () => {
     justify-content: flex-end;
   }
 
+  .vb-lastpost-by .vb-lastpost-author {
+    flex: 0 1 auto;
+  }
+
   .vb-no-posts {
     grid-column: 1 / -1;
     justify-self: center;
