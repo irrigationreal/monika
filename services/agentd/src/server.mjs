@@ -25,6 +25,7 @@ const MEMSTORE_SOCKET = process.env.MEMSTORE_SOCKET ?? '/tmp/memstore.sock';
 const IDLE_REAP_ENABLED = process.env.MONIKA_AGENTD_IDLE_REAP_ENABLED !== '0';
 const IDLE_REAP_MS = Number(process.env.MONIKA_AGENTD_IDLE_REAP_MS ?? 30 * 60 * 1000);
 const IDLE_REAP_INTERVAL_MS = Number(process.env.MONIKA_AGENTD_IDLE_REAP_INTERVAL_MS ?? 60 * 1000);
+const DRAIN_AUTO_CANCEL_MS = Number(process.env.MONIKA_AGENTD_DRAIN_AUTO_CANCEL_MS ?? 15 * 60 * 1000);
 const ATTACHMENT_IMAGE_INLINE_MAX_BYTES = Number(process.env.MONIKA_AGENTD_ATTACHMENT_IMAGE_INLINE_MAX_BYTES ?? 5 * 1024 * 1024);
 const ATTACHMENT_TEXT_EXTRACT_MAX_BYTES = Number(process.env.MONIKA_AGENTD_ATTACHMENT_TEXT_EXTRACT_MAX_BYTES ?? 64 * 1024);
 const ATTACHMENT_ALLOWED_ROOTS = (process.env.MONIKA_AGENTD_ATTACHMENT_ALLOWED_ROOTS ?? '/forum/uploads')
@@ -75,6 +76,39 @@ Files involved:
 
 const conversations = new Map();
 let draining = false;
+let drainAutoCancelTimer = null;
+
+function clearDrainAutoCancelTimer() {
+  if (!drainAutoCancelTimer) return;
+  clearTimeout(drainAutoCancelTimer);
+  drainAutoCancelTimer = null;
+}
+
+function setDraining(value, opts = {}) {
+  const next = Boolean(value);
+  const changed = draining !== next;
+  draining = next;
+  clearDrainAutoCancelTimer();
+
+  if (!next) {
+    if (changed) console.log('[agentd] drain cancelled');
+    return;
+  }
+
+  const reason = opts.reason ? ` reason=${opts.reason}` : '';
+  if (changed) console.log(`[agentd] drain started${reason}`);
+  const autoCancelMs = Number(opts.autoCancelMs ?? DRAIN_AUTO_CANCEL_MS);
+  const autoCancel = opts.autoCancel !== false && Number.isFinite(autoCancelMs) && autoCancelMs > 0;
+  if (!autoCancel) return;
+
+  drainAutoCancelTimer = setTimeout(() => {
+    if (!draining) return;
+    draining = false;
+    drainAutoCancelTimer = null;
+    console.warn(`[agentd] drain auto-cancelled after ${autoCancelMs}ms without shutdown`);
+  }, autoCancelMs);
+  drainAutoCancelTimer.unref?.();
+}
 
 function json(res, status, body) {
   const data = JSON.stringify(body);
@@ -1006,14 +1040,17 @@ const server = http.createServer(async (req, res) => {
     }
     if (method === 'GET' && url.pathname === '/v1/admin/quiescence') return json(res, 200, await deployState());
     if (method === 'POST' && url.pathname === '/v1/admin/drain') {
-      draining = true;
       const body = await readBody(req);
+      setDraining(true, {
+        reason: 'deploy-api',
+        autoCancelMs: body.auto_cancel_ms ?? body.autoCancelMs ?? undefined,
+      });
       const closed = await closeIdleConversations('deploy-drain');
       const state = await waitForDeployState({ timeoutMs: body.timeout_ms ?? body.timeoutMs ?? 0 });
       return json(res, state.blockers.length === 0 ? 200 : 409, { ...state, closed_idle_conversations: closed });
     }
     if (method === 'POST' && url.pathname === '/v1/admin/drain/cancel') {
-      draining = false;
+      setDraining(false);
       return json(res, 200, await deployState());
     }
     if (method === 'GET' && url.pathname === '/v1/models') return json(res, 200, await listModels());
@@ -1151,7 +1188,7 @@ server.listen(PORT, HOST, () => {
 });
 
 process.on('SIGTERM', async () => {
-  draining = true;
+  setDraining(true, { reason: 'sigterm', autoCancel: false });
   for (const conv of conversations.values()) {
     try { await closeConversation(conv, 'sigterm'); } catch {}
   }
