@@ -133,46 +133,51 @@ boundary is essential before modifying trace rendering.
    as frozen segments and cleared. New content only appears at the tail. Never
    retroactively modify or reorder committed segments.
 
-2. **Flush before commit.** `reasoning_delta` and `assistant_delta` are
+2. **Live trace capping is presentation-only.** `LiveAssistantTurn.vue` pins the
+   status item and renders only the latest 15 chronological live trace cards. Do
+   not trim `committedSegments`, draft text, server checkpoints, or saved Trace
+   History.
+
+3. **Flush before commit.** `reasoning_delta` and `assistant_delta` are
    rAF-buffered. `tool_started` events process synchronously. Call
    `flushPendingDeltas()` before committing segments or the text will be stale.
 
-3. **Use `tool_started`, not `recentToolRuns`.** The `state` SSE event carries all
+4. **Use `tool_started`, not `recentToolRuns`.** The `state` SSE event carries all
    recent tools at once — there's no incremental tool-by-tool progression. Tool
    segments must be committed from per-tool `tool_started` events.
 
-4. **Immutable `activityLog` updates.** Use `activityLog.value = [...]` not
+5. **Immutable `activityLog` updates.** Use `activityLog.value = [...]` not
    `.push()`. In-place mutations may not trigger Vue computed re-evaluation
    reliably through intermediate computed refs.
 
-5. **Use `kind` for formatting, not tool names.** Pi tool names are capitalised
+6. **Use `kind` for formatting, not tool names.** Pi tool names are capitalised
    (`Bash`, `Read`). The `tool` DB column is normalised lowercase (`exec`, `read`).
    Branch on `kind` (from `toolKindFromName`), and lowercase names for sub-type checks.
 
-6. **Timeout is seconds from Pi, milliseconds elsewhere.** `extractTimeoutMs`
+7. **Timeout is seconds from Pi, milliseconds elsewhere.** `extractTimeoutMs`
    handles both. Don't add new timeout extraction without checking units.
 
-7. **Elapsed timers must use client-relative time.** `ToolElapsedTimer` records
+8. **Elapsed timers must use client-relative time.** `ToolElapsedTimer` records
    `Date.now()` at mount. Never use `Date.now() - serverTimestamp` for live display.
 
-8. **`assistant_reset` fires once per dispatch or interrupt.** `reason: 'new_turn'`
+9. **`assistant_reset` fires once per dispatch or interrupt.** `reason: 'new_turn'`
    clears everything. `reason: 'interrupted'` preserves committed segments as a
    frozen trace. A single reply spans multiple Pi turns — don't add mid-response resets.
 
-9. **Idle state has no live plan.** `activity === 'idle'` must imply
+10. **Idle state has no live plan.** `activity === 'idle'` must imply
    `current_plan_id === null`; completion, interruption, startup cleanup, and
    queued-turn paths must not preserve a previous turn's plan as live state.
 
-10. **Completion suppresses reconstruction.** `assistant_message` is authoritative:
+11. **Completion suppresses reconstruction.** `assistant_message` is authoritative:
    once the final post is committed, the live trace must disappear. Completion
    reloads, initial idle loads, and queued/waiting states without live plan/text
    must not reconstruct committed segments from stale plan/tool state.
 
-11. **`parseReasoningSteps` only splits at line starts.** Inline bold like
+12. **`parseReasoningSteps` only splits at line starts.** Inline bold like
    `- **Gold** as currency` is NOT a step boundary. Only `**...**` at the start
    of a line (after newline + optional whitespace) creates a new step.
 
-12. **Saved trace checkpoints are nullable.** Old data and imported sessions won't
+13. **Saved trace checkpoints are nullable.** Old data and imported sessions won't
     have `reasoning_checkpoints_json`. Always handle the fallback path.
 
 

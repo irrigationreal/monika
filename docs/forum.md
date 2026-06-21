@@ -361,7 +361,7 @@ Key events emitted to the browser SSE stream:
 
 | Event | Source | Purpose |
 |---|---|---|
-| `state` | echsBridge.emitState() | Full robot state snapshot including `recentToolRuns` (last 10) |
+| `state` | echsBridge.emitState() | Full robot state snapshot including `recentToolRuns` (last 20) |
 | `reasoning_delta` | Pi thinking_delta → agentd → echsBridge | Incremental reasoning/thinking text |
 | `assistant_delta` | Pi text_delta → agentd turn_delta → echsBridge | Incremental visible assistant text |
 | `tool_started` | echsBridge item_started handler | Per-tool notification when a tool run is created |
@@ -405,6 +405,15 @@ Iterates committed segments (stable, ordered) plus the pending tail drafts
 (live, growing). For each tool segment, looks up the tool run from
 `activityLog`. If the tool data hasn't arrived yet (race between `tool_started`
 and `state`), renders a "Running tool…" placeholder.
+
+`LiveAssistantTurn.vue` treats the current status item as pinned panel state and
+renders only the latest 15 chronological live trace items beneath it. This is a
+presentation-only cap: `committedSegments`, draft text, server checkpoints, and
+saved Trace History remain complete. When a new chronological item arrives past
+the cap, Vue transition classes fade the oldest visible item out at the top and
+fade the newest item in at the bottom. Page refreshes during an active response
+reconstruct the current state first, then immediately show the latest 15-item
+window without inventing removal animations for cards the browser never saw.
 
 ### Interrupt handling
 
