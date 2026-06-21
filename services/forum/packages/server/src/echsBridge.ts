@@ -2105,7 +2105,7 @@ export class EchsBridge {
       return;
     }
     const plan = state.current_plan_id ? this.store.getPlan(state.current_plan_id) : null;
-    const toolRuns = this.store.listToolRuns(topicId, 10).map((run) => ({
+    const toolRuns = this.store.listToolRuns(topicId, 20).map((run) => ({
       id: run.id,
       tool: run.tool,
       parentPostId: run.parent_post_id,
