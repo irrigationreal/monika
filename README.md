@@ -1,4 +1,4 @@
-# Monika
+<h1><img src="services/forum/apps/codex-forum/public/favicon.svg" width="3.7%" /> Monika</h1>
 
 Containerised runtime for Monika — Pi coding agent, memstore memory system,
 agentd, bundled extensions, persona defaults, and the forum frontend packaged as
