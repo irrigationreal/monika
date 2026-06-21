@@ -25,6 +25,8 @@ AGENTD_URL="${MONIKA_AGENTD_BASE_URL:-http://127.0.0.1:7724}"
 FORUM_URL="${MONIKA_FORUM_BASE_URL:-http://127.0.0.1:4310/api}"
 FORUM_DEPLOY_TOKEN="${MONIKA_FORUM_DEPLOY_TOKEN:-${CODEX_FORUM_DEPLOY_TOKEN:-}}"
 AGENTD_DRAIN_TIMEOUT_MS="${MONIKA_AGENTD_DRAIN_TIMEOUT_MS:-0}"
+AGENTD_DRAIN_AUTO_CANCEL_MS="${MONIKA_AGENTD_DRAIN_AUTO_CANCEL_MS:-900000}"
+AGENTD_POST_DEPLOY_TIMEOUT_MS="${MONIKA_AGENTD_POST_DEPLOY_TIMEOUT_MS:-120000}"
 BACKUP_DIR="${MONIKA_DEPLOY_BACKUP_DIR:-$ROOT/runtime/backups/redeploy}"
 BACKUP_COMPRESSION="${MONIKA_DEPLOY_BACKUP_COMPRESSION:-auto}"
 BACKUP_ZSTD_LEVEL="${MONIKA_DEPLOY_BACKUP_ZSTD_LEVEL:-3}"
@@ -42,6 +44,8 @@ export MONIKA_FORUM_IMAGE="${MONIKA_FORUM_IMAGE:-ghcr.io/irrigationreal/monika-f
 
 DRAIN_STARTED=0
 CANCEL_DRAIN_ON_EXIT=0
+MONIKA_UPDATE_NEEDED=0
+FORUM_UPDATE_NEEDED=0
 
 json_field() {
   python3 -c 'import json,sys; data=json.load(sys.stdin); expr=sys.argv[1].split("."); v=data
@@ -84,15 +88,45 @@ drain_agentd() {
   if [ "$status" = "blocked" ]; then
     tempfail "agentd is blocked: $state"
   fi
-  if [ "$status" != "safe_to_stop" ]; then
-    state="$(curl -fsS -X POST "$AGENTD_URL/v1/admin/drain" \
-      -H 'content-type: application/json' \
-      --data "{\"timeout_ms\":${AGENTD_DRAIN_TIMEOUT_MS}}")" || tempfail "agentd drain failed"
-    DRAIN_STARTED=1
-    CANCEL_DRAIN_ON_EXIT=1
-  fi
+
+  # POST /drain even when quiescence already says safe_to_stop. The drain API
+  # is the deploy lock that rejects new conversations/messages between the
+  # safety check and Docker sending SIGTERM.
+  DRAIN_STARTED=1
+  CANCEL_DRAIN_ON_EXIT=1
+  state="$(curl -fsS -X POST "$AGENTD_URL/v1/admin/drain" \
+    -H 'content-type: application/json' \
+    --data "{\"timeout_ms\":${AGENTD_DRAIN_TIMEOUT_MS},\"auto_cancel_ms\":${AGENTD_DRAIN_AUTO_CANCEL_MS}}")" || tempfail "agentd drain failed"
+
   safe="$(printf '%s' "$state" | json_field ok)"
   [ "$safe" = "true" ] || tempfail "agentd is not safe to stop after drain: $state"
+}
+
+wait_for_agentd_drain_cancel_after_deploy() {
+  if [ "$DRAIN_STARTED" != "1" ]; then
+    return 0
+  fi
+
+  local deadline now state draining_state health_status
+  deadline=$(( $(date +%s) + (AGENTD_POST_DEPLOY_TIMEOUT_MS / 1000) ))
+  while true; do
+    if state="$(curl -fsS -X POST "$AGENTD_URL/v1/admin/drain/cancel" 2>/dev/null)"; then
+      draining_state="$(printf '%s' "$state" | json_field draining)"
+      if health_status="$(curl -fsS "$AGENTD_URL/healthz" 2>/dev/null | json_field status)"; then
+        if [ "$draining_state" = "false" ] && [ "$health_status" = "healthy" ]; then
+          CANCEL_DRAIN_ON_EXIT=0
+          echo "agentd drain cancelled after deploy"
+          return 0
+        fi
+      fi
+    fi
+    now=$(date +%s)
+    if [ "$now" -ge "$deadline" ]; then
+      echo "agentd did not become healthy/undrained after deploy within ${AGENTD_POST_DEPLOY_TIMEOUT_MS}ms" >&2
+      return 1
+    fi
+    sleep 2
+  done
 }
 
 require_git_current() {
@@ -280,21 +314,22 @@ pull_images() {
 
 update_needed() {
   local monika_current forum_current monika_target forum_target
+  MONIKA_UPDATE_NEEDED=0
+  FORUM_UPDATE_NEEDED=0
   monika_current="$(container_image_id monika)"
   forum_current="$(container_image_id forum)"
   monika_target="$(image_id "$MONIKA_IMAGE")"
   forum_target="$(image_id "$MONIKA_FORUM_IMAGE")"
 
-  if [ -z "$monika_current" ] || [ -z "$forum_current" ]; then
-    echo "container missing; deploy needed"
-    return 0
+  if [ -z "$monika_current" ] || [ -z "$monika_target" ] || [ "$monika_current" != "$monika_target" ]; then
+    MONIKA_UPDATE_NEEDED=1
   fi
-  if [ -z "$monika_target" ] || [ -z "$forum_target" ]; then
-    echo "target image missing after pull; deploy needed"
-    return 0
+  if [ -z "$forum_current" ] || [ -z "$forum_target" ] || [ "$forum_current" != "$forum_target" ]; then
+    FORUM_UPDATE_NEEDED=1
   fi
-  if [ "$monika_current" != "$monika_target" ] || [ "$forum_current" != "$forum_target" ]; then
-    echo "image update detected"
+
+  if [ "$MONIKA_UPDATE_NEEDED" = "1" ] || [ "$FORUM_UPDATE_NEEDED" = "1" ]; then
+    echo "image update detected: monika=$MONIKA_UPDATE_NEEDED forum=$FORUM_UPDATE_NEEDED"
     return 0
   fi
   echo "images already current; no deploy needed"
@@ -415,7 +450,9 @@ if [ "$MODE" = "deploy" ]; then
 fi
 
 require_safe_forum
-drain_agentd
+if [ "$MODE" = "backup-only" ] || [ "$MONIKA_UPDATE_NEEDED" = "1" ]; then
+  drain_agentd
+fi
 create_backup
 
 if [ "$MODE" = "backup-only" ]; then
@@ -424,11 +461,15 @@ if [ "$MODE" = "backup-only" ]; then
   exit 0
 fi
 
-# From here onward the containers are expected to restart, so do not cancel the
-# agentd drain state on exit.
-CANCEL_DRAIN_ON_EXIT=0
+# A long backup or an external drain cancel could reopen the race window. If the
+# monika container is going to be recreated, renew the agentd drain immediately
+# before Docker receives control.
+if [ "$MONIKA_UPDATE_NEEDED" = "1" ]; then
+  drain_agentd
+fi
 
 docker compose -f "$COMPOSE_FILE" up -d --remove-orphans monika forum
 docker compose -f "$COMPOSE_FILE" ps monika forum
+wait_for_agentd_drain_cancel_after_deploy
 prune_backups
 prune_docker_images

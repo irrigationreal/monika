@@ -61,6 +61,25 @@ The smoke test deliberately does **not** call a real model provider. Provider
 canaries belong in a separate trusted-branch workflow because they require
 secrets, network availability, and quota.
 
+### `smoke/deploy-if-safe-drain-lifecycle.sh`
+
+Validates the deploy script's agentd drain lifecycle using stubbed `docker` and
+`curl` commands. It does not contact the live runtime or Docker daemon.
+
+```bash
+tests/smoke/deploy-if-safe-drain-lifecycle.sh
+```
+
+The script verifies:
+
+1. a forum-only image update does not drain agentd;
+2. a monika image update starts drain before backup;
+3. the deploy script renews drain immediately before Compose runs;
+4. the deploy script cancels drain after Compose reports the deployment applied.
+
+This protects the failure mode where agentd stays in deploy drain after a
+forum-only update because the monika container was not recreated.
+
 ## Test compose
 
 `tests/compose.monika-runtime.yaml` is a test-only standalone compose file for

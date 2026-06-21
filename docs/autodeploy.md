@@ -59,12 +59,16 @@ python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
 4. Compare the pulled image IDs with the currently running containers.
 5. Exit cleanly if no image change is available.
 6. Ask the forum whether it is safe to stop, authenticating with the deploy token.
-7. Ask agentd whether it is safe to stop; if only idle conversations are loaded, request deploy drain.
+7. If the `monika` image changed, start agentd deploy drain. Drain is a lock, so the script POSTs `/v1/admin/drain` even when agentd was already `safe_to_stop`; this rejects new work between the safety check and Docker shutdown.
 8. Create and verify a whole-repo backup archive.
-9. Recreate only the `monika` and `forum` services with Docker Compose.
-10. Print `docker compose ps` for the managed services.
-11. Prune old redeploy backups by retention bucket.
-12. Prune old dangling Docker images conservatively.
+9. If the `monika` image changed, re-check/re-start agentd drain immediately before Compose runs. This closes the race where a long backup or external drain cancel could otherwise reopen agentd to new work.
+10. Recreate only the `monika` and `forum` services with Docker Compose.
+11. If agentd was drained, wait for the running agentd to accept `/v1/admin/drain/cancel` and report healthy/undrained.
+12. Print `docker compose ps` for the managed services.
+13. Prune old redeploy backups by retention bucket.
+14. Prune old dangling Docker images conservatively.
+
+Forum-only image updates do not drain agentd because the `monika` container is not expected to restart. Backup-only mode still drains and cancels agentd so the runtime capsule is quiescence-gated.
 
 The script exits `75` (`EX_TEMPFAIL`) when deployment should be retried later. systemd treats this as a successful deferral, not as a failed unit.
 
@@ -94,6 +98,8 @@ MONIKA_FORUM_IMAGE=ghcr.io/irrigationreal/monika-forum:sha-OLD \
 ```
 
 If the command exits `75`, do not force a restart. Wait for active work to finish and retry.
+
+Agentd drain has a lease as defense in depth. `MONIKA_AGENTD_DRAIN_AUTO_CANCEL_MS` controls the lease passed by `deploy-if-safe` and defaults to 15 minutes. Agentd also defaults to the same 15-minute auto-cancel window for any `/v1/admin/drain` call that does not override it. The deploy script still owns the normal lifecycle: drain, apply, cancel drain after Compose.
 
 ## Backups
 
