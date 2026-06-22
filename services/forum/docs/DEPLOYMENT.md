@@ -142,6 +142,8 @@ services:
       - CODEX_FORUM_ENABLE_AUTH=1
       - CODEX_FORUM_REGISTRATION_MODE=disabled
       - CODEX_FORUM_ENABLE_RATE_LIMITING=1
+      # Enable only when direct origin access is blocked and requests arrive through a trusted proxy/tunnel.
+      - CODEX_FORUM_TRUST_PROXY=1
       - CODEX_FORUM_DEPLOY_TOKEN=${CODEX_FORUM_DEPLOY_TOKEN}
     deploy:
       resources:
@@ -406,8 +408,12 @@ CODEX_FORUM_ENABLE_AUTH=1
 # Keep self-registration closed for public internet launch
 CODEX_FORUM_REGISTRATION_MODE=disabled
 
-# Enable rate limiting to prevent abuse
+# Enable route-specific rate limiting for auth, writes, and search
 CODEX_FORUM_ENABLE_RATE_LIMITING=1
+
+# Trust forwarded client IPs only when direct origin access is blocked
+# and all public traffic reaches the forum through a trusted reverse proxy/tunnel.
+CODEX_FORUM_TRUST_PROXY=1
 
 # Enable search functionality
 CODEX_FORUM_ENABLE_SEARCH=1
@@ -429,7 +435,9 @@ When registration is disabled, invite-code lookup also returns not found so publ
 
 `CODEX_FORUM_ENABLE_SEARCH=1` exposes `GET /search` to public readers. The search query applies forum visibility in SQL before result ordering and limits, so private or admin-only matches cannot consume the public result limit. The API accepts `scope=all|topics|posts`, an optional `forumId` to restrict search to one visible forum, and a clamped `limit` from 1 to 100. The web forum page searches the current forum by default and lets users opt into searching all visible forums.
 
-For internet-facing deployments, keep `CODEX_FORUM_ENABLE_RATE_LIMITING=1` enabled with search. The search route has its own limiter keyed by authenticated identity when present and by client IP for anonymous readers.
+For internet-facing deployments, keep `CODEX_FORUM_ENABLE_RATE_LIMITING=1` enabled with search. Rate limiting is route-specific rather than global: login/register, topic creation, replies, and search have limits, while normal authenticated read routes are not globally throttled. Browser sessions are bucketed by forum identity, API keys and impersonation tokens are bucketed by token id, and anonymous requests are bucketed by client IP.
+
+Set `CODEX_FORUM_TRUST_PROXY=1` (or a narrower Fastify trust-proxy value such as a hop count/CIDR string) only when the forum origin cannot be reached directly by public clients. If the origin port is public while forwarded headers are trusted, clients can spoof IP headers and bypass anonymous IP limits. Cloudflare Tunnel deployments should keep the origin private and let Fastify derive `request.ip` from the trusted forwarding chain.
 
 ### Redis for Horizontal Scaling
 

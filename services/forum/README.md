@@ -149,7 +149,8 @@ Key env vars (see `packages/server/src/runtimeConfig.ts` for the full list):
 | `CODEX_FORUM_REDIS_STREAM_BUS`             | Redis stream bus toggle                                                                                                         | `0`                              |
 | `CODEX_FORUM_ENABLE_AUTH`                  | Auth toggle                                                                                                                     | `0`                              |
 | `CODEX_FORUM_REGISTRATION_MODE`            | Self-registration policy: `disabled`, `invite-only`, or `public`                                                                | `disabled`                       |
-| `CODEX_FORUM_ENABLE_RATE_LIMITING`         | Rate limit toggle                                                                                                               | `0`                              |
+| `CODEX_FORUM_ENABLE_RATE_LIMITING`         | Route-specific rate limit toggle for auth/write/search endpoints; safe authenticated reads are not globally throttled            | `0`                              |
+| `CODEX_FORUM_TRUST_PROXY`                  | Fastify trusted proxy setting (`0`, `1`, hop count, or CIDR/list string) for deployments behind Cloudflare Tunnel/reverse proxy  | `0`                              |
 | `CODEX_FORUM_ENABLE_SEARCH`                | Search toggle                                                                                                                   | `0`                              |
 | `CODEX_FORUM_ECHS_BASE_URL`                | ECHS server base URL (required)                                                                                                 | unset                            |
 | `CODEX_FORUM_ECHS_API_TOKEN`               | Optional ECHS API token                                                                                                         | unset                            |
@@ -161,6 +162,8 @@ allow invite-code signup, or `public` to allow the legacy public/passwordless re
 deployments should keep the default `disabled` mode unless account creation is deliberately open.
 
 Search is visibility-aware when `CODEX_FORUM_ENABLE_SEARCH=1`: unauthenticated callers only search public-visible forums, authenticated members can also search members-only forums, and admin-only results require admin visibility. Forum pages search the current forum by default; the UI can opt into searching all visible forums. Public search should be paired with `CODEX_FORUM_ENABLE_RATE_LIMITING=1` so the route-specific search limiter is active.
+
+When `CODEX_FORUM_ENABLE_RATE_LIMITING=1`, limits are route-specific rather than global. Login/register, topic creation, replies, and search are limited; normal authenticated read routes are not globally throttled. Authenticated rate-limit buckets use the forum identity for browser sessions and the token id for API keys/impersonation tokens; anonymous buckets use `request.ip`. Set `CODEX_FORUM_TRUST_PROXY` only when the forum origin is private behind a trusted reverse proxy or Cloudflare Tunnel, so forwarded client IP headers cannot be spoofed by direct public traffic.
 
 Public `/healthz` and `/api/healthz` responses are intentionally minimal. Operational deploy state is available through `/api/deploy/quiescence` only with `CODEX_FORUM_DEPLOY_TOKEN`, while `/api/models` requires an authenticated forum user.
 

@@ -16,23 +16,14 @@ export function registerSearchRoutes({
   featureFlags: FeatureFlags;
   access: AccessHelpers;
 }): void {
-  const { getCurrentUser, getIdentityFromRequest, canViewForum } = access;
+  const { getIdentityFromRequest, canViewForum } = access;
   const allowedScopes = new Set(['all', 'topics', 'posts']);
 
   app.get(
     '/search',
     {
       config: {
-        rateLimit: featureFlags.enableRateLimiting
-          ? {
-              max: 60,
-              timeWindow: '1 minute',
-              keyGenerator: (request) => {
-                const user = getCurrentUser(request);
-                return user ? `identity:${user.identityId}` : `ip:${request.ip}`;
-              }
-            }
-          : false
+        rateLimit: featureFlags.enableRateLimiting ? { max: 60, timeWindow: '1 minute' } : false
       }
     },
     (request) => {
