@@ -302,6 +302,16 @@ function createMockApi(options: MockApiOptions = {}): {
       return fulfillJson(route, { items: [] });
     }
 
+    const topicAttachmentsMatch = path.match(/^\/api\/topics\/([^/]+)\/attachments$/);
+    if (topicAttachmentsMatch && method === 'GET') {
+      const posts = postsByTopic.get(topicAttachmentsMatch[1]) ?? [];
+      const itemsByPostId: Record<string, AttachmentDto[]> = {};
+      for (const post of posts) {
+        itemsByPostId[post.id] = attachmentsByPost.get(post.id) ?? [];
+      }
+      return fulfillJson(route, { itemsByPostId });
+    }
+
     const topicStateMatch = path.match(/^\/api\/topics\/([^/]+)\/state$/);
     if (topicStateMatch && method === 'GET') {
       return fulfillJson(route, null);

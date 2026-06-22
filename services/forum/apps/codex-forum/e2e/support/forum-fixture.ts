@@ -430,6 +430,10 @@ export function createForumFixture() {
       return { status: 200, body: null };
     }
 
+    if (segments[0] === 'topics' && segments[2] === 'attachments' && method === 'GET') {
+      return { status: 200, body: { itemsByPostId: {} } };
+    }
+
     if (segments[0] === 'posts' && segments[2] === 'attachments' && method === 'GET') {
       return { status: 200, body: [] };
     }
