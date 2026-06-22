@@ -660,6 +660,7 @@ onMounted(() => {
 .vb-lastpost-byline {
   display: flex;
   align-items: baseline;
+  justify-content: flex-end;
   gap: 4px;
   min-width: 0;
 }
@@ -675,6 +676,10 @@ onMounted(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.vb-lastpost-byline .vb-lastpost-author {
+  flex: 0 1 auto;
 }
 
 /* Mobile responsive: use compact list instead of stacked table-cards */
