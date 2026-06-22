@@ -63,6 +63,7 @@ import type {
   SessionDto,
   SessionInspectorDto,
   ToolRunDto,
+  TopicAttachmentsDto,
   TopicDto,
   TopicMoveDto,
   UpdatePrivateEmailResponseDto,
@@ -149,6 +150,7 @@ export type {
   SessionDto,
   SessionInspectorDto,
   ToolRunDto,
+  TopicAttachmentsDto,
   TopicDto,
   TopicMoveDto,
   UpdatePrivateEmailResponseDto,
@@ -346,6 +348,8 @@ function createApi({
     },
     deleteUserFile: (fileId: string) =>
       json<{ ok: boolean }>(`/user-files/${fileId}`, { method: 'DELETE' }),
+    listTopicAttachments: (topicId: string) =>
+      json<TopicAttachmentsDto>(`/topics/${topicId}/attachments`),
     listPostAttachments: (postId: string) =>
       json<AttachmentDto[]>(`/posts/${postId}/attachments`),
     // NOTE: uploadPostAttachment implementation continues below in the original file.

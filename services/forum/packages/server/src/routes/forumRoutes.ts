@@ -298,7 +298,7 @@ export function registerForumRoutes({
     '/forums/:forumId/topics',
     {
       config: {
-        rateLimit: featureFlags.enableRateLimiting ? { max: 2, timeWindow: '1 minute' } : false
+        rateLimit: featureFlags.enableRateLimiting ? { max: 4, timeWindow: '1 minute' } : false
       }
     },
     async (request) => {

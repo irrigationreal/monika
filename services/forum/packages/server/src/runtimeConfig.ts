@@ -67,6 +67,15 @@ function readStringEnv(name: string): string | null {
   return value || null;
 }
 
+function readTrustProxyEnv(name: string): boolean | string | number {
+  const value = process.env[name]?.trim();
+  if (!value || value === '0' || value.toLowerCase() === 'false') return false;
+  if (value === '1' || value.toLowerCase() === 'true') return true;
+  const numeric = Number(value);
+  if (Number.isInteger(numeric) && numeric >= 0) return numeric;
+  return value;
+}
+
 export const PORT: number = Number(process.env['CODEX_FORUM_PORT'] ?? 4310);
 export const DB_PATH: string = process.env['CODEX_FORUM_DB'] ?? '/var/lib/codex-forum/data.db';
 export const MODEL: string =
@@ -143,6 +152,7 @@ export const PROMPT_ENHANCER_ENABLED: boolean = process.env['CODEX_FORUM_PROMPT_
 export const BASE_URL: string = process.env['CODEX_FORUM_BASE_URL'] ?? `http://localhost:${PORT}`;
 export const API_BASE_URL: string = process.env['CODEX_FORUM_API_BASE_URL'] ?? `http://localhost:${PORT}`;
 export const API_PREFIX: string = process.env['CODEX_FORUM_API_PREFIX'] ?? '/api';
+export const TRUST_PROXY: boolean | string | number = readTrustProxyEnv('CODEX_FORUM_TRUST_PROXY');
 
 // OIDC / SSO (optional)
 export const OIDC_ENABLED: boolean = process.env['CODEX_FORUM_OIDC_ENABLED'] === '1';

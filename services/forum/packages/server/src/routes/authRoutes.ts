@@ -65,35 +65,43 @@ export function registerAuthRoutes({
     store.cleanupExpiredRefreshSessions();
   }, 60 * 60 * 1000); // Every hour
 
-  app.post('/auth/login', async (request) => {
-    if (!featureFlags.enableAuth) {
-      return { token: null, message: 'Auth disabled' };
-    }
-    const body = parseBody(app, LoginRequestSchema, request.body);
+  app.post(
+    '/auth/login',
+    {
+      config: {
+        rateLimit: featureFlags.enableRateLimiting ? { max: 10, timeWindow: '1 minute' } : false
+      }
+    },
+    async (request) => {
+      if (!featureFlags.enableAuth) {
+        return { token: null, message: 'Auth disabled' };
+      }
+      const body = parseBody(app, LoginRequestSchema, request.body);
 
-    // Look up user by username
-    const identity = store.getIdentityByUsername(body.username);
-    if (!identity || !identity.password_hash) {
-      throw app.httpErrors.unauthorized('Invalid credentials');
-    }
+      // Look up user by username
+      const identity = store.getIdentityByUsername(body.username);
+      if (!identity || !identity.password_hash) {
+        throw app.httpErrors.unauthorized('Invalid credentials');
+      }
 
-    // Verify password
-    const valid = await verifyPassword(body.password, identity.password_hash);
-    if (!valid) {
-      throw app.httpErrors.unauthorized('Invalid credentials');
-    }
+      // Verify password
+      const valid = await verifyPassword(body.password, identity.password_hash);
+      if (!valid) {
+        throw app.httpErrors.unauthorized('Invalid credentials');
+      }
 
-    const token = generateToken('cforum_access');
-    const refreshToken = generateToken('cforum_refresh');
-    store.createAuthSession(token, identity.id);
-    store.createRefreshSession(refreshToken, identity.id);
-    const identityDto = mapIdentityToDto(mapIdentityRowToDomain(identity));
-    return {
-      token,
-      refreshToken,
-      identity: identityDto
-    };
-  });
+      const token = generateToken('cforum_access');
+      const refreshToken = generateToken('cforum_refresh');
+      store.createAuthSession(token, identity.id);
+      store.createRefreshSession(refreshToken, identity.id);
+      const identityDto = mapIdentityToDto(mapIdentityRowToDomain(identity));
+      return {
+        token,
+        refreshToken,
+        identity: identityDto
+      };
+    }
+  );
 
   app.post('/auth/logout', async (request) => {
     const authHeader = request.headers['authorization'];

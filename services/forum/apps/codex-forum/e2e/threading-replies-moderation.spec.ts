@@ -591,6 +591,11 @@ async function attachMockApi(target: Page | BrowserContext, state: MockState): P
       return;
     }
 
+    if (path.startsWith('/api/topics/') && path.endsWith('/attachments') && method === 'GET') {
+      await fulfillJson(route, 200, { itemsByPostId: {} });
+      return;
+    }
+
     if (path.startsWith('/api/posts/') && path.endsWith('/attachments') && method === 'GET') {
       await fulfillJson(route, 200, []);
       return;

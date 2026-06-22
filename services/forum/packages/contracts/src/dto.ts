@@ -224,6 +224,10 @@ export interface AttachmentDto {
   createdAt: string;
 }
 
+export interface TopicAttachmentsDto {
+  itemsByPostId: Record<string, AttachmentDto[]>;
+}
+
 export interface UserFileDto {
   id: string;
   ownerId: string;

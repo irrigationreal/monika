@@ -513,6 +513,11 @@ async function attachMockApi(page: Page, context: MockContext) {
       return;
     }
 
+    if (pathname.startsWith('/api/topics/') && pathname.endsWith('/attachments') && method === 'GET') {
+      await fulfillJson(route, { itemsByPostId: {} });
+      return;
+    }
+
     if (pathname.startsWith('/api/topics/') && method === 'GET') {
       const topicId = extractTopicId(pathname);
       if (topicId && context.topics.has(topicId)) {

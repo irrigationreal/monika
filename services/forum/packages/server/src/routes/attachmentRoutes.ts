@@ -734,6 +734,22 @@ export function registerAttachmentRoutes({
     return { ok: true };
   });
 
+  app.get('/topics/:topicId/attachments', async (request) => {
+    const { topicId } = request.params as { topicId: string };
+    requireTopicVisible(topicId, request);
+
+    const postIds = store.listAllPosts(topicId).map((post) => post.id);
+    const attachmentsByPost = store.listAttachmentsByPostIds(postIds);
+    const itemsByPostId: Record<string, ReturnType<typeof mapAttachmentToDto>[]> = {};
+    for (const postId of postIds) {
+      itemsByPostId[postId] = (attachmentsByPost.get(postId) ?? []).map((attachment) =>
+        mapAttachmentToDto(mapAttachmentRowToDomain(attachment))
+      );
+    }
+
+    return { itemsByPostId };
+  });
+
   app.get('/posts/:postId/attachments', async (request) => {
     const { postId } = request.params as { postId: string };
     requirePostVisible(postId, request);

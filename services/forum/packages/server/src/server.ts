@@ -69,6 +69,7 @@ import {
   REASONING_EFFORT,
   REDIS_URL,
   ROBOT_ATTACHMENTS_DIR,
+  TRUST_PROXY,
   TTS_AVAILABLE,
   TTS_MAX_CHARS,
   TTS_SCRIPT,
@@ -87,6 +88,7 @@ import { RedisStreamBus, createStreamBus } from './streamBus';
 import { createPersonaPrefacePlugin, createPromptEnhancerPlugin } from './tamperPlugins';
 import { createAccessHelpers } from './utils/access';
 import { hashPassword } from './utils/auth';
+import { rateLimitKeyForRequest } from './utils/rateLimit';
 
 import type { MessageTamperContext } from '@irrigationreal/codex-forum-core';
 import type { FastifyPluginAsync } from 'fastify';
@@ -290,7 +292,8 @@ try {
   console.warn('Failed to resume agent threads on startup:', err instanceof Error ? err.message : err);
 }
 
-const app = Fastify({ logger: true, bodyLimit: MAX_REQUEST_BODY_BYTES });
+const app = Fastify({ logger: true, bodyLimit: MAX_REQUEST_BODY_BYTES, trustProxy: TRUST_PROXY });
+const access = createAccessHelpers(app, store);
 app.setErrorHandler((error, _request, reply) => {
   const errObj = error as Record<string, unknown>;
   const statusCode = typeof errObj['statusCode'] === 'number' ? errObj['statusCode'] : 500;
@@ -408,13 +411,11 @@ if (apiPrefix) {
 
 if (featureFlags.enableRateLimiting) {
   await app.register(rateLimit, {
-    max: 100,
-    timeWindow: '1 minute',
-    keyGenerator: (request) => request.ip,
+    global: false,
+    keyGenerator: (request) => rateLimitKeyForRequest(request, access),
   });
 }
 
-const access = createAccessHelpers(app, store);
 const adapterRegistry = createAdapterRegistry({
   store,
   bus,
