@@ -61,6 +61,44 @@ describe('Attachment routes access controls', () => {
     expect(authorStart.statusCode).toBe(200);
   });
 
+  it('lists topic attachments in one visibility-checked response', async () => {
+    const app = await buildApp();
+    const forum = store.createForum('Forum', null, null, null, null, 'active', 'members');
+    const author = store.createIdentityWithPassword('Author', 'author', 'pw-hash', 'human');
+    store.createAuthSession('author-token', author.id);
+    const { post: firstPost } = store.createTopic({ forumId: forum.id, title: 'Topic', body: 'starter', authorId: author.id });
+    const secondPost = store.createPost({ topicId: firstPost.topic_id, authorId: author.id, body: 'followup' });
+    const attachment = store.createAttachment({
+      postId: firstPost.id,
+      filename: 'file.txt',
+      mimeType: 'text/plain',
+      sizeBytes: 5,
+      storagePath: '/tmp/file.txt'
+    });
+
+    const guest = await app.inject({ method: 'GET', url: `/topics/${firstPost.topic_id}/attachments` });
+    expect(guest.statusCode).toBe(404);
+
+    const member = await app.inject({
+      method: 'GET',
+      url: `/topics/${firstPost.topic_id}/attachments`,
+      headers: { authorization: 'Bearer author-token' }
+    });
+    expect(member.statusCode).toBe(200);
+    expect(member.json()).toEqual({
+      itemsByPostId: {
+        [firstPost.id]: [
+          expect.objectContaining({
+            id: attachment.id,
+            postId: firstPost.id,
+            filename: 'file.txt'
+          })
+        ],
+        [secondPost.id]: []
+      }
+    });
+  });
+
   it('restricts user file downloads and deletes to owners/admins', async () => {
     const app = await buildApp();
     const owner = store.createIdentityWithPassword('Owner', 'owner', 'pw-hash', 'human');

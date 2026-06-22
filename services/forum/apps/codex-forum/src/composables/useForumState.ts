@@ -335,11 +335,14 @@ export function useForumState() {
         modelCatalogLoaded = true;
         void loadModelCatalog();
       }
-    } catch {
-      setAuthToken(null);
-      setRefreshToken(null);
-      currentUser.value = null;
-      currentPermissions.value = [];
+    } catch (err) {
+      const status = err instanceof Error && 'status' in err ? (err as Error & { status?: number }).status : undefined;
+      if (status === 401) {
+        setAuthToken(null);
+        setRefreshToken(null);
+        currentUser.value = null;
+        currentPermissions.value = [];
+      }
     }
     authChecked.value = true;
   }
@@ -744,19 +747,24 @@ export function useForumState() {
     const uniqueIds = [...new Set(postIds.filter(Boolean))];
     if (uniqueIds.length === 0) return;
     const topicId = selectedTopicId.value;
-    const results = await Promise.allSettled(uniqueIds.map((postId) => api.listPostAttachments(postId)));
-    if (!topicId || selectedTopicId.value !== topicId) return;
-    const next: Record<string, AttachmentDto[]> = { ...attachmentsByPost.value };
-    results.forEach((result, idx) => {
-      const postId = uniqueIds[idx];
-      if (!postId) return;
-      if (result.status === 'fulfilled') {
-        next[postId] = result.value;
-      } else {
+    if (!topicId) return;
+
+    try {
+      const result = await api.listTopicAttachments(topicId);
+      if (selectedTopicId.value !== topicId) return;
+      const next: Record<string, AttachmentDto[]> = { ...attachmentsByPost.value };
+      for (const postId of uniqueIds) {
+        next[postId] = result.itemsByPostId[postId] ?? [];
+      }
+      attachmentsByPost.value = next;
+    } catch {
+      if (selectedTopicId.value !== topicId) return;
+      const next: Record<string, AttachmentDto[]> = { ...attachmentsByPost.value };
+      for (const postId of uniqueIds) {
         next[postId] = [];
       }
-    });
-    attachmentsByPost.value = next;
+      attachmentsByPost.value = next;
+    }
   }
 
   async function loadSession(topicId: string): Promise<void> {

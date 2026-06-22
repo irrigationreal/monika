@@ -86,6 +86,7 @@ import type {
   TamperTestResultDto,
   TamperTrailEntryDto,
   ToolRunDto,
+  TopicAttachmentsDto,
   TopicDto,
   TopicMoveDto,
   UpdatePrivateEmailResponseDto,
@@ -279,6 +280,10 @@ export const AttachmentDtoSchema: z.ZodType<AttachmentDto> = z.object({
   mimeType: z.string(),
   sizeBytes: z.number(),
   createdAt: z.string()
+});
+
+export const TopicAttachmentsDtoSchema: z.ZodType<TopicAttachmentsDto> = z.object({
+  itemsByPostId: z.record(z.string(), z.array(AttachmentDtoSchema))
 });
 
 export const ChatAuthorDtoSchema: z.ZodType<ChatAuthorDto> = z.object({

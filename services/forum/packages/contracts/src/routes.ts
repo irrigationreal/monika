@@ -498,6 +498,8 @@ const userFilesResponseSchema = z.array(schemas.UserFileDtoSchema);
 
 const attachmentsResponseSchema = z.array(schemas.AttachmentDtoSchema);
 
+const topicAttachmentsResponseSchema = schemas.TopicAttachmentsDtoSchema;
+
 const identityListResponseSchema = pageSchema(schemas.IdentityDtoSchema);
 
 const postListResponseSchema = pageSchema(schemas.PostDtoSchema);
@@ -1124,6 +1126,14 @@ export const apiRoutes: ApiRoute[] = [
     tags: ['attachments'],
     request: { params: stringParam('fileId') },
     response: { schema: okSchema }
+  },
+  {
+    method: 'get',
+    path: '/topics/{topicId}/attachments',
+    summary: 'List topic attachments grouped by post',
+    tags: ['attachments'],
+    request: { params: stringParam('topicId') },
+    response: { schema: topicAttachmentsResponseSchema }
   },
   {
     method: 'get',
