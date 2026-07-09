@@ -33,8 +33,14 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Force npm global installs to /usr/local/bin (in PATH)
-ENV NPM_CONFIG_PREFIX=/usr/local
+# Pin an npm release with native dependency cooldown support. The bootstrap
+# upgrade itself necessarily runs before the cooldown can be enabled.
+RUN npm install -g npm@11.18.0
+
+# Protect image builds and ad-hoc npm installs inside the finished image from
+# newly published packages. Pi is the sole deliberate exception below.
+ENV NPM_CONFIG_PREFIX=/usr/local \
+    NPM_CONFIG_MIN_RELEASE_AGE=10
 
 # Build metadata is baked into the image for runtime introspection. It is
 # intentionally stored in a file rather than supplied as mutable runtime env.
@@ -49,8 +55,10 @@ RUN mkdir -p /opt/monika && \
 ENV AGENT_BROWSER_INSTALL_HOME=/opt/agent-browser
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/opt/agent-browser/chrome
 
-# Pi coding agent — pinned version
-RUN npm install -g @earendil-works/pi-coding-agent@0.75.5
+# Pi coding agent — pinned version. Pi releases are deliberately exempt from
+# the cooldown because coordinated @earendil-works updates are reviewed and
+# adopted explicitly; the exact version keeps the resulting image reproducible.
+RUN npm install -g --min-release-age=0 @earendil-works/pi-coding-agent@0.75.5
 
 # AgentLogs CLI — pinned version. Authentication/config is runtime-owned and
 # stored under /agentlogs-home by scripts/agentlogs-monika.
@@ -63,7 +71,7 @@ ENV AGENTLOGS_CLI_PATH=/usr/local/bin/agentlogs
 # by Chrome for Testing, so use Debian's Chromium package there instead. Expose
 # either browser via a stable executable path that runtime sessions use explicitly.
 RUN mkdir -p "$AGENT_BROWSER_INSTALL_HOME" && \
-    npm install -g agent-browser && \
+    npm install -g agent-browser@0.31.1 && \
     if [ "$(dpkg --print-architecture)" = "arm64" ]; then \
       apt-get update && \
       apt-get install -y --no-install-recommends chromium && \
@@ -94,9 +102,27 @@ COPY --from=memstore-build /memstore /usr/local/bin/memstore
 # frontends such as monika-forum. It runs in the same container as Pi/memstore
 # so there is a single owner for agent sessions and memory integration.
 WORKDIR /opt/agentd
-COPY services/agentd/package.json /opt/agentd/package.json
-RUN npm install --omit=dev
+COPY services/agentd/package.json services/agentd/pnpm-lock.yaml services/agentd/pnpm-workspace.yaml ./
+RUN corepack enable && \
+    corepack prepare pnpm@10.26.2 --activate && \
+    pnpm install --prod --frozen-lockfile
 COPY services/agentd/src/ /opt/agentd/src/
+
+# Keep pnpm's 10-day cooldown active outside a checked-out workspace without
+# exposing pnpm's differently named setting to npm as an unknown environment
+# option. Workspace files can still add precise package exemptions.
+RUN rm -f /usr/local/bin/pnpm /usr/local/bin/pnpx && \
+    printf '%s\n' \
+      '#!/bin/sh' \
+      'export NPM_CONFIG_MINIMUM_RELEASE_AGE=14400' \
+      'exec corepack pnpm@10.26.2 "$@"' \
+      > /usr/local/bin/pnpm && \
+    printf '%s\n' \
+      '#!/bin/sh' \
+      'export NPM_CONFIG_MINIMUM_RELEASE_AGE=14400' \
+      'exec corepack pnpm@10.26.2 dlx "$@"' \
+      > /usr/local/bin/pnpx && \
+    chmod +x /usr/local/bin/pnpm /usr/local/bin/pnpx
 WORKDIR /
 
 # AgentLogs runtime wrapper

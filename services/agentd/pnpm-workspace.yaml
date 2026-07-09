@@ -1,9 +1,10 @@
 packages:
-  - apps/*
-  - packages/*
+  - .
 
 minimumReleaseAge: 14400
 minimumReleaseAgeExclude:
   - '@earendil-works/*'
 
-onlyBuiltDependencies: '["sharp"]'
+ignoredBuiltDependencies:
+  - '@google/genai'
+  - protobufjs
