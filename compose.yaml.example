@@ -92,7 +92,7 @@ services:
       CODEX_FORUM_API_BASE_URL: http://forum:4310
       CODEX_FORUM_API_PREFIX: /api
       CODEX_FORUM_AGENT_BACKEND: monika-pi
-      CODEX_FORUM_AGENT_MODEL: ${CODEX_FORUM_AGENT_MODEL:-codex/gpt-5.5}
+      CODEX_FORUM_AGENT_MODEL: ${CODEX_FORUM_AGENT_MODEL:-codex/gpt-5.6-sol}
       MONIKA_AGENTD_BASE_URL: http://monika:7724
       MONIKA_PI_SESSION_TAXONOMY_CONFIG: /forum/taxonomy.local.json
       MONIKA_FORUM_DEFAULT_CWD: ${MONIKA_FORUM_DEFAULT_CWD:-/workspace/monika}
