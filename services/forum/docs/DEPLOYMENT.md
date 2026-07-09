@@ -46,7 +46,7 @@ CODEX_FORUM_BASE_URL=https://your-domain.com
 
 # Agent backend configuration
 CODEX_FORUM_ECHS_BASE_URL=https://your-echs-host
-CODEX_FORUM_AGENT_MODEL=codex/gpt-5.5
+CODEX_FORUM_AGENT_MODEL=codex/gpt-5.6-sol
 CODEX_FORUM_ECHS_REASONING_EFFORT=medium
 ```
 

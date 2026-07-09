@@ -27,7 +27,7 @@ describe('System route access controls', () => {
     const access = createAccessHelpers(app, store);
     const modelCatalog = {
       listModels: vi.fn(async () => ({
-        items: [{ id: 'codex/gpt-5.5', family: 'codex', label: 'GPT 5.5' }],
+        items: [{ id: 'codex/gpt-5.6-sol', family: 'codex', label: 'GPT 5.6 Sol' }],
         updatedAt: '2026-06-20T00:00:00.000Z'
       }))
     };
@@ -117,7 +117,7 @@ describe('System route access controls', () => {
       headers: { authorization: 'Bearer human-token' }
     });
     expect(humanRes.statusCode).toBe(200);
-    expect(humanRes.json()).toMatchObject({ items: [{ id: 'codex/gpt-5.5' }] });
+    expect(humanRes.json()).toMatchObject({ items: [{ id: 'codex/gpt-5.6-sol' }] });
   });
 
   it('requires authentication for API documentation assets', async () => {
