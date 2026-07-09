@@ -465,9 +465,14 @@ export class PiSessionSyncService {
 
   private ensureForum(name: string, parentForumId: string | null = null, cwd: string | null = null): string {
     const existing = this.db
-      .prepare('select id from forums where name = ? and parent_forum_id is ? order by created_at asc limit 1')
-      .get(name, parentForumId) as { id: string } | undefined;
-    if (existing) return existing.id;
+      .prepare('select id, cwd from forums where name = ? and parent_forum_id is ? order by created_at asc limit 1')
+      .get(name, parentForumId) as { id: string; cwd: string | null } | undefined;
+    if (existing) {
+      if (existing.cwd === null && cwd !== null) {
+        this.db.prepare('update forums set cwd = ?, updated_at = ? where id = ?').run(cwd, nowIso(), existing.id);
+      }
+      return existing.id;
+    }
     const id = randomUUID();
     const now = nowIso();
     this.db

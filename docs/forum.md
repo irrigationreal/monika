@@ -203,7 +203,7 @@ Default paths and URLs:
 - agentd binding in the Monika container: `0.0.0.0:7724`.
 - agentd host binding for deploy automation: `127.0.0.1:${MONIKA_AGENTD_PORT:-7724}:7724`.
 - Forum-to-agentd URL inside Docker: `http://monika:7724`.
-- Default work directory: `/workspace/monika`.
+- Default work directory: `/workspace`; project forums should set a repository-specific cwd.
 - Runtime secrets: `runtime/secrets/forum.env` and `runtime/secrets/secrets.env`.
 
 `runtime/secrets/forum.env` should include generated `CODEX_FORUM_INTERNAL_API_TOKEN`
