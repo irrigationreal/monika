@@ -115,12 +115,12 @@ RUN rm -f /usr/local/bin/pnpm /usr/local/bin/pnpx && \
     printf '%s\n' \
       '#!/bin/sh' \
       'export NPM_CONFIG_MINIMUM_RELEASE_AGE=14400' \
-      'exec corepack pnpm "$@"' \
+      'exec corepack pnpm@10.26.2 "$@"' \
       > /usr/local/bin/pnpm && \
     printf '%s\n' \
       '#!/bin/sh' \
       'export NPM_CONFIG_MINIMUM_RELEASE_AGE=14400' \
-      'exec corepack pnpx "$@"' \
+      'exec corepack pnpm@10.26.2 dlx "$@"' \
       > /usr/local/bin/pnpx && \
     chmod +x /usr/local/bin/pnpm /usr/local/bin/pnpx
 WORKDIR /
