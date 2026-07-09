@@ -9,7 +9,7 @@ Current deployment assumptions:
 MONIKA_AGENTD_BASE_URL=http://monika:7724
 CODEX_FORUM_DB=/forum/data.db
 CODEX_FORUM_UPLOADS_DIR=/forum/uploads
-CODEX_WORK_DIR=/workspace/monika
+CODEX_WORK_DIR=/workspace
 ```
 
 Use the repository-level `compose.yaml.example` as the deployment template. Copy it
