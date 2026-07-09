@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { Type } from "@sinclair/typebox";
-import { StringEnum } from "@mariozechner/pi-ai";
+import { StringEnum } from "@earendil-works/pi-ai";
 
 import { loadConfig } from "./config.js";
 import { MemoryStore, slugifyKeywords, renderEntityContext, updateRecencyIndex } from "./memory-store.js";

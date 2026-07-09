@@ -34,6 +34,19 @@ tests/forum/e2e.sh
 See `tests/forum/README.md` for the split between Vitest, mocked Playwright E2E,
 and opt-in live backend canaries.
 
+## Agentd tests
+
+Provider-independent Pi lifecycle and workspace-loading tests live under
+`services/agentd/test/`:
+
+```bash
+cd services/agentd
+pnpm test
+```
+
+The container build runs this suite after installing agentd's frozen production
+lockfile, so the tests exercise the same Pi packages shipped in the image.
+
 ## Smoke tests
 
 ### `smoke/monika-runtime.sh`
@@ -51,16 +64,19 @@ The script verifies:
 1. the container starts with bundled `/app/.pi` state and ephemeral `/data`;
 2. memstore creates its Unix socket;
 3. agentd answers `/healthz`;
-4. `pi --version` works inside the container;
+4. `pi --version` reports the repository's exact Pi pin;
 5. npm's 10-day dependency cooldown, pnpm 10.26.2, and the pinned agent-browser version are active;
-6. agentd can create a Pi conversation without sending an LLM prompt;
-7. agentd quiescence reports the loaded idle conversation and deploy drain closes it;
-8. `scripts/deploy-if-safe --backup-only` can create and verify an isolated runtime capsule backup through a mock forum quiescence endpoint;
-9. the container stops cleanly on SIGTERM.
+6. interactive project-trust state is linked into persistent `/data`;
+7. agentd can create a Pi conversation without sending an LLM prompt;
+8. agentd quiescence reports the loaded idle conversation and deploy drain closes it;
+9. `scripts/deploy-if-safe --backup-only` can create and verify an isolated runtime capsule backup through a mock forum quiescence endpoint;
+10. the container stops cleanly on SIGTERM.
 
 The smoke test deliberately does **not** call a real model provider. Provider
 canaries belong in a separate trusted-branch workflow because they require
-secrets, network availability, and quota.
+secrets, network availability, and quota. Provider-independent agentd lifecycle
+coverage lives in `services/agentd/test/`, including the distinction between Pi's
+`agent_end` and authoritative `agent_settled` completion.
 
 ### `smoke/deploy-if-safe-drain-lifecycle.sh`
 

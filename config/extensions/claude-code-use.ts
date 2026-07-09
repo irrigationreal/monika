@@ -62,7 +62,7 @@
 import { appendFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { Type } from "@sinclair/typebox";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 type ToolRegistration = Parameters<ExtensionAPI["registerTool"]>[0];
 type ToolInfo = ReturnType<ExtensionAPI["getAllTools"]>[number];

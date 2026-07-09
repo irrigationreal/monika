@@ -29,7 +29,7 @@
  * Architecture context: see monika-mono/monika-core/ARCHITECTURE.md
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { runFork, forkDepths } from "./fork-runner.js";
 

@@ -1,9 +1,10 @@
 import http from 'node:http';
 import net from 'node:net';
 import { createHash, randomUUID } from 'node:crypto';
-import { completeSimple } from '@earendil-works/pi-ai';
+import { completeSimple } from '@earendil-works/pi-ai/compat';
 import { existsSync, readFileSync, promises as fs } from 'node:fs';
 import path from 'node:path';
+import { handlePiEvent } from './pi-event-bridge.mjs';
 import {
   createAgentSessionFromServices,
   createAgentSessionRuntime,
@@ -479,7 +480,15 @@ function initialSessionOptions(services, opts = {}) {
 
 async function createRuntime(cwd, sessionManager, opts = {}) {
   const factory = async ({ cwd: runtimeCwd, sessionManager: runtimeSessionManager, sessionStartEvent }) => {
-    const services = await createAgentSessionServices({ cwd: runtimeCwd, agentDir: AGENT_DIR });
+    // Forum workspaces are administrator-configured server paths. Trust them
+    // explicitly so project AGENTS.md, .pi resources, and .agents/skills load
+    // without applying the interactive CLI's trust-prompt policy.
+    const settingsManager = SettingsManager.create(runtimeCwd, AGENT_DIR, { projectTrusted: true });
+    const services = await createAgentSessionServices({
+      cwd: runtimeCwd,
+      agentDir: AGENT_DIR,
+      settingsManager,
+    });
     return {
       ...(await createAgentSessionFromServices({
         services,
@@ -503,7 +512,7 @@ async function bindConversation(conv) {
   const session = conv.runtime.session;
   await session.bindExtensions({});
   conv.session = session;
-  conv.unsubscribe = session.subscribe((event) => handlePiEvent(conv, event));
+  conv.unsubscribe = session.subscribe((event) => handlePiEvent(conv, event, emit));
 }
 
 async function conversationFromRuntime(runtime, cwd) {
@@ -568,112 +577,6 @@ function emit(conv, event, data) {
   if (conv.history.length > 1000) conv.history.shift();
   const wire = `id: ${packet.id}\nevent: ${packet.event}\ndata: ${JSON.stringify(packet.data)}\n\n`;
   for (const res of conv.subscribers) res.write(wire);
-}
-
-function handlePiEvent(conv, event) {
-  switch (event.type) {
-    case 'agent_start': {
-      const messageId = randomUUID();
-      conv.current = { messageId, text: '', toolCalls: new Map(), startedAt: Date.now() };
-      emit(conv, 'turn_started', { message_id: messageId, thread_id: conv.id });
-      break;
-    }
-    case 'message_update': {
-      const assistantEvent = event.assistantMessageEvent ?? event;
-      if (assistantEvent.type === 'text_delta' && assistantEvent.delta) {
-        if (conv.current) conv.current.text += assistantEvent.delta;
-        emit(conv, 'turn_delta', { content: assistantEvent.delta });
-      } else if (assistantEvent.type === 'thinking_delta' && assistantEvent.delta) {
-        emit(conv, 'reasoning_delta', { delta: assistantEvent.delta });
-      }
-      break;
-    }
-    case 'tool_execution_start': {
-      const callId = event.toolCallId ?? event.id ?? randomUUID();
-      if (conv.current) conv.current.toolCalls.set(callId, event.toolName ?? 'tool');
-      emit(conv, 'item_started', {
-        item: {
-          type: 'function_call',
-          id: callId,
-          call_id: callId,
-          name: event.toolName ?? 'tool',
-          arguments: event.args ?? event.input ?? event.arguments ?? null,
-        },
-      });
-      break;
-    }
-    case 'tool_execution_update': {
-      const callId = event.toolCallId ?? event.id ?? randomUUID();
-      emit(conv, 'tool_updated', {
-        call_id: callId,
-        tool_name: event.toolName ?? 'tool',
-        args: event.args ?? null,
-        partial_result: event.partialResult ?? null,
-      });
-      break;
-    }
-    case 'tool_execution_end': {
-      const callId = event.toolCallId ?? event.id ?? randomUUID();
-      emit(conv, 'tool_completed', {
-        call_id: callId,
-        tool_name: event.toolName ?? 'tool',
-        args: event.args ?? null,
-        result: event.result ?? event.output ?? event.error ?? null,
-        is_error: Boolean(event.isError),
-      });
-      break;
-    }
-    case 'agent_end': {
-      const text = conv.current?.text ?? extractLastAssistantText(event.messages);
-      if (text && text.trim()) {
-        emit(conv, 'item_completed', {
-          item: {
-            type: 'message',
-            role: 'assistant',
-            content: [{ type: 'text', text }],
-          },
-        });
-      }
-      const usage = extractUsage(event.messages);
-      if (usage) emit(conv, 'turn_usage', { usage });
-      emit(conv, 'turn_completed', { message_id: conv.current?.messageId ?? null, thread_id: conv.id });
-      conv.current = null;
-      break;
-    }
-    case 'agent_error':
-      emit(conv, 'turn_error', { message: event.error?.message ?? String(event.error ?? 'agent error') });
-      break;
-  }
-}
-
-function extractTextFromMessage(message) {
-  const content = message?.content;
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content.filter((part) => part?.type === 'text').map((part) => part.text ?? '').join('');
-}
-
-function extractLastAssistantText(messages) {
-  if (!Array.isArray(messages)) return '';
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i]?.role === 'assistant') return extractTextFromMessage(messages[i]);
-  }
-  return '';
-}
-
-function extractUsage(messages) {
-  if (!Array.isArray(messages)) return null;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const usage = messages[i]?.usage;
-    if (usage && typeof usage === 'object') {
-      return {
-        input_tokens: usage.input ?? usage.input_tokens,
-        output_tokens: usage.output ?? usage.output_tokens,
-        total_tokens: usage.totalTokens ?? usage.total_tokens ?? usage.total,
-      };
-    }
-  }
-  return null;
 }
 
 function modelInfo(model) {
