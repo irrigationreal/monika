@@ -271,12 +271,41 @@ docker exec -e MONIKA_IMPORT_TAGS=historical-import,archive monika \
   node /workspace/monika/scripts/import-sessions.mjs
 ```
 
+## Dependency policy
+
+npm and pnpm resolution use a 10-day minimum release age. The npm policy is
+baked into the Monika image and remains active for interactive installs; the
+pnpm policy lives in each workspace's `pnpm-workspace.yaml`. Existing lockfiles
+remain authoritative during frozen installs.
+
+All `@earendil-works/*` packages are exempt so coordinated Pi releases can be
+adopted without waiting ten days. The runtime still installs Pi at an exact
+version, and agentd records the complete dependency graph in its pnpm lockfile.
+For an urgent non-Pi update, use a one-command bypass while changing an exact
+pin, then restore the normal cooldown:
+
+```bash
+npm install --min-release-age=0 <package>@<exact-version>
+pnpm install --config.minimumReleaseAge=0 <package>@<exact-version>
+```
+
+Runtime tools and Pi packages are also pinned explicitly:
+
+- `agent-browser` in `Containerfile`
+- `pi-agent-browser` in `config/settings.json`
+- `nutrient-skills` to a Git commit in `config/settings.json`
+
+Update those pins deliberately and run the container tests. Versioned npm Pi
+packages and pinned Git refs do not move during `pi update`.
+
 ## Upgrading Pi
 
-Change the version in the `Containerfile`:
+Change the exact Pi version in both `Containerfile` and
+`services/agentd/package.json`, then regenerate agentd's lockfile:
 
-```dockerfile
-RUN npm install -g @earendil-works/pi-coding-agent@X.Y.Z
+```bash
+cd services/agentd
+corepack pnpm@10.26.2 install --lockfile-only
 ```
 
 Build and test:

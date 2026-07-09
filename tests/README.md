@@ -52,10 +52,11 @@ The script verifies:
 2. memstore creates its Unix socket;
 3. agentd answers `/healthz`;
 4. `pi --version` works inside the container;
-5. agentd can create a Pi conversation without sending an LLM prompt;
-6. agentd quiescence reports the loaded idle conversation and deploy drain closes it;
-7. `scripts/deploy-if-safe --backup-only` can create and verify an isolated runtime capsule backup through a mock forum quiescence endpoint;
-8. the container stops cleanly on SIGTERM.
+5. npm's 10-day dependency cooldown, pnpm 10.26.2, and the pinned agent-browser version are active;
+6. agentd can create a Pi conversation without sending an LLM prompt;
+7. agentd quiescence reports the loaded idle conversation and deploy drain closes it;
+8. `scripts/deploy-if-safe --backup-only` can create and verify an isolated runtime capsule backup through a mock forum quiescence endpoint;
+9. the container stops cleanly on SIGTERM.
 
 The smoke test deliberately does **not** call a real model provider. Provider
 canaries belong in a separate trusted-branch workflow because they require

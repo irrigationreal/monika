@@ -118,6 +118,34 @@ section "Runtime checks"
 PI_VERSION="$(docker exec "$CONTAINER_NAME" pi --version 2>&1)"
 pass "pi CLI available: ${PI_VERSION}"
 
+NPM_MIN_RELEASE_AGE="$(docker exec "$CONTAINER_NAME" npm config get min-release-age)"
+if [ "$NPM_MIN_RELEASE_AGE" != "10" ]; then
+  echo "Expected npm min-release-age=10, got: $NPM_MIN_RELEASE_AGE"
+  exit 1
+fi
+pass "npm dependency cooldown active: ${NPM_MIN_RELEASE_AGE} days"
+
+PNPM_VERSION="$(docker exec "$CONTAINER_NAME" pnpm --version)"
+if [ "$PNPM_VERSION" != "10.26.2" ]; then
+  echo "Expected pnpm 10.26.2, got: $PNPM_VERSION"
+  exit 1
+fi
+pass "agentd package manager available: pnpm ${PNPM_VERSION}"
+
+PNPM_MIN_RELEASE_AGE="$(docker exec "$CONTAINER_NAME" pnpm config get minimumReleaseAge)"
+if [ "$PNPM_MIN_RELEASE_AGE" != "14400" ]; then
+  echo "Expected pnpm minimumReleaseAge=14400, got: $PNPM_MIN_RELEASE_AGE"
+  exit 1
+fi
+pass "pnpm dependency cooldown active: 10 days"
+
+AGENT_BROWSER_VERSION="$(docker exec "$CONTAINER_NAME" agent-browser --version)"
+if [ "$AGENT_BROWSER_VERSION" != "agent-browser 0.31.1" ]; then
+  echo "Expected agent-browser 0.31.1, got: $AGENT_BROWSER_VERSION"
+  exit 1
+fi
+pass "agent-browser pin active: ${AGENT_BROWSER_VERSION}"
+
 AGENTD_PORT="$AGENTD_PORT" node <<'NODE_SMOKE'
 const base = `http://127.0.0.1:${process.env.AGENTD_PORT}`;
 
