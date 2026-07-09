@@ -16,7 +16,7 @@
  * extensionFactories (which setActiveTools would interfere with).
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export default function forceTools(pi: ExtensionAPI) {
   const tools = [

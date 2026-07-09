@@ -28,7 +28,7 @@ import {
   DefaultResourceLoader,
   SettingsManager,
   getAgentDir,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 
 
 // ─── Constants ────────────────────────────────────────────────────────────────

@@ -58,7 +58,7 @@ ENV AGENT_BROWSER_EXECUTABLE_PATH=/opt/agent-browser/chrome
 # Pi coding agent — pinned version. Pi releases are deliberately exempt from
 # the cooldown because coordinated @earendil-works updates are reviewed and
 # adopted explicitly; the exact version keeps the resulting image reproducible.
-RUN npm install -g --min-release-age=0 @earendil-works/pi-coding-agent@0.75.5
+RUN npm install -g --min-release-age=0 @earendil-works/pi-coding-agent@0.80.5
 
 # AgentLogs CLI — pinned version. Authentication/config is runtime-owned and
 # stored under /agentlogs-home by scripts/agentlogs-monika.
@@ -107,6 +107,8 @@ RUN corepack enable && \
     corepack prepare pnpm@10.26.2 --activate && \
     pnpm install --prod --frozen-lockfile
 COPY services/agentd/src/ /opt/agentd/src/
+COPY services/agentd/test/ /opt/agentd/test/
+RUN pnpm test
 
 # Keep pnpm's 10-day cooldown active outside a checked-out workspace without
 # exposing pnpm's differently named setting to npm as an unknown environment

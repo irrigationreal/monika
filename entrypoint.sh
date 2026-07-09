@@ -59,6 +59,18 @@ fi
 mkdir -p "$PI_CODING_AGENT_DIR"
 ln -sf "$PI_AUTH_STATE_FILE" "$PI_CODING_AGENT_DIR/auth.json"
 
+# Pi project-trust decisions are mutable runtime state too. Keep them under the
+# existing persistent /data mount so direct interactive sessions do not need to
+# approve the same administrator-chosen workspace after every image recreation.
+PI_TRUST_STATE_DIR="${PI_TRUST_STATE_DIR:-/data/pi-agent-trust}"
+PI_TRUST_STATE_FILE="${PI_TRUST_STATE_FILE:-$PI_TRUST_STATE_DIR/trust.json}"
+mkdir -p "$PI_TRUST_STATE_DIR"
+if [ ! -f "$PI_TRUST_STATE_FILE" ]; then
+  printf '{}\n' > "$PI_TRUST_STATE_FILE"
+  chmod 600 "$PI_TRUST_STATE_FILE" 2>/dev/null || true
+fi
+ln -sf "$PI_TRUST_STATE_FILE" "$PI_CODING_AGENT_DIR/trust.json"
+
 link_secret_file "/runtime/secrets/pi-agent/models.json" "$PI_CODING_AGENT_DIR/models.json"
 link_secret_file "/runtime/secrets/pi-agent/keybindings.json" "$PI_CODING_AGENT_DIR/keybindings.json"
 link_secret_file "/runtime/secrets/keybindings.json" "$PI_CODING_AGENT_DIR/keybindings.json"

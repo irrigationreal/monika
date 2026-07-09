@@ -42,6 +42,7 @@ The host owns only explicit mutable state under gitignored `runtime/`:
 runtime/
   data/                memstore database state; socket stays container-local at /tmp/memstore.sock
     pi-agent-auth/     writable Pi OAuth auth state, seeded from runtime/secrets/auth.json
+    pi-agent-trust/    writable Pi project-trust decisions for interactive sessions
   persona/             mounted to /app/.pi/stateful-memory
   pi-agent/sessions/   persistent Pi JSONL sessions for resume/reopen
   pi-agent/skills/     local skills, if any
@@ -68,6 +69,12 @@ symlinks.
 Pi JSONL sessions remain canonical. Forum SQLite is a projection/metadata store;
 agent execution, memory lifecycle, tools, and memstore stay behind `agentd` in the
 Monika container.
+
+Interactive Pi sessions retain Pi's normal project-trust prompts. Their decisions
+are persisted at `runtime/data/pi-agent-trust/trust.json` and linked into the
+image-owned agent directory at startup. Forum workspaces are administrator-configured
+server paths, so agentd explicitly trusts their cwd when loading project `AGENTS.md`,
+`.pi` resources, and `.agents/skills`; the forum never needs to answer a trust prompt.
 
 ## Deployment compose
 

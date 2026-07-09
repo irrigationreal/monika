@@ -116,7 +116,19 @@ endsection
 
 section "Runtime checks"
 PI_VERSION="$(docker exec "$CONTAINER_NAME" pi --version 2>&1)"
-pass "pi CLI available: ${PI_VERSION}"
+if [ "$PI_VERSION" != "0.80.5" ]; then
+  echo "Expected Pi 0.80.5, got: $PI_VERSION"
+  exit 1
+fi
+pass "pi CLI pin active: ${PI_VERSION}"
+
+PI_TRUST_TARGET="$(docker exec "$CONTAINER_NAME" readlink /app/.pi/agent/trust.json)"
+if [ "$PI_TRUST_TARGET" != "/data/pi-agent-trust/trust.json" ]; then
+  echo "Expected persistent Pi trust state link, got: ${PI_TRUST_TARGET:-<not a symlink>}"
+  exit 1
+fi
+docker exec "$CONTAINER_NAME" node -e "JSON.parse(require('fs').readFileSync('/data/pi-agent-trust/trust.json', 'utf8'))"
+pass "Pi project-trust state persists under /data"
 
 NPM_MIN_RELEASE_AGE="$(docker exec "$CONTAINER_NAME" npm config get min-release-age)"
 if [ "$NPM_MIN_RELEASE_AGE" != "10" ]; then

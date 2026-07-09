@@ -81,7 +81,7 @@ import {
   DefaultResourceLoader,
   SettingsManager,
   getAgentDir,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 
 // ─── Depth registry ────────────────────────────────────────────────────────────
 // Maps sessionFile -> delegation depth for that session.

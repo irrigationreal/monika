@@ -206,6 +206,12 @@ Default paths and URLs:
 - Default work directory: `/workspace`; project forums should set a repository-specific cwd.
 - Runtime secrets: `runtime/secrets/forum.env` and `runtime/secrets/secrets.env`.
 
+The forum sends each configured cwd to agentd, which explicitly marks these
+administrator-configured server workspaces as trusted for Pi SDK resource loading.
+Project `AGENTS.md`, `.pi` resources, and `.agents/skills` therefore load without an
+interactive prompt. This does not change direct Pi TUI behavior: interactive trust
+prompts remain enabled, and their decisions persist under `/data/pi-agent-trust`.
+
 `runtime/secrets/forum.env` should include generated `CODEX_FORUM_INTERNAL_API_TOKEN`
 and `CODEX_FORUM_DEPLOY_TOKEN` values. The internal token is shared by the `monika`
 and `forum` containers for pending-attachment uploads. The deploy token is shared by
@@ -367,6 +373,12 @@ Key events emitted to the browser SSE stream:
 | `tool_started` | echsBridge item_started handler | Per-tool notification when a tool run is created |
 | `assistant_reset` | echsBridge.dispatchUserMessage() | Start of new response (reason: `new_turn`) or interrupt (reason: `interrupted`) |
 | `assistant_message` | echsBridge turn_completed handler | Response done; final text committed as a post |
+
+agentd does not translate Pi's `agent_end` directly into `turn_completed`. An agent
+run may still retry, compact and retry, or process a queued continuation after that
+event. agentd stages final text and usage at `agent_end`, then emits exactly one
+`turn_completed` at Pi's `agent_settled` boundary. This prevents the forum from
+committing a post and becoming idle while Pi still intends to continue.
 
 ### Live trace: append-only committed segments
 

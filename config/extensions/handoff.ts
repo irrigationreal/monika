@@ -12,9 +12,9 @@
  * The generated prompt appears as a draft in the editor for review/editing.
  */
 
-import { complete, type Message } from "@mariozechner/pi-ai";
-import type { ExtensionAPI, SessionEntry } from "@mariozechner/pi-coding-agent";
-import { BorderedLoader, convertToLlm, serializeConversation } from "@mariozechner/pi-coding-agent";
+import { complete, type Message } from "@earendil-works/pi-ai/compat";
+import type { ExtensionAPI, SessionEntry } from "@earendil-works/pi-coding-agent";
+import { BorderedLoader, convertToLlm, serializeConversation } from "@earendil-works/pi-coding-agent";
 
 const SYSTEM_PROMPT = `You are a context transfer assistant. Given a conversation history and the user's goal for a new thread, generate a focused prompt that:
 
@@ -134,12 +134,9 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			// Capture ui reference before newSession() — Pi 0.69.0+ invalidates
-			// the ctx object after session replacement, so any post-switch ui calls
-			// must go through a reference captured before the switch.
-			const ui = ctx.ui;
-
-			// Create new session with parent tracking
+			// Create new session with parent tracking. Pi invalidates the old
+			// command context during replacement, so all post-switch UI work must
+			// use the fresh context supplied to withSession.
 			const newSessionResult = await ctx.newSession({
 				parentSession: currentSessionFile,
 				setup: async (sessionManager) => {
@@ -150,16 +147,16 @@ export default function (pi: ExtensionAPI) {
 						createdAt: new Date().toISOString(),
 					});
 				},
+				withSession: async (ctx) => {
+					ctx.ui.setEditorText(editedPrompt);
+					ctx.ui.notify("Handoff ready. Submit when ready.", "info");
+				},
 			});
 
 			if (newSessionResult.cancelled) {
-				ui.notify("New session cancelled", "info");
+				ctx.ui.notify("New session cancelled", "info");
 				return;
 			}
-
-			// Set the edited prompt in the main editor for submission
-			ui.setEditorText(editedPrompt);
-			ui.notify("Handoff ready. Submit when ready.", "info");
 		},
 	});
 }
