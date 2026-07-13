@@ -95,6 +95,15 @@ E2E tests live under:
 
 Do not add new tests unless explicitly instructed, unless the change is large or high-risk enough that you should recommend tests first.
 
+## Pi session reconciliation
+
+- Forum-created, imported, and hybrid topics all project one canonical Pi JSONL session. Topic tags are taxonomy, not permanent writer ownership.
+- Agentd-authored `monika.message.provenance` custom entries and canonical Pi message IDs are the primary forum-turn identity. Text matching is a legacy fallback.
+- Sync projects visible messages from the active Pi branch only. Preserve posts that later leave that branch and record divergence; never delete projected history automatically.
+- Real active-branch Pi CLI user and assistant messages belong in the topic after settlement. Do not classify content by how meaningful it looks.
+- Exclude posts already present in canonical Pi from later catch-up envelopes or the forum will feed imported CLI messages back into the same session.
+- A `pi_message_links` row with `post_id = null` is unresolved state, not a terminal dedupe marker. Rescans must revisit it.
+
 ## Live trace and Trace History
 
 The forum renders robot responses as a chronological trace of reasoning, text,

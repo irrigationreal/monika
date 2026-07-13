@@ -236,6 +236,7 @@ export class EchsClient {
       messageId?: string | null;
       configure?: Record<string, unknown>;
       attachments?: unknown[];
+      provenance?: { origin: 'forum'; topicId: string; postId: string };
     }
   ): Promise<{ messageId: string; threadId?: string | null; compacted?: boolean }> {
     const payload: Record<string, unknown> = {
@@ -245,6 +246,7 @@ export class EchsClient {
     if (opts?.messageId) payload['message_id'] = opts.messageId;
     if (opts?.configure) payload['configure'] = opts.configure;
     if (opts?.attachments) payload['attachments'] = opts.attachments;
+    if (opts?.provenance) payload['provenance'] = opts.provenance;
     const result = (await this.request(`/v1/conversations/${conversationId}/messages`, {
       method: 'POST',
       body: payload,

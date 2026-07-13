@@ -6,6 +6,15 @@ import { existsSync, readFileSync, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { handlePiEvent } from './pi-event-bridge.mjs';
 import {
+  createProvenanceState,
+  discardDispatch,
+  extractMessageProvenance,
+  handleProvenanceEvent,
+  normalizeForumProvenance,
+  registerDispatch,
+} from './message-provenance.mjs';
+import { deriveActiveBranchMetadata } from './session-export.mjs';
+import {
   createAgentSessionFromServices,
   createAgentSessionRuntime,
   createAgentSessionServices,
@@ -512,7 +521,14 @@ async function bindConversation(conv) {
   const session = conv.runtime.session;
   await session.bindExtensions({});
   conv.session = session;
-  conv.unsubscribe = session.subscribe((event) => handlePiEvent(conv, event, emit));
+  conv.unsubscribe = session.subscribe((event) => {
+    const reconciliation = handleProvenanceEvent(conv, event);
+    if (reconciliation && conv.current) {
+      conv.current.piMessageId = reconciliation.assistantPiMessageId;
+      conv.current.userMappings = reconciliation.userMappings;
+    }
+    handlePiEvent(conv, event, emit);
+  });
 }
 
 async function conversationFromRuntime(runtime, cwd) {
@@ -530,6 +546,7 @@ async function conversationFromRuntime(runtime, cwd) {
     history: [],
     eventSeq: 0,
     current: null,
+    provenanceState: createProvenanceState(),
     unsubscribe: null,
   };
   await bindConversation(conv);
@@ -856,6 +873,21 @@ function extractLineage(entries) {
   return lineages.length > 0 ? lineages[lineages.length - 1] : null;
 }
 
+function activeBranchMetadata(session, entries) {
+  const live = [...conversations.values()].find((conv) => conv.piSessionId === session.id || conv.sessionPath === session.path);
+  if (live) {
+    const manager = live.session.sessionManager;
+    const leafEntryId = manager.getLeafId?.() ?? manager.getLeafEntry?.()?.id ?? null;
+    return {
+      leaf_entry_id: leafEntryId,
+      active_entry_ids: manager.getBranch().map((entry) => entry.id),
+    };
+  }
+  // The last physically appended entry is the leaf restored by SessionManager.open().
+  // Derive the path without mutating or rewriting the exported session.
+  return deriveActiveBranchMetadata(entries);
+}
+
 async function generateHandoffDraft(conv, opts = {}) {
   if (conv.current) throw new Error('Cannot generate handoff while a turn is active');
   const goal = String(opts.goal ?? '').trim();
@@ -928,7 +960,9 @@ async function exportSession(sessionId) {
   return {
     session,
     entries,
+    active_branch: activeBranchMetadata(session, entries),
     lineage: extractLineage(entries),
+    message_provenance: extractMessageProvenance(entries),
     parse_errors: parseErrors,
   };
 }
@@ -1030,20 +1064,41 @@ const server = http.createServer(async (req, res) => {
         const baseText = textFromContent(body.content);
         const attachmentPrompt = await prepareAttachmentsForPrompt(conv, body.attachments);
         const text = [baseText, attachmentPrompt.text].filter(Boolean).join('\n\n');
-        const mode = body.mode ?? 'queue';
+        const mode = body.mode === 'steer' ? 'steer' : 'queue';
+        let provenance;
+        try {
+          provenance = normalizeForumProvenance(body.provenance);
+        } catch (err) {
+          return badRequest(res, err instanceof Error ? err.message : String(err));
+        }
         const config = body.configure ?? body.config ?? {};
         await applySessionConfig(conv, config);
+        const dispatch = registerDispatch(conv, {
+          turnId: messageId,
+          dispatchMode: mode,
+          text,
+          provenance,
+        });
         void (async () => {
           try {
-            const promptOptions = attachmentPrompt.images.length > 0 ? { source: 'api', images: attachmentPrompt.images } : { source: 'api' };
-            if (mode === 'steer') await conv.session.prompt(text, { ...promptOptions, streamingBehavior: 'steer' });
-            else await conv.session.prompt(text, promptOptions);
+            const promptOptions = {
+              source: 'api',
+              streamingBehavior: mode === 'steer' ? 'steer' : 'followUp',
+              preflightResult: (accepted) => { dispatch.accepted = accepted; },
+              ...(attachmentPrompt.images.length > 0 ? { images: attachmentPrompt.images } : {}),
+            };
+            await conv.session.prompt(text, promptOptions);
+            // A handled extension command can resolve without producing a user
+            // message. Queued prompts resolve early but remain streaming here.
+            if (!dispatch.userMessage && !conv.session.isStreaming) discardDispatch(conv, dispatch);
           } catch (err) {
-            emit(conv, 'turn_error', { message: err instanceof Error ? err.message : String(err) });
-            emit(conv, 'turn_completed', { message_id: messageId, thread_id: conv.id });
+            dispatch.accepted = false;
+            discardDispatch(conv, dispatch);
+            emit(conv, 'turn_error', { message: err instanceof Error ? err.message : String(err), turn_id: messageId });
+            emit(conv, 'turn_completed', { message_id: messageId, turn_id: messageId, thread_id: conv.id });
           }
         })();
-        return json(res, 200, { message_id: messageId, thread_id: conv.id, compacted: false });
+        return json(res, 200, { message_id: messageId, turn_id: messageId, thread_id: conv.id, compacted: false });
       }
       if (method === 'POST' && tail === 'interrupt') {
         await conv.session.abort();

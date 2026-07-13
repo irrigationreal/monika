@@ -1185,6 +1185,21 @@ export function registerAdminRoutes({
     return piSessionSync.getHealth();
   });
 
+  app.get('/admin/pi-sync/repair-inventory', async (request) => {
+    requireAdmin(request);
+    if (!piSessionSync) return { generatedAt: new Date().toISOString(), candidates: [] };
+    return piSessionSync.getRepairInventory();
+  });
+
+  app.post('/admin/pi-sync/topics/:topicId/bump-repaired', async (request) => {
+    requireAdmin(request);
+    if (!piSessionSync) throw app.httpErrors.conflict('Pi session sync is disabled.');
+    const params = request.params as { topicId: string };
+    const result = piSessionSync.bumpRepairedTopic(params.topicId);
+    if (!result.ok) throw app.httpErrors.conflict(result.message);
+    return result;
+  });
+
   app.post('/admin/pi-sync/run', async (request) => {
     requireAdmin(request);
     if (!piSessionSync) throw app.httpErrors.conflict('Pi session sync is disabled.');
