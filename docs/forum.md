@@ -137,17 +137,18 @@ Implemented in `services/forum`:
 - Background sync worker is enabled by default:
   - `MONIKA_PI_SYNC_ENABLED=1`
   - `MONIKA_PI_SYNC_INTERVAL_MS=5000`
-- Sync polls agentd list/export endpoints, imports new/changed sessions
-  idempotently, and links forum-origin `[FORUM TURN]` Pi user messages back to
-  the originating forum post rather than duplicating them.
-- Live forum topics are single-writer for public posts while the bridge is active.
-  If sync sees an unmatched visible Pi message in such a topic, it records a
-  bounded `pi_sync_anomalies` row instead of importing immediately or retrying
-  forever in the hot path. Deferred anomalies retry briefly, then move to
-  `needs_manual_review` for explicit admin repair.
-- Admin → Sync Health exposes current anomaly counts, a manual sync trigger,
-  targeted per-session sync, silent historical backfill, optional backfill+bump,
-  and ignore actions. Ignored/resolved anomalies remain as audit history.
+- Sync polls agentd list/export endpoints, indexes canonical entry topology,
+  imports active-branch messages idempotently, and reconciles forum-origin
+  messages by canonical provenance before using `[FORUM TURN]` or text matching
+  as legacy fallbacks.
+- Forum-created, Pi-imported, and hybrid topics share one reconciliation path.
+  Forum-origin messages wait for bridge persistence, while external Pi CLI
+  continuations project after the settlement/idle gate. Ambiguous bridge-owned
+  messages move to `needs_manual_review`; ignored and resolved anomalies remain
+  as audit history.
+- Admin → Sync Health exposes anomaly counts, global and targeted rescans,
+  silent historical backfill, optional backfill+bump, ignore actions, a dry-run
+  repair inventory, and an explicit repaired-topic bump endpoint.
 - Bootstrap identities are `neon`, `Pi CLI`, `robot`, and `Director`.
 - Forum-native handoff is implemented with disposable draft generation and final
   confirmation that creates the destination topic, parented Pi session, lineage
