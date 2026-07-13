@@ -25,6 +25,8 @@ test('normal agent run completes only after agent_settled', () => {
   assert.equal(events.some(({ event }) => event === 'turn_completed'), false);
   assert.notEqual(conv.current, null);
 
+  conv.current.piMessageId = 'pi-assistant-1';
+  conv.current.userMappings = [{ turn_id: 'forum-dispatch-1', user_pi_message_id: 'pi-user-1' }];
   dispatch({ type: 'agent_settled' });
 
   assert.equal(events.filter(({ event }) => event === 'turn_started').length, 1);
@@ -34,6 +36,14 @@ test('normal agent run completes only after agent_settled', () => {
     input_tokens: 4,
     output_tokens: 2,
     total_tokens: 6,
+  });
+  assert.equal(events.find(({ event }) => event === 'item_completed').data.item.id, 'pi-assistant-1');
+  assert.deepEqual(events.find(({ event }) => event === 'turn_completed').data, {
+    message_id: 'id-1',
+    pi_message_id: 'pi-assistant-1',
+    user_pi_message_id: 'pi-user-1',
+    user_mappings: [{ turn_id: 'forum-dispatch-1', user_pi_message_id: 'pi-user-1' }],
+    thread_id: 'conversation-1',
   });
   assert.equal(conv.current, null);
 });

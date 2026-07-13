@@ -1353,7 +1353,11 @@ export class EchsBridge {
       const lastDispatchedPostId = session.last_dispatched_post_id ?? null;
       const catchupPosts =
         parentPostId && topic
-          ? this.store.listPostsBetween(topicId, { afterPostId: lastDispatchedPostId, beforePostId: parentPostId })
+          ? this.store.listPostsBetween(topicId, {
+              afterPostId: lastDispatchedPostId,
+              beforePostId: parentPostId,
+              excludePiSessionId: piSessionLink?.pi_session_id ?? null,
+            })
           : [];
       let catchupText =
         catchupPosts.length > 0
@@ -1536,6 +1540,7 @@ export class EchsBridge {
           mode: enqueueMode,
           configure,
           attachments: triggerAttachments,
+          provenance: parentPostId ? { origin: 'forum', topicId, postId: parentPostId } : undefined,
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -1553,6 +1558,7 @@ export class EchsBridge {
             mode: enqueueMode,
             configure,
             attachments: triggerAttachments,
+            provenance: parentPostId ? { origin: 'forum', topicId, postId: parentPostId } : undefined,
           });
         } else {
           throw err;
@@ -1798,7 +1804,7 @@ export class EchsBridge {
         if (item?.type === 'message' && item?.role === 'assistant') {
           const text = extractAssistantText(item);
           if (text?.trim()) {
-            this.persistAssistantMessage(threadId, ctx, text).catch(() => undefined);
+            this.persistAssistantMessage(threadId, ctx, text, { piMessageId: item.id ?? null }).catch(() => undefined);
             void this.syncReasoningFromHistory(threadId, ctx);
             void this.forceReasoningBackfill(threadId);
             setTimeout(() => {
@@ -2180,7 +2186,7 @@ export class EchsBridge {
     threadId: string,
     ctx: ThreadContext,
     text: string,
-    opts?: { parentPostId?: string | null }
+    opts?: { parentPostId?: string | null; piMessageId?: string | null }
   ): Promise<void> {
     let finalText = text;
 
@@ -2239,6 +2245,15 @@ export class EchsBridge {
           console.warn('Artifact attachment failed for post ' + duplicatePost.id + ': ' + (err instanceof Error ? err.message : String(err)));
         });
       }
+      if (opts?.piMessageId) {
+        const piSessionLink = this.store.getPiSessionLinkByTopic(ctx.topicId);
+        if (piSessionLink) {
+          this.store.createPiMessageLink({
+            piSessionId: piSessionLink.pi_session_id, piMessageId: opts.piMessageId, postId: duplicatePost.id,
+            role: 'assistant', metadata: { forumOrigin: true, linkedBy: 'agentd-canonical-id' },
+          });
+        }
+      }
       ctx.lastAssistantAt = Date.now();
       return;
     }
@@ -2251,6 +2266,16 @@ export class EchsBridge {
       parentPostId: opts?.parentPostId ?? ctx.lastUserPostId,
       sourceMessageId: sessionMessage.id,
     });
+    if (opts?.piMessageId) {
+      const piSessionLink = this.store.getPiSessionLinkByTopic(ctx.topicId);
+      if (piSessionLink) {
+        this.store.createPiMessageLink({
+          piSessionId: piSessionLink.pi_session_id, piMessageId: opts.piMessageId, postId: post.id,
+          sessionMessageId: sessionMessage.id, role: 'assistant',
+          metadata: { forumOrigin: true, linkedBy: 'agentd-canonical-id' },
+        });
+      }
+    }
     if (requested) {
       this.attachTtsToPost(post.id, cleanedText).catch(() => undefined);
     }

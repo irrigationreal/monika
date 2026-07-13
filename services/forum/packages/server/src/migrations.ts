@@ -1195,6 +1195,58 @@ export const MIGRATIONS: Migration[] = [
       db.prepare("update robot_state set current_plan_id = null where activity = 'idle' and current_plan_id is not null").run();
     },
   },
+  {
+    version: 32,
+    name: 'pi-entry-index-and-active-branch',
+    up: (db) => {
+      db.exec(`
+        create table if not exists pi_entry_index (
+          pi_session_id text not null,
+          entry_id text not null,
+          parent_entry_id text,
+          entry_type text not null,
+          role text,
+          custom_type text,
+          entry_timestamp text,
+          has_visible_text integer not null default 0,
+          first_indexed_at text not null,
+          metadata_json text,
+          primary key (pi_session_id, entry_id)
+        );
+        create index if not exists idx_pi_entry_index_parent
+          on pi_entry_index(pi_session_id, parent_entry_id);
+        create index if not exists idx_pi_entry_index_type
+          on pi_entry_index(pi_session_id, entry_type, role);
+
+        create table if not exists pi_session_heads (
+          pi_session_id text primary key,
+          leaf_entry_id text,
+          active_entry_ids_json text not null,
+          observed_at text not null,
+          metadata_json text
+        );
+
+        create table if not exists pi_projection_divergences (
+          id text primary key,
+          pi_session_id text not null,
+          pi_message_id text not null,
+          post_id text not null,
+          first_observed_at text not null,
+          last_observed_at text not null,
+          status text not null default 'inactive_branch',
+          metadata_json text,
+          unique (pi_session_id, pi_message_id, post_id)
+        );
+        create index if not exists idx_pi_projection_divergences_session
+          on pi_projection_divergences(pi_session_id, status);
+
+        update pi_sync_anomalies
+        set status = 'deferred', next_retry_at = null
+        where status = 'needs_manual_review'
+          and reason = 'live-topic-unmatched-visible-message';
+      `);
+    },
+  },
 ];
 
 export const SCHEMA_VERSION: number = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;

@@ -3695,7 +3695,7 @@ onMounted(async () => {
 
           <div class="vb-modal-actions">
             <button class="vb-btn" :disabled="piSyncAction || piSyncHealth?.running" @click="runPiSync()">
-              {{ piSyncAction || piSyncHealth?.running ? 'Syncing...' : 'Run Sync Now' }}
+              {{ piSyncAction || piSyncHealth?.running ? 'Rescanning...' : 'Rescan All Sessions' }}
             </button>
             <button class="vb-btn vb-btn-secondary" :disabled="piSyncLoading" @click="loadPiSyncHealth">Refresh</button>
           </div>
@@ -3724,7 +3724,7 @@ onMounted(async () => {
                   <td>{{ anomaly.preview || anomaly.piMessageId }}</td>
                   <td>
                     <div class="vb-inline-actions">
-                      <button class="vb-small-btn" :disabled="piSyncAction" @click="runPiSync(anomaly.piSessionId)">Sync Session</button>
+                      <button class="vb-small-btn" :disabled="piSyncAction" @click="runPiSync(anomaly.piSessionId)">Rescan Session</button>
                       <button class="vb-small-btn" :disabled="piSyncAction" @click="backfillPiSyncAnomaly(anomaly.id, false)">Backfill Silent</button>
                       <button class="vb-small-btn" :disabled="piSyncAction" @click="backfillPiSyncAnomaly(anomaly.id, true)">Backfill + Bump</button>
                       <button class="vb-small-btn vb-danger-btn" :disabled="piSyncAction" @click="ignorePiSyncAnomaly(anomaly.id)">Ignore</button>

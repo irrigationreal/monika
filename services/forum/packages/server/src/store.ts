@@ -1271,7 +1271,7 @@ export class ForumStore {
    * Used to build deterministic "catch-up context" for the robot when some posts were created
    * without dispatching a robot turn (silent posts).
    */
-  listPostsBetween(topicId: string, opts: { afterPostId?: string | null; beforePostId: string }): PostRow[] {
+  listPostsBetween(topicId: string, opts: { afterPostId?: string | null; beforePostId: string; excludePiSessionId?: string | null }): PostRow[] {
     const before = this.db
       .prepare('select rowid as rowid from posts where id = ? and topic_id = ?')
       .get(opts.beforePostId, topicId) as { rowid: number } | undefined;
@@ -1286,8 +1286,15 @@ export class ForumStore {
     }
 
     return this.db
-      .prepare('select * from posts where topic_id = ? and rowid > ? and rowid < ? order by rowid asc')
-      .all(topicId, afterRowid, before.rowid) as PostRow[];
+      .prepare(
+        `select p.* from posts p
+         where p.topic_id = ? and p.rowid > ? and p.rowid < ?
+           and (? is null or not exists (
+             select 1 from pi_message_links l where l.post_id = p.id and l.pi_session_id = ?
+           ))
+         order by p.rowid asc`
+      )
+      .all(topicId, afterRowid, before.rowid, opts.excludePiSessionId ?? null, opts.excludePiSessionId ?? null) as PostRow[];
   }
 
   getTopicRead(identityId: string, topicId: string): TopicReadRow | null {
@@ -2797,7 +2804,19 @@ export class ForumStore {
     metadata?: unknown;
   }): PiMessageLinkRow {
     const existing = this.getPiMessageLink(input.piSessionId, input.piMessageId);
-    if (existing) return existing;
+    if (existing) {
+      this.db
+        .prepare(
+          `update pi_message_links
+           set post_id = coalesce(post_id, ?), session_message_id = coalesce(session_message_id, ?),
+               role = coalesce(role, ?),
+               metadata_json = case when post_id is null and ? is not null then ? else metadata_json end
+           where id = ?`
+        )
+        .run(input.postId ?? null, input.sessionMessageId ?? null, input.role ?? null, input.postId ?? null,
+          JSON.stringify(input.metadata ?? null), existing.id);
+      return this.db.prepare('select * from pi_message_links where id = ?').get(existing.id) as PiMessageLinkRow;
+    }
     const id = randomUUID();
     this.db
       .prepare(

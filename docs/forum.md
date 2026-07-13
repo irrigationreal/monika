@@ -137,23 +137,58 @@ Implemented in `services/forum`:
 - Background sync worker is enabled by default:
   - `MONIKA_PI_SYNC_ENABLED=1`
   - `MONIKA_PI_SYNC_INTERVAL_MS=5000`
-- Sync polls agentd list/export endpoints, imports new/changed sessions
-  idempotently, and links forum-origin `[FORUM TURN]` Pi user messages back to
-  the originating forum post rather than duplicating them.
-- Live forum topics are single-writer for public posts while the bridge is active.
-  If sync sees an unmatched visible Pi message in such a topic, it records a
-  bounded `pi_sync_anomalies` row instead of importing immediately or retrying
-  forever in the hot path. Deferred anomalies retry briefly, then move to
-  `needs_manual_review` for explicit admin repair.
-- Admin → Sync Health exposes current anomaly counts, a manual sync trigger,
-  targeted per-session sync, silent historical backfill, optional backfill+bump,
-  and ignore actions. Ignored/resolved anomalies remain as audit history.
+- Sync polls agentd list/export endpoints, indexes canonical entry topology,
+  imports active-branch messages idempotently, and reconciles forum-origin
+  messages by canonical provenance before using `[FORUM TURN]` or text matching
+  as legacy fallbacks.
+- Forum-created, Pi-imported, and hybrid topics share one reconciliation path.
+  Forum-origin messages wait for bridge persistence, while external Pi CLI
+  continuations project after the settlement/idle gate. Ambiguous bridge-owned
+  messages move to `needs_manual_review`; ignored and resolved anomalies remain
+  as audit history.
+- Admin → Sync Health exposes anomaly counts, global and targeted rescans,
+  silent historical backfill, optional backfill+bump, ignore actions, a dry-run
+  repair inventory, and an explicit repaired-topic bump endpoint.
 - Bootstrap identities are `neon`, `Pi CLI`, `robot`, and `Director`.
 - Forum-native handoff is implemented with disposable draft generation and final
   confirmation that creates the destination topic, parented Pi session, lineage
   metadata, edited draft post, and first robot turn.
 - `pi_session_links` stores `parent_pi_session_id`, `parent_pi_session_path`,
   `lineage_kind`, and `lineage_source`.
+
+### Provenance-aware Pi reconciliation
+
+Forum-created, Pi-imported, and hybrid sessions use one reconciliation engine.
+Topic tags are taxonomy, not permanent writer ownership: a session can move
+between forum and Pi CLI while retaining one canonical JSONL history.
+
+Agentd appends versioned `monika.message.provenance` custom entries for forum
+dispatches and emits the terminal canonical Pi message ID. The live bridge uses
+that ID to link its post directly; `[FORUM TURN]` envelopes and normalized
+body/time matching remain legacy fallbacks. Custom provenance does not enter the
+model context.
+
+Session export includes the current leaf and active root-to-leaf IDs. The forum
+indexes immutable topology in `pi_entry_index`, records heads in
+`pi_session_heads`, and only projects visible messages from the active branch.
+Posts that later leave the active branch are preserved and recorded in
+`pi_projection_divergences`, leaving room for future branch browsing without
+deleting forum history.
+
+Unmarked active-branch Pi CLI user and assistant messages are projected after a
+60-second settlement window once the forum robot is idle. Content heuristics are
+not used: terse real input is still conversation. Structural entries, compaction
+summaries, tool results, custom state, and forum-origin intermediate tool-use
+assistant entries are indexed but not emitted as separate posts. New external
+continuations bump the topic once; high-confidence legacy repairs are silent.
+
+Posts already linked to canonical Pi are excluded from later catch-up envelopes,
+preventing imported CLI input from being sent back into the same session. Admin
+Sync Health uses “rescan” for reconciliation, while explicit backfill remains a
+separate action. `GET /api/admin/pi-sync/repair-inventory` returns a dry-run list
+of unresolved candidates and proposed actions. Historical repairs remain silent;
+an admin can intentionally resurface a repaired thread with
+`POST /api/admin/pi-sync/topics/:topicId/bump-repaired`.
 
 ## Pi session taxonomy configuration
 

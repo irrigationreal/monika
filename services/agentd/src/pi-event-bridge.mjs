@@ -109,19 +109,26 @@ export function handlePiEvent(conv, event, emit, createId = randomUUID) {
     }
     case 'agent_settled': {
       if (!conv.current) break;
-      const { completionText, text, usage, messageId } = conv.current;
+      const { completionText, text, usage, messageId, piMessageId, userMappings = [] } = conv.current;
       const finalText = completionText || text;
       if (finalText && finalText.trim()) {
         emit(conv, 'item_completed', {
           item: {
             type: 'message',
+            id: piMessageId ?? null,
             role: 'assistant',
             content: [{ type: 'text', text: finalText }],
           },
         });
       }
       if (usage) emit(conv, 'turn_usage', { usage });
-      emit(conv, 'turn_completed', { message_id: messageId ?? null, thread_id: conv.id });
+      emit(conv, 'turn_completed', {
+        message_id: messageId ?? null,
+        pi_message_id: piMessageId ?? null,
+        user_pi_message_id: userMappings.length === 1 ? userMappings[0].user_pi_message_id : null,
+        user_mappings: userMappings,
+        thread_id: conv.id,
+      });
       conv.current = null;
       break;
     }
