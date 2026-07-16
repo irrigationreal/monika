@@ -97,6 +97,28 @@ The script verifies:
 This protects the failure mode where agentd stays in deploy drain after a
 forum-only update because the monika container was not recreated.
 
+### `smoke/forum-runtime.sh`
+
+Validates that a forum runtime image starts, serves health and static frontend,
+and contains only production dependencies.
+
+```bash
+docker build -f services/forum/Containerfile -t monika-forum-test ./services/forum
+tests/smoke/forum-runtime.sh monika-forum-test
+```
+
+The script verifies:
+
+1. the container starts with ephemeral state and a dummy agentd URL;
+2. `/healthz` returns `{"ok":true}`;
+3. `GET /` serves the built frontend HTML;
+4. representative dev-only packages (vitest, vite, typescript, eslint, prettier,
+   vue-tsc, playwright, husky, lint-staged) are absent from `node_modules`;
+5. runtime-critical packages (tsx, fastify, better-sqlite3, sharp) are present;
+6. workspace packages (core, contracts, adapters) are present with source files;
+7. build toolchain (python3, make, g++, pnpm) is absent from the runtime image;
+8. native modules (better-sqlite3, sharp) load successfully.
+
 ## Test compose
 
 `tests/compose.monika-runtime.yaml` is a test-only standalone compose file for
