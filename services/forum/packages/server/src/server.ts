@@ -393,7 +393,7 @@ await app.register(fastifyStatic, {
 // Serve the built Vue application when the Docker image includes it. API routes
 // are registered below and keep their normal behavior; unknown non-API GETs fall
 // back to index.html for client-side routing.
-const publicDir = resolve(process.cwd(), '../../public');
+const publicDir = process.env['CODEX_FORUM_PUBLIC_DIR'] ?? resolve(process.cwd(), '../../public');
 const publicIndex = join(publicDir, 'index.html');
 if (existsSync(publicDir)) {
   await app.register(fastifyStatic, {

@@ -70,6 +70,13 @@ RUN VITE_BUILD_COMMIT="$MONIKA_BUILD_COMMIT" \
     VITE_BUILD_DATE="$MONIKA_BUILD_DATE" \
     pnpm run build:apps
 
+# Deploy the server package with only production dependencies.
+# pnpm deploy creates a standalone directory with the package, its workspace
+# dependencies (copied into node_modules), and only production npm packages.
+# Native modules (better-sqlite3, sharp) are deployed from the builder where
+# their install scripts have already run; the runtime needs no build toolchain.
+RUN pnpm --filter @irrigationreal/codex-forum-server deploy --prod --legacy /app/deploy
+
 # -----------------------------------------------------------------------------
 # Stage 3: Production runtime
 # -----------------------------------------------------------------------------
@@ -83,42 +90,16 @@ LABEL org.opencontainers.image.revision=$MONIKA_BUILD_COMMIT
 LABEL org.opencontainers.image.source=$MONIKA_BUILD_SOURCE
 LABEL org.opencontainers.image.created=$MONIKA_BUILD_DATE
 
-# Install pnpm for running the server
-RUN corepack enable && corepack prepare pnpm@10.26.2 --activate
-
-# Install runtime dependencies for better-sqlite3
-RUN apt-get update && apt-get install -y \
-    python3 \
-    make \
-    g++ \
-    && rm -rf /var/lib/apt/lists/*
-
 # Create non-root user for security
 RUN groupadd --gid 1001 codex && \
     useradd --uid 1001 --gid 1001 -m codex
 
 WORKDIR /app
 
-# Copy workspace configuration
-COPY --from=builder /app/package.json /app/pnpm-lock.yaml /app/pnpm-workspace.yaml ./
-COPY --from=builder /app/packages/typescript-config/package.json ./packages/typescript-config/
-COPY --from=builder /app/packages/eslint-config/package.json ./packages/eslint-config/
-COPY --from=builder /app/packages/contracts/package.json ./packages/contracts/
-COPY --from=builder /app/packages/core/package.json ./packages/core/
-COPY --from=builder /app/packages/adapters/package.json ./packages/adapters/
-COPY --from=builder /app/packages/server/package.json ./packages/server/
-COPY --from=builder /app/apps/codex-forum/package.json ./apps/codex-forum/
-
-# Install production dependencies only
-RUN pnpm install --frozen-lockfile
-
-# Copy built packages
-COPY --from=builder /app/packages/typescript-config/ ./packages/typescript-config/
-COPY --from=builder /app/packages/eslint-config/ ./packages/eslint-config/
-COPY --from=builder /app/packages/contracts/ ./packages/contracts/
-COPY --from=builder /app/packages/core/ ./packages/core/
-COPY --from=builder /app/packages/adapters/ ./packages/adapters/
-COPY --from=builder /app/packages/server/ ./packages/server/
+# Copy the pnpm-deployed server with production-only dependencies.
+# This includes workspace packages (core, contracts, adapters) in node_modules
+# and all native modules pre-built from the builder stage.
+COPY --from=builder /app/deploy/ ./
 
 # Copy baked build metadata and built frontend to be served as static files
 COPY --from=builder /app/build-info.json ./build-info.json
@@ -138,6 +119,7 @@ ENV CODEX_FORUM_PORT=4310
 ENV CODEX_FORUM_DB=/var/lib/codex-forum/data.db
 ENV CODEX_FORUM_UPLOADS_DIR=/var/lib/codex-forum/uploads
 ENV CODEX_FORUM_BASE_URL=http://localhost:4310
+ENV CODEX_FORUM_PUBLIC_DIR=/app/public
 
 # Expose the server port
 EXPOSE 4310
@@ -146,6 +128,5 @@ EXPOSE 4310
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD node -e "fetch('http://localhost:4310/healthz').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"
 
-# Start the server
-WORKDIR /app/packages/server
-CMD ["pnpm", "start"]
+# Start the server using tsx from the deployed package
+CMD ["node_modules/.bin/tsx", "src/server.ts"]

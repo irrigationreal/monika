@@ -381,6 +381,9 @@ importers:
       sharp:
         specifier: ^0.34.5
         version: 0.34.5
+      tsx:
+        specifier: ^4.20.3
+        version: 4.23.0
     devDependencies:
       '@irrigationreal/typescript-config':
         specifier: workspace:*
@@ -400,9 +403,6 @@ importers:
       '@types/redis':
         specifier: ^4.0.11
         version: 4.0.11
-      tsx:
-        specifier: ^4.20.3
-        version: 4.23.0
       typescript:
         specifier: ~5.9.3
         version: 5.9.3

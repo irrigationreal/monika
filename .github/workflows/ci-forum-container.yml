@@ -50,6 +50,7 @@ jobs:
               'services/forum/packages/' \
               'services/forum/tsconfig.json' \
               'tests/forum/' \
+              'tests/smoke/forum-runtime.sh' \
               '.github/workflows/ci-forum-container.yml' \
               '.github/workflows/image-forum.yml' \
             | grep -qvE '\.md$'; then
@@ -89,6 +90,9 @@ jobs:
             --build-arg MONIKA_BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
             -t monika-forum-test \
             ./services/forum
+
+      - name: Smoke-test forum runtime image
+        run: tests/smoke/forum-runtime.sh monika-forum-test
 
   # Gate job — branch protection should require this check.
   forum-container-checks:
