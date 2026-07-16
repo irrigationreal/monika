@@ -4,11 +4,10 @@
  */
 
 import nodemailer from 'nodemailer';
+
+import { getVerificationEmailTemplate, getWelcomeEmailTemplate } from './emailTemplates';
+
 import type { Transporter } from 'nodemailer';
-import {
-  getVerificationEmailTemplate,
-  getWelcomeEmailTemplate
-} from './emailTemplates';
 
 /**
  * Email configuration loaded from environment variables
@@ -86,7 +85,12 @@ export class EmailService implements IEmailService {
         host,
         port,
         secure,
-        auth: user && pass ? { user, pass } : undefined
+        auth: user && pass ? { user, pass } : undefined,
+        // Forum-generated mail never needs local-file or remote-URL content.
+        // Keep those capabilities disabled even if a future template grows
+        // attachment support.
+        disableFileAccess: true,
+        disableUrlAccess: true,
       } as nodemailer.TransportOptions;
 
       this.transporter = nodemailer.createTransport(transportOptions);
@@ -130,7 +134,7 @@ export class EmailService implements IEmailService {
         to,
         subject,
         text,
-        html
+        html,
       });
 
       console.log(`[EmailService] Email sent successfully: ${info.messageId}`);
@@ -147,7 +151,7 @@ export class EmailService implements IEmailService {
   async sendVerificationEmail(to: string, verifyUrl: string, displayName: string): Promise<boolean> {
     const { html, text, subject } = getVerificationEmailTemplate({
       displayName,
-      verifyUrl
+      verifyUrl,
     });
 
     console.log(`[EmailService] Sending verification email to: ${to}`);
@@ -159,7 +163,7 @@ export class EmailService implements IEmailService {
    */
   async sendWelcomeEmail(to: string, displayName: string): Promise<boolean> {
     const { html, text, subject } = getWelcomeEmailTemplate({
-      displayName
+      displayName,
     });
 
     console.log(`[EmailService] Sending welcome email to: ${to}`);
