@@ -1,7 +1,7 @@
 import http from 'node:http';
 import net from 'node:net';
 import { createHash, randomUUID } from 'node:crypto';
-import { completeSimple } from '@earendil-works/pi-ai/compat';
+import { completeSimple, getSupportedThinkingLevels } from '@earendil-works/pi-ai/compat';
 import { existsSync, readFileSync, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { handlePiEvent } from './pi-event-bridge.mjs';
@@ -605,6 +605,7 @@ function modelInfo(model) {
     provider: model.provider,
     model: model.id,
     supportsReasoning: Boolean(model.reasoning),
+    supportedThinkingLevels: getSupportedThinkingLevels(model),
     supportsTools: true,
     contextWindowTokens: model.contextWindow ?? null,
     maxTokens: model.maxTokens ?? null,
@@ -643,6 +644,7 @@ async function listModels() {
           provider,
           model: model.id,
           supportsReasoning: Boolean(model.reasoning),
+          supportedThinkingLevels: getSupportedThinkingLevels(model),
           supportsTools: true,
           contextWindowTokens: model.contextWindow ?? null,
           maxTokens: model.maxTokens ?? null,

@@ -66,9 +66,9 @@
  *   stateful-memory writes a session summary to memory/sessions/*.md — making
  *   fork work durable and recallable exactly like any other session.
  * - dispose() does NOT fire session_shutdown (it only disconnects listeners).
- *   session["_extensionRunner"] is a TypeScript private field compiled to a
- *   regular JS property. If a Pi upgrade breaks this, the catch below degrades
- *   gracefully (fork sessions fall back to explicit-remember-only durability).
+ *   Use AgentSession's public extensionRunner getter to emit shutdown before
+ *   disposal. If shutdown fails, the catch below degrades gracefully (fork
+ *   sessions fall back to explicit-remember-only durability).
  */
 
 import { join } from "node:path";
@@ -299,9 +299,9 @@ async function createForkSession(cwd: string) {
 async function shutdownForkSession(session: Awaited<ReturnType<typeof createForkSession>>) {
   try {
     await session.agent.waitForIdle();
-    const runner = (session as any)["_extensionRunner"];
+    const runner = session.extensionRunner;
     if (runner?.hasHandlers("session_shutdown")) {
-      await runner.emit({ type: "session_shutdown" });
+      await runner.emit({ type: "session_shutdown", reason: "quit" });
     }
   } catch (err) {
     console.warn(`[delegate] Session summary write error: ${(err as Error).message}`);

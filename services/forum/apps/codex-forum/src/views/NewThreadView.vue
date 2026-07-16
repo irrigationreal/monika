@@ -29,7 +29,8 @@ const modelOptions = computed(() => state.allModelOptions.value);
 const allowedModels = computed(() => new Set(modelOptions.value));
 const effectiveSelectedModel = computed(() => selectedModel.value || state.defaultModel.value || '');
 const supportsReasoning = computed(() => state.modelSupportsReasoning(effectiveSelectedModel.value));
-const allowedReasoning = new Set(['low', 'medium', 'high', 'xhigh']);
+const reasoningOptions = computed(() => state.modelReasoningOptions(effectiveSelectedModel.value));
+const allowedReasoning = computed(() => new Set(reasoningOptions.value));
 const CHUNKED_THRESHOLD_BYTES = 90 * 1024 * 1024;
 
 const routeForumId = computed(() => (route.params['forumId'] as string | undefined) ?? null);
@@ -46,6 +47,18 @@ const titleCharCount = computed(() => title.value.length);
 const bodyCharCount = computed(() => body.value.length);
 const attachmentTotalBytes = computed(() => threadFiles.value.reduce((total, file) => total + file.size, 0));
 const hasLargeAttachment = computed(() => threadFiles.value.some((file) => file.size >= CHUNKED_THRESHOLD_BYTES));
+
+function normalizeReasoning(model: string, reasoning: string): string {
+  const options = state.modelReasoningOptions(model);
+  if (options.includes(reasoning)) return reasoning;
+  if (options.includes('medium')) return 'medium';
+  return options[0] ?? 'medium';
+}
+
+function formatReasoningLabel(value: string): string {
+  if (value === 'xhigh') return 'X-High';
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -205,7 +218,7 @@ watch(() => route.query, () => {
     selectedModel.value = model;
   }
   const reasoning = route.query['reasoning'];
-  if (typeof reasoning === 'string' && allowedReasoning.has(reasoning)) {
+  if (typeof reasoning === 'string' && allowedReasoning.value.has(reasoning)) {
     selectedReasoning.value = reasoning;
   }
 }, { immediate: true });
@@ -381,10 +394,9 @@ onMounted(async () => {
                 <div class="vb-option-group" v-if="supportsReasoning">
                   <label for="thread-reasoning-select">Reasoning:</label>
                   <select id="thread-reasoning-select" v-model="selectedReasoning" class="vb-option-select" :disabled="silentPost || robotMode === 'off'">
-                    <option value="low">Low</option>
-                    <option value="medium">Medium</option>
-                    <option value="high">High</option>
-                    <option value="xhigh">X-High</option>
+                    <option v-for="option in reasoningOptions" :key="option" :value="option">
+                      {{ formatReasoningLabel(option) }}
+                    </option>
                   </select>
                 </div>
               </div>

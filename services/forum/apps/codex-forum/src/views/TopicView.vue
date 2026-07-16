@@ -80,8 +80,7 @@ const selectedReasoning = ref(state.lastReplyReasoning.value ?? 'medium');
 const replyModels = computed(() => state.allModelOptions.value);
 const effectiveSelectedModel = computed(() => selectedModel.value || (state.robotState.value as any)?.model || state.defaultModel.value || '');
 const supportsReasoning = computed(() => state.modelSupportsReasoning(effectiveSelectedModel.value));
-const reasoningOptions = ['low', 'medium', 'high', 'xhigh'];
-const replyReasoningOptions = computed(() => reasoningOptions);
+const replyReasoningOptions = computed(() => state.modelReasoningOptions(effectiveSelectedModel.value));
 const canModerate = computed(() => state.canModerate.value);
 const isAdmin = computed(() => state.currentUser.value?.kind === 'admin');
 const isRobotBusy = computed(() => state.isRobotBusy.value);
@@ -133,10 +132,10 @@ const autoRunModelOptions = computed(() => {
   return [{ value: '', label: 'Default' }, ...replyModels.value.map((model) => ({ value: model, label: model }))];
 });
 const showAutoRunReasoning = computed(() => state.modelSupportsReasoning(autoRunModel.value));
-const autoRunReasoningOptions = computed(() => reasoningOptions);
+const autoRunReasoningOptions = computed(() => state.modelReasoningOptions(autoRunModel.value));
 
 function normalizeReasoning(model: string, reasoning: string): string {
-  const options = reasoningOptions;
+  const options = state.modelReasoningOptions(model);
   if (options.includes(reasoning)) return reasoning;
   if (options.includes('medium')) return 'medium';
   return options[0] ?? 'medium';
@@ -201,6 +200,8 @@ const handoffDraftModelEffective = computed(() => handoffDraftModel.value || eff
 const handoffLaunchModelEffective = computed(() => handoffLaunchModel.value || effectiveSelectedModel.value || state.defaultModel.value || '');
 const handoffDraftSupportsReasoning = computed(() => state.modelSupportsReasoning(handoffDraftModelEffective.value));
 const handoffLaunchSupportsReasoning = computed(() => state.modelSupportsReasoning(handoffLaunchModelEffective.value));
+const handoffDraftReasoningOptions = computed(() => state.modelReasoningOptions(handoffDraftModelEffective.value));
+const handoffLaunchReasoningOptions = computed(() => state.modelReasoningOptions(handoffLaunchModelEffective.value));
 
 const robotModeNotice = computed(() => {
   if (topicRobotMode.value === 'off') return 'Robot replies are disabled for this thread.';
@@ -2227,7 +2228,7 @@ onUnmounted(() => {
                 <div v-if="handoffDraftSupportsReasoning" class="vb-option-group">
                   <label>Reasoning:</label>
                   <select v-model="handoffDraftReasoning" class="vb-option-select">
-                    <option v-for="option in replyReasoningOptions" :key="option" :value="option">{{ formatReasoningLabel(option) }}</option>
+                    <option v-for="option in handoffDraftReasoningOptions" :key="option" :value="option">{{ formatReasoningLabel(option) }}</option>
                   </select>
                 </div>
               </div>
@@ -2289,7 +2290,7 @@ onUnmounted(() => {
                 <div v-if="handoffLaunchSupportsReasoning" class="vb-option-group">
                   <label>Reasoning:</label>
                   <select v-model="handoffLaunchReasoning" class="vb-option-select">
-                    <option v-for="option in replyReasoningOptions" :key="option" :value="option">{{ formatReasoningLabel(option) }}</option>
+                    <option v-for="option in handoffLaunchReasoningOptions" :key="option" :value="option">{{ formatReasoningLabel(option) }}</option>
                   </select>
                 </div>
               </div>

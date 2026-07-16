@@ -205,9 +205,9 @@ async function executeForkAttempt({ task, infra, model, phase, parentSessionFile
   // Fire session_shutdown so stateful-memory writes a session summary
   try {
     await forkSession.agent.waitForIdle();
-    const runner = forkSession["_extensionRunner"];
+    const runner = forkSession.extensionRunner;
     if (runner?.hasHandlers("session_shutdown")) {
-      await runner.emit({ type: "session_shutdown" });
+      await runner.emit({ type: "session_shutdown", reason: "quit" });
     }
   } catch (err) {
     console.warn(`[sleep] Session summary write error: ${err.message}`);

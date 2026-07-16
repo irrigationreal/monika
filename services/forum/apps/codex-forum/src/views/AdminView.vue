@@ -169,7 +169,6 @@ const newAutomationRunMode = ref<'manual' | 'interval'>('manual');
 const newAutomationIntervalMinutes = ref(60);
 const creatingAutomation = ref(false);
 const automationModels = computed(() => state.allModelOptions.value);
-const automationReasoningOptions = ['low', 'medium', 'high', 'xhigh'];
 const newAutomationModelOptions = computed(() => {
   return [
     { value: '', label: 'Default' },
@@ -177,7 +176,7 @@ const newAutomationModelOptions = computed(() => {
   ];
 });
 const showNewAutomationReasoning = computed(() => state.modelSupportsReasoning(newAutomationModel.value));
-const newAutomationReasoningOptions = computed(() => automationReasoningOptions);
+const newAutomationReasoningOptions = computed(() => state.modelReasoningOptions(newAutomationModel.value));
 // Edit automation modal
 const editingAutomation = ref<RobotAutomationDto | null>(null);
 const editAutomationName = ref('');
@@ -211,7 +210,7 @@ const editAutomationModelOptions = computed(() => {
   ];
 });
 const showEditAutomationReasoning = computed(() => state.modelSupportsReasoning(editAutomationModel.value));
-const editAutomationReasoningOptions = computed(() => automationReasoningOptions);
+const editAutomationReasoningOptions = computed(() => state.modelReasoningOptions(editAutomationModel.value));
 
 // Tamper layer state
 const tamperPlugins = ref<TamperPluginDto[]>([]);
@@ -1342,7 +1341,7 @@ watch(newAutomationModel, (model) => {
     newAutomationReasoningEffort.value = '';
     return;
   }
-  if (newAutomationReasoningEffort.value && !automationReasoningOptions.includes(newAutomationReasoningEffort.value)) {
+  if (newAutomationReasoningEffort.value && !newAutomationReasoningOptions.value.includes(newAutomationReasoningEffort.value)) {
     newAutomationReasoningEffort.value = 'medium';
   }
 });
@@ -1362,7 +1361,7 @@ watch(editAutomationModel, (model) => {
     editAutomationReasoningEffort.value = '';
     return;
   }
-  if (editAutomationReasoningEffort.value && !automationReasoningOptions.includes(editAutomationReasoningEffort.value)) {
+  if (editAutomationReasoningEffort.value && !editAutomationReasoningOptions.value.includes(editAutomationReasoningEffort.value)) {
     editAutomationReasoningEffort.value = 'medium';
   }
 });
