@@ -29,7 +29,7 @@
     "@fastify/multipart": "^9.4.0",
     "@fastify/rate-limit": "^10.3.0",
     "@fastify/sensible": "^6.0.4",
-    "@fastify/static": "^8.3.0",
+    "@fastify/static": "^9.1.3",
     "@irrigationreal/codex-forum-adapters": "workspace:*",
     "@irrigationreal/codex-forum-contracts": "workspace:*",
     "@irrigationreal/codex-forum-core": "workspace:*",
@@ -37,7 +37,7 @@
     "discord.js": "^14.16.3",
     "fastify": "^5.8.5",
     "nanoid": "^5.1.0",
-    "nodemailer": "^7.0.13",
+    "nodemailer": "^9.0.3",
     "openid-client": "^6.8.1",
     "redis": "^5.10.0",
     "sharp": "^0.34.5"
