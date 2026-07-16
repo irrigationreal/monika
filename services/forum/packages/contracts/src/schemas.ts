@@ -195,6 +195,7 @@ export const ModelInfoDtoSchema: z.ZodType<ModelInfoDto> = z.object({
   family: z.string(),
   label: optionalNullableString,
   supportsReasoning: z.boolean().optional(),
+  supportedThinkingLevels: z.array(z.string()).optional(),
   supportsTools: z.boolean().optional(),
   defaultReasoning: optionalNullableString,
   contextWindowTokens: z.number().nullable().optional()

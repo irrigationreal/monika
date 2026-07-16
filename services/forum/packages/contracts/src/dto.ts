@@ -46,6 +46,7 @@ export interface ModelInfoDto {
   family: string;
   label?: string | null;
   supportsReasoning?: boolean;
+  supportedThinkingLevels?: string[];
   supportsTools?: boolean;
   defaultReasoning?: string | null;
   contextWindowTokens?: number | null;

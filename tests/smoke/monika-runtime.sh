@@ -116,8 +116,8 @@ endsection
 
 section "Runtime checks"
 PI_VERSION="$(docker exec "$CONTAINER_NAME" pi --version 2>&1)"
-if [ "$PI_VERSION" != "0.80.5" ]; then
-  echo "Expected Pi 0.80.5, got: $PI_VERSION"
+if [ "$PI_VERSION" != "0.80.7" ]; then
+  echo "Expected Pi 0.80.7, got: $PI_VERSION"
   exit 1
 fi
 pass "pi CLI pin active: ${PI_VERSION}"

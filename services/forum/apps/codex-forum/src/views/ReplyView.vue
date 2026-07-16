@@ -23,8 +23,7 @@ const replyModels = computed(() => state.allModelOptions.value);
 const effectiveSelectedModel = computed(() => selectedModel.value || (state.robotState.value as any)?.model || state.defaultModel.value || '');
 const supportsReasoning = computed(() => state.modelSupportsReasoning(effectiveSelectedModel.value));
 const sessionContext = computed(() => (state.robotState.value as any)?.context ?? null);
-const reasoningOptions = ['low', 'medium', 'high', 'xhigh'];
-const replyReasoningOptions = computed(() => reasoningOptions);
+const replyReasoningOptions = computed(() => state.modelReasoningOptions(effectiveSelectedModel.value));
 const silentPost = ref(false);
 const CHUNKED_THRESHOLD_BYTES = 90 * 1024 * 1024;
 
@@ -44,7 +43,7 @@ const autoRunModelOptions = computed(() => {
   ];
 });
 const showAutoRunReasoning = computed(() => state.modelSupportsReasoning(autoRunModel.value));
-const autoRunReasoningOptions = computed(() => reasoningOptions);
+const autoRunReasoningOptions = computed(() => state.modelReasoningOptions(autoRunModel.value));
 const autoRunStatusLabel = computed(() => {
   const current = autoRun.value;
   if (!current || !current.enabled) return 'Disabled';
@@ -73,10 +72,10 @@ const attachmentTotalBytes = computed(() => replyFiles.value.reduce((total, file
 const hasLargeAttachment = computed(() => replyFiles.value.some((file) => file.size >= CHUNKED_THRESHOLD_BYTES));
 
 const allowedModels = computed(() => new Set([...replyModels.value]));
-const allowedReasoning = new Set(['low', 'medium', 'high', 'xhigh']);
+const allowedReasoning = computed(() => new Set(replyReasoningOptions.value));
 
 function normalizeReasoning(model: string, reasoning: string): string {
-  const options = reasoningOptions;
+  const options = state.modelReasoningOptions(model);
   if (options.includes(reasoning)) return reasoning;
   if (options.includes('medium')) return 'medium';
   return options[0] ?? 'medium';
@@ -264,7 +263,7 @@ function syncSelectionFromQuery(): void {
     selectedModel.value = model;
   }
   const reasoning = route.query['reasoning'];
-  if (typeof reasoning === 'string' && allowedReasoning.has(reasoning)) {
+  if (typeof reasoning === 'string' && allowedReasoning.value.has(reasoning)) {
     selectedReasoning.value = reasoning;
   }
   selectedReasoning.value = normalizeReasoning(effectiveSelectedModel.value, selectedReasoning.value);

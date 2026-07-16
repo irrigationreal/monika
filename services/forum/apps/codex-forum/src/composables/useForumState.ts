@@ -83,9 +83,17 @@ const attachmentsByPost = ref<Record<string, AttachmentDto[]>>({});
 const lastReplyModel = ref<string | null>(null);
 const lastReplyReasoning = ref<string | null>(null);
 const fallbackModelCatalog: ModelCatalogDto = {
-  items: [{ id: 'gpt-5.2', family: 'echs', supportsReasoning: true, supportsTools: true, contextWindowTokens: 200000 }],
+  items: [{
+    id: 'gpt-5.2',
+    family: 'echs',
+    supportsReasoning: true,
+    supportedThinkingLevels: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'],
+    supportsTools: true,
+    contextWindowTokens: 200000
+  }],
   updatedAt: new Date(0).toISOString(),
 };
+const FORUM_REASONING_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const modelCatalog = ref<ModelCatalogDto | null>(null);
 const modelCatalogLoading = ref(false);
 const modelCatalogError = ref<string | null>(null);
@@ -280,6 +288,16 @@ export function useForumState() {
     const catalogDefault = (modelCatalog.value as any)?.defaultModel ?? (modelCatalog.value as any)?.default_model ?? null;
     return catalogDefault || modelItems.value[0]?.id || null;
   });
+
+  const modelReasoningOptions = (modelId: string | null | undefined): string[] => {
+    const effectiveModel = modelId || defaultModel.value;
+    const info = getModelInfo(effectiveModel);
+    if (!info?.supportsReasoning) return [];
+    const advertised = info.supportedThinkingLevels;
+    if (!advertised?.length) return FORUM_REASONING_LEVELS.filter((level) => level !== 'max');
+    const supported = new Set(advertised);
+    return FORUM_REASONING_LEVELS.filter((level) => supported.has(level));
+  };
 
   const allModelOptions = computed(() => modelItems.value.map((item) => item.id));
 
@@ -1488,6 +1506,7 @@ export function useForumState() {
     canModerate,
     modelItems,
     modelSupportsReasoning,
+    modelReasoningOptions,
     defaultModel,
     allModelOptions,
     getModelInfo,

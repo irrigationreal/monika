@@ -7,6 +7,7 @@ export interface ModelInfo {
   family: ModelFamily;
   label?: string | null;
   supportsReasoning?: boolean;
+  supportedThinkingLevels?: string[];
   supportsTools?: boolean;
   defaultReasoning?: string | null;
   contextWindowTokens?: number | null;
@@ -42,6 +43,7 @@ export function normalizeModelInfo(input: ModelInfo | string): ModelInfo {
       id: input,
       family: 'echs',
       supportsReasoning: true,
+      supportedThinkingLevels: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'],
       supportsTools: true,
       contextWindowTokens
     };
@@ -53,6 +55,7 @@ export function normalizeModelInfo(input: ModelInfo | string): ModelInfo {
     family,
     label: input.label ?? null,
     supportsReasoning: input.supportsReasoning ?? true,
+    supportedThinkingLevels: input.supportedThinkingLevels?.map(String),
     supportsTools: input.supportsTools ?? true,
     defaultReasoning: input.defaultReasoning ?? null,
     contextWindowTokens,
@@ -75,6 +78,11 @@ function normalizeRemoteModel(item: unknown): ModelInfo | null {
     family: typeof record['family'] === 'string' ? record['family'] : 'echs',
     label: typeof record['label'] === 'string' ? record['label'] : typeof record['displayName'] === 'string' ? record['displayName'] : null,
     supportsReasoning: typeof record['supportsReasoning'] === 'boolean' ? record['supportsReasoning'] : true,
+    supportedThinkingLevels: Array.isArray(record['supportedThinkingLevels'])
+      ? record['supportedThinkingLevels'].map(String)
+      : Array.isArray(record['supported_thinking_levels'])
+        ? record['supported_thinking_levels'].map(String)
+        : undefined,
     supportsTools: typeof record['supportsTools'] === 'boolean' ? record['supportsTools'] : true,
     defaultReasoning: typeof record['defaultReasoning'] === 'string' ? record['defaultReasoning'] : null,
     contextWindowTokens: normalizeContextWindowTokens(
