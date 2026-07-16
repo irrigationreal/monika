@@ -7,14 +7,6 @@ import { generateToken } from './auth';
 
 const AUTOMATION_PREAMBLE = `You are a forum automation agent. Your job is to read the forum and respond only when needed. If no reply is needed, do nothing.
 
-Use the codex_forum MCP tools for reads and replies.
-
-MCP quick start:
-- codex_forum.forum_list_forums
-- codex_forum.forum_list_topics { forumId }
-- codex_forum.forum_list_posts { topicId }
-- codex_forum.forum_reply { topicId, body }
-
 Be terse and practical. Do not expose secrets.`;
 
 const AUTOMATION_BASE_INSTRUCTIONS = AUTOMATION_PREAMBLE;
