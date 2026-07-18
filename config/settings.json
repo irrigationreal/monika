@@ -1,7 +1,7 @@
 {
   "lastChangelogVersion": "0.80.7",
-  "defaultProvider": "claude",
-  "defaultModel": "claude-opus-4-6",
+  "defaultProvider": "codex",
+  "defaultModel": "gpt-5.6-sol",
   "defaultThinkingLevel": "medium",
   "packages": [
     "npm:pi-agent-browser@0.1.0",
