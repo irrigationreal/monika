@@ -85,15 +85,21 @@ The script verifies:
 4. `pi --version` reports the repository's exact Pi pin;
 5. npm's 10-day dependency cooldown, pnpm 10.26.2, and the pinned agent-browser version are active;
 6. interactive project-trust state is linked into persistent `/data`;
-7. agentd can create a Pi conversation without sending an LLM prompt;
-8. agentd quiescence reports the loaded idle conversation and deploy drain closes it;
-9. `scripts/deploy-if-safe --backup-only` can create and verify an isolated runtime capsule backup through a mock forum quiescence endpoint;
-10. the container stops cleanly on SIGTERM.
+7. agentd sends a complete Pi turn—including the bundled `pi_run` extension
+   tool—to a local OpenAI Responses fixture;
+8. every strict function schema in the serialized request satisfies OpenAI's
+   `additionalProperties: false` and required-property rules;
+9. agentd quiescence reports the loaded idle conversation and deploy drain closes it;
+10. `scripts/deploy-if-safe --backup-only` can create and verify an isolated runtime capsule backup through a mock forum quiescence endpoint;
+11. the container stops cleanly on SIGTERM.
 
-The smoke test deliberately does **not** call a real model provider. Provider
-canaries belong in a separate trusted-branch workflow because they require
-secrets, network availability, and quota. Provider-independent agentd lifecycle
-coverage lives in `services/agentd/test/`, including the distinction between Pi's
+The model fixture runs in a second throwaway container on an isolated Docker
+network. It exercises Pi's real extension loading, tool serialization, provider
+request, streaming response parsing, and agentd turn lifecycle without contacting
+an external provider. This catches invalid strict tool schemas during image CI;
+real-provider canaries remain separate because they require secrets, network
+availability, and quota. Provider-independent agentd lifecycle coverage also
+lives in `services/agentd/test/`, including the distinction between Pi's
 `agent_end` and authoritative `agent_settled` completion.
 
 ### `smoke/deploy-if-safe-drain-lifecycle.sh`

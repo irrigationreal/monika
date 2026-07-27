@@ -8,8 +8,8 @@ Usage: tests/smoke/monika-runtime.sh <image>
 Smoke-test a Monika runtime image in standalone mode.
 
 The test starts an isolated throwaway container, waits for memstore and agentd,
-checks the Pi CLI, then creates and closes an agentd conversation without making
-an LLM call.
+checks the Pi CLI, runs an agentd turn against a local strict-schema model
+fixture, then drains and closes the runtime.
 USAGE
 }
 
@@ -19,6 +19,7 @@ if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
 fi
 
 IMAGE="${1:-}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 if [ -z "$IMAGE" ]; then
   usage >&2
   exit 2
@@ -30,7 +31,8 @@ MEMSTORE_SOCKET="/tmp/memstore.sock"
 MEMSTORE_DATA_DIR="/data/memstore"
 SMOKE_TMP_DIR=""
 MOCK_FORUM_PID=""
-CONTAINER_STOPPED=0
+MOCK_MODEL_CONTAINER=""
+SMOKE_NETWORK=""
 
 section() {
   if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
@@ -55,23 +57,82 @@ cleanup() {
     section "${CONTAINER_NAME} logs"
     docker logs "$CONTAINER_NAME" 2>/dev/null || true
     endsection
+    if [ -n "$MOCK_MODEL_CONTAINER" ]; then
+      section "${MOCK_MODEL_CONTAINER} logs"
+      docker logs "$MOCK_MODEL_CONTAINER" 2>/dev/null || true
+      endsection
+    fi
   fi
   if [ -n "$MOCK_FORUM_PID" ]; then
     kill "$MOCK_FORUM_PID" >/dev/null 2>&1 || true
     wait "$MOCK_FORUM_PID" >/dev/null 2>&1 || true
   fi
+  docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  if [ -n "$MOCK_MODEL_CONTAINER" ]; then
+    docker rm -f "$MOCK_MODEL_CONTAINER" >/dev/null 2>&1 || true
+  fi
+  if [ -n "$SMOKE_NETWORK" ]; then
+    docker network rm "$SMOKE_NETWORK" >/dev/null 2>&1 || true
+  fi
   if [ -n "$SMOKE_TMP_DIR" ]; then
     rm -rf "$SMOKE_TMP_DIR"
   fi
-  docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
   exit "$status"
 }
 trap cleanup EXIT
+
+SMOKE_TMP_DIR="$(mktemp -d)"
+SMOKE_RUNTIME_SECRETS="$SMOKE_TMP_DIR/runtime-secrets"
+SMOKE_NETWORK="monika-smoke-net-$$"
+MOCK_MODEL_CONTAINER="monika-mock-model-$$"
+mkdir -p "$SMOKE_RUNTIME_SECRETS"
+docker network create "$SMOKE_NETWORK" >/dev/null
+docker run -d \
+  --name "$MOCK_MODEL_CONTAINER" \
+  --network "$SMOKE_NETWORK" \
+  --network-alias mock-model \
+  --entrypoint node \
+  -v "$SCRIPT_DIR/mock-openai-responses.cjs:/mock/server.cjs:ro" \
+  -v "$SMOKE_TMP_DIR:/output" \
+  "$IMAGE" /mock/server.cjs >/dev/null
+for _ in {1..50}; do
+  if docker exec "$MOCK_MODEL_CONTAINER" node -e "fetch('http://127.0.0.1:7777/healthz').then(r => { if (!r.ok) process.exit(1) })" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.1
+done
+if ! docker exec "$MOCK_MODEL_CONTAINER" node -e "fetch('http://127.0.0.1:7777/healthz').then(r => { if (!r.ok) process.exit(1) })" >/dev/null 2>&1; then
+  echo "mock model server did not start"
+  docker logs "$MOCK_MODEL_CONTAINER" || true
+  exit 1
+fi
+cat >"$SMOKE_RUNTIME_SECRETS/models.json" <<'MODELS_SMOKE'
+{
+  "providers": {
+    "mock-openai": {
+      "baseUrl": "http://mock-model:7777/v1",
+      "apiKey": "smoke-test-key",
+      "api": "openai-responses",
+      "models": [{
+        "id": "schema-smoke",
+        "name": "Schema Smoke",
+        "reasoning": false,
+        "input": ["text"],
+        "contextWindow": 32000,
+        "maxTokens": 1024,
+        "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+        "compat": { "supportsStrictMode": true }
+      }]
+    }
+  }
+}
+MODELS_SMOKE
 
 section "Start standalone runtime"
 docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 CONTAINER_ID="$(docker run -d \
   --name "$CONTAINER_NAME" \
+  --network "$SMOKE_NETWORK" \
   -p "127.0.0.1::${AGENTD_CONTAINER_PORT}" \
   -e HOME=/app \
   -e MEMSTORE_SOCKET="$MEMSTORE_SOCKET" \
@@ -79,6 +140,7 @@ CONTAINER_ID="$(docker run -d \
   -e MONIKA_AGENTD_HOST=0.0.0.0 \
   -e MONIKA_AGENTD_PORT="$AGENTD_CONTAINER_PORT" \
   -e AGENTLOGS_HOME=/agentlogs-home \
+  -v "$SMOKE_RUNTIME_SECRETS:/runtime/secrets:ro" \
   "$IMAGE")"
 AGENTD_PORT="$(docker port "$CONTAINER_NAME" "${AGENTD_CONTAINER_PORT}/tcp" | sed 's/.*://')"
 if [ -z "$AGENTD_PORT" ]; then
@@ -208,7 +270,11 @@ if (health.ok !== true) {
 }
 console.log(`✓ agentd healthy: active=${health.active_threads}, loaded=${health.loaded_conversations}, queue=${health.queue_depth}`);
 
-const created = await request('POST', '/v1/conversations', { cwd: '/tmp' }, { attempts: 2, timeoutMs: 60_000 });
+const created = await request('POST', '/v1/conversations', {
+  cwd: '/tmp',
+  provider: 'mock-openai',
+  model: 'schema-smoke',
+}, { attempts: 2, timeoutMs: 60_000 });
 const conversation = created?.conversation ?? {};
 const conversationId = conversation.id ?? conversation.conversation_id ?? conversation.session_id;
 if (!conversationId) {
@@ -218,6 +284,31 @@ console.log(`✓ conversation created: ${conversationId}`);
 console.log(`  cwd: ${conversation.cwd ?? '/tmp'}`);
 console.log(`  model: ${conversation.model ?? 'unknown'}`);
 console.log(`  session: ${conversation.session_path ?? '(not reported)'}`);
+
+const message = await request('POST', `/v1/conversations/${conversationId}/messages`, {
+  content: 'Reply with exactly OK.',
+}, { timeoutMs: 30_000 });
+const deadline = Date.now() + 120_000;
+let terminal;
+let lastHistory;
+while (Date.now() < deadline) {
+  const history = await request('GET', `/v1/conversations/${conversationId}/history`, undefined, { timeoutMs: 10_000 });
+  lastHistory = history;
+  terminal = history.items?.findLast?.((item) => item.event === 'item_completed' && item.data?.item?.role === 'assistant');
+  const completed = history.items?.some?.((item) => item.event === 'turn_completed');
+  if (terminal || completed) break;
+  await new Promise((resolve) => setTimeout(resolve, 250));
+}
+if (!terminal) {
+  const exported = await request('GET', `/v1/pi/sessions/${encodeURIComponent(conversation.session_id)}/export`);
+  throw new Error(`mock model turn did not finish: message=${JSON.stringify(message)}, history=${JSON.stringify(lastHistory)}, session=${JSON.stringify(exported)}`);
+}
+const assistant = terminal.data.item;
+const terminalText = assistant.content?.filter((part) => part.type === 'text').map((part) => part.text).join('') ?? '';
+if (terminalText !== 'OK') {
+  throw new Error(`unexpected mock model response: ${JSON.stringify(assistant)}`);
+}
+console.log('✓ real Pi model round trip accepted all extension tool schemas');
 
 const loaded = await request('GET', '/v1/admin/quiescence');
 if (loaded.status === 'blocked') {
@@ -246,7 +337,6 @@ NODE_SMOKE
 endsection
 
 section "Redeploy backup smoke"
-SMOKE_TMP_DIR="$(mktemp -d)"
 SMOKE_DEPLOY_ROOT="$SMOKE_TMP_DIR/deploy-root"
 MOCK_FORUM_PORT_FILE="$SMOKE_TMP_DIR/mock-forum-port"
 mkdir -p \
@@ -335,7 +425,6 @@ endsection
 
 section "Clean shutdown"
 docker stop --time 30 "$CONTAINER_NAME" >/dev/null
-CONTAINER_STOPPED=1
 EXIT_CODE="$(docker inspect -f '{{.State.ExitCode}}' "$CONTAINER_NAME")"
 if [ "$EXIT_CODE" != "0" ]; then
   echo "Expected clean container shutdown exit code 0, got $EXIT_CODE"

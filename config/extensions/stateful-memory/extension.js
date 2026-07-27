@@ -628,7 +628,6 @@ export default function (pi) {
     name: "list_topics",
     label: "List Topics",
     description: "List available topic addenda for knowledge routing.",
-    constrainedSampling: { type: "json_schema", strict: "prefer" },
     parameters: Type.Object({}),
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
       const topics = await getTopicIndex(ctx);
@@ -651,7 +650,6 @@ export default function (pi) {
     name: "load_topic",
     label: "Load Topic",
     description: "Load the full content of a topic addendum by id.",
-    constrainedSampling: { type: "json_schema", strict: "prefer" },
     parameters: Type.Object({
       id: Type.String({ description: "Topic id." }),
     }),
@@ -681,7 +679,6 @@ export default function (pi) {
     label: "Remember",
     description:
       "Store observations about people, projects, decisions, preferences, the environment, or yourself. Each observation is appended to the named entity's history in the structured memory store. Observations should be self-contained.",
-    constrainedSampling: { type: "json_schema", strict: "prefer" },
     parameters: Type.Object({
       items: Type.Array(
         Type.String({ description: "Self-contained observations to store." })
@@ -748,7 +745,6 @@ export default function (pi) {
     label: "Correct Observation",
     description:
       "Replace a specific observation with a corrected current observation while preserving the old observation as history. Use an observation ID returned by recall.",
-    constrainedSampling: { type: "json_schema", strict: "prefer" },
     parameters: Type.Object({
       observation_id: Type.Integer({ description: "Observation ID to supersede." }),
       replacement: Type.String({ description: "Self-contained corrected observation." }),
@@ -797,7 +793,6 @@ export default function (pi) {
     label: "Retract Observation",
     description:
       "Mark a specific observation as no longer current without deleting its historical record. Use an observation ID returned by recall.",
-    constrainedSampling: { type: "json_schema", strict: "prefer" },
     parameters: Type.Object({
       observation_id: Type.Integer({ description: "Observation ID to retract." }),
       reason: Type.Optional(Type.String({ description: "Why the observation is no longer valid." })),
@@ -825,7 +820,6 @@ export default function (pi) {
     name: "remember_session",
     label: "Remember Session",
     description: "Summarize the current session into long-term memory.",
-    constrainedSampling: { type: "json_schema", strict: "prefer" },
     parameters: Type.Object({}),
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
       const stored = await summarizeCurrentSession(ctx, { reason: "manual" });
@@ -849,7 +843,6 @@ export default function (pi) {
     label: "Recall",
     description:
       "Search past sessions and current observations. Returns compact ranked snippets; use recall_session with a session ID for bounded detail.",
-    constrainedSampling: { type: "json_schema", strict: "prefer" },
     parameters: Type.Object({
       query: Type.String({ description: "Question or context to recall." }),
       include_historical_observations: Type.Optional(Type.Boolean({
@@ -949,7 +942,6 @@ ${observationLines.join("\n\n---\n\n")}`);
     label: "Recall Session",
     description:
       "Read bounded relevant excerpts from one session returned by recall. Supply the original query for matched windows; use offset to continue. The explicit full mode pages raw transcript content and remains capped below Pi's 50KB tool-output limit.",
-    constrainedSampling: { type: "json_schema", strict: "prefer" },
     parameters: Type.Object({
       id: Type.Integer({ description: "Session entry ID returned by recall." }),
       query: Type.Optional(Type.String({ description: "Terms used to select relevant windows." })),

@@ -42,7 +42,6 @@ export default function forumAttachmentsExtension(pi: ExtensionAPI) {
 			"Use forum_upload_attachment when you need to return a generated file to the forum user as an attachment.",
 			"After forum_upload_attachment succeeds, include the returned [forum-attachment id=\"...\"] reference as a standalone line in the final answer so the forum can attach it to the post.",
 		],
-		constrainedSampling: { type: "json_schema", strict: "prefer" },
 		parameters: Type.Object({
 			path: Type.String({ description: "Local path to the file to upload. A leading @ is ignored." }),
 			filename: Type.Optional(Type.String({ description: "Attachment filename to show in the forum. Defaults to the basename of path." })),
