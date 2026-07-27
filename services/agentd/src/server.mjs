@@ -1,7 +1,7 @@
 import http from 'node:http';
 import net from 'node:net';
 import { createHash, randomUUID } from 'node:crypto';
-import { completeSimple, getSupportedThinkingLevels } from '@earendil-works/pi-ai/compat';
+import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
 import { existsSync, readFileSync, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { handlePiEvent } from './pi-event-bridge.mjs';
@@ -14,16 +14,15 @@ import {
   registerDispatch,
 } from './message-provenance.mjs';
 import { deriveActiveBranchMetadata } from './session-export.mjs';
+import { modelRefreshIntervalMs, startModelCatalogRefresh } from './model-refresh.mjs';
 import {
   createAgentSessionFromServices,
   createAgentSessionRuntime,
   createAgentSessionServices,
   convertToLlm,
   serializeConversation,
-  getAgentDir,
   SessionManager,
-  AuthStorage,
-  ModelRegistry,
+  ModelRuntime,
   SettingsManager,
 } from '@earendil-works/pi-coding-agent';
 
@@ -48,6 +47,9 @@ const ARTIFACT_ALLOWED_ROOTS = (process.env.MONIKA_AGENTD_ARTIFACT_ALLOWED_ROOTS
   .filter(Boolean);
 const ARTIFACT_EXPORT_MAX_BYTES = Number(process.env.MONIKA_AGENTD_ARTIFACT_EXPORT_MAX_BYTES ?? 50 * 1024 * 1024);
 const BUILD_INFO_PATH = '/opt/monika/build-info.json';
+const MODEL_AUTH_PATH = path.join(AGENT_DIR, 'auth.json');
+const MODEL_CONFIG_PATH = path.join(AGENT_DIR, 'models.json');
+const MODEL_REFRESH_MS = modelRefreshIntervalMs(process.env.MONIKA_AGENTD_MODEL_REFRESH_MS);
 
 let cachedBuildInfo;
 function buildInfo() {
@@ -85,6 +87,7 @@ Files involved:
 [Clear description of what to do next based on user's goal]`;
 
 const conversations = new Map();
+const conversationModelRefreshes = new WeakMap();
 let draining = false;
 let drainAutoCancelTimer = null;
 
@@ -455,20 +458,53 @@ function splitModelId(modelId) {
   return { provider: null, modelId: raw };
 }
 
-function resolveModel(modelRegistry, modelId) {
+function resolveModel(modelRuntime, modelId) {
   const parsed = splitModelId(modelId);
   if (!parsed) return null;
-  if (parsed.provider) return modelRegistry.find(parsed.provider, parsed.modelId) ?? null;
-  return (modelRegistry.getAvailable().find((model) => model.id === parsed.modelId)
-    ?? modelRegistry.getAll().find((model) => model.id === parsed.modelId)
+  if (parsed.provider) return modelRuntime.getModel(parsed.provider, parsed.modelId) ?? null;
+  return (modelRuntime.getAvailableSnapshot().find((model) => model.id === parsed.modelId)
+    ?? modelRuntime.getModels().find((model) => model.id === parsed.modelId)
     ?? null);
 }
+
+function createModelRuntime() {
+  return ModelRuntime.create({
+    authPath: MODEL_AUTH_PATH,
+    modelsPath: MODEL_CONFIG_PATH,
+    allowModelNetwork: false,
+  });
+}
+
+function refreshConversationModelRuntime(modelRuntime) {
+  const existing = conversationModelRefreshes.get(modelRuntime);
+  if (existing) return existing;
+  const refresh = modelRuntime.refresh({ allowNetwork: false })
+    .catch((err) => console.warn('[agentd] conversation model refresh failed:', err instanceof Error ? err.message : String(err)))
+    .finally(() => conversationModelRefreshes.delete(modelRuntime));
+  conversationModelRefreshes.set(modelRuntime, refresh);
+  return refresh;
+}
+
+const forumModelRuntimePromise = createModelRuntime();
+const forumCatalogRefresh = startModelCatalogRefresh(forumModelRuntimePromise, {
+  intervalMs: MODEL_REFRESH_MS,
+  onRefresh: () => {
+    // Conversation runtimes are isolated so extension provider registration is
+    // session-local. Reload their snapshots from the shared on-disk catalog
+    // after the long-lived forum runtime updates it.
+    for (const modelRuntime of new Set(
+      [...conversations.values()].map((conv) => conv.runtime.services.modelRuntime),
+    )) {
+      void refreshConversationModelRuntime(modelRuntime);
+    }
+  },
+});
 
 async function applySessionConfig(conv, config = {}) {
   const modelId = config.model ?? config.provider_model ?? null;
   const reasoning = config.reasoning ?? config.thinking ?? config.thinking_level ?? null;
   if (modelId) {
-    const model = resolveModel(conv.runtime.services.modelRegistry, modelId);
+    const model = resolveModel(conv.runtime.services.modelRuntime, modelId);
     if (!model) throw new Error('Unknown model: ' + modelId);
     const current = conv.session.model;
     if (!current || current.provider !== model.provider || current.id !== model.id) {
@@ -480,7 +516,7 @@ async function applySessionConfig(conv, config = {}) {
 
 function initialSessionOptions(services, opts = {}) {
   const out = {};
-  const model = resolveModel(services.modelRegistry, opts.model ?? null);
+  const model = resolveModel(services.modelRuntime, opts.model ?? null);
   if (model) out.model = model;
   const thinkingLevel = opts.reasoning ?? opts.thinking ?? opts.thinking_level ?? null;
   if (thinkingLevel) out.thinkingLevel = String(thinkingLevel);
@@ -493,10 +529,12 @@ async function createRuntime(cwd, sessionManager, opts = {}) {
     // explicitly so project AGENTS.md, .pi resources, and .agents/skills load
     // without applying the interactive CLI's trust-prompt policy.
     const settingsManager = SettingsManager.create(runtimeCwd, AGENT_DIR, { projectTrusted: true });
+    const modelRuntime = await createModelRuntime();
     const services = await createAgentSessionServices({
       cwd: runtimeCwd,
       agentDir: AGENT_DIR,
       settingsManager,
+      modelRuntime,
     });
     return {
       ...(await createAgentSessionFromServices({
@@ -613,48 +651,31 @@ function modelInfo(model) {
   };
 }
 
-function getDefaultModelId(registry) {
+function getDefaultModelId(modelRuntime) {
   try {
     const settings = SettingsManager.create(DEFAULT_CWD, AGENT_DIR);
     const provider = settings.getDefaultProvider?.();
     const modelId = settings.getDefaultModel?.();
-    if (provider && modelId && registry.find(provider, modelId)) return provider + '/' + modelId;
+    if (provider && modelId && modelRuntime.getModel(provider, modelId)) return provider + '/' + modelId;
   } catch {}
-  const first = registry.getAvailable()[0] ?? registry.getAll()[0];
+  const first = modelRuntime.getAvailableSnapshot()[0] ?? modelRuntime.getModels()[0];
   return first ? first.provider + '/' + first.id : null;
 }
 
 async function listModels() {
   try {
-    const authStorage = AuthStorage.create();
-    const registry = ModelRegistry.create(authStorage);
-    const available = registry.getAvailable();
-    return { models: available.map(modelInfo), default_model: getDefaultModelId(registry) };
-  } catch (err) {
+    const modelRuntime = await forumModelRuntimePromise;
+    let available;
     try {
-      const modelsPath = path.join(AGENT_DIR, 'models.json');
-      const raw = JSON.parse(await fs.readFile(modelsPath, 'utf8'));
-      const models = [];
-      for (const [provider, config] of Object.entries(raw.providers ?? {})) {
-        for (const model of config.models ?? []) models.push({
-          id: provider + '/' + model.id,
-          name: model.name ?? model.id,
-          label: model.name ?? model.id,
-          family: 'pi',
-          provider,
-          model: model.id,
-          supportsReasoning: Boolean(model.reasoning),
-          supportedThinkingLevels: getSupportedThinkingLevels(model),
-          supportsTools: true,
-          contextWindowTokens: model.contextWindow ?? null,
-          maxTokens: model.maxTokens ?? null,
-          inputModalities: model.input ?? null,
-        });
-      }
-      return { models, default_model: models[0]?.id ?? null };
-    } catch {
-      return { models: [], default_model: null };
+      available = await modelRuntime.getAvailable();
+    } catch (err) {
+      console.warn('[agentd] failed to refresh model availability; using existing snapshot:', err instanceof Error ? err.message : String(err));
+      available = modelRuntime.getAvailableSnapshot();
     }
+    return { models: available.map(modelInfo), default_model: getDefaultModelId(modelRuntime) };
+  } catch (err) {
+    console.warn('[agentd] failed to initialize model runtime:', err instanceof Error ? err.message : String(err));
+    return { models: [], default_model: null };
   }
 }
 
@@ -834,7 +855,7 @@ function contextFromEntries(entries, registry = null) {
     }
   }
   const modelKey = provider && modelId ? provider + '/' + modelId : null;
-  const model = provider && modelId && registry ? registry.find(provider, modelId) : null;
+  const model = provider && modelId && registry ? registry.getModel(provider, modelId) : null;
   const contextWindow = model?.contextWindow ?? null;
   const usedTokens = lastUsage?.tokens ?? null;
   return { model: modelKey, provider, modelId, thinkingLevel, contextWindowTokens: contextWindow, usedTokens, remainingTokens: usedTokens != null && contextWindow != null ? Math.max(0, contextWindow - usedTokens) : null, percent: usedTokens != null && contextWindow ? (usedTokens / contextWindow) * 100 : null, exact: Boolean(usedTokens && lastUsageMessageId && lastUsageMessageId === lastVisibleMessageId), source: usedTokens ? 'pi-usage' : 'unavailable', asOfPiMessageId: lastUsageMessageId };
@@ -890,21 +911,52 @@ function activeBranchMetadata(session, entries) {
   return deriveActiveBranchMetadata(entries);
 }
 
+function handoffMessagesFromBranch(branch) {
+  const entryToMessage = (entry) => {
+    if (entry.type === 'message') return entry.message;
+    if (entry.type === 'compaction') {
+      return {
+        role: 'compactionSummary',
+        summary: entry.summary,
+        tokensBefore: entry.tokensBefore,
+        timestamp: entry.timestamp,
+      };
+    }
+    return null;
+  };
+
+  let compactionIndex = -1;
+  for (let index = branch.length - 1; index >= 0; index -= 1) {
+    if (branch[index].type === 'compaction') {
+      compactionIndex = index;
+      break;
+    }
+  }
+  if (compactionIndex < 0) return branch.map(entryToMessage).filter(Boolean);
+
+  const compaction = branch[compactionIndex];
+  const firstKeptIndex = branch.findIndex((entry) => entry.id === compaction.firstKeptEntryId);
+  const activeEntries = [
+    compaction,
+    ...(firstKeptIndex >= 0 ? branch.slice(firstKeptIndex, compactionIndex) : []),
+    ...branch.slice(compactionIndex + 1),
+  ];
+  return activeEntries.map(entryToMessage).filter(Boolean);
+}
+
 async function generateHandoffDraft(conv, opts = {}) {
   if (conv.current) throw new Error('Cannot generate handoff while a turn is active');
   const goal = String(opts.goal ?? '').trim();
   if (!goal) throw new Error('goal is required');
-  const branch = conv.session.sessionManager.getBranch();
-  const messages = branch.filter((entry) => entry.type === 'message').map((entry) => entry.message);
+  const messages = handoffMessagesFromBranch(conv.session.sessionManager.getBranch());
   if (messages.length === 0) throw new Error('No conversation to hand off');
   const conversationText = serializeConversation(convertToLlm(messages));
   const systemPrompt = String(opts.system_prompt ?? opts.systemPrompt ?? '').trim() || DEFAULT_HANDOFF_SYSTEM_PROMPT;
   if (systemPrompt.length > 20000) throw new Error('system prompt is too long');
-  const model = resolveModel(conv.runtime.services.modelRegistry, opts.model ?? opts.provider_model ?? null) ?? conv.session.model;
+  const modelRuntime = conv.runtime.services.modelRuntime;
+  const model = resolveModel(modelRuntime, opts.model ?? opts.provider_model ?? null) ?? conv.session.model;
   if (!model) throw new Error('No model selected');
-  const auth = await conv.runtime.services.modelRegistry.getApiKeyAndHeaders(model);
-  if (!auth.ok) throw new Error(auth.error);
-  const response = await completeSimple(
+  const response = await modelRuntime.completeSimple(
     model,
     {
       systemPrompt,
@@ -915,8 +967,6 @@ async function generateHandoffDraft(conv, opts = {}) {
       }],
     },
     {
-      apiKey: auth.apiKey,
-      headers: auth.headers,
       reasoning: opts.reasoning ?? opts.thinking ?? conv.session.thinkingLevel ?? undefined,
     }
   );
@@ -1011,8 +1061,8 @@ const server = http.createServer(async (req, res) => {
     if (method === 'GET' && piContextMatch) {
       const exported = await exportSession(decodeURIComponent(piContextMatch[1]));
       if (!exported) return notFound(res);
-      const registry = ModelRegistry.create(AuthStorage.create());
-      return json(res, 200, { session: exported.session, context: contextFromEntries(exported.entries, registry) });
+      const modelRuntime = await forumModelRuntimePromise;
+      return json(res, 200, { session: exported.session, context: contextFromEntries(exported.entries, modelRuntime) });
     }
 
     if (method === 'POST' && url.pathname === '/v1/conversations') {
@@ -1148,6 +1198,7 @@ server.listen(PORT, HOST, () => {
 });
 
 process.on('SIGTERM', async () => {
+  forumCatalogRefresh.stop();
   setDraining(true, { reason: 'sigterm', autoCancel: false });
   for (const conv of conversations.values()) {
     try { await closeConversation(conv, 'sigterm'); } catch {}

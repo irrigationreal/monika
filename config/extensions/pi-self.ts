@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 
 const MAX_OUTPUT_CHARS = 8000;
 
@@ -14,6 +14,7 @@ export default function piSelf(pi: ExtensionAPI) {
     label: "Pi Run",
     description: "Run a Pi CLI command as a subprocess (for tests or automation).",
     promptSnippet: "Run a Pi CLI command as a subprocess (for tests or automation).",
+    constrainedSampling: { type: "json_schema", strict: "prefer" },
     parameters: Type.Object({
       args: Type.Array(
         Type.String({ description: "Arguments passed to the pi CLI." })

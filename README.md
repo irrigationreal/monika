@@ -42,6 +42,7 @@ The host owns only explicit mutable state under gitignored `runtime/`:
 runtime/
   data/                memstore database state; socket stays container-local at /tmp/memstore.sock
     pi-agent-auth/     writable Pi OAuth auth state, seeded from runtime/secrets/auth.json
+    pi-agent-models/   persisted cache for Pi's refreshed built-in model catalogs
     pi-agent-trust/    writable Pi project-trust decisions for interactive sessions
   persona/             mounted to /app/.pi/stateful-memory
   pi-agent/sessions/   persistent Pi JSONL sessions for resume/reopen
@@ -72,9 +73,14 @@ Monika container.
 
 Interactive Pi sessions retain Pi's normal project-trust prompts. Their decisions
 are persisted at `runtime/data/pi-agent-trust/trust.json` and linked into the
-image-owned agent directory at startup. Forum workspaces are administrator-configured
-server paths, so agentd explicitly trusts their cwd when loading project `AGENTS.md`,
-`.pi` resources, and `.agents/skills`; the forum never needs to answer a trust prompt.
+image-owned agent directory at startup. Pi's `models-store.json` cache is likewise
+persisted under `runtime/data/pi-agent-models/`; agentd refreshes authenticated
+built-in provider catalogs from `pi.dev` in the background every four hours by
+default. Set `MONIKA_AGENTD_MODEL_REFRESH_MS=0` to disable network refresh. This
+refresh does not download or replace deployment-owned `models.json` configuration.
+Forum workspaces are administrator-configured server paths, so agentd explicitly
+trusts their cwd when loading project `AGENTS.md`, `.pi` resources, and
+`.agents/skills`; the forum never needs to answer a trust prompt.
 
 ## Deployment compose
 
