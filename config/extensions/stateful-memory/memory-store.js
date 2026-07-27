@@ -1,6 +1,8 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
+import { truncateCharactersSafe } from "./recall-utils.js";
+
 function pad(value) {
   return String(value).padStart(2, "0");
 }
@@ -82,6 +84,8 @@ const TYPE_LABELS = {
   preference: "Preferences",
   self: "Self",
 };
+const RECENT_OBSERVATION_LIMIT = 6;
+const RECENT_OBSERVATIONS_PER_ENTITY = 2;
 
 /**
  * Render entity context from memstore observations + entity-index.json.
@@ -104,11 +108,20 @@ export async function renderEntityContext(memstoreClient, entityIndexPath, outpu
     }
   }
 
-  // Fetch recent observations from memstore
+  // Fetch a small, entity-diverse set of current observations. Pull a wider
+  // candidate set so one active project cannot consume the whole prompt.
   let recentObs = [];
   try {
-    const result = await memstoreClient.listObservations({ limit: 15 });
-    recentObs = result.observations || [];
+    const result = await memstoreClient.listObservations({ limit: 50 });
+    const perEntity = new Map();
+    for (const observation of result.observations || []) {
+      const key = `${observation.entity_type}:${observation.entity_name}`;
+      const count = perEntity.get(key) || 0;
+      if (count >= RECENT_OBSERVATIONS_PER_ENTITY) continue;
+      recentObs.push(observation);
+      perEntity.set(key, count + 1);
+      if (recentObs.length >= RECENT_OBSERVATION_LIMIT) break;
+    }
   } catch (err) {
     console.error("[stateful-memory] Failed to list observations:", err.message);
   }
@@ -118,7 +131,7 @@ export async function renderEntityContext(memstoreClient, entityIndexPath, outpu
   sections.push("");
   sections.push("*Rendered from memstore observation store. Regenerated on every session start.*");
 
-  // ── Part 1: Recent observations (last 15) ──
+  // ── Part 1: Recent observations (six, max two per entity) ──
   if (recentObs.length > 0) {
     // Group recent observations by entity type for readability
     const recentByType = new Map();
@@ -155,9 +168,7 @@ export async function renderEntityContext(memstoreClient, entityIndexPath, outpu
         sections.push(`\n### ${name}`);
         for (const o of obs) {
           // Truncate long observations to ~150 chars
-          const body = o.body.length > 150
-            ? o.body.slice(0, 147) + "..."
-            : o.body;
+          const body = truncateCharactersSafe(o.body, 150);
           sections.push(`- ${body}`);
         }
       }

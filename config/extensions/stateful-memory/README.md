@@ -20,10 +20,16 @@ On every turn (`before_agent_start`), the extension builds the system prompt add
 
 When the first user message arrives:
 
-1. Check memstore queue depth — if save jobs are pending, ask whether to wait
-2. Search memstore with the user's prompt (natural language → FTS5 query)
-3. Fetch top 3 results, truncate bodies to 3000 chars each
-4. Cache results — they're included in the system prompt for the rest of the session
+1. Check memstore queue depth — if save jobs are pending, ask whether to wait.
+2. Search session transcripts and current observations with the user's prompt.
+3. Select up to five session snippets, preferring trunk sessions while retaining a
+   delegate/fork result when useful, plus up to three concise observations.
+4. Enforce a 6000-byte aggregate budget and cache the result for the session.
+5. Rebuild the first turn's prompt addon after retrieval so enrichment is available
+   immediately rather than one turn late.
+
+Enrichment never hydrates complete session transcripts. Session search snippets come
+from FTS5's matching window; observation bodies are capped independently.
 
 ### Session Saves
 
@@ -35,8 +41,10 @@ The save flow:
 1. Read session JSONL → extract user/assistant text blocks
 2. Generate a slug title from keywords
 3. Detect project tags from content and active topics
-4. Submit to memstore proxy (body, title, origin, tags, depth)
-5. Update recency index (`recent-sessions.json`)
+4. Mark sessions under Pi's `sessions/forks/` directory with the `fork` tag and depth 3;
+   trunk sessions remain depth 2.
+5. Submit to memstore proxy (body, title, origin, tags, depth).
+6. Update recency index (`recent-sessions.json`).
 
 The memstore save job processor extracts the session date from the `# Date:` header
 in the transcript body and uses it as `created_at`. This means re-saving a resumed
@@ -50,8 +58,8 @@ FTS5-indexed table distinct from session transcripts. Each observation is associ
 an entity (person, project, decision, preference, environment, self).
 
 On session start, the entity context is rendered from two sources:
-- **Recent observations** — the 15 most recent observations from memstore, grouped by
-  entity type and name, with bodies truncated to ~150 chars
+- **Recent observations** — six current observations, capped at two per entity so one
+  active project cannot consume the section, with bodies truncated to ~150 chars
 - **Entity awareness** — a compact listing of all known entities from `entity-index.json`,
   showing name, type, count, and last observation date
 
@@ -74,6 +82,11 @@ Config is loaded from `~/.pi/agent/stateful-memory.json` with defaults from `con
 | `dreamsDir` | Dream journal directory |
 | `topicsFile` | Topic index (PERSONALITY_MATRIX.md) |
 | `memstoreSocketPath` | Unix socket for memstore (default: `$XDG_RUNTIME_DIR/memstore.sock`) |
+| `recallSessionResults` | Session snippets returned by recall/enrichment (default 5) |
+| `recallObservationResults` | Observation results returned by recall/enrichment (default 3) |
+| `recallSearchMaxBytes` | Aggregate compact `recall` result budget (default 10000 bytes) |
+| `recallMaxSessionChars` | Default bounded `recall_session` excerpt (default 8000 characters; hard max 12000) |
+| `enrichmentMaxBytes` | Aggregate first-message enrichment budget (default 6000 bytes) |
 
 ### Path resolution
 
@@ -85,11 +98,27 @@ which keys get path-resolved.
 
 ### `recall` — Search memory
 
-Searches memstore for both session transcripts (FTS5 full-text, top 3) and entity
-observations (FTS5 full-text, top 5). Results are presented in two sections: "Recalled
-Sessions" and "Recalled Observations". Session results include the session date extracted
-from the `# Date:` header so that conflicting information from different time periods can
-be distinguished.
+Searches memstore and returns progressive, bounded results:
+
+- Up to five ranked session snippets with entry IDs, dates, tags, and fork/delegate
+  labeling. If enough trunk matches exist, at most one fork result is shown; forks fill
+  remaining slots when they contain the only useful matches.
+- Up to three current observations with observation IDs, entity metadata, and dates.
+- A 10000-byte aggregate ceiling across both result sections.
+
+Complete transcripts are never returned by `recall`. Pass a returned session ID to
+`recall_session`. Set `include_historical_observations` only when superseded or retracted
+facts are relevant. Set `include_all_delegate_sessions` for exhaustive fork-heavy research
+that should bypass the normal diversity rule.
+
+### `recall_session` — Inspect one session
+
+Returns query-relevant transcript windows under an 8000-character default and
+12000-character hard maximum. Results include source character ranges and a continuation
+offset. Without a query, the tool pages through the transcript from the requested offset.
+The explicit `full` flag pages raw transcript content instead of matching windows, but each
+call remains capped at 45KB—below Pi's 50KB custom-tool ceiling—and returns an offset when
+more remains.
 
 ### `remember` — Store observations
 
@@ -97,6 +126,21 @@ Writes observations to memstore's observations table. Each observation is stored
 separate FTS5-indexed entry with entity_type and entity_name. The local entity-index.json
 is updated after each write. Entity type mapping: `person` → `sophont`. Default entity
 names: person→Neon, self→Monika, environment→stanza, preference→Neon.
+
+### `correct_observation` / `retract_observation` — Observation lifecycle
+
+Corrections and retractions are append-only:
+
+- `correct_observation` writes a replacement observation and a `superseded_by` edge from
+  the old observation ID.
+- `retract_observation` writes a `retracted` lifecycle edge without deleting the original.
+- Current searches and entity context exclude observations with lifecycle edges. The
+  rendered context is refreshed immediately after remember/correct/retract operations,
+  and cached enrichment is cleared after corrections or retractions.
+- Historical recall can include both the original and its replacement/retraction status.
+
+Supersession is always explicit. The system does not guess that similarly worded facts
+conflict, because an incorrect automatic supersession would silently hide valid memory.
 
 ### `remember_session` — Manual session save
 

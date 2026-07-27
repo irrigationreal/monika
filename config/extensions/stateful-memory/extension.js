@@ -17,6 +17,13 @@ import {
   selectTopics,
 } from "./topic-router.js";
 import { MemstoreClient } from "./memstore-client.js";
+import {
+  buildRelevantExcerpt,
+  isDelegateSession,
+  joinWithinBudget,
+  selectDiverseSessionEntries,
+  truncateCharactersSafe,
+} from "./recall-utils.js";
 
 const DEFAULT_PERSONA = `# Soul\n\nYou are a warm, curious, and reliable AI companion who remembers important facts across sessions. You speak clearly and kindly, prioritize accuracy, and treat stored memories as trustworthy recollections. When you are unsure, you ask clarifying questions rather than guessing.\n`;
 
@@ -81,6 +88,39 @@ export default function (pi) {
     existing.last_observed = new Date().toISOString();
     index[key] = existing;
     await writeEntityIndex(index);
+  }
+
+  async function refreshEntityContext() {
+    await ensureMemstore();
+    await renderEntityContext(memstoreClient, getEntityIndexPath(), config.observationsFile);
+  }
+
+  async function refreshEntityContextAfterMutation() {
+    try {
+      await refreshEntityContext();
+    } catch (err) {
+      console.error("[stateful-memory] entity context refresh failed:", err.message);
+    }
+  }
+
+  function normalizeObservationEntity(target, requestedName) {
+    const defaults = {
+      person: "Neon",
+      self: "Monika",
+      environment: "stanza",
+      preference: "Neon",
+    };
+    const aliases = {
+      "the zeta directive": "TheZetaDirective",
+      "tzd": "TheZetaDirective",
+      "the novel": "TheZetaDirective",
+      "zeta directive": "TheZetaDirective",
+    };
+    const typeMap = { person: "sophont" };
+    const entityType = typeMap[target] || target;
+    let entityName = requestedName?.trim() || defaults[target] || target;
+    entityName = aliases[entityName.toLowerCase()] || entityName;
+    return { entityType, entityName };
   }
 
   // ── Date extraction helpers ───────────────────────────────────────
@@ -354,6 +394,10 @@ export default function (pi) {
     if (ctx.hasUI) ctx.ui.notify("Saving session...", "info");
 
     const tags = determineSessionTags(transcript, activeTopics);
+    const isForkSession = String(sessionPath)
+      .split(/[\\/]+/)
+      .some((segment) => segment === "forks");
+    if (isForkSession && !tags.includes("fork")) tags.push("fork");
 
     try {
       await ensureMemstore();
@@ -365,7 +409,7 @@ export default function (pi) {
         title: slugifyKeywords(transcript, 8),
         origin: sessionPath,
         tags,
-        depth: 2,
+        depth: isForkSession ? 3 : 2,
       });
 
       // Update recency index (no entry ID — proxy manages that via origin map)
@@ -441,8 +485,7 @@ export default function (pi) {
     // Render OBSERVATIONS.md from memstore observations + entity index
     try {
       await ensureMemstore();
-      const entityIndexPath = getEntityIndexPath();
-      await renderEntityContext(memstoreClient, entityIndexPath, config.observationsFile);
+      await refreshEntityContext();
     } catch (err) {
       console.error("[stateful-memory] OBSERVATIONS.md render failed:", err.message);
     }
@@ -455,7 +498,7 @@ export default function (pi) {
     const lastAssistantMsg = getLastAssistantMessage(ctx);
     const combinedQuery = [event.prompt, lastAssistantMsg].filter(Boolean).join("\n");
 
-    const [addon, topicSelection] = await Promise.all([
+    let [addon, topicSelection] = await Promise.all([
       buildSystemPromptAddon(),
       selectTopicsForPrompt({
         query: combinedQuery,
@@ -490,38 +533,62 @@ export default function (pi) {
         doMemstoreSearch = false;
       }
 
-      let memstoreResult = { entries: [], bodies: [] };
+      let memstoreResult = { entries: [], observations: [] };
       if (doMemstoreSearch) {
         try {
           await ensureMemstore();
-          const searchResults = await memstoreClient.search(event.prompt, { limit: 5 });
-          const topEntries = searchResults.entries?.slice(0, 3) || [];
-          const bodies = await Promise.all(topEntries.map(e => memstoreClient.show(e.id)));
-          memstoreResult = { entries: topEntries, bodies };
+          const [sessionResults, observationResults] = await Promise.all([
+            memstoreClient.search(event.prompt, { limit: 12 }).catch((err) => {
+              console.error("[stateful-memory] session enrichment search failed:", err.message);
+              return { entries: [] };
+            }),
+            memstoreClient.searchObservations(event.prompt, {
+              limit: config.recallObservationResults ?? 3,
+            }).catch((err) => {
+              console.error("[stateful-memory] observation enrichment search failed:", err.message);
+              return { observations: [] };
+            }),
+          ]);
+          memstoreResult = {
+            entries: selectDiverseSessionEntries(
+              sessionResults.entries,
+              config.recallSessionResults ?? 5,
+            ),
+            observations: observationResults.observations || [],
+          };
         } catch (err) {
           console.error("[stateful-memory] memstore enrichment failed:", err.message);
         }
       }
 
-      if (memstoreResult.bodies.length > 0) {
-        cachedMemoryContext = memstoreResult.bodies
-          .map(r => {
-            const body = r.entry.body;
-            const truncated = body.length > 3000
-              ? body.slice(0, 3000) + "\n(truncated)"
-              : body;
-            const sessionDate = extractSessionDate(body) || r.entry.created_at;
-            const dateLabel = formatSessionDate(sessionDate);
-            return `**${r.entry.title}** *(${dateLabel})*\n${truncated}`;
-          })
-          .join("\n\n---\n\n");
+      const enrichmentSections = [];
+      for (const entry of memstoreResult.entries) {
+        const dateLabel = formatSessionDate(entry.created_at);
+        const kind = isDelegateSession(entry) ? " | delegate/fork" : "";
+        enrichmentSections.push(
+          `**Session #${entry.id}: ${entry.title}** *(${dateLabel}${kind})*\n${entry.snippet || "(no snippet)"}`,
+        );
       }
+      for (const observation of memstoreResult.observations) {
+        const dateLabel = formatSessionDate(observation.created_at);
+        const body = truncateCharactersSafe(observation.body, 800);
+        enrichmentSections.push(
+          `**Observation #${observation.id}: ${observation.entity_name}** *(${observation.entity_type} | ${dateLabel})*\n${body}`,
+        );
+      }
+      cachedMemoryContext = joinWithinBudget(
+        enrichmentSections,
+        config.enrichmentMaxBytes ?? 6000,
+      );
 
       sessionEnriched = true;
+      // The first addon was built before enrichment completed. Rebuild it so
+      // the retrieved context is present on this first agent turn, not the next.
+      addon = await buildSystemPromptAddon();
       if (ctx.hasUI) {
         ctx.ui.setStatus("stateful-memory-enrich", "");
-        const memCount = memstoreResult.entries.length;
-        ctx.ui.notify(`Memory enriched: ${memCount} memories.`, "info");
+        const memCount = memstoreResult.entries.length + memstoreResult.observations.length;
+        ctx.ui.notify(`Memory enriched: ${memCount} results.`, "info");
       }
     }
 
@@ -630,30 +697,7 @@ export default function (pi) {
       ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      // Entity name defaults
-      const DEFAULTS = {
-        person: "Neon",
-        self: "Monika",
-        environment: "stanza",
-        preference: "Neon",
-      };
-
-      // Entity name aliases for normalization
-      const ALIASES = {
-        "the zeta directive": "TheZetaDirective",
-        "tzd": "TheZetaDirective",
-        "the novel": "TheZetaDirective",
-        "zeta directive": "TheZetaDirective",
-      };
-
-      // Map tool-facing target types to stored entity types
-      // Keeps compatibility with migrated Neotoma data (person→sophont)
-      const TYPE_MAP = { person: "sophont" };
-      const entityType = TYPE_MAP[params.target] || params.target;
-
-      let entityName = params.name?.trim() || DEFAULTS[params.target] || params.target;
-      const normalized = entityName.toLowerCase();
-      if (ALIASES[normalized]) entityName = ALIASES[normalized];
+      const { entityType, entityName } = normalizeObservationEntity(params.target, params.name);
 
       try {
         await ensureMemstore();
@@ -673,17 +717,99 @@ export default function (pi) {
         // Update local entity index
         try {
           await updateEntityIndex(entityType, entityName, params.items.length);
+          await refreshEntityContextAfterMutation();
         } catch (indexErr) {
-          console.error("[stateful-memory] entity-index update failed:", indexErr.message);
+          console.error("[stateful-memory] entity context update failed:", indexErr.message);
         }
 
         return {
           content: [{ type: "text", text: `Stored ${params.items.length} observation(s) for ${params.target}:${entityName}.` }],
-          details: { target: params.target, name: entityName, count: params.items.length },
+          details: {
+            target: params.target,
+            name: entityName,
+            count: params.items.length,
+            observationIds: results.map((result) => result.observation?.id).filter(Boolean),
+          },
         };
       } catch (err) {
         return {
           content: [{ type: "text", text: `Failed to store observations: ${err.message}` }],
+          details: { error: err.message },
+        };
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "correct_observation",
+    label: "Correct Observation",
+    description:
+      "Replace a specific observation with a corrected current observation while preserving the old observation as history. Use an observation ID returned by recall.",
+    parameters: Type.Object({
+      observation_id: Type.Integer({ description: "Observation ID to supersede." }),
+      replacement: Type.String({ description: "Self-contained corrected observation." }),
+      tags: Type.Optional(Type.Array(Type.String({ description: "Optional tags." }))),
+    }),
+    async execute(_toolCallId, params) {
+      try {
+        await ensureMemstore();
+        const result = await memstoreClient.addObservation({
+          body: params.replacement,
+          tags: params.tags || [],
+          supersedes_id: params.observation_id,
+        });
+        // The durable correction has committed at this point. Invalidate stale
+        // enrichment immediately; local index/render projections are best effort
+        // and must not make the correction look like it failed.
+        cachedMemoryContext = "";
+        try {
+          await updateEntityIndex(
+            result.observation.entity_type,
+            result.observation.entity_name,
+            1,
+          );
+        } catch (indexErr) {
+          console.error("[stateful-memory] entity-index update failed after correction:", indexErr.message);
+        }
+        await refreshEntityContextAfterMutation();
+        return {
+          content: [{
+            type: "text",
+            text: `Observation #${params.observation_id} superseded by observation #${result.observation.id}.`,
+          }],
+          details: { oldId: params.observation_id, newId: result.observation.id },
+        };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: `Failed to correct observation: ${err.message}` }],
+          details: { error: err.message },
+        };
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "retract_observation",
+    label: "Retract Observation",
+    description:
+      "Mark a specific observation as no longer current without deleting its historical record. Use an observation ID returned by recall.",
+    parameters: Type.Object({
+      observation_id: Type.Integer({ description: "Observation ID to retract." }),
+      reason: Type.Optional(Type.String({ description: "Why the observation is no longer valid." })),
+    }),
+    async execute(_toolCallId, params) {
+      try {
+        await ensureMemstore();
+        await memstoreClient.retractObservation(params.observation_id, params.reason || "");
+        cachedMemoryContext = "";
+        await refreshEntityContextAfterMutation();
+        return {
+          content: [{ type: "text", text: `Retracted observation #${params.observation_id}.` }],
+          details: { observationId: params.observation_id, retracted: true },
+        };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: `Failed to retract observation: ${err.message}` }],
           details: { error: err.message },
         };
       }
@@ -715,13 +841,18 @@ export default function (pi) {
   pi.registerTool({
     name: "recall",
     label: "Recall",
-    description: "Recall past sessions and memories to answer a query.",
+    description:
+      "Search past sessions and current observations. Returns compact ranked snippets; use recall_session with a session ID for bounded detail.",
     parameters: Type.Object({
-      query: Type.String({
-        description: "Question or context to recall.",
-      }),
+      query: Type.String({ description: "Question or context to recall." }),
+      include_historical_observations: Type.Optional(Type.Boolean({
+        description: "Include observations that were superseded or retracted. Defaults to current observations only.",
+      })),
+      include_all_delegate_sessions: Type.Optional(Type.Boolean({
+        description: "Disable fork-result diversification and return delegates strictly by rank for exhaustive research.",
+      })),
     }),
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params) {
       try {
         await ensureMemstore();
       } catch (err) {
@@ -731,46 +862,136 @@ export default function (pi) {
         };
       }
 
-      // Search memstore sessions
-      const searchResults = await memstoreClient.search(params.query, { limit: 5 });
-      const topEntries = searchResults.entries?.slice(0, 3) || [];
-      const bodies = await Promise.all(topEntries.map(e => memstoreClient.show(e.id)));
+      const [searchResults, observationResults] = await Promise.all([
+        memstoreClient.search(params.query, { limit: 12 }),
+        memstoreClient.searchObservations(params.query, {
+          limit: config.recallObservationResults ?? 3,
+          include_historical: params.include_historical_observations ?? false,
+        }).catch((err) => {
+          console.error("[stateful-memory] observation search failed:", err.message);
+          return { observations: [] };
+        }),
+      ]);
 
-      const memoryLines = bodies.map(r => {
-        const e = r.entry;
-        const sessionDate = extractSessionDate(e.body) || e.created_at;
-        const dateLabel = formatSessionDate(sessionDate);
-        return `### ${e.title}\n*${dateLabel} | depth ${e.depth} | tags: ${(e.tags || []).join(", ")}*\n\n${e.body}`;
+      const sessionLimit = config.recallSessionResults ?? 5;
+      const topEntries = params.include_all_delegate_sessions
+        ? (searchResults.entries || []).slice(0, sessionLimit)
+        : selectDiverseSessionEntries(searchResults.entries, sessionLimit);
+      const sessionLines = topEntries.map((entry) => {
+        const dateLabel = formatSessionDate(entry.created_at);
+        const kind = isDelegateSession(entry) ? " | delegate/fork" : "";
+        const tags = (entry.tags || []).join(", ") || "none";
+        const snippet = entry.snippet
+          ? truncateCharactersSafe(entry.snippet, 800)
+          : "(no snippet)";
+        return `### Session #${entry.id}: ${entry.title}
+*${dateLabel} | depth ${entry.depth}${kind} | tags: ${tags}*
+
+${snippet}`;
       });
 
-      // Search memstore observations
-      let observationSection = "";
-      try {
-        const obsResults = await memstoreClient.searchObservations(params.query, { limit: 5 });
-        const observations = obsResults.observations || [];
-        if (observations.length > 0) {
-          const obsLines = observations.map(o => {
-            const date = o.created_at
-              ? new Date(o.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
-              : "unknown";
-            return `**${o.entity_name}** (${o.entity_type}) — *${date}*\n${o.body}`;
-          });
-          observationSection = "\n\n## Recalled Observations\n\n" + obsLines.join("\n\n---\n\n");
-        }
-      } catch (err) {
-        console.error("[stateful-memory] observation search failed:", err.message);
+      const observations = observationResults.observations || [];
+      const observationLines = observations.map((observation) => {
+        const dateLabel = formatSessionDate(observation.created_at);
+        const lifecycle = observation.lifecycle === "superseded_by"
+          ? ` | superseded by #${observation.replacement_id}`
+          : observation.lifecycle === "retracted"
+            ? " | retracted"
+            : "";
+        const reason = observation.lifecycle_reason
+          ? `\nLifecycle reason: ${observation.lifecycle_reason}`
+          : "";
+        const body = truncateCharactersSafe(observation.body, 1200);
+        return `**Observation #${observation.id}: ${observation.entity_name}** (${observation.entity_type}) — *${dateLabel}${lifecycle}*
+${body}${reason}`;
+      });
+
+      const sections = [];
+      if (sessionLines.length > 0) {
+        sections.push(`## Session Search Results
+
+${sessionLines.join("\n\n---\n\n")}
+
+Use \`recall_session\` with a session ID and the query to inspect bounded relevant excerpts.`);
+      }
+      if (observationLines.length > 0) {
+        sections.push(`## Observation Search Results
+
+${observationLines.join("\n\n---\n\n")}`);
       }
 
-      const text = memoryLines.length > 0
-        ? `## Recalled Sessions\n\n${memoryLines.join("\n\n---\n\n")}${observationSection}`
-        : observationSection
-          ? observationSection.trim()
-          : "No relevant memories found.";
-
       return {
-        content: [{ type: "text", text }],
-        details: { entries: topEntries, hasObservations: Boolean(observationSection) },
+        content: [{
+          type: "text",
+          text: joinWithinBudget(
+            sections,
+            config.recallSearchMaxBytes ?? 10000,
+            "\n\n",
+          ) || "No relevant memories found.",
+        }],
+        details: {
+          entries: topEntries,
+          observationIds: observations.map((observation) => observation.id),
+        },
       };
+    },
+  });
+
+  pi.registerTool({
+    name: "recall_session",
+    label: "Recall Session",
+    description:
+      "Read bounded relevant excerpts from one session returned by recall. Supply the original query for matched windows; use offset to continue. The explicit full mode pages raw transcript content and remains capped below Pi's 50KB tool-output limit.",
+    parameters: Type.Object({
+      id: Type.Integer({ description: "Session entry ID returned by recall." }),
+      query: Type.Optional(Type.String({ description: "Terms used to select relevant windows." })),
+      offset: Type.Optional(Type.Integer({ minimum: 0, description: "Source character offset to continue from." })),
+      max_chars: Type.Optional(Type.Integer({
+        minimum: 1000,
+        maximum: 12000,
+        description: "Maximum returned characters; defaults to configured recall limit.",
+      })),
+      full: Type.Optional(Type.Boolean({
+        description: "Explicitly page raw transcript content instead of matching windows (capped at 45KB; use offset to continue).",
+      })),
+    }),
+    async execute(_toolCallId, params) {
+      try {
+        await ensureMemstore();
+        const result = await memstoreClient.show(params.id);
+        const entry = result.entry;
+        const excerpt = buildRelevantExcerpt(entry.body, {
+          query: params.query || "",
+          offset: params.offset || 0,
+          maxChars: params.max_chars || config.recallMaxSessionChars || 8000,
+          full: params.full || false,
+        });
+        const dateLabel = formatSessionDate(extractSessionDate(entry.body) || entry.created_at);
+        const continuation = excerpt.nextOffset != null
+          ? `
+
+*More matching content is available. Continue with offset ${excerpt.nextOffset}.*`
+          : "";
+        const text = `## Session #${entry.id}: ${entry.title}
+*${dateLabel} | depth ${entry.depth} | tags: ${(entry.tags || []).join(", ") || "none"}*
+
+${excerpt.text}${continuation}`;
+        const boundedText = joinWithinBudget([text], 48 * 1024, "");
+        return {
+          content: [{ type: "text", text: boundedText }],
+          details: {
+            id: entry.id,
+            sourceRanges: excerpt.sourceRanges,
+            nextOffset: excerpt.nextOffset,
+            truncated: excerpt.truncated,
+          },
+        };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: `Failed to recall session: ${err.message}` }],
+          details: { error: err.message },
+        };
+      }
     },
   });
 

@@ -47,6 +47,24 @@ pnpm test
 The container build runs this suite after installing agentd's frozen production
 lockfile, so the tests exercise the same Pi packages shipped in the image.
 
+## Stateful-memory tests
+
+Progressive recall selection, excerpt bounds, pagination, and enrichment budgets have a
+provider-independent Node test:
+
+```bash
+nix-shell -p nodejs_22 --run \
+  'node --experimental-default-type=module --test tests/stateful-memory/recall-utils.test.js'
+```
+
+Memstore's Go suite covers FTS search, save deduplication, and append-only observation
+supersession/retraction:
+
+```bash
+nix-shell -p go gcc --run \
+  'cd services/memstore && CGO_ENABLED=1 go test -tags fts5 ./...'
+```
+
 ## Smoke tests
 
 ### `smoke/monika-runtime.sh`

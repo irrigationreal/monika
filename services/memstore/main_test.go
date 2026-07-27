@@ -503,5 +503,118 @@ func TestMemstore(t *testing.T) {
 		t.Errorf("expected 3 total entries at end, got %d", finalTotal)
 	}
 
+	// --- Test append-only observation lifecycle ---
+	resp = rpcCallOnScanner(t, conn, scanner, map[string]any{
+		"jsonrpc": "2.0", "id": 22, "method": "tools/call",
+		"params": map[string]any{
+			"name": "memstore_add_observation",
+			"arguments": map[string]any{
+				"entity_type": "sophont", "entity_name": "Neon",
+				"body": "Neon's favorite test color is red.",
+			},
+		},
+	})
+	sc = resp["result"].(map[string]any)["structuredContent"].(map[string]any)
+	oldObservationID := int(sc["observation"].(map[string]any)["id"].(float64))
+
+	resp = rpcCallOnScanner(t, conn, scanner, map[string]any{
+		"jsonrpc": "2.0", "id": 23, "method": "tools/call",
+		"params": map[string]any{
+			"name": "memstore_add_observation",
+			"arguments": map[string]any{
+				"body":          "Neon's favorite test color is blue.",
+				"supersedes_id": oldObservationID,
+			},
+		},
+	})
+	sc = resp["result"].(map[string]any)["structuredContent"].(map[string]any)
+	newObservationID := int(sc["observation"].(map[string]any)["id"].(float64))
+
+	// Current search hides the superseded observation.
+	resp = rpcCallOnScanner(t, conn, scanner, map[string]any{
+		"jsonrpc": "2.0", "id": 24, "method": "tools/call",
+		"params": map[string]any{
+			"name":      "memstore_search_observations",
+			"arguments": map[string]any{"query": "favorite test color", "limit": 10},
+		},
+	})
+	sc = resp["result"].(map[string]any)["structuredContent"].(map[string]any)
+	currentObservations := sc["observations"].([]any)
+	if len(currentObservations) != 1 || int(currentObservations[0].(map[string]any)["id"].(float64)) != newObservationID {
+		t.Fatalf("expected only replacement observation %d in current search, got %#v", newObservationID, currentObservations)
+	}
+
+	// Historical search retains both and identifies the replacement edge.
+	resp = rpcCallOnScanner(t, conn, scanner, map[string]any{
+		"jsonrpc": "2.0", "id": 25, "method": "tools/call",
+		"params": map[string]any{
+			"name": "memstore_search_observations",
+			"arguments": map[string]any{
+				"query": "favorite test color", "limit": 10, "include_historical": true,
+			},
+		},
+	})
+	sc = resp["result"].(map[string]any)["structuredContent"].(map[string]any)
+	historicalObservations := sc["observations"].([]any)
+	if len(historicalObservations) != 2 {
+		t.Fatalf("expected 2 historical observations, got %d", len(historicalObservations))
+	}
+	foundSuperseded := false
+	for _, raw := range historicalObservations {
+		observation := raw.(map[string]any)
+		if int(observation["id"].(float64)) == oldObservationID {
+			foundSuperseded = observation["lifecycle"] == "superseded_by" &&
+				int(observation["replacement_id"].(float64)) == newObservationID
+		}
+	}
+	if !foundSuperseded {
+		t.Errorf("historical search did not expose supersession edge")
+	}
+
+	// Retraction removes the replacement from current views without deleting it.
+	resp = rpcCallOnScanner(t, conn, scanner, map[string]any{
+		"jsonrpc": "2.0", "id": 26, "method": "tools/call",
+		"params": map[string]any{
+			"name":      "memstore_retract_observation",
+			"arguments": map[string]any{"id": newObservationID, "reason": "test cleanup"},
+		},
+	})
+	if resp["result"].(map[string]any)["isError"] == true {
+		t.Fatalf("retraction failed: %#v", resp)
+	}
+
+	resp = rpcCallOnScanner(t, conn, scanner, map[string]any{
+		"jsonrpc": "2.0", "id": 27, "method": "tools/call",
+		"params": map[string]any{
+			"name": "memstore_list_observations", "arguments": map[string]any{},
+		},
+	})
+	sc = resp["result"].(map[string]any)["structuredContent"].(map[string]any)
+	if len(sc["observations"].([]any)) != 0 {
+		t.Errorf("expected no current observations after retraction")
+	}
+
+	resp = rpcCallOnScanner(t, conn, scanner, map[string]any{
+		"jsonrpc": "2.0", "id": 28, "method": "tools/call",
+		"params": map[string]any{
+			"name": "memstore_search_observations",
+			"arguments": map[string]any{
+				"query": "favorite test color", "limit": 10, "include_historical": true,
+			},
+		},
+	})
+	sc = resp["result"].(map[string]any)["structuredContent"].(map[string]any)
+	foundRetractionReason := false
+	for _, raw := range sc["observations"].([]any) {
+		observation := raw.(map[string]any)
+		if int(observation["id"].(float64)) == newObservationID {
+			foundRetractionReason = observation["lifecycle"] == "retracted" &&
+				observation["lifecycle_reason"] == "test cleanup"
+		}
+	}
+	if !foundRetractionReason {
+		t.Errorf("historical search did not expose retraction reason")
+	}
+
 	fmt.Printf("All tests passed. Final entry count: %d\n", finalTotal)
 }
