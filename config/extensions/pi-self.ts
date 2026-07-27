@@ -14,7 +14,6 @@ export default function piSelf(pi: ExtensionAPI) {
     label: "Pi Run",
     description: "Run a Pi CLI command as a subprocess (for tests or automation).",
     promptSnippet: "Run a Pi CLI command as a subprocess (for tests or automation).",
-    constrainedSampling: { type: "json_schema", strict: "prefer" },
     parameters: Type.Object({
       args: Type.Array(
         Type.String({ description: "Arguments passed to the pi CLI." })

@@ -131,7 +131,6 @@ export default function webSearch(pi: ExtensionAPI) {
     label: "Web Search",
     description: "Search the web using configured providers (Brave, Tavily).",
     promptSnippet: "Search the web using configured providers (Brave, Tavily).",
-    constrainedSampling: { type: "json_schema", strict: "prefer" },
     parameters: Type.Object({
       query: Type.String({ description: "Search query" }),
       maxResults: Type.Optional(Type.Number({ description: "Max results" })),

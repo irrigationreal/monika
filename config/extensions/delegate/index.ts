@@ -73,7 +73,6 @@ export default function delegateExtension(pi: ExtensionAPI) {
       "Max delegation depth is 3 levels. At depth 3, complete tasks directly — do not call delegate.",
     ],
 
-    constrainedSampling: { type: "json_schema", strict: "prefer" },
     parameters: Type.Object({
       task: Type.String({
         description:
