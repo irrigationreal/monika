@@ -262,6 +262,25 @@ END;
 
 CREATE INDEX IF NOT EXISTS idx_observations_entity ON observations(entity_type, entity_name);
 CREATE INDEX IF NOT EXISTS idx_observations_created ON observations(created_at);
+
+-- Append-only lifecycle edges. Original observations remain immutable; current
+-- views exclude observations with a superseded_by or retracted edge.
+CREATE TABLE IF NOT EXISTS observation_relations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_observation_id INTEGER NOT NULL REFERENCES observations(id) ON DELETE RESTRICT,
+  target_observation_id INTEGER REFERENCES observations(id) ON DELETE RESTRICT,
+  relation_type TEXT NOT NULL CHECK (relation_type IN ('superseded_by', 'retracted')),
+  reason TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  CHECK (
+    (relation_type = 'superseded_by' AND target_observation_id IS NOT NULL) OR
+    (relation_type = 'retracted' AND target_observation_id IS NULL)
+  )
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_observation_relations_source
+  ON observation_relations(source_observation_id);
+CREATE INDEX IF NOT EXISTS idx_observation_relations_target
+  ON observation_relations(target_observation_id);
 `
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("create schema: %w", err)
@@ -296,6 +315,8 @@ func (p *proxy) handleToolCall(name string, args json.RawMessage) (any, error) {
 		return p.toolListObservations(args)
 	case "memstore_delete_observation":
 		return p.toolDeleteObservation(args)
+	case "memstore_retract_observation":
+		return p.toolRetractObservation(args)
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)
 	}
@@ -691,19 +712,20 @@ func (p *proxy) toolListEntries(args json.RawMessage) (any, error) {
 
 func (p *proxy) toolAddObservation(args json.RawMessage) (any, error) {
 	var params struct {
-		EntityType string   `json:"entity_type"`
-		EntityName string   `json:"entity_name"`
-		Body       string   `json:"body"`
-		Tags       []string `json:"tags"`
-		CreatedAt  string   `json:"created_at"`
+		EntityType   string   `json:"entity_type"`
+		EntityName   string   `json:"entity_name"`
+		Body         string   `json:"body"`
+		Tags         []string `json:"tags"`
+		CreatedAt    string   `json:"created_at"`
+		SupersedesID int      `json:"supersedes_id"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return nil, fmt.Errorf("invalid arguments: %w", err)
 	}
-	if params.EntityType == "" {
+	if params.SupersedesID <= 0 && params.EntityType == "" {
 		return nil, fmt.Errorf("entity_type is required")
 	}
-	if params.EntityName == "" {
+	if params.SupersedesID <= 0 && params.EntityName == "" {
 		return nil, fmt.Errorf("entity_name is required")
 	}
 	if params.Body == "" {
@@ -715,41 +737,92 @@ func (p *proxy) toolAddObservation(args json.RawMessage) (any, error) {
 	tagsJSON, _ := json.Marshal(params.Tags)
 
 	p.dbMu.Lock()
+	defer p.dbMu.Unlock()
+	tx, err := p.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin observation transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	if params.SupersedesID > 0 {
+		var oldType, oldName string
+		if err := tx.QueryRow(
+			"SELECT entity_type, entity_name FROM observations WHERE id = ?",
+			params.SupersedesID,
+		).Scan(&oldType, &oldName); err != nil {
+			if err == sql.ErrNoRows {
+				return nil, fmt.Errorf("observation %d not found", params.SupersedesID)
+			}
+			return nil, fmt.Errorf("read superseded observation: %w", err)
+		}
+		if params.EntityType == "" {
+			params.EntityType = oldType
+		}
+		if params.EntityName == "" {
+			params.EntityName = oldName
+		}
+		if oldType != params.EntityType || oldName != params.EntityName {
+			return nil, fmt.Errorf("replacement must use the same entity type and name as observation %d", params.SupersedesID)
+		}
+		var relationCount int
+		if err := tx.QueryRow(
+			"SELECT COUNT(*) FROM observation_relations WHERE source_observation_id = ?",
+			params.SupersedesID,
+		).Scan(&relationCount); err != nil {
+			return nil, fmt.Errorf("check observation lifecycle: %w", err)
+		}
+		if relationCount > 0 {
+			return nil, fmt.Errorf("observation %d is already superseded or retracted", params.SupersedesID)
+		}
+	}
+
 	var result sql.Result
-	var err error
 	if params.CreatedAt != "" {
-		result, err = p.db.Exec(
+		result, err = tx.Exec(
 			"INSERT INTO observations (entity_type, entity_name, body, tags, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
 			params.EntityType, params.EntityName, params.Body, string(tagsJSON), params.CreatedAt, params.CreatedAt,
 		)
 	} else {
-		result, err = p.db.Exec(
+		result, err = tx.Exec(
 			"INSERT INTO observations (entity_type, entity_name, body, tags) VALUES (?, ?, ?, ?)",
 			params.EntityType, params.EntityName, params.Body, string(tagsJSON),
 		)
 	}
-	p.dbMu.Unlock()
-
 	if err != nil {
 		return nil, fmt.Errorf("insert observation: %w", err)
 	}
 
 	newID, _ := result.LastInsertId()
-	return map[string]any{
-		"observation": map[string]any{
-			"id":          int(newID),
-			"entity_type": params.EntityType,
-			"entity_name": params.EntityName,
-		},
-	}, nil
+	if params.SupersedesID > 0 {
+		if _, err := tx.Exec(
+			"INSERT INTO observation_relations (source_observation_id, target_observation_id, relation_type) VALUES (?, ?, 'superseded_by')",
+			params.SupersedesID, newID,
+		); err != nil {
+			return nil, fmt.Errorf("record observation supersession: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit observation transaction: %w", err)
+	}
+
+	observation := map[string]any{
+		"id":          int(newID),
+		"entity_type": params.EntityType,
+		"entity_name": params.EntityName,
+	}
+	if params.SupersedesID > 0 {
+		observation["supersedes_id"] = params.SupersedesID
+	}
+	return map[string]any{"observation": observation}, nil
 }
 
 func (p *proxy) toolSearchObservations(args json.RawMessage) (any, error) {
 	var params struct {
-		Query      string `json:"query"`
-		EntityType string `json:"entity_type"`
-		EntityName string `json:"entity_name"`
-		Limit      int    `json:"limit"`
+		Query             string `json:"query"`
+		EntityType        string `json:"entity_type"`
+		EntityName        string `json:"entity_name"`
+		Limit             int    `json:"limit"`
+		IncludeHistorical bool   `json:"include_historical"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return nil, fmt.Errorf("invalid arguments: %w", err)
@@ -767,13 +840,19 @@ func (p *proxy) toolSearchObservations(args json.RawMessage) (any, error) {
 	}
 
 	querySQL := `SELECT o.id, o.entity_type, o.entity_name, o.body, o.tags, o.created_at,
-       bm25(observations_fts, 1.0, 5.0, 0.5) AS score
+       bm25(observations_fts, 1.0, 5.0, 0.5) AS score,
+       COALESCE((SELECT r.relation_type FROM observation_relations r WHERE r.source_observation_id = o.id ORDER BY r.id DESC LIMIT 1), 'current') AS lifecycle,
+       COALESCE((SELECT r.target_observation_id FROM observation_relations r WHERE r.source_observation_id = o.id ORDER BY r.id DESC LIMIT 1), 0) AS replacement_id,
+       COALESCE((SELECT r.reason FROM observation_relations r WHERE r.source_observation_id = o.id ORDER BY r.id DESC LIMIT 1), '') AS lifecycle_reason
 FROM observations_fts
 JOIN observations o ON o.id = observations_fts.rowid
 WHERE observations_fts MATCH ?`
 
 	queryArgs := []any{ftsQuery}
 
+	if !params.IncludeHistorical {
+		querySQL += " AND NOT EXISTS (SELECT 1 FROM observation_relations r WHERE r.source_observation_id = o.id)"
+	}
 	if params.EntityType != "" {
 		querySQL += " AND o.entity_type = ?"
 		queryArgs = append(queryArgs, params.EntityType)
@@ -798,15 +877,18 @@ WHERE observations_fts MATCH ?`
 	var observations []map[string]any
 	for rows.Next() {
 		var (
-			id        int
-			entType   string
-			entName   string
-			body      string
-			tagsJSON  string
-			createdAt string
-			score     float64
+			id              int
+			entType         string
+			entName         string
+			body            string
+			tagsJSON        string
+			createdAt       string
+			score           float64
+			lifecycle       string
+			lifecycleReason string
+			replacementID   int
 		)
-		if err := rows.Scan(&id, &entType, &entName, &body, &tagsJSON, &createdAt, &score); err != nil {
+		if err := rows.Scan(&id, &entType, &entName, &body, &tagsJSON, &createdAt, &score, &lifecycle, &replacementID, &lifecycleReason); err != nil {
 			return nil, fmt.Errorf("scan: %w", err)
 		}
 		var tags []string
@@ -815,7 +897,7 @@ WHERE observations_fts MATCH ?`
 			tags = []string{}
 		}
 
-		observations = append(observations, map[string]any{
+		observation := map[string]any{
 			"id":          id,
 			"entity_type": entType,
 			"entity_name": entName,
@@ -823,7 +905,15 @@ WHERE observations_fts MATCH ?`
 			"tags":        tags,
 			"created_at":  createdAt,
 			"score":       score,
-		})
+			"lifecycle":   lifecycle,
+		}
+		if replacementID > 0 {
+			observation["replacement_id"] = replacementID
+		}
+		if lifecycleReason != "" {
+			observation["lifecycle_reason"] = lifecycleReason
+		}
+		observations = append(observations, observation)
 	}
 	if observations == nil {
 		observations = []map[string]any{}
@@ -834,10 +924,11 @@ WHERE observations_fts MATCH ?`
 
 func (p *proxy) toolListObservations(args json.RawMessage) (any, error) {
 	var params struct {
-		EntityType string `json:"entity_type"`
-		EntityName string `json:"entity_name"`
-		Limit      int    `json:"limit"`
-		Offset     int    `json:"offset"`
+		EntityType        string `json:"entity_type"`
+		EntityName        string `json:"entity_name"`
+		Limit             int    `json:"limit"`
+		Offset            int    `json:"offset"`
+		IncludeHistorical bool   `json:"include_historical"`
 	}
 	if args != nil {
 		_ = json.Unmarshal(args, &params)
@@ -846,19 +937,22 @@ func (p *proxy) toolListObservations(args json.RawMessage) (any, error) {
 		params.Limit = 50
 	}
 
-	querySQL := "SELECT id, entity_type, entity_name, body, tags, created_at FROM observations WHERE 1=1"
+	querySQL := "SELECT o.id, o.entity_type, o.entity_name, o.body, o.tags, o.created_at FROM observations o WHERE 1=1"
 	var queryArgs []any
 
+	if !params.IncludeHistorical {
+		querySQL += " AND NOT EXISTS (SELECT 1 FROM observation_relations r WHERE r.source_observation_id = o.id)"
+	}
 	if params.EntityType != "" {
-		querySQL += " AND entity_type = ?"
+		querySQL += " AND o.entity_type = ?"
 		queryArgs = append(queryArgs, params.EntityType)
 	}
 	if params.EntityName != "" {
-		querySQL += " AND entity_name = ?"
+		querySQL += " AND o.entity_name = ?"
 		queryArgs = append(queryArgs, params.EntityName)
 	}
 
-	querySQL += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+	querySQL += " ORDER BY o.created_at DESC LIMIT ? OFFSET ?"
 	queryArgs = append(queryArgs, params.Limit, params.Offset)
 
 	rows, err := p.db.Query(querySQL, queryArgs...)
@@ -900,14 +994,17 @@ func (p *proxy) toolListObservations(args json.RawMessage) (any, error) {
 	}
 
 	// Also return total count for the applied filters
-	countSQL := "SELECT COUNT(*) FROM observations WHERE 1=1"
+	countSQL := "SELECT COUNT(*) FROM observations o WHERE 1=1"
 	var countArgs []any
+	if !params.IncludeHistorical {
+		countSQL += " AND NOT EXISTS (SELECT 1 FROM observation_relations r WHERE r.source_observation_id = o.id)"
+	}
 	if params.EntityType != "" {
-		countSQL += " AND entity_type = ?"
+		countSQL += " AND o.entity_type = ?"
 		countArgs = append(countArgs, params.EntityType)
 	}
 	if params.EntityName != "" {
-		countSQL += " AND entity_name = ?"
+		countSQL += " AND o.entity_name = ?"
 		countArgs = append(countArgs, params.EntityName)
 	}
 	var total int
@@ -940,6 +1037,52 @@ func (p *proxy) toolDeleteObservation(args json.RawMessage) (any, error) {
 		"deleted": affected > 0,
 		"id":      params.ID,
 	}, nil
+}
+
+func (p *proxy) toolRetractObservation(args json.RawMessage) (any, error) {
+	var params struct {
+		ID     int    `json:"id"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return nil, fmt.Errorf("invalid arguments: %w", err)
+	}
+	if params.ID <= 0 {
+		return nil, fmt.Errorf("id is required")
+	}
+
+	p.dbMu.Lock()
+	defer p.dbMu.Unlock()
+	tx, err := p.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin retraction: %w", err)
+	}
+	defer tx.Rollback()
+
+	var exists int
+	if err := tx.QueryRow("SELECT COUNT(*) FROM observations WHERE id = ?", params.ID).Scan(&exists); err != nil {
+		return nil, fmt.Errorf("read observation: %w", err)
+	}
+	if exists == 0 {
+		return nil, fmt.Errorf("observation %d not found", params.ID)
+	}
+	var relationCount int
+	if err := tx.QueryRow("SELECT COUNT(*) FROM observation_relations WHERE source_observation_id = ?", params.ID).Scan(&relationCount); err != nil {
+		return nil, fmt.Errorf("check observation lifecycle: %w", err)
+	}
+	if relationCount > 0 {
+		return nil, fmt.Errorf("observation %d is already superseded or retracted", params.ID)
+	}
+	if _, err := tx.Exec(
+		"INSERT INTO observation_relations (source_observation_id, relation_type, reason) VALUES (?, 'retracted', ?)",
+		params.ID, params.Reason,
+	); err != nil {
+		return nil, fmt.Errorf("record observation retraction: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit retraction: %w", err)
+	}
+	return map[string]any{"retracted": true, "id": params.ID, "reason": params.Reason}, nil
 }
 
 // nullString converts an empty string to sql.NullString with Valid=false.
