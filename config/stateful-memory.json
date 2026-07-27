@@ -16,5 +16,9 @@
   "recallModelMaxTokens": 1024,
   "memoryModelTemperature": 0,
   "sessionSummaryMaxChars": 12000,
-  "recallMaxSessionChars": 12000
+  "recallMaxSessionChars": 8000,
+  "recallSessionResults": 5,
+  "recallObservationResults": 3,
+  "recallSearchMaxBytes": 10000,
+  "enrichmentMaxBytes": 6000
 }

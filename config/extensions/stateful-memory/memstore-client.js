@@ -171,11 +171,12 @@ export class MemstoreClient {
   /**
    * Add an observation to the entity store.
    * @param {object} params
-   * @param {string} params.entity_type — e.g. "sophont", "project", "self"
-   * @param {string} params.entity_name — e.g. "Neon", "TheZetaDirective"
+   * @param {string} [params.entity_type] — Required for new observations; inherited when supersedes_id is set
+   * @param {string} [params.entity_name] — Required for new observations; inherited when supersedes_id is set
    * @param {string} params.body — Observation text
    * @param {string[]} [params.tags] — Optional tags
    * @param {string} [params.created_at] — Optional ISO timestamp
+   * @param {number} [params.supersedes_id] — Observation ID this new observation explicitly replaces
    * @returns {Promise<{observation: {id: number, entity_type: string, entity_name: string}}>}
    */
   async addObservation(params) {
@@ -189,6 +190,7 @@ export class MemstoreClient {
    * @param {string} [opts.entity_type] — Filter by entity type
    * @param {string} [opts.entity_name] — Filter by entity name
    * @param {number} [opts.limit] — Max results
+   * @param {boolean} [opts.include_historical] — Include superseded and retracted observations
    * @returns {Promise<{observations: Array<{id: number, entity_type: string, entity_name: string, body: string, tags: string[], created_at: string, score: number}>}>}
    */
   async searchObservations(query, opts = {}) {
@@ -215,6 +217,20 @@ export class MemstoreClient {
    */
   async deleteObservation(id) {
     return this.#callTool("memstore_delete_observation", { id }, { timeoutMs: WRITE_TIMEOUT_MS });
+  }
+
+  /**
+   * Retract an observation without deleting its historical record.
+   * @param {number} id — Observation ID
+   * @param {string} [reason] — Why the observation is no longer current
+   * @returns {Promise<{retracted: boolean, id: number, reason: string}>}
+   */
+  async retractObservation(id, reason = "") {
+    return this.#callTool(
+      "memstore_retract_observation",
+      { id, reason },
+      { timeoutMs: WRITE_TIMEOUT_MS },
+    );
   }
 
   /**
