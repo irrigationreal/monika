@@ -116,8 +116,8 @@ endsection
 
 section "Runtime checks"
 PI_VERSION="$(docker exec "$CONTAINER_NAME" pi --version 2>&1)"
-if [ "$PI_VERSION" != "0.80.7" ]; then
-  echo "Expected Pi 0.80.7, got: $PI_VERSION"
+if [ "$PI_VERSION" != "0.82.1" ]; then
+  echo "Expected Pi 0.82.1, got: $PI_VERSION"
   exit 1
 fi
 pass "pi CLI pin active: ${PI_VERSION}"
@@ -129,6 +129,14 @@ if [ "$PI_TRUST_TARGET" != "/data/pi-agent-trust/trust.json" ]; then
 fi
 docker exec "$CONTAINER_NAME" node -e "JSON.parse(require('fs').readFileSync('/data/pi-agent-trust/trust.json', 'utf8'))"
 pass "Pi project-trust state persists under /data"
+
+PI_MODELS_STORE_TARGET="$(docker exec "$CONTAINER_NAME" readlink /app/.pi/agent/models-store.json)"
+if [ "$PI_MODELS_STORE_TARGET" != "/data/pi-agent-models/models-store.json" ]; then
+  echo "Expected persistent Pi model-catalog state link, got: ${PI_MODELS_STORE_TARGET:-<not a symlink>}"
+  exit 1
+fi
+docker exec "$CONTAINER_NAME" node -e "JSON.parse(require('fs').readFileSync('/data/pi-agent-models/models-store.json', 'utf8'))"
+pass "Pi model-catalog cache persists under /data"
 
 NPM_MIN_RELEASE_AGE="$(docker exec "$CONTAINER_NAME" npm config get min-release-age)"
 if [ "$NPM_MIN_RELEASE_AGE" != "10" ]; then

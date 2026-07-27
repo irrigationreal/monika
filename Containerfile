@@ -58,7 +58,7 @@ ENV AGENT_BROWSER_EXECUTABLE_PATH=/opt/agent-browser/chrome
 # Pi coding agent — pinned version. Pi releases are deliberately exempt from
 # the cooldown because coordinated @earendil-works updates are reviewed and
 # adopted explicitly; the exact version keeps the resulting image reproducible.
-RUN npm install -g --min-release-age=0 @earendil-works/pi-coding-agent@0.80.7
+RUN npm install -g --min-release-age=0 @earendil-works/pi-coding-agent@0.82.1
 
 # AgentLogs CLI — pinned version. Authentication/config is runtime-owned and
 # stored under /agentlogs-home by scripts/agentlogs-monika.

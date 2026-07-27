@@ -72,12 +72,11 @@
  */
 
 import { join } from "node:path";
-import { existsSync, mkdirSync, statSync } from "node:fs";
+import { mkdirSync, statSync } from "node:fs";
 import {
   createAgentSession,
   SessionManager,
-  AuthStorage,
-  ModelRegistry,
+  ModelRuntime,
   DefaultResourceLoader,
   SettingsManager,
   getAgentDir,
@@ -243,12 +242,10 @@ function extractSummary(fullText: string, lastTurnText: string): string {
 // Shared between runFork() and attemptRecovery() to avoid duplication.
 
 async function createForkSession(cwd: string) {
-  const authStorage = AuthStorage.create(join(AGENT_DIR, "auth.json"));
-  const modelsPath = join(AGENT_DIR, "models.json");
-  const modelRegistry = ModelRegistry.create(
-    authStorage,
-    existsSync(modelsPath) ? modelsPath : undefined
-  );
+  const modelRuntime = await ModelRuntime.create({
+    authPath: join(AGENT_DIR, "auth.json"),
+    modelsPath: join(AGENT_DIR, "models.json"),
+  });
   // Use disk-backed settings so the fork inherits the saved default model/provider.
   // SettingsManager.inMemory() loses the defaultProvider/defaultModel from settings.json,
   // causing the fork to pick the wrong provider (e.g. built-in 'anthropic' instead of
@@ -264,8 +261,7 @@ async function createForkSession(cwd: string) {
   const { session } = await createAgentSession({
     cwd,
     agentDir: AGENT_DIR,
-    authStorage,
-    modelRegistry,
+    modelRuntime,
     resourceLoader,
     sessionManager,
     settingsManager,

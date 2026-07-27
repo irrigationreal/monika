@@ -71,6 +71,22 @@ if [ ! -f "$PI_TRUST_STATE_FILE" ]; then
 fi
 ln -sf "$PI_TRUST_STATE_FILE" "$PI_CODING_AGENT_DIR/trust.json"
 
+# Pi's refreshed built-in provider catalogs are cache state, not deployment
+# configuration. Persist the cache across image recreation so agentd and direct
+# Pi sessions can revalidate it instead of starting cold after every deploy.
+PI_MODELS_STATE_DIR="${PI_MODELS_STATE_DIR:-/data/pi-agent-models}"
+PI_MODELS_STORE_FILE="${PI_MODELS_STORE_FILE:-$PI_MODELS_STATE_DIR/models-store.json}"
+mkdir -p "$PI_MODELS_STATE_DIR"
+if [ ! -f "$PI_MODELS_STORE_FILE" ]; then
+  if [ -f "$PI_CODING_AGENT_DIR/models-store.json" ] && [ ! -L "$PI_CODING_AGENT_DIR/models-store.json" ]; then
+    cp "$PI_CODING_AGENT_DIR/models-store.json" "$PI_MODELS_STORE_FILE"
+  else
+    printf '{}\n' > "$PI_MODELS_STORE_FILE"
+  fi
+  chmod 600 "$PI_MODELS_STORE_FILE" 2>/dev/null || true
+fi
+ln -sf "$PI_MODELS_STORE_FILE" "$PI_CODING_AGENT_DIR/models-store.json"
+
 link_secret_file "/runtime/secrets/pi-agent/models.json" "$PI_CODING_AGENT_DIR/models.json"
 link_secret_file "/runtime/secrets/pi-agent/keybindings.json" "$PI_CODING_AGENT_DIR/keybindings.json"
 link_secret_file "/runtime/secrets/keybindings.json" "$PI_CODING_AGENT_DIR/keybindings.json"

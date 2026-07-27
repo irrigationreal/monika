@@ -17,14 +17,13 @@
  */
 
 import { promises as fs } from "node:fs";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import path from "node:path";
 import {
   createAgentSession,
   SessionManager,
-  AuthStorage,
-  ModelRegistry,
+  ModelRuntime,
   DefaultResourceLoader,
   SettingsManager,
   getAgentDir,
@@ -42,7 +41,7 @@ const TASK_COMPLETE_MARKER = "TASK_COMPLETE:";
 
 // Fallback model candidates in priority order (provider/id pairs).
 // On repeated timeouts the runner walks this list looking for a model
-// that exists in the registry. If none match, the retry uses the default.
+// that exists in the model runtime. If none match, the retry uses the default.
 const FALLBACK_MODEL_CANDIDATES = [
   ["claude", "claude-sonnet-4-6"],
   ["claude", "claude-sonnet-4-6 [1m]"],
@@ -65,24 +64,22 @@ function formatDreamStamp(date = new Date()) {
 
 // ─── Shared infra (created once per sleep cycle, reused across retries) ───────
 
-function loadSharedInfra(cwd) {
+async function loadSharedInfra(cwd) {
   mkdirSync(FORKS_DIR, { recursive: true });
 
-  const authStorage = AuthStorage.create(join(AGENT_DIR, "auth.json"));
-  const modelsPath = join(AGENT_DIR, "models.json");
-  const modelRegistry = ModelRegistry.create(
-    authStorage,
-    existsSync(modelsPath) ? modelsPath : undefined
-  );
+  const modelRuntime = await ModelRuntime.create({
+    authPath: join(AGENT_DIR, "auth.json"),
+    modelsPath: join(AGENT_DIR, "models.json"),
+  });
 
-  return { authStorage, modelRegistry, cwd };
+  return { modelRuntime, cwd };
 }
 
 // ─── Find fallback model ──────────────────────────────────────────────────────
 
-function findFallbackModel(modelRegistry) {
+function findFallbackModel(modelRuntime) {
   for (const [provider, id] of FALLBACK_MODEL_CANDIDATES) {
-    const model = modelRegistry.find(provider, id);
+    const model = modelRuntime.getModel(provider, id);
     if (model) {
       console.log(`[sleep] Fallback model resolved: ${provider}/${id}`);
       return model;
@@ -94,7 +91,7 @@ function findFallbackModel(modelRegistry) {
 // ─── Single fork attempt ──────────────────────────────────────────────────────
 
 async function executeForkAttempt({ task, infra, model, phase, parentSessionFile }) {
-  const { authStorage, modelRegistry, cwd } = infra;
+  const { modelRuntime, cwd } = infra;
 
   // Use disk-backed settings so the fork inherits defaultProvider/defaultModel
   // from settings.json. SettingsManager.inMemory() loses these fields, causing
@@ -114,8 +111,7 @@ async function executeForkAttempt({ task, infra, model, phase, parentSessionFile
   const sessionOpts = {
     cwd,
     agentDir: AGENT_DIR,
-    authStorage,
-    modelRegistry,
+    modelRuntime,
     resourceLoader,
     sessionManager,
     settingsManager,
@@ -257,7 +253,7 @@ async function runSleepFork({ task, cwd, infra, phase, parentSessionFile }) {
     // Pick model: default for attempts 1-2, fallback for attempt 3+
     let model = undefined;
     if (attempt > 2) {
-      model = findFallbackModel(infra.modelRegistry);
+      model = findFallbackModel(infra.modelRuntime);
       if (model) {
         console.log(`[sleep] Attempt ${attempt}: falling back to ${model.name ?? model.id}`);
       } else {
@@ -480,7 +476,7 @@ export async function runSleepCycle({ ctx, config, store, summarizeCurrentSessio
   const observationsFile = path.join(path.dirname(factsFile), "OBSERVATIONS.md");
 
   // ── Shared infra for all forks (avoids re-reading settings/auth per attempt)
-  const infra = loadSharedInfra(ctx.cwd);
+  const infra = await loadSharedInfra(ctx.cwd);
 
   // ── Phase 1: WAKE.md ───────────────────────────────────────────────────
   notify("Phase 1/3: Writing WAKE.md...");
