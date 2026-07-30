@@ -673,9 +673,15 @@ export function useForumState() {
   }
 
   async function loadOperationalEvents(topicId: string): Promise<void> {
-    const res = await operationalEventApi.listOperationalEvents(topicId);
-    if (!isActiveTopic(topicId)) return;
-    operationalEvents.value = res.items;
+    try {
+      const res = await operationalEventApi.listOperationalEvents(topicId);
+      if (!isActiveTopic(topicId)) return;
+      operationalEvents.value = res.items;
+    } catch {
+      // Keep topic rendering compatible during rolling deploys where the forum
+      // frontend may briefly precede the operational-events API.
+      if (isActiveTopic(topicId)) operationalEvents.value = [];
+    }
   }
 
   async function loadIdentities(topicId: string): Promise<void> {
