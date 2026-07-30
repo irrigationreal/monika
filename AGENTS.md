@@ -46,8 +46,8 @@ Image publishing workflows:
 
 - `Image / Monika` publishes multi-arch `ghcr.io/irrigationreal/monika:main` and `sha-*` from `main`.
 - `Image / Forum` publishes multi-arch `ghcr.io/irrigationreal/monika-forum:main` and `sha-*` from `main`.
-- `Release / Nightly` publishes rolling `:nightly` images and recreates a `nightly` prerelease when `main` changes.
-- `Release / Stable` manually promotes existing `sha-*` images to a date-style release tag and `latest`; it does not rebuild artifacts.
+- `Release / Nightly` builds Monika and Forum from the same commit, publishes immutable `candidate-<full-sha>` manifests, updates rolling `:nightly` images, and recreates the `nightly` prerelease when `main` changes.
+- `Release / Stable` runs daily and promotes the current coordinated candidate to a date-style release tag and `latest` after a seven-day soak. Manual dispatch can bypass only the timer. It promotes exact digests and does not rebuild artifacts. See `docs/releases.md`.
 
 ## Container commands
 

@@ -70,7 +70,7 @@ the forum thread/post that requested the change.
 
 Forum container build checks live at `.github/workflows/ci-forum-container.yml` and expose `forum-container-checks` as the branch-protection gate. Cross-service agentd/forum compatibility belongs in `.github/workflows/ci-integration.yml`; it is currently a placeholder gate named `integration-checks`.
 
-The forum image definition is `services/forum/Containerfile`. The `Image / Forum`, `Release / Nightly`, and `Release / Stable` workflows publish or promote `ghcr.io/irrigationreal/monika-forum` images from this repo.
+The forum image definition is `services/forum/Containerfile`. `Image / Forum` publishes path-filtered development images. `Release / Nightly` builds a coordinated Monika and Forum candidate from one commit, and `Release / Stable` promotes its exact digest after the soak policy documented in `docs/releases.md`.
 
 ## Testing
 

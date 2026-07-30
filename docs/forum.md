@@ -71,8 +71,11 @@ currently a passing placeholder so branch protection can require
 request smoke tests when those tests are ready.
 
 The forum image is published from this repository by `Image / Forum` as
-`ghcr.io/irrigationreal/monika-forum:main` and `sha-*`. Nightly and stable release
-workflows publish or promote `:nightly`, date-style release tags, and `:latest`.
+`ghcr.io/irrigationreal/monika-forum:main` and `sha-*`. For releases, Nightly
+builds Forum and Monika from the same commit and publishes immutable coordinated
+candidate manifests plus `:nightly`. Stable automatically promotes those exact
+candidate digests to a date-style tag and `:latest` after a seven-day soak. See
+`docs/releases.md` for the complete lifecycle.
 
 ## agentd
 
