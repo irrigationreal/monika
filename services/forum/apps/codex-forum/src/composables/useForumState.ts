@@ -676,7 +676,7 @@ export function useForumState() {
     try {
       const res = await operationalEventApi.listOperationalEvents(topicId);
       if (!isActiveTopic(topicId)) return;
-      operationalEvents.value = res.items;
+      operationalEvents.value = Array.isArray(res.items) ? res.items : [];
     } catch {
       // Keep topic rendering compatible during rolling deploys where the forum
       // frontend may briefly precede the operational-events API.
