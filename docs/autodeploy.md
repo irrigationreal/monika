@@ -10,7 +10,7 @@ This runbook describes a host-side deployment lifecycle for standalone Monika ru
 |---|---|
 | `compose.yaml` | Local deployment file for the live Monika runtime. Copied from `compose.yaml.example` and kept out of git. |
 | `scripts/deploy-if-safe` | Host-side deploy entry point. Pulls images, checks quiescence, creates backups, applies images, and prunes old artifacts. |
-| agentd quiescence API | Reports whether Pi work/memstore saves are safe to stop and performs deploy drain. |
+| agentd quiescence API | Reports whether forum turns, interactive Pi sessions, and memstore saves are safe to stop and performs deploy drain. |
 | forum deploy API | Reports whether forum robot dispatch, Pi sync, and robot state are safe to stop. Requires `CODEX_FORUM_DEPLOY_TOKEN`. |
 | systemd timer | Periodically invokes `scripts/deploy-if-safe` from the host. |
 
@@ -70,7 +70,7 @@ python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
 
 Forum-only image updates do not drain agentd because the `monika` container is not expected to restart. Backup-only mode still drains and cancels agentd so the runtime capsule is quiescence-gated.
 
-The script exits `75` (`EX_TEMPFAIL`) when deployment should be retried later. systemd treats this as a successful deferral, not as a failed unit.
+The script exits `75` (`EX_TEMPFAIL`) when deployment should be retried later. This includes an active interactive Pi ownership lease: deployment waits for the TUI to exit or its abandoned lease to expire rather than terminating the administrator's session. systemd treats this as a successful deferral, not as a failed unit.
 
 ## Manual commands
 

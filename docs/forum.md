@@ -99,6 +99,10 @@ Implemented endpoints:
 - `GET /v1/pi/sessions`
 - `GET /v1/pi/sessions/:id/export`
 - `GET /v1/pi/sessions/:id/context`
+- `GET /v1/pi/sessions/:id/ownership`
+- `POST /v1/pi/sessions/:id/ownership/claim`
+- `POST /v1/pi/sessions/:id/ownership/heartbeat`
+- `POST /v1/pi/sessions/:id/ownership/release`
 - `POST /v1/conversations`
 - `POST /v1/conversations/open`
 - `GET /v1/conversations/:id`
@@ -189,6 +193,32 @@ separate action. `GET /api/admin/pi-sync/repair-inventory` returns a dry-run lis
 of unresolved candidates and proposed actions. Historical repairs remain silent;
 an admin can intentionally resurface a repaired thread with
 `POST /api/admin/pi-sync/topics/:topicId/bump-repaired`.
+
+### Interactive Pi ownership
+
+`config/extensions/session-ownership.ts` prevents agentd and an interactive Pi
+TUI from independently writing the same canonical session. It hooks Pi's
+cancellable `session_before_switch` event, so the normal `pi` then `/resume`
+workflow remains unchanged. Initial command-line resumes use a guarded
+`session_start` fallback. Non-TUI runtimes, including agentd itself, do not claim
+interactive ownership.
+
+Agentd grants renewable 90-second leases persisted under the Pi agent directory,
+so an agentd restart does not silently create a second writer. Claiming an idle
+loaded conversation evicts its cached runtime; claiming an active forum turn
+requires an explicit interrupt-and-takeover choice. The extension heartbeats
+every 30 seconds and releases its lease on session shutdown. Expiry recovers
+ownership after a crashed terminal, while an expired heartbeat blocks further
+TUI input until the administrator reclaims ownership, exits, or explicitly
+continues unprotected. Agentd rejects forum reopen and message dispatch attempts
+while a lease is active.
+
+Session export also reconciles the loaded manager branch with the append-only
+JSONL. If disk is a strict descendant of the cached leaf, export selects the disk
+branch and marks it as external advancement. A true sibling divergence keeps the
+loaded branch and reports a branch conflict. Before reusing an idle cached
+conversation, agentd performs the same check and reloads it when disk advanced.
+This is a backstop for continuations that bypass the ownership extension.
 
 ## Pi session taxonomy configuration
 

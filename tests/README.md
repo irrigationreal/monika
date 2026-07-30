@@ -89,9 +89,10 @@ The script verifies:
    tool—to a local OpenAI Responses fixture;
 8. every strict function schema in the serialized request satisfies OpenAI's
    `additionalProperties: false` and required-property rules;
-9. agentd quiescence reports the loaded idle conversation and deploy drain closes it;
-10. `scripts/deploy-if-safe --backup-only` can create and verify an isolated runtime capsule backup through a mock forum quiescence endpoint;
-11. the container stops cleanly on SIGTERM.
+9. an interactive Pi ownership lease evicts an idle agentd runtime, blocks forum reopen and deployment, heartbeats, and releases cleanly;
+10. agentd quiescence reports the reloaded idle conversation and deploy drain closes it;
+11. `scripts/deploy-if-safe --backup-only` can create and verify an isolated runtime capsule backup through a mock forum quiescence endpoint;
+12. the container stops cleanly on SIGTERM.
 
 The model fixture runs in a second throwaway container on an isolated Docker
 network. It exercises Pi's real extension loading, tool serialization, provider
