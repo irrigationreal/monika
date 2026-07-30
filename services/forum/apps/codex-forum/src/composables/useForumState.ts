@@ -1057,7 +1057,10 @@ export function useForumState() {
     if (!hydrateState) {
       resetTopicState();
     }
-    await Promise.all([loadPosts(topic.id), loadOperationalEvents(topic.id), loadIdentities(topic.id), loadRobotPersonas(topic.id)]);
+    await Promise.all([loadPosts(topic.id), loadIdentities(topic.id), loadRobotPersonas(topic.id)]);
+    // Operational events are an additive projection and must not delay core
+    // topic/robot hydration when an older API or test fixture lacks the route.
+    void loadOperationalEvents(topic.id);
     await loadAttachmentsForPosts(posts.value.map((post) => post.id));
     if (!isActiveTopic(topic.id) || loadId !== topicLoadCounter) {
       return;
