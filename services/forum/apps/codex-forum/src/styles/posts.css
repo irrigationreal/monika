@@ -322,8 +322,28 @@
   transition: box-shadow var(--transition-fast);
 }
 
-.vb-post:not(:last-child) {
+.vb-post:not(:last-child):not(.vb-post--has-operational-events) {
   border-bottom: 2px solid var(--border-default);
+}
+
+.vb-post--has-operational-events {
+  border-bottom: 0;
+}
+
+.vb-operational-event-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-surface-muted);
+}
+
+@media (max-width: 640px) {
+  .vb-operational-event-group {
+    padding: 6px;
+  }
 }
 
 .vb-post:hover {

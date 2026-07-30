@@ -60,21 +60,19 @@ const label = computed(() =>
 
 <style scoped>
 .vb-operational-event {
-  border: 1px solid var(--vb-border, #aeb6c2);
+  border: 1px solid var(--border-default);
   border-left-width: 4px;
-  background: var(--vb-panel-bg, #f5f7fa);
-  color: var(--vb-text, #222);
-  margin: -1px 8px 10px;
+  color: var(--text-primary);
   padding: 9px 12px;
   font-size: 0.86rem;
 }
 .vb-operational-event--error {
-  border-left-color: #b42318;
-  background: rgba(180, 35, 24, 0.07);
+  border-left-color: var(--status-error);
+  background: var(--status-error-bg);
 }
 .vb-operational-event--success {
-  border-left-color: #287a45;
-  background: rgba(40, 122, 69, 0.07);
+  border-left-color: var(--status-success);
+  background: var(--status-success-bg);
 }
 .vb-operational-event-main {
   display: flex;
@@ -82,7 +80,14 @@ const label = computed(() =>
   gap: 9px;
 }
 .vb-operational-event-icon {
+  flex: 0 0 auto;
   font-weight: 800;
+}
+.vb-operational-event--error .vb-operational-event-icon {
+  color: var(--status-error);
+}
+.vb-operational-event--success .vb-operational-event-icon {
+  color: var(--status-success);
 }
 .vb-operational-event-copy {
   display: flex;
@@ -90,9 +95,14 @@ const label = computed(() =>
   min-width: 0;
   gap: 7px;
   flex-wrap: wrap;
+  color: var(--text-secondary);
+}
+.vb-operational-event-copy strong {
+  color: var(--text-primary);
 }
 .vb-operational-event-detail {
   margin: 7px 0 0 24px;
+  color: var(--text-secondary);
 }
 .vb-operational-event-detail summary {
   cursor: pointer;
@@ -102,9 +112,17 @@ const label = computed(() =>
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   margin: 7px 0 0;
+  padding: 7px 8px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
   font-size: 0.78rem;
 }
 @media (max-width: 640px) {
+  .vb-operational-event {
+    padding: 8px 10px;
+  }
   .vb-operational-event-main {
     align-items: flex-start;
     flex-wrap: wrap;

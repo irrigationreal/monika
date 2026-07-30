@@ -26,6 +26,7 @@ describe('OperationalEventBar', () => {
   it('keeps raw error detail collapsed and offers context recovery', async () => {
     const view = render(OperationalEventBar, { props: { event: event(), canRecover: true, recoverDisabled: false } });
 
+    expect(view.container.querySelector('.vb-operational-event--error')).toBeTruthy();
     expect(screen.getByText('Raw error detail').closest('details')?.open).toBe(false);
     expect(screen.getByText('context length overflow: 200001 tokens')).toBeTruthy();
     await fireEvent.click(screen.getByRole('button', { name: 'Compact and recover' }));
@@ -39,5 +40,19 @@ describe('OperationalEventBar', () => {
 
     expect(screen.queryByText('Raw error detail')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Compact and recover' })).toBeNull();
+  });
+
+  it.each([
+    { status: 'failed', tone: 'error', label: 'Compaction failed' },
+    { status: 'succeeded', tone: 'success', label: 'Session compacted' },
+  ] as const)('uses the $tone theme tone for $status compaction', ({ status, tone, label }) => {
+    const view = render(OperationalEventBar, {
+      props: {
+        event: event({ type: 'compaction', status, summary: `Compaction ${status}.`, detail: null }),
+      },
+    });
+
+    expect(view.container.querySelector(`.vb-operational-event--${tone}`)).toBeTruthy();
+    expect(screen.getByText(label)).toBeTruthy();
   });
 });

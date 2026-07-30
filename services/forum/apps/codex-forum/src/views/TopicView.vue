@@ -2061,20 +2061,26 @@ onUnmounted(() => {
 
       <div v-if="threadSearchQuery && filteredPosts.length === 0" class="vb-empty">No posts match your search.</div>
 
-      <OperationalEventBar
-        v-for="event in unanchoredOperationalEvents"
+      <div
+        v-if="unanchoredOperationalEvents.length > 0"
         v-show="!threadSearchQuery"
-        :key="event.id"
-        :event="event"
-        :can-recover="isAdmin"
-        :recover-disabled="!canCompact"
-        @recover="openCompactionModal"
-      />
+        class="vb-operational-event-group"
+      >
+        <OperationalEventBar
+          v-for="event in unanchoredOperationalEvents"
+          :key="event.id"
+          :event="event"
+          :can-recover="isAdmin"
+          :recover-disabled="!canCompact"
+          @recover="openCompactionModal"
+        />
+      </div>
 
       <template v-for="(post, idx) in threadSearchQuery ? filteredPosts : state.currentPosts.value" :key="post.id">
       <div
         class="vb-post"
         :id="String(postNumberForPostId(post.id) ?? postNumberForIndex(idx))"
+        :class="{ 'vb-post--has-operational-events': operationalEventsAfter(post.id).length > 0 }"
       >
         <div class="vb-post-header">
           <div>● {{ state.formatDate(post.createdAt) }}</div>
@@ -2358,14 +2364,16 @@ onUnmounted(() => {
           <button class="vb-small-btn" @click="cancelDelete">Cancel</button>
         </div>
       </div>
-      <OperationalEventBar
-        v-for="event in operationalEventsAfter(post.id)"
-        :key="event.id"
-        :event="event"
-        :can-recover="isAdmin"
-        :recover-disabled="!canCompact"
-        @recover="openCompactionModal"
-      />
+      <div v-if="operationalEventsAfter(post.id).length > 0" class="vb-operational-event-group">
+        <OperationalEventBar
+          v-for="event in operationalEventsAfter(post.id)"
+          :key="event.id"
+          :event="event"
+          :can-recover="isAdmin"
+          :recover-disabled="!canCompact"
+          @recover="openCompactionModal"
+        />
+      </div>
       </template>
 
       <LiveAssistantTurn
