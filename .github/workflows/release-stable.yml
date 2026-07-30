@@ -1,15 +1,23 @@
 name: Release / Stable
 
 on:
+  schedule:
+    - cron: "0 12 * * *" # Daily; exact start time is intentionally not significant.
   workflow_dispatch:
     inputs:
       tag:
         description: "Release tag. Defaults to YYYY.MM.DD."
         required: false
         type: string
+      force:
+        description: "Promote the current candidate before its seven-day soak completes."
+        required: false
+        default: false
+        type: boolean
 
+# Serialize with Nightly so promotion cannot overlap candidate publication.
 concurrency:
-  group: release-stable
+  group: release-pipeline
   cancel-in-progress: false
 
 permissions:
@@ -25,77 +33,259 @@ jobs:
           ref: main
           fetch-depth: 0
 
+      - name: Check candidate eligibility
+        id: candidate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REQUESTED_TAG: ${{ inputs.tag }}
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force || false }}
+          IS_MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          set -euo pipefail
+
+          defer() {
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+            if [ "$IS_MANUAL" = "true" ]; then
+              echo "::error::$1"
+              exit 1
+            fi
+            echo "::notice::$1"
+            exit 0
+          }
+
+          FULL_SHA=$(git rev-parse HEAD)
+          SHORT_SHA=$(git rev-parse --short HEAD)
+
+          if ! gh release view nightly >/dev/null 2>&1; then
+            defer "No nightly candidate release exists yet."
+          fi
+
+          git fetch origin refs/tags/nightly:refs/tags/nightly --force
+          CANDIDATE_SHA=$(git rev-parse "nightly^{commit}")
+          if [ "$CANDIDATE_SHA" != "$FULL_SHA" ]; then
+            defer "Latest nightly candidate ${CANDIDATE_SHA:0:7} does not match main ${SHORT_SHA}; waiting for Nightly."
+          fi
+
+          rm -f candidate-manifests.json
+          gh release download nightly --pattern candidate-manifests.json
+          ASSET_SHA=$(jq -er .commit candidate-manifests.json)
+          ASSET_TAG=$(jq -er .candidateTag candidate-manifests.json)
+          MONIKA_DIGEST=$(jq -er .monikaDigest candidate-manifests.json)
+          FORUM_DIGEST=$(jq -er .forumDigest candidate-manifests.json)
+          if [ "$ASSET_SHA" != "$FULL_SHA" ] || [ "$ASSET_TAG" != "candidate-${FULL_SHA}" ]; then
+            echo "Nightly candidate metadata does not match its Git tag." >&2
+            exit 1
+          fi
+          if ! [[ "$MONIKA_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || \
+             ! [[ "$FORUM_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Nightly candidate metadata contains an invalid manifest digest." >&2
+            exit 1
+          fi
+
+          PUBLISHED_AT=$(gh release view nightly --json publishedAt --jq .publishedAt)
+          PUBLISHED_EPOCH=$(date -d "$PUBLISHED_AT" +%s)
+          NOW_EPOCH=$(date -u +%s)
+          AGE_SECONDS=$((NOW_EPOCH - PUBLISHED_EPOCH))
+          SOAK_SECONDS=$((7 * 24 * 60 * 60))
+
+          if [ "$AGE_SECONDS" -lt 0 ]; then
+            echo "Nightly publication time is in the future: ${PUBLISHED_AT}" >&2
+            exit 1
+          fi
+
+          if [ "$AGE_SECONDS" -lt "$SOAK_SECONDS" ] && [ "$FORCE" != "true" ]; then
+            REMAINING_SECONDS=$((SOAK_SECONDS - AGE_SECONDS))
+            REMAINING_HOURS=$(((REMAINING_SECONDS + 3599) / 3600))
+            defer "Candidate ${SHORT_SHA} has not completed its seven-day soak (${REMAINING_HOURS}h remaining)."
+          fi
+
+          while IFS= read -r STABLE_TAG; do
+            [ -n "$STABLE_TAG" ] || continue
+            if git rev-parse "refs/tags/${STABLE_TAG}^{commit}" >/dev/null 2>&1 && \
+               [ "$(git rev-parse "refs/tags/${STABLE_TAG}^{commit}")" = "$FULL_SHA" ]; then
+              echo "eligible=false" >> "$GITHUB_OUTPUT"
+              echo "::notice::Candidate ${SHORT_SHA} is already stable as ${STABLE_TAG}."
+              exit 0
+            fi
+          done < <(gh api --paginate "repos/${{ github.repository }}/releases?per_page=100" \
+            --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name')
+
+          RELEASE_TAG="$REQUESTED_TAG"
+          if [ -z "$RELEASE_TAG" ]; then
+            RELEASE_TAG=$(date -u +%Y.%m.%d)
+          fi
+
+          if ! [[ "$RELEASE_TAG" =~ ^[0-9A-Za-z][0-9A-Za-z._-]{0,127}$ ]] || \
+             ! git check-ref-format "refs/tags/${RELEASE_TAG}"; then
+            echo "Invalid container/release tag: $RELEASE_TAG" >&2
+            exit 1
+          fi
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release '$RELEASE_TAG' already exists; refusing to overwrite it." >&2
+            exit 1
+          fi
+          if git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"; then
+            echo "Git tag '$RELEASE_TAG' already exists without a matching release; refusing to reuse it." >&2
+            exit 1
+          fi
+
+          PREVIOUS_TAG=$(gh release list \
+            --exclude-drafts \
+            --exclude-pre-releases \
+            --limit 1 \
+            --json tagName \
+            --jq '.[0].tagName // ""')
+
+          {
+            echo "eligible=true"
+            echo "tag=${RELEASE_TAG}"
+            echo "short_sha=${SHORT_SHA}"
+            echo "full_sha=${FULL_SHA}"
+            echo "candidate_tag=candidate-${FULL_SHA}"
+            echo "monika_digest=${MONIKA_DIGEST}"
+            echo "forum_digest=${FORUM_DIGEST}"
+            echo "previous_tag=${PREVIOUS_TAG}"
+            echo "published_at=${PUBLISHED_AT}"
+          } >> "$GITHUB_OUTPUT"
+
+          if [ "$FORCE" = "true" ] && [ "$AGE_SECONDS" -lt "$SOAK_SECONDS" ]; then
+            echo "::warning::Manual override is bypassing the seven-day soak for ${SHORT_SHA}."
+          else
+            echo "Candidate ${SHORT_SHA} is eligible after soaking since ${PUBLISHED_AT}."
+          fi
+
       - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
+        if: steps.candidate.outputs.eligible == 'true'
 
       - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
+        if: steps.candidate.outputs.eligible == 'true'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Prepare release metadata
-        id: meta
+      - name: Verify immutable candidate images
+        if: steps.candidate.outputs.eligible == 'true'
+        env:
+          MONIKA_IMAGE: ghcr.io/${{ github.repository }}
+          FORUM_IMAGE: ghcr.io/${{ github.repository }}-forum
+          CANDIDATE_TAG: ${{ steps.candidate.outputs.candidate_tag }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect "${MONIKA_IMAGE}:${CANDIDATE_TAG}" >/dev/null
+          docker buildx imagetools inspect "${FORUM_IMAGE}:${CANDIDATE_TAG}" >/dev/null
+
+      - name: Recheck candidate before promotion
+        if: steps.candidate.outputs.eligible == 'true'
+        env:
+          EXPECTED_SHA: ${{ steps.candidate.outputs.full_sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin main:refs/remotes/origin/main --force
+          git fetch origin refs/tags/nightly:refs/tags/nightly --force
+          CURRENT_MAIN=$(git rev-parse origin/main)
+          CURRENT_CANDIDATE=$(git rev-parse "nightly^{commit}")
+
+          if [ "$CURRENT_MAIN" != "$EXPECTED_SHA" ] || [ "$CURRENT_CANDIDATE" != "$EXPECTED_SHA" ]; then
+            echo "main or nightly changed while Stable was running; refusing promotion." >&2
+            echo "expected=${EXPECTED_SHA} main=${CURRENT_MAIN} nightly=${CURRENT_CANDIDATE}" >&2
+            exit 1
+          fi
+
+      - name: Promote candidate image digests
+        id: images
+        if: steps.candidate.outputs.eligible == 'true'
         shell: bash
-        run: |
-          TAG="${{ inputs.tag }}"
-          if [ -z "$TAG" ]; then
-            TAG=$(date -u +%Y.%m.%d)
-          fi
-
-          if ! [[ "$TAG" =~ ^[0-9A-Za-z][0-9A-Za-z._-]{0,127}$ ]]; then
-            echo "Invalid container/release tag: $TAG" >&2
-            exit 1
-          fi
-
-          SHORT_SHA=$(git rev-parse --short HEAD)
-          FULL_SHA=$(git rev-parse HEAD)
-
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release '$TAG' already exists; refusing to overwrite it." >&2
-            exit 1
-          fi
-
-          {
-            echo "tag=${TAG}"
-            echo "short_sha=${SHORT_SHA}"
-            echo "full_sha=${FULL_SHA}"
-          } >> "$GITHUB_OUTPUT"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Verify source images exist
         env:
           MONIKA_IMAGE: ghcr.io/${{ github.repository }}
           FORUM_IMAGE: ghcr.io/${{ github.repository }}-forum
-          SHORT_SHA: ${{ steps.meta.outputs.short_sha }}
+          CANDIDATE_TAG: ${{ steps.candidate.outputs.candidate_tag }}
+          EXPECTED_MONIKA_DIGEST: ${{ steps.candidate.outputs.monika_digest }}
+          EXPECTED_FORUM_DIGEST: ${{ steps.candidate.outputs.forum_digest }}
+          RELEASE_TAG: ${{ steps.candidate.outputs.tag }}
         run: |
-          docker buildx imagetools inspect "${MONIKA_IMAGE}:sha-${SHORT_SHA}" >/dev/null
-          docker buildx imagetools inspect "${FORUM_IMAGE}:sha-${SHORT_SHA}" >/dev/null
+          set -euo pipefail
 
-      - name: Promote image tags
-        env:
-          MONIKA_IMAGE: ghcr.io/${{ github.repository }}
-          FORUM_IMAGE: ghcr.io/${{ github.repository }}-forum
-          SHORT_SHA: ${{ steps.meta.outputs.short_sha }}
-          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
-        run: |
+          manifest_digest() {
+            local source=$1
+            local raw
+            raw=$(mktemp)
+            docker buildx imagetools inspect --raw "$source" > "$raw"
+            printf 'sha256:%s' "$(sha256sum "$raw" | awk '{print $1}')"
+            rm -f "$raw"
+          }
+
+          MONIKA_DIGEST=$(manifest_digest "${MONIKA_IMAGE}:${CANDIDATE_TAG}")
+          FORUM_DIGEST=$(manifest_digest "${FORUM_IMAGE}:${CANDIDATE_TAG}")
+
+          if [ "$MONIKA_DIGEST" != "$EXPECTED_MONIKA_DIGEST" ] || \
+             [ "$FORUM_DIGEST" != "$EXPECTED_FORUM_DIGEST" ]; then
+            echo "Candidate manifests changed after nightly publication; refusing promotion." >&2
+            echo "Monika: expected=${EXPECTED_MONIKA_DIGEST} actual=${MONIKA_DIGEST}" >&2
+            echo "Forum: expected=${EXPECTED_FORUM_DIGEST} actual=${FORUM_DIGEST}" >&2
+            exit 1
+          fi
+
+          # Validate the computed registry references before mutating release tags.
+          docker buildx imagetools inspect "${MONIKA_IMAGE}@${MONIKA_DIGEST}" >/dev/null
+          docker buildx imagetools inspect "${FORUM_IMAGE}@${FORUM_DIGEST}" >/dev/null
+
+          # Publish and verify the versioned pair before moving either rolling
+          # latest tag. Re-running after a partial registry failure is safe.
           docker buildx imagetools create \
             -t "${MONIKA_IMAGE}:${RELEASE_TAG}" \
-            -t "${MONIKA_IMAGE}:latest" \
-            "${MONIKA_IMAGE}:sha-${SHORT_SHA}"
-
+            "${MONIKA_IMAGE}@${MONIKA_DIGEST}"
           docker buildx imagetools create \
             -t "${FORUM_IMAGE}:${RELEASE_TAG}" \
+            "${FORUM_IMAGE}@${FORUM_DIGEST}"
+
+          [ "$(manifest_digest "${MONIKA_IMAGE}:${RELEASE_TAG}")" = "$MONIKA_DIGEST" ]
+          [ "$(manifest_digest "${FORUM_IMAGE}:${RELEASE_TAG}")" = "$FORUM_DIGEST" ]
+
+          docker buildx imagetools create \
+            -t "${MONIKA_IMAGE}:latest" \
+            "${MONIKA_IMAGE}@${MONIKA_DIGEST}"
+          docker buildx imagetools create \
             -t "${FORUM_IMAGE}:latest" \
-            "${FORUM_IMAGE}:sha-${SHORT_SHA}"
+            "${FORUM_IMAGE}@${FORUM_DIGEST}"
+
+          [ "$(manifest_digest "${MONIKA_IMAGE}:latest")" = "$MONIKA_DIGEST" ]
+          [ "$(manifest_digest "${FORUM_IMAGE}:latest")" = "$FORUM_DIGEST" ]
+
+          {
+            echo "monika_digest=${MONIKA_DIGEST}"
+            echo "forum_digest=${FORUM_DIGEST}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub release
+        if: steps.candidate.outputs.eligible == 'true'
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
-          SHORT_SHA: ${{ steps.meta.outputs.short_sha }}
-          FULL_SHA: ${{ steps.meta.outputs.full_sha }}
+          RELEASE_TAG: ${{ steps.candidate.outputs.tag }}
+          PREVIOUS_TAG: ${{ steps.candidate.outputs.previous_tag }}
+          SHORT_SHA: ${{ steps.candidate.outputs.short_sha }}
+          FULL_SHA: ${{ steps.candidate.outputs.full_sha }}
+          CANDIDATE_TAG: ${{ steps.candidate.outputs.candidate_tag }}
+          MONIKA_DIGEST: ${{ steps.images.outputs.monika_digest }}
+          FORUM_DIGEST: ${{ steps.images.outputs.forum_digest }}
         run: |
+          set -euo pipefail
+
+          if [ -n "$PREVIOUS_TAG" ]; then
+            gh api \
+              --method POST \
+              "repos/${{ github.repository }}/releases/generate-notes" \
+              -f tag_name="$RELEASE_TAG" \
+              -f target_commitish="$FULL_SHA" \
+              -f previous_tag_name="$PREVIOUS_TAG" \
+              --jq .body > generated-notes.md
+          else
+            printf 'Initial stable release.\n' > generated-notes.md
+          fi
+
           cat > release-notes.md <<NOTES
           ## Stable Release — ${RELEASE_TAG}
 
@@ -108,17 +298,19 @@ jobs:
           docker pull ghcr.io/${{ github.repository }}-forum:${RELEASE_TAG}
           \`\`\`
 
-          ### Exact Source Images
+          \`latest\` now points at these exact manifests:
 
-          \`\`\`bash
-          docker pull ghcr.io/${{ github.repository }}:sha-${SHORT_SHA}
-          docker pull ghcr.io/${{ github.repository }}-forum:sha-${SHORT_SHA}
-          \`\`\`
+          - Monika: \`${MONIKA_DIGEST}\`
+          - Forum: \`${FORUM_DIGEST}\`
 
-          \`latest\` now points at this stable release for both images.
+          The immutable source candidate is \`${CANDIDATE_TAG}\`.
+
+          ## Changes
+
           NOTES
+          cat generated-notes.md >> release-notes.md
 
-          gh release create "${RELEASE_TAG}" \
+          gh release create "$RELEASE_TAG" \
             --title "Stable Release — ${RELEASE_TAG}" \
             --notes-file release-notes.md \
-            --target "${FULL_SHA}"
+            --target "$FULL_SHA"

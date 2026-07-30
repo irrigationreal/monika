@@ -5,9 +5,11 @@ on:
     - cron: "0 6 * * *" # 06:00 UTC daily
   workflow_dispatch:
 
+# Nightly publication and stable promotion both mutate release/image tags. Keep
+# them serialized so Stable can never observe a half-published candidate.
 concurrency:
-  group: release-nightly
-  cancel-in-progress: true
+  group: release-pipeline
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -19,6 +21,8 @@ jobs:
     outputs:
       should_build: ${{ steps.check.outputs.should_build }}
       short_sha: ${{ steps.check.outputs.short_sha }}
+      full_sha: ${{ steps.check.outputs.full_sha }}
+      candidate_tag: ${{ steps.check.outputs.candidate_tag }}
       date: ${{ steps.check.outputs.date }}
       build_date: ${{ steps.check.outputs.build_date }}
     steps:
@@ -33,29 +37,29 @@ jobs:
           DATE=$(date -u +%Y.%m.%d)
           BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           SHORT_SHA=$(git rev-parse --short HEAD)
-          echo "date=${DATE}" >> "$GITHUB_OUTPUT"
-          echo "build_date=${BUILD_DATE}" >> "$GITHUB_OUTPUT"
-          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          FULL_SHA=$(git rev-parse HEAD)
+          CANDIDATE_TAG="candidate-${FULL_SHA}"
 
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "should_build=true" >> "$GITHUB_OUTPUT"
-            echo "Manual dispatch — building unconditionally."
-            exit 0
-          fi
+          {
+            echo "date=${DATE}"
+            echo "build_date=${BUILD_DATE}"
+            echo "short_sha=${SHORT_SHA}"
+            echo "full_sha=${FULL_SHA}"
+            echo "candidate_tag=${CANDIDATE_TAG}"
+          } >> "$GITHUB_OUTPUT"
 
-          if git rev-parse nightly >/dev/null 2>&1; then
-            NIGHTLY_SHA=$(git rev-parse nightly)
-            HEAD_SHA=$(git rev-parse HEAD)
-            if [ "$NIGHTLY_SHA" = "$HEAD_SHA" ]; then
+          if git rev-parse "nightly^{commit}" >/dev/null 2>&1; then
+            NIGHTLY_SHA=$(git rev-parse "nightly^{commit}")
+            if [ "$NIGHTLY_SHA" = "$FULL_SHA" ]; then
               echo "should_build=false" >> "$GITHUB_OUTPUT"
-              echo "No changes since last nightly (${SHORT_SHA}). Skipping."
+              echo "No changes since candidate ${SHORT_SHA}. Skipping."
             else
               echo "should_build=true" >> "$GITHUB_OUTPUT"
               echo "Changes detected (nightly=${NIGHTLY_SHA:0:7} → HEAD=${SHORT_SHA})."
             fi
           else
             echo "should_build=true" >> "$GITHUB_OUTPUT"
-            echo "No previous nightly tag found. Building."
+            echo "No previous nightly candidate found. Building."
           fi
 
   monika-build:
@@ -72,6 +76,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ needs.check-changes.outputs.full_sha }}
 
       - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
 
@@ -87,13 +93,15 @@ jobs:
           file: ./Containerfile
           push: true
           provenance: false
-          tags: ghcr.io/${{ github.repository }}:nightly-${{ matrix.arch }}
+          tags: |
+            ghcr.io/${{ github.repository }}:nightly-${{ matrix.arch }}
+            ghcr.io/${{ github.repository }}:${{ needs.check-changes.outputs.candidate_tag }}-${{ matrix.arch }}
           labels: |
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ needs.check-changes.outputs.full_sha }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.created=${{ needs.check-changes.outputs.build_date }}
           build-args: |
-            MONIKA_BUILD_COMMIT=${{ github.sha }}
+            MONIKA_BUILD_COMMIT=${{ needs.check-changes.outputs.full_sha }}
             MONIKA_BUILD_SOURCE=${{ github.server_url }}/${{ github.repository }}
             MONIKA_BUILD_DATE=${{ needs.check-changes.outputs.build_date }}
           cache-from: type=gha,scope=monika-${{ matrix.arch }}
@@ -112,14 +120,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Create Monika runtime manifest
+      - name: Create immutable Monika runtime manifest
         env:
           IMAGE: ghcr.io/${{ github.repository }}
+          CANDIDATE_TAG: ${{ needs.check-changes.outputs.candidate_tag }}
         run: |
           docker buildx imagetools create \
-            -t "${IMAGE}:nightly" \
-            "${IMAGE}:nightly-amd64" \
-            "${IMAGE}:nightly-arm64"
+            -t "${IMAGE}:${CANDIDATE_TAG}" \
+            "${IMAGE}:${CANDIDATE_TAG}-amd64" \
+            "${IMAGE}:${CANDIDATE_TAG}-arm64"
 
   forum-build:
     needs: check-changes
@@ -135,6 +144,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ needs.check-changes.outputs.full_sha }}
 
       - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
 
@@ -150,13 +161,15 @@ jobs:
           file: ./services/forum/Containerfile
           push: true
           provenance: false
-          tags: ghcr.io/${{ github.repository }}-forum:nightly-${{ matrix.arch }}
+          tags: |
+            ghcr.io/${{ github.repository }}-forum:nightly-${{ matrix.arch }}
+            ghcr.io/${{ github.repository }}-forum:${{ needs.check-changes.outputs.candidate_tag }}-${{ matrix.arch }}
           labels: |
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ needs.check-changes.outputs.full_sha }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.created=${{ needs.check-changes.outputs.build_date }}
           build-args: |
-            MONIKA_BUILD_COMMIT=${{ github.sha }}
+            MONIKA_BUILD_COMMIT=${{ needs.check-changes.outputs.full_sha }}
             MONIKA_BUILD_SOURCE=${{ github.server_url }}/${{ github.repository }}
             MONIKA_BUILD_DATE=${{ needs.check-changes.outputs.build_date }}
           cache-from: type=gha,scope=forum-${{ matrix.arch }}
@@ -175,14 +188,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Create forum manifest
+      - name: Create immutable forum manifest
         env:
           IMAGE: ghcr.io/${{ github.repository }}-forum
+          CANDIDATE_TAG: ${{ needs.check-changes.outputs.candidate_tag }}
         run: |
           docker buildx imagetools create \
-            -t "${IMAGE}:nightly" \
-            "${IMAGE}:nightly-amd64" \
-            "${IMAGE}:nightly-arm64"
+            -t "${IMAGE}:${CANDIDATE_TAG}" \
+            "${IMAGE}:${CANDIDATE_TAG}-amd64" \
+            "${IMAGE}:${CANDIDATE_TAG}-arm64"
 
   release:
     runs-on: ubuntu-latest
@@ -193,6 +207,56 @@ jobs:
       - forum-manifest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ needs.check-changes.outputs.full_sha }}
+
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
+
+      - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish coordinated rolling images
+        id: manifests
+        shell: bash
+        env:
+          MONIKA_IMAGE: ghcr.io/${{ github.repository }}
+          FORUM_IMAGE: ghcr.io/${{ github.repository }}-forum
+          CANDIDATE_TAG: ${{ needs.check-changes.outputs.candidate_tag }}
+        run: |
+          set -euo pipefail
+
+          manifest_digest() {
+            local source=$1
+            local raw
+            raw=$(mktemp)
+            docker buildx imagetools inspect --raw "$source" > "$raw"
+            printf 'sha256:%s' "$(sha256sum "$raw" | awk '{print $1}')"
+            rm -f "$raw"
+          }
+
+          MONIKA_DIGEST=$(manifest_digest "${MONIKA_IMAGE}:${CANDIDATE_TAG}")
+          FORUM_DIGEST=$(manifest_digest "${FORUM_IMAGE}:${CANDIDATE_TAG}")
+
+          docker buildx imagetools inspect "${MONIKA_IMAGE}@${MONIKA_DIGEST}" >/dev/null
+          docker buildx imagetools inspect "${FORUM_IMAGE}@${FORUM_DIGEST}" >/dev/null
+
+          docker buildx imagetools create \
+            -t "${MONIKA_IMAGE}:nightly" \
+            "${MONIKA_IMAGE}@${MONIKA_DIGEST}"
+          docker buildx imagetools create \
+            -t "${FORUM_IMAGE}:nightly" \
+            "${FORUM_IMAGE}@${FORUM_DIGEST}"
+
+          [ "$(manifest_digest "${MONIKA_IMAGE}:nightly")" = "$MONIKA_DIGEST" ]
+          [ "$(manifest_digest "${FORUM_IMAGE}:nightly")" = "$FORUM_DIGEST" ]
+
+          {
+            echo "monika_digest=${MONIKA_DIGEST}"
+            echo "forum_digest=${FORUM_DIGEST}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Delete previous nightly release
         env:
@@ -204,11 +268,23 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DATE: ${{ needs.check-changes.outputs.date }}
           SHORT_SHA: ${{ needs.check-changes.outputs.short_sha }}
+          FULL_SHA: ${{ needs.check-changes.outputs.full_sha }}
+          CANDIDATE_TAG: ${{ needs.check-changes.outputs.candidate_tag }}
+          MONIKA_DIGEST: ${{ steps.manifests.outputs.monika_digest }}
+          FORUM_DIGEST: ${{ steps.manifests.outputs.forum_digest }}
         run: |
+          jq -n \
+            --arg commit "$FULL_SHA" \
+            --arg candidateTag "$CANDIDATE_TAG" \
+            --arg monikaDigest "$MONIKA_DIGEST" \
+            --arg forumDigest "$FORUM_DIGEST" \
+            '{commit: $commit, candidateTag: $candidateTag, monikaDigest: $monikaDigest, forumDigest: $forumDigest}' \
+            > candidate-manifests.json
+
           cat > release-notes.md <<NOTES
           ## Nightly Build — ${DATE}
 
-          **Commit:** [\`${SHORT_SHA}\`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})
+          **Commit:** [\`${SHORT_SHA}\`](${{ github.server_url }}/${{ github.repository }}/commit/${FULL_SHA})
 
           ### Container Images
 
@@ -217,11 +293,17 @@ jobs:
           docker pull ghcr.io/${{ github.repository }}-forum:nightly
           \`\`\`
 
-          These are rolling nightly images built from the latest commit on \`main\`.
+          Immutable candidate images are tagged \`${CANDIDATE_TAG}\`:
+
+          - Monika: \`${MONIKA_DIGEST}\`
+          - Forum: \`${FORUM_DIGEST}\`
+
+          Stable promotion begins only after these coordinated manifests remain
+          current for seven days.
           NOTES
 
-          gh release create nightly \
+          gh release create nightly candidate-manifests.json \
             --title "Nightly Build — ${DATE}" \
             --notes-file release-notes.md \
             --prerelease \
-            --target "${{ github.sha }}"
+            --target "${FULL_SHA}"
