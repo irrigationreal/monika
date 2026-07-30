@@ -223,11 +223,15 @@ branch and marks it as external advancement. A true sibling divergence keeps the
 loaded branch and reports a branch conflict. Before reusing an idle cached
 conversation, agentd performs the same check and reloads it when disk advanced.
 This is a backstop for continuations that bypass the ownership extension.
+
 ## Durable errors and manual compaction
 
 Execution failures and compactions are projected as forum operational events, not
 posts. `topic_operational_events` anchors each event after a real post while keeping
-it out of post numbering, search, pagination counts, and Pi catch-up context. Raw
+it out of post numbering, search, pagination counts, and Pi catch-up context. The
+frontend renders anchored events in a theme-aware inter-post gutter: the gutter
+replaces the normal post separator without moving the event into `.vb-post`, and
+status tokens provide the error or success tone across light and dark themes. Raw
 provider errors follow the trace visibility boundary: authenticated viewers can
 expand the diagnostic text, while unauthenticated readers receive only the neutral
 event summary. Pi JSONL remains authoritative; sync conservatively reconstructs
