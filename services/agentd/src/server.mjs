@@ -13,7 +13,8 @@ import {
   normalizeForumProvenance,
   registerDispatch,
 } from './message-provenance.mjs';
-import { deriveActiveBranchMetadata } from './session-export.mjs';
+import { deriveActiveBranchMetadata, reconcileActiveBranchMetadata } from './session-export.mjs';
+import { SessionOwnershipRegistry } from './session-ownership.mjs';
 import { modelRefreshIntervalMs, startModelCatalogRefresh } from './model-refresh.mjs';
 import {
   createAgentSessionFromServices,
@@ -87,6 +88,34 @@ Files involved:
 [Clear description of what to do next based on user's goal]`;
 
 const conversations = new Map();
+const sessionOperationTails = new Map();
+const sessionOwnership = new SessionOwnershipRegistry({
+  storagePath: process.env.MONIKA_AGENTD_OWNERSHIP_FILE ?? path.join(AGENT_DIR, '.session-ownership-leases.json'),
+});
+
+class SessionOwnershipConflict extends Error {
+  constructor(sessionId, lease) {
+    super(`Pi session ${sessionId} is owned by an interactive CLI session until ${new Date(lease.expiresAtMs).toISOString()}`);
+    this.sessionId = sessionId;
+    this.lease = lease;
+  }
+}
+
+class SessionBranchConflict extends Error {
+  constructor(sessionId, branch) {
+    super(`Pi session ${sessionId} has divergent loaded and persisted branches`);
+    this.sessionId = sessionId;
+    this.branch = branch;
+  }
+}
+
+class SessionExternalAdvance extends Error {
+  constructor(sessionId, branch) {
+    super(`Pi session ${sessionId} advanced outside this loaded agentd runtime; reopen it before dispatching`);
+    this.sessionId = sessionId;
+    this.branch = branch;
+  }
+}
 const conversationModelRefreshes = new WeakMap();
 let draining = false;
 let drainAutoCancelTimer = null;
@@ -191,12 +220,14 @@ async function memstoreDeployState() {
 
 async function deployState() {
   const convs = [...conversations.values()];
-  const active = convs.filter((c) => c.current);
-  const idle = convs.filter((c) => !c.current);
+  const active = convs.filter((c) => c.current || c.pendingMutations > 0);
+  const idle = convs.filter((c) => !c.current && c.pendingMutations === 0);
+  const externalLeases = sessionOwnership.list();
   const memstore = await memstoreDeployState();
   const blockers = [];
   const drainRequired = [];
   if (active.length > 0) blockers.push({ code: 'active_agent_turns', count: active.length });
+  if (externalLeases.length > 0) blockers.push({ code: 'interactive_pi_sessions', count: externalLeases.length });
   if (!memstore.reachable) blockers.push({ code: 'memstore_unreachable' });
   if ((memstore.queue_depth ?? 0) > 0 || memstore.processing) blockers.push({ code: 'memstore_busy', queue_depth: memstore.queue_depth, processing: memstore.processing });
   if (idle.length > 0) drainRequired.push({ code: 'idle_loaded_conversations', count: idle.length });
@@ -207,6 +238,7 @@ async function deployState() {
     active_threads: active.length,
     loaded_conversations: convs.length,
     idle_loaded_conversations: idle.length,
+    interactive_pi_sessions: externalLeases,
     memstore,
     blockers,
     drain_required: drainRequired,
@@ -214,7 +246,7 @@ async function deployState() {
 }
 
 async function closeIdleConversations(reason) {
-  const idle = [...conversations.values()].filter((conv) => !conv.current);
+  const idle = [...conversations.values()].filter((conv) => !conv.current && conv.pendingMutations === 0 && !sessionOwnership.get(conv.piSessionId));
   await Promise.all(idle.map((conv) => closeConversation(conv, reason).catch((err) => {
     console.warn('[agentd] failed to close idle conversation during drain:', err instanceof Error ? err.message : String(err));
   })));
@@ -584,6 +616,8 @@ async function conversationFromRuntime(runtime, cwd) {
     history: [],
     eventSeq: 0,
     current: null,
+    pendingMutations: 0,
+    takeoverPending: false,
     provenanceState: createProvenanceState(),
     unsubscribe: null,
   };
@@ -610,19 +644,50 @@ async function createConversation(opts = {}) {
   return conv;
 }
 
+async function withSessionOperation(sessionId, operation) {
+  const previous = sessionOperationTails.get(sessionId) ?? Promise.resolve();
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const tail = previous.then(() => gate);
+  sessionOperationTails.set(sessionId, tail);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (sessionOperationTails.get(sessionId) === tail) sessionOperationTails.delete(sessionId);
+  }
+}
+
 async function openConversation(opts = {}) {
   const sessionRef = opts.pi_session_id ?? opts.session_id ?? opts.id ?? opts.pi_session_path ?? opts.path;
   if (!sessionRef) throw new Error('pi_session_id or pi_session_path is required');
   const sessionInfo = await findSession(sessionRef);
   if (!sessionInfo) return null;
 
-  for (const conv of conversations.values()) {
-    if (conv.piSessionId === sessionInfo.id || conv.sessionPath === sessionInfo.path) return conv;
-  }
+  return withSessionOperation(sessionInfo.id, async () => {
+    const lease = sessionOwnership.get(sessionInfo.id);
+    if (lease) throw new SessionOwnershipConflict(sessionInfo.id, lease);
 
-  const cwd = path.resolve(opts.cwd ?? sessionInfo.cwd ?? DEFAULT_CWD);
-  const runtime = await createRuntime(cwd, SessionManager.open(sessionInfo.path, undefined, cwd), opts);
-  return conversationFromRuntime(runtime, cwd);
+    for (const conv of conversations.values()) {
+      if (conv.piSessionId !== sessionInfo.id && conv.sessionPath !== sessionInfo.path) continue;
+      const raw = await fs.readFile(sessionInfo.path, 'utf8');
+      const entries = raw.split('\n').filter((line) => line.trim()).flatMap((line) => {
+        try { return [parseSessionLine(line)]; } catch { return []; }
+      });
+      const branch = activeBranchMetadata(sessionInfo, entries);
+      if (branch.branch_conflict) throw new SessionBranchConflict(sessionInfo.id, branch);
+      if (!conv.current && conv.pendingMutations === 0 && branch.external_advance) {
+        await closeConversation(conv, 'external-session-advance');
+        break;
+      }
+      return conv;
+    }
+
+    const cwd = path.resolve(opts.cwd ?? sessionInfo.cwd ?? DEFAULT_CWD);
+    const runtime = await createRuntime(cwd, SessionManager.open(sessionInfo.path, undefined, cwd), opts);
+    return conversationFromRuntime(runtime, cwd);
+  });
 }
 
 function emit(conv, event, data) {
@@ -901,14 +966,14 @@ function activeBranchMetadata(session, entries) {
   if (live) {
     const manager = live.session.sessionManager;
     const leafEntryId = manager.getLeafId?.() ?? manager.getLeafEntry?.()?.id ?? null;
-    return {
+    return reconcileActiveBranchMetadata(entries, {
       leaf_entry_id: leafEntryId,
       active_entry_ids: manager.getBranch().map((entry) => entry.id),
-    };
+    });
   }
   // The last physically appended entry is the leaf restored by SessionManager.open().
   // Derive the path without mutating or rewriting the exported session.
-  return deriveActiveBranchMetadata(entries);
+  return { ...deriveActiveBranchMetadata(entries), source: 'disk' };
 }
 
 function handoffMessagesFromBranch(branch) {
@@ -984,11 +1049,117 @@ async function generateHandoffDraft(conv, opts = {}) {
   };
 }
 
-async function closeConversation(conv, reason = 'api') {
+async function closeConversation(conv, reason = 'api', { emitCompletion = true } = {}) {
   conv.unsubscribe?.();
   await conv.runtime.dispose();
   conversations.delete(conv.id);
-  emit(conv, 'turn_completed', { thread_id: conv.id, closed: true, reason });
+  if (emitCompletion) emit(conv, 'turn_completed', { thread_id: conv.id, closed: true, reason });
+}
+
+function loadedConversationForSession(session) {
+  return [...conversations.values()].find((conv) => conv.piSessionId === session.id || conv.sessionPath === session.path) ?? null;
+}
+
+async function inspectLoadedConversationBranch(conv) {
+  const session = await findSession(conv.piSessionId ?? conv.sessionPath);
+  if (!session) return null;
+  const raw = await fs.readFile(session.path, 'utf8');
+  const entries = raw.split('\n').filter((line) => line.trim()).flatMap((line) => {
+    try { return [parseSessionLine(line)]; } catch { return []; }
+  });
+  return activeBranchMetadata(session, entries);
+}
+
+function ownershipConversationRecord(conv) {
+  return conv ? {
+    id: conv.id,
+    active: Boolean(conv.current || conv.pendingMutations > 0),
+    started_at: conv.current?.startedAt ? new Date(conv.current.startedAt).toISOString() : null,
+    last_activity_at: new Date(conv.lastActivityAt).toISOString(),
+  } : null;
+}
+
+async function claimExternalSession(sessionRef, body) {
+  const session = await findSession(sessionRef);
+  if (!session) return { status: 404, body: { error: 'not_found' } };
+  const clientId = typeof body.client_id === 'string' ? body.client_id.trim() : '';
+  if (!clientId) return { status: 400, body: { error: 'bad_request', message: 'client_id is required' } };
+  const timeoutValue = Number(body.timeout_ms ?? 10_000);
+  const timeoutMs = Number.isFinite(timeoutValue) ? Math.min(30_000, Math.max(1_000, timeoutValue)) : 10_000;
+
+  return withSessionOperation(session.id, async () => {
+    const existingLease = sessionOwnership.get(session.id);
+    if (existingLease && existingLease.clientId !== clientId) {
+      return {
+        status: 409,
+        body: { ok: false, state: 'leased', lease: sessionOwnership.describe(session.id), message: 'Another interactive Pi process owns this session. Wait for it to exit or for its lease to expire.' },
+      };
+    }
+
+    const conv = loadedConversationForSession(session);
+    const takingOver = Boolean(conv && (conv.current || conv.pendingMutations > 0));
+    if (takingOver && !body.takeover && !body.force) {
+      return { status: 409, body: { ok: false, state: 'active', conversation: ownershipConversationRecord(conv) } };
+    }
+
+    let forcedBeforeSettlement = false;
+    if (conv) conv.takeoverPending = true;
+    try {
+      if (conv && takingOver) {
+        emit(conv, 'turn_interrupted', { thread_id: conv.id, reason: 'interactive-cli-takeover' });
+        await conv.session.abort();
+        const deadline = Date.now() + timeoutMs;
+        while ((conv.current || conv.pendingMutations > 0) && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        forcedBeforeSettlement = Boolean(conv.current || conv.pendingMutations > 0);
+        if (forcedBeforeSettlement && !body.force) {
+          conv.takeoverPending = false;
+          return {
+            status: 409,
+            body: { ok: false, state: 'interrupt_timeout', conversation: ownershipConversationRecord(conv), message: 'The forum turn did not settle before takeover.' },
+          };
+        }
+      }
+
+      let evictedIdle = false;
+      if (conv) {
+        if (forcedBeforeSettlement) conv.current = null;
+        await closeConversation(
+          conv,
+          takingOver ? (body.force ? 'forced-cli-takeover' : 'cli-takeover') : 'cli-ownership-claim',
+          { emitCompletion: forcedBeforeSettlement || !takingOver },
+        );
+        // Forced disposal can wake HTTP handlers that were awaiting attachment,
+        // configuration, or prompt work. Keep the operation lock and ownership
+        // fence until every counted mutation has run its finally block.
+        while (conv.pendingMutations > 0) await new Promise((resolve) => setTimeout(resolve, 25));
+        evictedIdle = !takingOver;
+      }
+
+      // Publish ownership only after every agentd runtime capable of writing the
+      // session has been disposed. The per-session operation lock prevents a
+      // concurrent reopen from entering this gap.
+      const claimed = sessionOwnership.claim(session.id, clientId);
+      if (!claimed.ok) {
+        return { status: 409, body: { ok: false, state: 'leased', lease: sessionOwnership.describe(session.id) } };
+      }
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          state: 'claimed',
+          session_id: session.id,
+          lease_token: claimed.lease.token,
+          expires_at: new Date(claimed.lease.expiresAtMs).toISOString(),
+          evicted_idle: evictedIdle,
+        },
+      };
+    } catch (err) {
+      if (conv) conv.takeoverPending = false;
+      throw err;
+    }
+  });
 }
 
 async function exportSession(sessionId) {
@@ -1025,7 +1196,7 @@ const server = http.createServer(async (req, res) => {
     const method = req.method ?? 'GET';
 
     if (method === 'GET' && url.pathname === '/healthz') {
-      return json(res, 200, { ok: true, status: draining ? 'draining' : 'healthy', active_threads: [...conversations.values()].filter((c) => c.current).length, loaded_conversations: conversations.size, idle_reap_enabled: IDLE_REAP_ENABLED, queue_depth: 0, build: buildInfo() });
+      return json(res, 200, { ok: true, status: draining ? 'draining' : 'healthy', active_threads: [...conversations.values()].filter((c) => c.current || c.pendingMutations > 0).length, loaded_conversations: conversations.size, interactive_pi_sessions: sessionOwnership.list().length, idle_reap_enabled: IDLE_REAP_ENABLED, queue_depth: 0, build: buildInfo() });
     }
     if (method === 'GET' && url.pathname === '/v1/admin/quiescence') return json(res, 200, await deployState());
     if (method === 'POST' && url.pathname === '/v1/admin/drain') {
@@ -1048,6 +1219,39 @@ const server = http.createServer(async (req, res) => {
     if (method === 'POST' && url.pathname === '/v1/artifacts/resolve') {
       const body = await readBody(req);
       return json(res, 200, await resolveArtifactForExport(body));
+    }
+
+    const piOwnershipMatch = url.pathname.match(/^\/v1\/pi\/sessions\/([^/]+)\/ownership(?:\/(claim|heartbeat|release))?$/);
+    if (piOwnershipMatch) {
+      const sessionRef = decodeURIComponent(piOwnershipMatch[1]);
+      const action = piOwnershipMatch[2] ?? '';
+      const session = await findSession(sessionRef);
+      if (!session) return notFound(res);
+      if (method === 'GET' && action === '') {
+        const conv = loadedConversationForSession(session);
+        const lease = sessionOwnership.describe(session.id);
+        return json(res, 200, {
+          session_id: session.id,
+          state: lease ? 'leased' : (conv?.current || conv?.pendingMutations > 0) ? 'active' : conv ? 'idle' : 'unloaded',
+          conversation: ownershipConversationRecord(conv),
+          lease,
+        });
+      }
+      if (method === 'POST' && action === 'claim') {
+        const result = await claimExternalSession(session.id, await readBody(req));
+        return json(res, result.status, result.body);
+      }
+      if (method === 'POST' && action === 'heartbeat') {
+        const body = await readBody(req);
+        const lease = sessionOwnership.heartbeat(session.id, body.lease_token);
+        if (!lease) return json(res, 409, { ok: false, state: 'lease_lost' });
+        return json(res, 200, { ok: true, expires_at: new Date(lease.expiresAtMs).toISOString() });
+      }
+      if (method === 'POST' && action === 'release') {
+        const body = await readBody(req);
+        const released = sessionOwnership.release(session.id, body.lease_token);
+        return json(res, released ? 200 : 409, { ok: released, state: released ? 'released' : 'lease_lost' });
+      }
     }
 
     const piExportMatch = url.pathname.match(/^\/v1\/pi\/sessions\/([^/]+)\/export$/);
@@ -1090,9 +1294,20 @@ const server = http.createServer(async (req, res) => {
       if (method === 'GET' && tail === 'history') return json(res, 200, { conversation_id: conv.id, items: conv.history, total: conv.history.length });
       if (method === 'GET' && tail === 'context') return json(res, 200, { conversation_id: conv.id, context: liveContext(conv) });
       if (method === 'PATCH' && tail === '') {
-        const body = await readBody(req);
-        await applySessionConfig(conv, body.config ?? body);
-        return json(res, 200, { conversation: conversationRecord(conv) });
+        if (conv.takeoverPending) return json(res, 409, { error: 'session_takeover_pending' });
+        const lease = sessionOwnership.get(conv.piSessionId);
+        if (lease) throw new SessionOwnershipConflict(conv.piSessionId, lease);
+        conv.pendingMutations += 1;
+        try {
+          const branch = await inspectLoadedConversationBranch(conv);
+          if (branch?.branch_conflict) throw new SessionBranchConflict(conv.piSessionId, branch);
+          if (branch?.external_advance) throw new SessionExternalAdvance(conv.piSessionId, branch);
+          const body = await readBody(req);
+          await applySessionConfig(conv, body.config ?? body);
+          return json(res, 200, { conversation: conversationRecord(conv) });
+        } finally {
+          conv.pendingMutations -= 1;
+        }
       }
       if (method === 'POST' && tail === 'handoff/draft') {
         const body = await readBody(req);
@@ -1111,46 +1326,64 @@ const server = http.createServer(async (req, res) => {
       }
       if (method === 'POST' && tail === 'messages') {
         if (draining) return unavailable(res, 'agentd is draining for deployment');
-        const body = await readBody(req);
-        const messageId = body.message_id ?? randomUUID();
-        const baseText = textFromContent(body.content);
-        const attachmentPrompt = await prepareAttachmentsForPrompt(conv, body.attachments);
-        const text = [baseText, attachmentPrompt.text].filter(Boolean).join('\n\n');
-        const mode = body.mode === 'steer' ? 'steer' : 'queue';
-        let provenance;
+        if (conv.takeoverPending) return json(res, 409, { error: 'session_takeover_pending' });
+        const initialLease = sessionOwnership.get(conv.piSessionId);
+        if (initialLease) throw new SessionOwnershipConflict(conv.piSessionId, initialLease);
+        conv.pendingMutations += 1;
+        let mutationTransferredToPrompt = false;
         try {
-          provenance = normalizeForumProvenance(body.provenance);
-        } catch (err) {
-          return badRequest(res, err instanceof Error ? err.message : String(err));
-        }
-        const config = body.configure ?? body.config ?? {};
-        await applySessionConfig(conv, config);
-        const dispatch = registerDispatch(conv, {
-          turnId: messageId,
-          dispatchMode: mode,
-          text,
-          provenance,
-        });
-        void (async () => {
+          const branch = await inspectLoadedConversationBranch(conv);
+          if (branch?.branch_conflict) throw new SessionBranchConflict(conv.piSessionId, branch);
+          if (branch?.external_advance) throw new SessionExternalAdvance(conv.piSessionId, branch);
+          const body = await readBody(req);
+          const messageId = body.message_id ?? randomUUID();
+          const baseText = textFromContent(body.content);
+          const attachmentPrompt = await prepareAttachmentsForPrompt(conv, body.attachments);
+          const text = [baseText, attachmentPrompt.text].filter(Boolean).join('\n\n');
+          const mode = body.mode === 'steer' ? 'steer' : 'queue';
+          let provenance;
           try {
-            const promptOptions = {
-              source: 'api',
-              streamingBehavior: mode === 'steer' ? 'steer' : 'followUp',
-              preflightResult: (accepted) => { dispatch.accepted = accepted; },
-              ...(attachmentPrompt.images.length > 0 ? { images: attachmentPrompt.images } : {}),
-            };
-            await conv.session.prompt(text, promptOptions);
-            // A handled extension command can resolve without producing a user
-            // message. Queued prompts resolve early but remain streaming here.
-            if (!dispatch.userMessage && !conv.session.isStreaming) discardDispatch(conv, dispatch);
+            provenance = normalizeForumProvenance(body.provenance);
           } catch (err) {
-            dispatch.accepted = false;
-            discardDispatch(conv, dispatch);
-            emit(conv, 'turn_error', { message: err instanceof Error ? err.message : String(err), turn_id: messageId });
-            emit(conv, 'turn_completed', { message_id: messageId, turn_id: messageId, thread_id: conv.id });
+            return badRequest(res, err instanceof Error ? err.message : String(err));
           }
-        })();
-        return json(res, 200, { message_id: messageId, turn_id: messageId, thread_id: conv.id, compacted: false });
+          const config = body.configure ?? body.config ?? {};
+          await applySessionConfig(conv, config);
+          const reservedLease = sessionOwnership.get(conv.piSessionId);
+          if (reservedLease) throw new SessionOwnershipConflict(conv.piSessionId, reservedLease);
+          const dispatch = registerDispatch(conv, {
+            turnId: messageId,
+            dispatchMode: mode,
+            text,
+            provenance,
+          });
+          const promptOptions = {
+            source: 'api',
+            streamingBehavior: mode === 'steer' ? 'steer' : 'followUp',
+            preflightResult: (accepted) => { dispatch.accepted = accepted; },
+            ...(attachmentPrompt.images.length > 0 ? { images: attachmentPrompt.images } : {}),
+          };
+          const promptPromise = conv.session.prompt(text, promptOptions);
+          mutationTransferredToPrompt = true;
+          void (async () => {
+            try {
+              await promptPromise;
+              // A handled extension command can resolve without producing a user
+              // message. Queued prompts resolve early but remain streaming here.
+              if (!dispatch.userMessage && !conv.session.isStreaming) discardDispatch(conv, dispatch);
+            } catch (err) {
+              dispatch.accepted = false;
+              discardDispatch(conv, dispatch);
+              emit(conv, 'turn_error', { message: err instanceof Error ? err.message : String(err), turn_id: messageId });
+              emit(conv, 'turn_completed', { message_id: messageId, turn_id: messageId, thread_id: conv.id });
+            } finally {
+              conv.pendingMutations -= 1;
+            }
+          })();
+          return json(res, 200, { message_id: messageId, turn_id: messageId, thread_id: conv.id, compacted: false });
+        } finally {
+          if (!mutationTransferredToPrompt) conv.pendingMutations -= 1;
+        }
       }
       if (method === 'POST' && tail === 'interrupt') {
         await conv.session.abort();
@@ -1173,6 +1406,30 @@ const server = http.createServer(async (req, res) => {
     return notFound(res);
   } catch (err) {
     if (err instanceof SyntaxError) return badRequest(res, err.message);
+    if (err instanceof SessionOwnershipConflict) {
+      return json(res, 409, {
+        error: 'session_owned_by_cli',
+        session_id: err.sessionId,
+        lease: sessionOwnership.describe(err.sessionId),
+        message: err.message,
+      });
+    }
+    if (err instanceof SessionBranchConflict) {
+      return json(res, 409, {
+        error: 'session_branch_conflict',
+        session_id: err.sessionId,
+        active_branch: err.branch,
+        message: err.message,
+      });
+    }
+    if (err instanceof SessionExternalAdvance) {
+      return json(res, 409, {
+        error: 'session_external_advance',
+        session_id: err.sessionId,
+        active_branch: err.branch,
+        message: err.message,
+      });
+    }
     console.error('[agentd]', err);
     return serverError(res, err);
   }
@@ -1183,7 +1440,7 @@ function startIdleReaper() {
   const interval = setInterval(() => {
     const now = Date.now();
     for (const conv of [...conversations.values()]) {
-      if (conv.current) continue;
+      if (conv.current || conv.pendingMutations > 0 || sessionOwnership.get(conv.piSessionId)) continue;
       if (now - conv.lastActivityAt < IDLE_REAP_MS) continue;
       closeConversation(conv, 'idle-reap').catch((err) => console.warn('[agentd] idle reap failed:', err instanceof Error ? err.message : String(err)));
     }

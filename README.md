@@ -73,7 +73,14 @@ Monika container.
 
 Interactive Pi sessions retain Pi's normal project-trust prompts. Their decisions
 are persisted at `runtime/data/pi-agent-trust/trust.json` and linked into the
-image-owned agent directory at startup. Pi's `models-store.json` cache is likewise
+image-owned agent directory at startup. A bundled ownership extension integrates
+with Pi's normal `/resume` selector: before an interactive TUI continues a
+forum-linked session, agentd relinquishes an idle cached runtime or offers an
+explicit interrupt-and-takeover flow for an active forum turn. Renewable leases
+prevent agentd and the TUI from writing the same canonical JSONL concurrently and
+also defer runtime redeployment until the interactive session exits. See
+[`docs/forum.md`](docs/forum.md#interactive-pi-ownership) for the protocol.
+Pi's `models-store.json` cache is likewise
 persisted under `runtime/data/pi-agent-models/`; agentd refreshes authenticated
 built-in provider catalogs from `pi.dev` in the background every four hours by
 default. Set `MONIKA_AGENTD_MODEL_REFRESH_MS=0` to disable network refresh. This

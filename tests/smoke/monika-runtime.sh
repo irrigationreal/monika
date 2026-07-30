@@ -310,6 +310,28 @@ if (terminalText !== 'OK') {
 }
 console.log('✓ real Pi model round trip accepted all extension tool schemas');
 
+const ownershipPath = `/v1/pi/sessions/${encodeURIComponent(conversation.session_id)}/ownership`;
+const claimed = await request('POST', `${ownershipPath}/claim`, { client_id: 'runtime-smoke-cli' });
+if (claimed.state !== 'claimed' || !claimed.lease_token || claimed.evicted_idle !== true) {
+  throw new Error(`interactive ownership claim did not evict the idle runtime: ${JSON.stringify(claimed)}`);
+}
+const leasedQuiescence = await request('GET', '/v1/admin/quiescence');
+if (!leasedQuiescence.blockers?.some?.((blocker) => blocker.code === 'interactive_pi_sessions')) {
+  throw new Error(`interactive Pi lease did not block deployment: ${JSON.stringify(leasedQuiescence)}`);
+}
+const blockedOpen = await fetch(base + '/v1/conversations/open', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ pi_session_id: conversation.session_id }),
+});
+if (blockedOpen.status !== 409) {
+  throw new Error(`agentd reopened a CLI-owned session: ${blockedOpen.status} ${await blockedOpen.text()}`);
+}
+await request('POST', `${ownershipPath}/heartbeat`, { lease_token: claimed.lease_token });
+await request('POST', `${ownershipPath}/release`, { lease_token: claimed.lease_token });
+await request('POST', '/v1/conversations/open', { pi_session_id: conversation.session_id });
+console.log('✓ interactive Pi ownership evicts idle agentd, fences reopen, heartbeats, and blocks deploy');
+
 const loaded = await request('GET', '/v1/admin/quiescence');
 if (loaded.status === 'blocked') {
   throw new Error(`agentd unexpectedly blocked before drain: ${JSON.stringify(loaded)}`);
