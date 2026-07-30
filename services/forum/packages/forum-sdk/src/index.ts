@@ -79,7 +79,10 @@ import type {
   PiSyncHealthDto,
   PiSyncRunResponseDto,
   TopicSubscriptionDto,
-  TopicUnreadDto
+  TopicUnreadDto,
+  TopicOperationalEventDto,
+  CreateCompactionRequestDto,
+  CompactionOperationDto
 } from '@irrigationreal/codex-forum-contracts';
 
 import type { ForumApi } from '@irrigationreal/codex-forum-contracts';
@@ -165,6 +168,9 @@ export type {
   PiSyncRunResponseDto,
   TopicSubscriptionDto,
   TopicUnreadDto,
+  TopicOperationalEventDto,
+  CreateCompactionRequestDto,
+  CompactionOperationDto,
   ForumApi
 };
 
@@ -728,6 +734,12 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
       json<TopicDto>(`/topics/${topicId}/tags`, { method: 'PATCH', body: JSON.stringify({ sticky }) }),
     deleteTopic: (topicId: string) =>
       json<{ ok: boolean }>(`/topics/${topicId}`, { method: 'DELETE' }),
+    listOperationalEvents: (topicId: string) =>
+      json<{ items: TopicOperationalEventDto[] }>(`/topics/${topicId}/operational-events`),
+    compactTopic: (topicId: string, payload: CreateCompactionRequestDto) =>
+      json<CompactionOperationDto>(`/topics/${topicId}/compactions`, { method: 'POST', body: JSON.stringify(payload) }),
+    getCompaction: (topicId: string, operationId: string) =>
+      json<CompactionOperationDto>(`/topics/${topicId}/compactions/${operationId}`),
     listPosts: (topicId: string, opts?: { page?: number; pageSize?: number; include?: string[] | string }) => {
       const params = new URLSearchParams();
       if (opts?.page) params.set('page', String(opts.page));

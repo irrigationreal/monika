@@ -811,6 +811,32 @@ export const apiRoutes: ApiRoute[] = [
     response: { schema: okSchema }
   },
 
+  // Operational timeline and maintenance
+  {
+    method: 'get',
+    path: '/topics/{topicId}/operational-events',
+    summary: 'List durable topic operational events',
+    tags: ['topics'],
+    request: { params: stringParam('topicId') },
+    response: { schema: itemsSchema(schemas.TopicOperationalEventDtoSchema) }
+  },
+  {
+    method: 'post',
+    path: '/topics/{topicId}/compactions',
+    summary: 'Compact a linked idle Pi conversation',
+    tags: ['topics'],
+    request: { params: stringParam('topicId'), body: { schema: schemas.CreateCompactionRequestSchema } },
+    response: { schema: schemas.CompactionOperationDtoSchema }
+  },
+  {
+    method: 'get',
+    path: '/topics/{topicId}/compactions/{operationId}',
+    summary: 'Get a durable compaction operation',
+    tags: ['topics'],
+    request: { params: z.object({ topicId: z.string(), operationId: z.string() }) },
+    response: { schema: schemas.CompactionOperationDtoSchema }
+  },
+
   // Posts
   {
     method: 'get',

@@ -10,6 +10,8 @@ import type {
   AccessRuleScopeKind,
   CreatePostInput,
   CreateTopicInput,
+  CompactionOperation,
+  TopicOperationalEvent,
   ForumListOptions,
   ForumStatus,
   ForumVisibility,
@@ -26,6 +28,7 @@ import type {
   ChatCategoryRow,
   ChatMessageRow,
   ChatRoomRow,
+  CompactionOperationRow,
   ExternalIdentityRow,
   ExternalRefRow,
   ForumRow,
@@ -52,12 +55,14 @@ import type {
   ToolRunRow,
   TopicAutoRunRow,
   TopicMoveRow,
+  TopicOperationalEventRow,
   TopicReadRow,
   TopicRow,
   TopicSubscriptionRow,
   UserFileRow,
   WebhookRow,
 } from './db';
+import { mapCompactionOperationRowToDomain, mapTopicOperationalEventRowToDomain } from './mappers/db';
 
 const ACCESS_TOKEN_TTL_DAYS = 7;
 const REFRESH_TOKEN_TTL_DAYS = 30;
@@ -308,6 +313,28 @@ export interface UpdateRobotStateInput {
   model?: string | null;
   reasoningEffort?: string | null;
   currentPlanId?: string | null;
+}
+
+export interface CreateTopicOperationalEventInput {
+  topicId: string;
+  anchorPostId?: string | null;
+  type: TopicOperationalEvent['type'];
+  category: TopicOperationalEvent['category'];
+  status: TopicOperationalEvent['status'];
+  summary: string;
+  detail?: Record<string, unknown> | null;
+  sourceKind: TopicOperationalEvent['sourceKind'];
+  sourceId: string;
+}
+
+export interface CreateCompactionOperationInput {
+  id: string;
+  topicId: string;
+  sessionId: string;
+  initiatedBy: string;
+  expectedLeafId: string;
+  customInstructions?: string | null;
+  recoveryPrompt: string;
 }
 
 export interface CreatePostDispatchInput {
@@ -2109,6 +2136,120 @@ export class ForumStore {
   getToolRun(toolRunId: string): ToolRunRow | null {
     const row = this.db.prepare('select * from tool_runs where id = ?').get(toolRunId) as ToolRunRow | undefined;
     return row ?? null;
+  }
+
+  createTopicOperationalEvent(input: CreateTopicOperationalEventInput): TopicOperationalEvent {
+    const existing = this.db
+      .prepare('select * from topic_operational_events where source_kind = ? and source_id = ?')
+      .get(input.sourceKind, input.sourceId) as TopicOperationalEventRow | undefined;
+    if (existing) return mapTopicOperationalEventRowToDomain(existing);
+    const id = randomUUID();
+    this.db.prepare(
+      `insert into topic_operational_events
+       (id, topic_id, anchor_post_id, event_type, category, status, summary, detail_json, source_kind, source_id, created_at)
+       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(id, input.topicId, input.anchorPostId ?? null, input.type, input.category, input.status,
+      input.summary, input.detail ? JSON.stringify(input.detail) : null, input.sourceKind, input.sourceId, nowIso());
+    return mapTopicOperationalEventRowToDomain(
+      this.db.prepare('select * from topic_operational_events where id = ?').get(id) as TopicOperationalEventRow
+    );
+  }
+
+  listTopicOperationalEvents(topicId: string): TopicOperationalEvent[] {
+    return (this.db.prepare(
+      'select * from topic_operational_events where topic_id = ? order by created_at asc, id asc'
+    ).all(topicId) as TopicOperationalEventRow[]).map(mapTopicOperationalEventRowToDomain);
+  }
+
+  createCompactionOperation(input: CreateCompactionOperationInput): CompactionOperation {
+    const existing = this.getCompactionOperation(input.id);
+    if (existing) return existing;
+    const now = nowIso();
+    this.db.prepare(
+      `insert into compaction_operations
+       (id, topic_id, session_id, initiated_by, expected_leaf_id, custom_instructions, recovery_prompt,
+        status, event_id, recovery_post_id, error_message, created_at, started_at, finished_at)
+       values (?, ?, ?, ?, ?, ?, ?, 'pending', null, null, null, ?, null, null)`
+    ).run(input.id, input.topicId, input.sessionId, input.initiatedBy, input.expectedLeafId,
+      input.customInstructions ?? null, input.recoveryPrompt, now);
+    return this.getCompactionOperation(input.id) as CompactionOperation;
+  }
+
+  getCompactionOperation(id: string): CompactionOperation | null {
+    const row = this.db.prepare('select * from compaction_operations where id = ?').get(id) as CompactionOperationRow | undefined;
+    return row ? mapCompactionOperationRowToDomain(row) : null;
+  }
+
+  claimCompactionOperation(id: string): CompactionOperation | null {
+    const now = nowIso();
+    const result = this.db.prepare(
+      `update compaction_operations set status = 'running', started_at = ? where id = ? and status = 'pending'`
+    ).run(now, id);
+    return result.changes === 1 ? this.getCompactionOperation(id) : null;
+  }
+
+  getPiSessionHead(piSessionId: string): string | null {
+    const row = this.db.prepare('select leaf_entry_id from pi_session_heads where pi_session_id = ?')
+      .get(piSessionId) as { leaf_entry_id: string | null } | undefined;
+    return row?.leaf_entry_id ?? null;
+  }
+
+  finishCompactionFailure(id: string, message: string): CompactionOperation {
+    return this.db.transaction(() => {
+      const operation = this.getCompactionOperation(id);
+      if (operation?.status !== 'running') throw new Error('compaction operation is not running');
+      const event = this.createTopicOperationalEvent({
+        topicId: operation.topicId,
+        anchorPostId: this.getLatestPostId(operation.topicId),
+        type: 'compaction', category: 'maintenance', status: 'failed',
+        summary: 'Conversation compaction failed.', detail: { error: message.slice(0, 4000) },
+        sourceKind: 'compaction_operation', sourceId: operation.id,
+      });
+      const now = nowIso();
+      this.db.prepare(
+        `update compaction_operations set status = 'failed', event_id = ?, error_message = ?, finished_at = ? where id = ? and status = 'running'`
+      ).run(event.id, message.slice(0, 1000), now, id);
+      const completed = this.getCompactionOperation(id);
+      if (!completed) throw new Error('compaction operation disappeared after failure');
+      return completed;
+    })();
+  }
+
+  finishCompactionSuccess(id: string): CompactionOperation {
+    return this.db.transaction(() => {
+      const operation = this.getCompactionOperation(id);
+      if (operation?.status !== 'running') throw new Error('compaction operation is not running');
+      const anchorPostId = this.getLatestPostId(operation.topicId);
+      const postId = randomUUID();
+      const now = nowIso();
+      this.db.prepare(
+        `insert into posts (id, topic_id, tenant_id, parent_post_id, author_id, body, source_message_id, silent, created_at, edited_at, deleted_at)
+         values (?, ?, null, null, ?, ?, null, 0, ?, null, null)`
+      ).run(postId, operation.topicId, operation.initiatedBy, operation.recoveryPrompt, now);
+      this.db.prepare(
+        `insert into post_dispatches
+         (id, topic_id, post_id, session_id, status, mode, model, reasoning_effort, attempt_count,
+          last_attempt_at, next_attempt_at, dispatched_at, error_message, created_at, updated_at)
+         values (?, ?, ?, ?, 'pending', 'auto', null, null, 0, null, ?, null, null, ?, ?)`
+      ).run(randomUUID(), operation.topicId, postId, operation.sessionId, now, now, now);
+      const event = this.createTopicOperationalEvent({
+        topicId: operation.topicId, anchorPostId,
+        type: 'compaction', category: 'maintenance', status: 'succeeded',
+        summary: 'Conversation context was compacted.',
+        detail: { expectedLeafId: operation.expectedLeafId, recoveryPostId: postId },
+        sourceKind: 'compaction_operation', sourceId: operation.id,
+      });
+      this.db.prepare(
+        `update compaction_operations set status = 'succeeded', event_id = ?, recovery_post_id = ?, finished_at = ?
+         where id = ? and status = 'running'`
+      ).run(event.id, postId, now, id);
+      this.invalidateTopicStatsCache(operation.topicId);
+      const topic = this.getTopic(operation.topicId);
+      if (topic) this.invalidateForumStatsCache(topic.forum_id);
+      const completed = this.getCompactionOperation(id);
+      if (!completed) throw new Error('compaction operation disappeared after success');
+      return completed;
+    })();
   }
 
   createPostDispatch(input: CreatePostDispatchInput): PostDispatchRow {

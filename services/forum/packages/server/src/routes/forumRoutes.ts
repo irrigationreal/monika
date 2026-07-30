@@ -5,7 +5,10 @@ import type { ForumStore } from '../store';
 import type { WebhookService } from '../services/webhookService';
 import type { StreamBusInterface } from '../streamBus';
 import type { PostDispatchService } from '../services/postDispatchService';
+import { CompactionConflictError, CompactionNotFoundError, type CompactionService } from '../services/compactionService';
 import type { AccessHelpers } from '../utils/access';
+import { CreateCompactionRequestSchema } from '@irrigationreal/codex-forum-contracts';
+import { mapCompactionOperationToDto, mapTopicOperationalEventToDto } from '../mappers/dto';
 import { serializePost, serializeTopic } from '../utils/serializers';
 
 export function registerForumRoutes({
@@ -16,6 +19,7 @@ export function registerForumRoutes({
   webhookService,
   bus,
   postDispatchService,
+  compactionService,
   access,
   webIdentityId
 }: {
@@ -26,6 +30,7 @@ export function registerForumRoutes({
   webhookService: WebhookService;
   bus: StreamBusInterface;
   postDispatchService?: Pick<PostDispatchService, 'wake'>;
+  compactionService?: CompactionService;
   access: AccessHelpers;
   webIdentityId: string;
 }): void {
@@ -396,6 +401,47 @@ export function registerForumRoutes({
       throw app.httpErrors.notFound('topic not found');
     }
     return serializeTopicWithPiLineage(topic);
+  });
+
+  app.get('/topics/:topicId/operational-events', async (request) => {
+    const { topicId } = request.params as { topicId: string };
+    requireTopicVisible(topicId, request);
+    const includeDetail = Boolean(getIdentityFromRequest(request));
+    return { items: store.listTopicOperationalEvents(topicId).map((event) => mapTopicOperationalEventToDto(event, includeDetail)) };
+  });
+
+  app.post('/topics/:topicId/compactions', async (request) => {
+    const user = requireAdmin(request);
+    const { topicId } = request.params as { topicId: string };
+    requireTopicVisible(topicId, request);
+    if (!compactionService) throw app.httpErrors.serviceUnavailable('Compaction service is unavailable');
+    const parsed = CreateCompactionRequestSchema.safeParse(request.body);
+    if (!parsed.success) throw app.httpErrors.badRequest(parsed.error.issues[0]?.message ?? 'Invalid compaction request');
+    try {
+      return mapCompactionOperationToDto(await compactionService.compact({
+        operationId: parsed.data.operationId,
+        topicId,
+        initiatedBy: user.identityId,
+        customInstructions: parsed.data.customInstructions,
+        recoveryPrompt: parsed.data.recoveryPrompt,
+      }));
+    } catch (error) {
+      if (error instanceof CompactionConflictError) throw app.httpErrors.conflict(error.message);
+      throw error;
+    }
+  });
+
+  app.get('/topics/:topicId/compactions/:operationId', async (request) => {
+    requireAdmin(request);
+    const { topicId, operationId } = request.params as { topicId: string; operationId: string };
+    requireTopicVisible(topicId, request);
+    if (!compactionService) throw app.httpErrors.serviceUnavailable('Compaction service is unavailable');
+    try {
+      return mapCompactionOperationToDto(compactionService.get(topicId, operationId));
+    } catch (error) {
+      if (error instanceof CompactionNotFoundError) throw app.httpErrors.notFound(error.message);
+      throw error;
+    }
   });
 
   app.post('/topics/:topicId/handoff/draft', async (request) => {

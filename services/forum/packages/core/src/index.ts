@@ -4,6 +4,7 @@ export * from './domain/events';
 export * from './domain/surfaces';
 export * from './domain/mentions';
 export * from './domain/access';
+export * from './domain/operationalEvents';
 export * from './domain/dispatchPolicy';
 export * from './state/robot';
 export * from './interfaces/repositories';

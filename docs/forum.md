@@ -111,6 +111,7 @@ Implemented endpoints:
 - `GET /v1/conversations/:id/events`
 - `POST /v1/conversations/:id/messages`
 - `POST /v1/conversations/:id/interrupt`
+- `POST /v1/conversations/:id/compact` (idle-only manual Pi compaction with optimistic leaf validation)
 - `POST /v1/conversations/:id/close`
 - `POST /v1/conversations/:id/handoff/draft`
 - `POST /v1/conversations/:id/memory/save` currently returns 501 until Pi exposes
@@ -219,6 +220,38 @@ branch and marks it as external advancement. A true sibling divergence keeps the
 loaded branch and reports a branch conflict. Before reusing an idle cached
 conversation, agentd performs the same check and reloads it when disk advanced.
 This is a backstop for continuations that bypass the ownership extension.
+## Durable errors and manual compaction
+
+Execution failures and compactions are projected as forum operational events, not
+posts. `topic_operational_events` anchors each event after a real post while keeping
+it out of post numbering, search, pagination counts, and Pi catch-up context. Raw
+provider errors follow the trace visibility boundary: authenticated viewers can
+expand the diagnostic text, while unauthenticated readers receive only the neutral
+event summary. Pi JSONL remains authoritative; sync conservatively reconstructs
+historical terminal errors from the active branch and ignores failed attempts that
+Pi later recovered through retry or compact-and-retry.
+
+Admins can choose **Compact** beside **Handoff** while a topic is idle. The forum
+creates a durable compaction operation and calls agentd with the expected canonical
+Pi leaf. Agentd rejects busy or stale sessions and invokes Pi's public
+`AgentSession.compact()` API. Expected-leaf validation makes a lost HTTP response
+retry-safe: an existing compaction child proves that the operation already happened,
+so agentd does not compact twice. Automatic compaction remains disabled by runtime
+policy.
+
+After successful compaction, the forum atomically creates a user-attributed automated
+recovery-checkpoint post and queues it through the normal durable post dispatcher.
+The default prompt asks the assistant to restate goals, completed work, current work,
+remaining steps, blockers, and possibly lost details without doing further work. If
+compaction fails, the forum records a durable failure event and creates no recovery
+post. If later dispatch fails, the existing post-dispatch retry path retries only the
+checkpoint turn; it never repeats compaction.
+
+Forum endpoints:
+
+- `GET /api/topics/:topicId/operational-events`
+- `POST /api/topics/:topicId/compactions` (admin only)
+- `GET /api/topics/:topicId/compactions/:operationId` (admin only)
 
 ## Pi session taxonomy configuration
 
@@ -368,7 +401,7 @@ Preferred outbound upload flow:
   `[forum-attachment id="..."]` reference to include in the final response.
 - Forum route `POST /api/agent/topics/:topicId/pending-attachments` requires
   that shared token via `x-internal-token` (preferred) or `Authorization: Bearer
-  ...` (compatibility), then stores the file in forum upload storage as a pending
+...` (compatibility), then stores the file in forum upload storage as a pending
   attachment with SHA-256 and TTL. If the server token is unset, the route returns
   a configuration error instead of accepting unauthenticated uploads.
 - Robot post persistence consumes standalone `[forum-attachment id="..."]` lines
@@ -376,7 +409,6 @@ Preferred outbound upload flow:
   normal attachments, and strips the reference line from the rendered body.
 - Legacy `[artifact ...]` markers are also consumed only as standalone lines
   outside fenced code blocks.
-
 
 ## Live trace and saved trace architecture
 
@@ -430,14 +462,14 @@ Pi SDK events → agentd (server.mjs) → echsBridge (forum server) → SSE bus 
 
 Key events emitted to the browser SSE stream:
 
-| Event | Source | Purpose |
-|---|---|---|
-| `state` | echsBridge.emitState() | Full robot state snapshot including `recentToolRuns` (last 20) |
-| `reasoning_delta` | Pi thinking_delta → agentd → echsBridge | Incremental reasoning/thinking text |
-| `assistant_delta` | Pi text_delta → agentd turn_delta → echsBridge | Incremental visible assistant text |
-| `tool_started` | echsBridge item_started handler | Per-tool notification when a tool run is created |
-| `assistant_reset` | echsBridge.dispatchUserMessage() | Start of new response (reason: `new_turn`) or interrupt (reason: `interrupted`) |
-| `assistant_message` | echsBridge turn_completed handler | Response done; final text committed as a post |
+| Event               | Source                                         | Purpose                                                                         |
+| ------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------- |
+| `state`             | echsBridge.emitState()                         | Full robot state snapshot including `recentToolRuns` (last 20)                  |
+| `reasoning_delta`   | Pi thinking_delta → agentd → echsBridge        | Incremental reasoning/thinking text                                             |
+| `assistant_delta`   | Pi text_delta → agentd turn_delta → echsBridge | Incremental visible assistant text                                              |
+| `tool_started`      | echsBridge item_started handler                | Per-tool notification when a tool run is created                                |
+| `assistant_reset`   | echsBridge.dispatchUserMessage()               | Start of new response (reason: `new_turn`) or interrupt (reason: `interrupted`) |
+| `assistant_message` | echsBridge turn_completed handler              | Response done; final text committed as a post                                   |
 
 agentd does not translate Pi's `agent_end` directly into `turn_completed`. An agent
 run may still retry, compact and retry, or process a queued continuation after that
@@ -454,9 +486,9 @@ rendered, it never moves — new content only appears at the tail.
 
 ```typescript
 type TraceSegment =
-  | { kind: 'reasoning'; text: string }
-  | { kind: 'assistant_text'; text: string }
-  | { kind: 'tool'; toolRunId: string };
+  | { kind: "reasoning"; text: string }
+  | { kind: "assistant_text"; text: string }
+  | { kind: "tool"; toolRunId: string };
 ```
 
 `committedSegments` is an ordered array of frozen segments. `reasoningDraft` and
@@ -582,15 +614,18 @@ stages where data can be lost or misordered. Use these debug techniques:
 
 **Server-side SSE capture:** Capture the raw SSE stream to see what events the
 server actually sends:
+
 ```bash
 TOKEN=$(curl -s .../api/auth/login -d '...' | python3 -c '...')
 timeout 30 curl -sN ".../api/topics/$TOPIC/state/stream" \
   -H "Authorization: Bearer $TOKEN" | grep '^event:'
 ```
+
 Verify `tool_started` events appear between `state` events, and that
 `assistant_delta` bursts arrive between tool events.
 
 **Client-side console logging:** Add temporary `console.warn` in:
+
 - `syncToolActivity` — verify tools are added/updated in `activityLog`
 - `tool_started` handler — verify segments are committed
 - `liveTurnItems` computed — verify items are produced (log count + types)
@@ -598,6 +633,7 @@ Verify `tool_started` events appear between `state` events, and that
 - `resetRobotActivity` — add `new Error().stack` to identify the caller
 
 **Common patterns:**
+
 - Items produced but not rendered → Vue reactivity issue (check immutable updates)
 - `tool_started` not firing → SSE stream not connected or wrong topic
 - Tools "updated" but never "added NEW" → tools already in `activityLog` from

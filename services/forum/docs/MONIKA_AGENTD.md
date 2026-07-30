@@ -1,7 +1,7 @@
 # Monika agentd forum backend
 
-The forum talks to Monika through `agentd` in the `monika` container. Pi remains
-canonical; the forum database is a projection/metadata store.
+The forum talks to Monika through `agentd` in the `monika` container. Pi remains canonical; the forum database is a
+projection/metadata store.
 
 Current deployment assumptions:
 
@@ -12,8 +12,8 @@ CODEX_FORUM_UPLOADS_DIR=/forum/uploads
 CODEX_WORK_DIR=/workspace
 ```
 
-Use the repository-level `compose.yaml.example` as the deployment template. Copy it
-to ignored `compose.yaml` and run Docker Compose from the repo root:
+Use the repository-level `compose.yaml.example` as the deployment template. Copy it to ignored `compose.yaml` and run
+Docker Compose from the repo root:
 
 ```bash
 cp compose.yaml.example compose.yaml
@@ -48,3 +48,15 @@ Key event types for live trace rendering:
 in real time, while `state.recentToolRuns` arrives batched with all tools already
 present. Client-side checkpoint recording must use `tool_started`, not
 `recentToolRuns` diffing.
+
+## Errors and manual compaction
+
+Agentd reports terminal Pi provider failures as `turn_error` only after
+`agent_settled`; failed attempts that Pi successfully retries are not terminal forum
+errors. The forum persists terminal failures as operational timeline events.
+
+Manual compaction uses `POST /v1/conversations/:id/compact` with an operation ID and
+expected Pi leaf ID. Agentd accepts it only while fully idle and calls Pi's public
+`AgentSession.compact()` API. The forum's admin-only workflow then creates and
+dispatches a user-attributed recovery-checkpoint post. See `docs/forum.md` for full
+persistence, visibility, and failure semantics.

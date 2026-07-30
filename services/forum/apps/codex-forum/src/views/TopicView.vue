@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router';
 
 import DecryptText from '../components/DecryptText.vue';
 import LiveAssistantTurn from '../components/LiveAssistantTurn.vue';
+import OperationalEventBar from '../components/OperationalEventBar.vue';
 import PostTracePanel from '../components/PostTracePanel.vue';
 import ToolMiniView from '../components/ToolMiniView.vue';
 import { useForumState } from '../composables/useForumState';
@@ -16,11 +17,13 @@ import { toolHumanTitle } from '../lib/toolTimeline';
 import type { RobotActivityEvent } from '../composables/useForumState';
 import type {
   AttachmentDto,
+  CompactionOperationDto,
   ForumDto,
   PostDto,
   RobotPersonaDto,
   SessionInspectorDto,
   ToolRunDto,
+  TopicOperationalEventDto,
 } from '../lib/apiClient';
 import type { ReasoningStep } from '../lib/reasoning';
 
@@ -40,6 +43,13 @@ type LiveTurnItem = {
 
 const { renderContent, renderBBCode } = useMarkdown();
 const apiAny = api as any;
+const compactionApi = api as unknown as {
+  compactTopic(
+    topicId: string,
+    payload: { operationId: string; confirmation: 'COMPACT'; customInstructions: string | null; recoveryPrompt: string }
+  ): Promise<CompactionOperationDto>;
+  getCompaction(topicId: string, operationId: string): Promise<CompactionOperationDto>;
+};
 
 const route = useRoute();
 const router = useRouter();
@@ -117,6 +127,29 @@ const handoffDestinationForumId = ref('');
 const handoffCwdOverride = ref('');
 const handoffOverrideCwd = ref(false);
 
+const DEFAULT_RECOVERY_PROMPT = `This session was manually compacted before this message. Before doing any further work, restate:
+
+1. the current goal,
+2. work already completed,
+3. work currently in progress,
+4. remaining steps,
+5. blockers, uncertainties, or details that may have been lost.
+
+Do not perform additional work in this response. This is a context-recovery checkpoint.`;
+const showCompactionModal = ref(false);
+const showCompactionAdvanced = ref(false);
+const compactionRecoveryPrompt = ref(DEFAULT_RECOVERY_PROMPT);
+const compactionInstructions = ref('');
+const compactionConfirmed = ref(false);
+const compactionOperation = ref<CompactionOperationDto | null>(null);
+const compactionError = ref('');
+const compactionActive = computed(
+  () => compactionOperation.value?.status === 'pending' || compactionOperation.value?.status === 'running'
+);
+const canCompact = computed(
+  () => isAdmin.value && !isRobotBusy.value && !state.isTopicLocked() && !compactionActive.value
+);
+
 const autoRun = computed(() => state.topicAutoRun.value);
 const showAutoRunPanel = computed(() => isAdmin.value && showAdminPanel.value && Boolean(routeTopicId.value));
 const showRobotStatePanel = computed(() => isAdmin.value && topicRobotMode.value && topicRobotMode.value !== 'off');
@@ -133,6 +166,119 @@ const autoRunModelOptions = computed(() => {
 });
 const showAutoRunReasoning = computed(() => state.modelSupportsReasoning(autoRunModel.value));
 const autoRunReasoningOptions = computed(() => state.modelReasoningOptions(autoRunModel.value));
+
+function operationalEventsAfter(postId: string): TopicOperationalEventDto[] {
+  return state.operationalEvents.value
+    .filter((event) => event.anchorPostId === postId)
+    .slice()
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+const unanchoredOperationalEvents = computed(() =>
+  state.operationalEvents.value
+    .filter((event) => !event.anchorPostId)
+    .slice()
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+);
+
+function isRecoveryCheckpoint(postId: string): boolean {
+  return state.operationalEvents.value.some(
+    (event) =>
+      event.type === 'compaction' && event.status === 'succeeded' && event.detail?.['recoveryPostId'] === postId
+  );
+}
+
+function openCompactionModal(): void {
+  if (!canCompact.value) return;
+  showCompactionModal.value = true;
+  showCompactionAdvanced.value = false;
+  compactionRecoveryPrompt.value = DEFAULT_RECOVERY_PROMPT;
+  compactionInstructions.value = '';
+  compactionConfirmed.value = false;
+  compactionOperation.value = null;
+  compactionError.value = '';
+}
+
+function closeCompactionModal(): void {
+  if (compactionActive.value) return;
+  showCompactionModal.value = false;
+}
+
+async function awaitCompaction(topicId: string, operation: CompactionOperationDto): Promise<CompactionOperationDto> {
+  let current = operation;
+  while (current.status === 'pending' || current.status === 'running') {
+    await new Promise((resolve) => window.setTimeout(resolve, 500));
+    current = await compactionApi.getCompaction(topicId, current.id);
+    compactionOperation.value = current;
+  }
+  return current;
+}
+
+async function submitCompaction(): Promise<void> {
+  const topicId = routeTopicId.value;
+  if (!topicId || !canCompact.value) return;
+  if (!compactionConfirmed.value) {
+    compactionError.value = 'Confirm that you understand this permanently replaces older context with a summary.';
+    return;
+  }
+  if (!compactionRecoveryPrompt.value.trim()) {
+    compactionError.value = 'Recovery prompt is required.';
+    return;
+  }
+
+  compactionError.value = '';
+  compactionOperation.value = {
+    id: crypto.randomUUID(),
+    topicId,
+    sessionId: '',
+    initiatedBy: '',
+    expectedLeafId: '',
+    customInstructions: null,
+    recoveryPrompt: compactionRecoveryPrompt.value.trim(),
+    status: 'pending',
+    eventId: null,
+    recoveryPostId: null,
+    errorMessage: null,
+    createdAt: new Date().toISOString(),
+    startedAt: null,
+    finishedAt: null,
+  };
+  try {
+    const started = await compactionApi.compactTopic(topicId, {
+      operationId: compactionOperation.value.id,
+      confirmation: 'COMPACT',
+      customInstructions: compactionInstructions.value.trim() ? compactionInstructions.value.trim() : null,
+      recoveryPrompt: compactionRecoveryPrompt.value.trim(),
+    });
+    const completed = await awaitCompaction(topicId, started);
+    compactionOperation.value = completed;
+    await Promise.all([
+      state.loadPosts(topicId),
+      state.loadOperationalEvents(topicId),
+      state.loadState(topicId, { reconstructTrace: false }),
+    ]);
+    await Promise.all([
+      state.loadAttachmentsForPosts(state.posts.value.map((post) => post.id)),
+      state.loadSessionInspector(),
+    ]);
+    if (completed.status === 'failed') {
+      compactionError.value = completed.errorMessage || 'Compaction failed.';
+      return;
+    }
+    showCompactionModal.value = false;
+  } catch (err) {
+    compactionError.value = err instanceof Error ? err.message : 'Compaction failed.';
+    const status = compactionOperation.value.status;
+    if (status === 'pending' || status === 'running') {
+      compactionOperation.value = {
+        ...compactionOperation.value,
+        status: 'failed',
+        errorMessage: compactionError.value,
+      };
+    }
+    await state.loadOperationalEvents(topicId).catch(() => undefined);
+  }
+}
 
 function normalizeReasoning(model: string, reasoning: string): string {
   const options = state.modelReasoningOptions(model);
@@ -1570,6 +1716,80 @@ onUnmounted(() => {
     </div>
   </div>
 
+
+  <div v-if="showCompactionModal" class="vb-modal-overlay" @click.self="closeCompactionModal">
+    <div class="vb-modal vb-compaction-modal">
+      <div class="vb-modal-header">
+        <span>Compact Session and Recover</span>
+        <button class="vb-modal-close" type="button" :disabled="compactionActive" @click="closeCompactionModal">
+          &times;
+        </button>
+      </div>
+      <div class="vb-modal-body">
+        <p class="vb-delete-warning">
+          <strong>This permanently replaces older session context with an AI-generated summary.</strong>
+          Exact wording, tool output, and details may be lost. The operation cannot be undone, and a recovery checkpoint
+          will be posted immediately afterward so the assistant can state what survived.
+        </p>
+        <label class="vb-inline-check vb-compaction-confirm">
+          <input v-model="compactionConfirmed" type="checkbox" :disabled="compactionActive" />
+          <span>I understand that compaction is destructive and may lose context.</span>
+        </label>
+        <button
+          class="vb-small-btn"
+          type="button"
+          :disabled="compactionActive"
+          @click="showCompactionAdvanced = !showCompactionAdvanced"
+        >
+          {{ showCompactionAdvanced ? 'Hide advanced options' : 'Advanced options' }}
+        </button>
+        <div v-if="showCompactionAdvanced" class="vb-compaction-advanced">
+          <label for="compaction-recovery-prompt">Editable recovery prompt</label>
+          <textarea
+            id="compaction-recovery-prompt"
+            v-model="compactionRecoveryPrompt"
+            rows="10"
+            class="vb-modal-textarea"
+            :disabled="compactionActive"
+          ></textarea>
+          <label for="compaction-summary-instructions">Custom summary instructions (optional)</label>
+          <textarea
+            id="compaction-summary-instructions"
+            v-model="compactionInstructions"
+            rows="4"
+            class="vb-modal-textarea"
+            :disabled="compactionActive"
+            placeholder="Emphasize particular decisions, files, or unresolved work in the compaction summary."
+          ></textarea>
+        </div>
+        <div v-if="compactionActive" class="vb-note" role="status">
+          Compacting the canonical Pi session and preparing the recovery checkpoint…
+        </div>
+        <div v-if="compactionError" class="vb-error vb-compaction-error" role="alert">
+          <strong>Compaction failed:</strong> {{ compactionError }}
+        </div>
+        <div class="vb-modal-actions">
+          <button
+            class="vb-btn vb-btn-danger"
+            type="button"
+            :disabled="!canCompact || !compactionConfirmed"
+            @click="submitCompaction"
+          >
+            {{ compactionActive ? 'Compacting…' : 'Compact and recover' }}
+          </button>
+          <button
+            class="vb-btn vb-btn-secondary"
+            type="button"
+            :disabled="compactionActive"
+            @click="closeCompactionModal"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <section class="vb-section">
     <div class="vb-thread-titlebar">
       <div class="vb-thread-icon" aria-hidden="true"></div>
@@ -1603,6 +1823,7 @@ onUnmounted(() => {
           Post Reply
         </button>
         <button class="vb-btn" :disabled="state.loading.value || state.isTopicLocked()" @click="openHandoffModal">Handoff</button>
+        <button v-if="isAdmin" class="vb-btn" :disabled="!canCompact" @click="openCompactionModal">Compact</button>
         <button class="vb-btn" @click="goHome">Back to Forum</button>
       </div>
       <div class="vb-pagination-controls">
@@ -1840,9 +2061,18 @@ onUnmounted(() => {
 
       <div v-if="threadSearchQuery && filteredPosts.length === 0" class="vb-empty">No posts match your search.</div>
 
+      <OperationalEventBar
+        v-for="event in unanchoredOperationalEvents"
+        v-show="!threadSearchQuery"
+        :key="event.id"
+        :event="event"
+        :can-recover="isAdmin"
+        :recover-disabled="!canCompact"
+        @recover="openCompactionModal"
+      />
+
+      <template v-for="(post, idx) in threadSearchQuery ? filteredPosts : state.currentPosts.value" :key="post.id">
       <div
-        v-for="(post, idx) in threadSearchQuery ? filteredPosts : state.currentPosts.value"
-        :key="post.id"
         class="vb-post"
         :id="String(postNumberForPostId(post.id) ?? postNumberForIndex(idx))"
       >
@@ -1879,6 +2109,7 @@ onUnmounted(() => {
 
               <div class="vb-post-heading">
                 <span>{{ state.selectedTopic.value?.title }}</span>
+                <span v-if="isRecoveryCheckpoint(post.id)" class="vb-recovery-checkpoint-badge">Automated recovery checkpoint</span>
                 <button
                   v-if="state.isRobotPost(post)"
                   class="vb-tts-inline"
@@ -2011,6 +2242,7 @@ onUnmounted(() => {
               />
               <div class="vb-post-heading">
                 <span>{{ state.selectedTopic.value?.title }}</span>
+                <span v-if="isRecoveryCheckpoint(post.id)" class="vb-recovery-checkpoint-badge">Automated recovery checkpoint</span>
                 <button
                   v-if="state.isRobotPost(post)"
                   class="vb-tts-inline"
@@ -2126,6 +2358,15 @@ onUnmounted(() => {
           <button class="vb-small-btn" @click="cancelDelete">Cancel</button>
         </div>
       </div>
+      <OperationalEventBar
+        v-for="event in operationalEventsAfter(post.id)"
+        :key="event.id"
+        :event="event"
+        :can-recover="isAdmin"
+        :recover-disabled="!canCompact"
+        @recover="openCompactionModal"
+      />
+      </template>
 
       <LiveAssistantTurn
         v-if="showDetailedLiveTraceOnCurrentPage"
@@ -2161,6 +2402,7 @@ onUnmounted(() => {
           Post Reply
         </button>
         <button class="vb-btn" :disabled="state.loading.value || state.isTopicLocked()" @click="openHandoffModal">Handoff</button>
+        <button v-if="isAdmin" class="vb-btn" :disabled="!canCompact" @click="openCompactionModal">Compact</button>
         <button class="vb-btn" @click="goHome">Back to Forum</button>
       </div>
       <div class="vb-pagination-controls">

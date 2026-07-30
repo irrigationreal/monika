@@ -5,6 +5,7 @@ import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
 import { existsSync, readFileSync, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { handlePiEvent } from './pi-event-bridge.mjs';
+import { compactConversation, ConversationConflictError } from './compaction-operation.mjs';
 import {
   createProvenanceState,
   discardDispatch,
@@ -163,6 +164,13 @@ function json(res, status, body) {
 
 function notFound(res) { json(res, 404, { error: 'not_found' }); }
 function badRequest(res, message) { json(res, 400, { error: 'bad_request', message }); }
+function conflict(res, err) {
+  json(res, 409, {
+    error: err.code ?? 'conflict',
+    message: err.message,
+    ...(err.details && typeof err.details === 'object' ? err.details : {}),
+  });
+}
 function serverError(res, err) { json(res, 500, { error: 'internal_error', message: err instanceof Error ? err.message : String(err) }); }
 
 function unavailable(res, message) { json(res, 503, { error: 'unavailable', message }); }
@@ -929,7 +937,8 @@ function contextFromEntries(entries, registry = null) {
 function liveContext(conv) {
   const usage = conv.session.getContextUsage?.();
   const model = conv.session.model;
-  return { model: model ? model.provider + '/' + model.id : null, provider: model?.provider ?? null, modelId: model?.id ?? null, thinkingLevel: conv.session.thinkingLevel ?? null, contextWindowTokens: usage?.contextWindow ?? model?.contextWindow ?? null, usedTokens: usage?.tokens ?? null, remainingTokens: usage?.tokens != null && usage?.contextWindow ? Math.max(0, usage.contextWindow - usage.tokens) : null, percent: usage?.percent ?? null, exact: false, source: usage?.tokens != null ? 'pi-runtime-estimate' : 'unavailable', asOfPiMessageId: null };
+  const leafEntryId = conv.session.sessionManager.getLeafId?.() ?? conv.session.sessionManager.getLeafEntry?.()?.id ?? null;
+  return { model: model ? model.provider + '/' + model.id : null, provider: model?.provider ?? null, modelId: model?.id ?? null, thinkingLevel: conv.session.thinkingLevel ?? null, contextWindowTokens: usage?.contextWindow ?? model?.contextWindow ?? null, usedTokens: usage?.tokens ?? null, remainingTokens: usage?.tokens != null && usage?.contextWindow ? Math.max(0, usage.contextWindow - usage.tokens) : null, percent: usage?.percent ?? null, exact: false, source: usage?.tokens != null ? 'pi-runtime-estimate' : 'unavailable', asOfPiMessageId: null, leafEntryId };
 }
 
 async function resolveParentSessionPath(opts = {}) {
@@ -1312,6 +1321,16 @@ const server = http.createServer(async (req, res) => {
       if (method === 'POST' && tail === 'handoff/draft') {
         const body = await readBody(req);
         return json(res, 200, await generateHandoffDraft(conv, body));
+      }
+      if (method === 'POST' && tail === 'compact') {
+        const body = await readBody(req);
+        try {
+          return json(res, 200, await compactConversation(conv, body));
+        } catch (err) {
+          if (err instanceof ConversationConflictError) return conflict(res, err);
+          if (err instanceof TypeError) return badRequest(res, err.message);
+          throw err;
+        }
       }
       if (method === 'GET' && tail === 'events') {
         res.writeHead(200, {

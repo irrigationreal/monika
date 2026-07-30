@@ -69,6 +69,12 @@
                           "supportsReasoning": {
                             "type": "boolean"
                           },
+                          "supportedThinkingLevels": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
                           "supportsTools": {
                             "type": "boolean"
                           },
@@ -2916,6 +2922,366 @@
                     "createdBy",
                     "createdAt",
                     "updatedAt"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/topics/{topicId}/operational-events": {
+      "get": {
+        "tags": [
+          "topics"
+        ],
+        "summary": "List durable topic operational events",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "topicId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "topicId": {
+                            "type": "string"
+                          },
+                          "anchorPostId": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "type": {
+                            "type": "string",
+                            "enum": [
+                              "turn_error",
+                              "compaction"
+                            ]
+                          },
+                          "category": {
+                            "type": "string",
+                            "enum": [
+                              "assistant",
+                              "maintenance"
+                            ]
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "failed",
+                              "succeeded"
+                            ]
+                          },
+                          "summary": {
+                            "type": "string"
+                          },
+                          "detail": {
+                            "type": "object",
+                            "nullable": true,
+                            "additionalProperties": {
+                              "nullable": true
+                            }
+                          },
+                          "sourceKind": {
+                            "type": "string",
+                            "enum": [
+                              "echs_turn",
+                              "compaction_operation"
+                            ]
+                          },
+                          "sourceId": {
+                            "type": "string"
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "topicId",
+                          "anchorPostId",
+                          "type",
+                          "category",
+                          "status",
+                          "summary",
+                          "detail",
+                          "sourceKind",
+                          "sourceId",
+                          "createdAt"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/topics/{topicId}/compactions": {
+      "post": {
+        "tags": [
+          "topics"
+        ],
+        "summary": "Compact a linked idle Pi conversation",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "topicId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "confirmation": {
+                    "type": "string",
+                    "enum": [
+                      "COMPACT"
+                    ]
+                  },
+                  "customInstructions": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 20000
+                  },
+                  "recoveryPrompt": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100000
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "confirmation",
+                  "customInstructions",
+                  "recoveryPrompt"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "topicId": {
+                      "type": "string"
+                    },
+                    "sessionId": {
+                      "type": "string"
+                    },
+                    "initiatedBy": {
+                      "type": "string"
+                    },
+                    "expectedLeafId": {
+                      "type": "string"
+                    },
+                    "customInstructions": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "recoveryPrompt": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "running",
+                        "succeeded",
+                        "failed"
+                      ]
+                    },
+                    "eventId": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "recoveryPostId": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "errorMessage": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "createdAt": {
+                      "type": "string"
+                    },
+                    "startedAt": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "finishedAt": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "topicId",
+                    "sessionId",
+                    "initiatedBy",
+                    "expectedLeafId",
+                    "customInstructions",
+                    "recoveryPrompt",
+                    "status",
+                    "eventId",
+                    "recoveryPostId",
+                    "errorMessage",
+                    "createdAt",
+                    "startedAt",
+                    "finishedAt"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/topics/{topicId}/compactions/{operationId}": {
+      "get": {
+        "tags": [
+          "topics"
+        ],
+        "summary": "Get a durable compaction operation",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "topicId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "operationId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "topicId": {
+                      "type": "string"
+                    },
+                    "sessionId": {
+                      "type": "string"
+                    },
+                    "initiatedBy": {
+                      "type": "string"
+                    },
+                    "expectedLeafId": {
+                      "type": "string"
+                    },
+                    "customInstructions": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "recoveryPrompt": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "running",
+                        "succeeded",
+                        "failed"
+                      ]
+                    },
+                    "eventId": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "recoveryPostId": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "errorMessage": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "createdAt": {
+                      "type": "string"
+                    },
+                    "startedAt": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "finishedAt": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "topicId",
+                    "sessionId",
+                    "initiatedBy",
+                    "expectedLeafId",
+                    "customInstructions",
+                    "recoveryPrompt",
+                    "status",
+                    "eventId",
+                    "recoveryPostId",
+                    "errorMessage",
+                    "createdAt",
+                    "startedAt",
+                    "finishedAt"
                   ]
                 }
               }

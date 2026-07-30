@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { handlePiEvent } from '../src/pi-event-bridge.mjs';
+import { classifyProviderError, handlePiEvent } from '../src/pi-event-bridge.mjs';
 
 function harness() {
   const events = [];
@@ -46,6 +46,73 @@ test('normal agent run completes only after agent_settled', () => {
     thread_id: 'conversation-1',
   });
   assert.equal(conv.current, null);
+});
+
+test('terminal provider failure emits one standardized error at settlement without completion', () => {
+  const { conv, events, dispatch } = harness();
+
+  dispatch({ type: 'agent_start' });
+  dispatch({
+    type: 'message_end',
+    message: { role: 'assistant', stopReason: 'error', errorMessage: '429 rate limit exceeded' },
+  });
+  conv.current.piMessageId = 'pi-error-1';
+  conv.current.userMappings = [{ turn_id: 'forum-turn-1', user_pi_message_id: 'pi-user-1' }];
+
+  assert.equal(events.some(({ event }) => event === 'turn_error'), false);
+  dispatch({ type: 'agent_settled' });
+  dispatch({ type: 'agent_settled' });
+
+  assert.deepEqual(events.filter(({ event }) => event === 'turn_error'), [{
+    event: 'turn_error',
+    data: {
+      error: '429 rate limit exceeded',
+      category: 'rate_limit',
+      turn_id: 'forum-turn-1',
+      pi_message_id: 'pi-error-1',
+      thread_id: 'conversation-1',
+    },
+  }]);
+  assert.equal(events.some(({ event }) => event === 'turn_completed'), false);
+  assert.equal(events.some(({ event }) => event === 'item_completed'), false);
+  assert.equal(conv.current, null);
+});
+
+test('a successful retry clears the prior provider failure', () => {
+  const { events, dispatch } = harness();
+
+  dispatch({ type: 'agent_start' });
+  dispatch({
+    type: 'message_end',
+    message: { role: 'assistant', stopReason: 'error', errorMessage: 'service unavailable' },
+  });
+  dispatch({ type: 'agent_end', messages: [] });
+  dispatch({ type: 'agent_start' });
+  dispatch({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'Recovered' } });
+  dispatch({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop', content: 'Recovered' } });
+  dispatch({ type: 'agent_end', messages: [{ role: 'assistant', content: 'Recovered' }] });
+  dispatch({ type: 'agent_settled' });
+
+  assert.equal(events.some(({ event }) => event === 'turn_error'), false);
+  assert.equal(events.filter(({ event }) => event === 'turn_completed').length, 1);
+  assert.equal(events.find(({ event }) => event === 'item_completed').data.item.content[0].text, 'Recovered');
+});
+
+test('provider error categories are conservative', () => {
+  assert.equal(classifyProviderError('maximum context length exceeded'), 'context_overflow');
+  assert.equal(classifyProviderError('HTTP 429: too many requests'), 'rate_limit');
+  assert.equal(classifyProviderError('401 unauthorized: invalid API key'), 'authentication');
+  assert.equal(classifyProviderError('403 Forbidden'), 'authentication');
+  assert.equal(classifyProviderError('upstream service unavailable'), 'provider');
+  assert.equal(classifyProviderError('Something peculiar happened'), 'unknown');
+});
+
+test('compaction lifecycle is forwarded without creating a turn', () => {
+  const { events, dispatch } = harness();
+  dispatch({ type: 'compaction_start', reason: 'manual' });
+  dispatch({ type: 'compaction_end', reason: 'manual', aborted: false, willRetry: false, result: { tokensBefore: 42 } });
+  assert.deepEqual(events.map(({ event }) => event), ['compaction_start', 'compaction_end']);
+  assert.equal(events[1].data.result.tokensBefore, 42);
 });
 
 test('retry or continuation does not create an early or duplicate completion', () => {

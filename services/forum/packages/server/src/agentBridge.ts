@@ -165,6 +165,17 @@ export class AgentBridge {
     return this.echs.generateHandoffDraft(topicId, opts);
   }
 
+  async getTopicCompactionLeaf(topicId: string): Promise<string | null> {
+    return this.echs.getTopicCompactionLeaf(topicId);
+  }
+
+  async compactTopicConversation(
+    topicId: string,
+    opts: { operationId: string; expectedLeafId: string; customInstructions?: string | null }
+  ): Promise<Record<string, unknown>> {
+    return this.echs.compactTopicConversation(topicId, opts);
+  }
+
   async createLinkedHandoffConversation(
     topicId: string,
     opts: {

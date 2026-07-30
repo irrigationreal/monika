@@ -30,6 +30,21 @@ function extractUsage(messages) {
   return null;
 }
 
+export function classifyProviderError(error) {
+  const text = String(error ?? '').toLowerCase();
+  if (/context (?:length|window)|maximum context|context limit|too many tokens|prompt (?:is )?too long|token limit/.test(text)) {
+    return 'context_overflow';
+  }
+  if (/\brate[ -]?limit|\btoo many requests\b|\b429\b|quota exceeded/.test(text)) return 'rate_limit';
+  if (/\bauthentication\b|\bunauthorized\b|\bforbidden\b|invalid (?:api )?key|api key.*(?:invalid|missing)|\b40[13]\b/.test(text)) {
+    return 'authentication';
+  }
+  if (/\bprovider\b|\bupstream\b|service unavailable|temporarily unavailable|overloaded|internal server error|\b50[0234]\b/.test(text)) {
+    return 'provider';
+  }
+  return 'unknown';
+}
+
 /**
  * Translate Pi SDK lifecycle events into agentd's stable forum-facing event
  * protocol. agent_end is not a durable completion boundary: Pi may still retry,
@@ -50,6 +65,7 @@ export function handlePiEvent(conv, event, emit, createId = randomUUID) {
           startedAt: Date.now(),
           completionText: '',
           usage: null,
+          terminalError: null,
         };
         emit(conv, 'turn_started', { message_id: messageId, thread_id: conv.id });
       }
@@ -100,6 +116,18 @@ export function handlePiEvent(conv, event, emit, createId = randomUUID) {
       });
       break;
     }
+    case 'message_end': {
+      if (!conv.current || event.message?.role !== 'assistant') break;
+      if (event.message.stopReason === 'error') {
+        conv.current.terminalError = String(event.message.errorMessage ?? 'Provider request failed');
+      } else {
+        // A later successful assistant response means Pi recovered the prior
+        // provider failure through retry/compaction. Only the terminal attempt
+        // is user-visible as an error.
+        conv.current.terminalError = null;
+      }
+      break;
+    }
     case 'agent_end': {
       if (conv.current) {
         conv.current.completionText = conv.current.text || extractLastAssistantText(event.messages);
@@ -107,9 +135,33 @@ export function handlePiEvent(conv, event, emit, createId = randomUUID) {
       }
       break;
     }
+    case 'compaction_start':
+      emit(conv, 'compaction_start', { reason: event.reason, thread_id: conv.id });
+      break;
+    case 'compaction_end':
+      emit(conv, 'compaction_end', {
+        reason: event.reason,
+        aborted: Boolean(event.aborted),
+        will_retry: Boolean(event.willRetry),
+        error: event.errorMessage ?? null,
+        result: event.result ?? null,
+        thread_id: conv.id,
+      });
+      break;
     case 'agent_settled': {
       if (!conv.current) break;
-      const { completionText, text, usage, messageId, piMessageId, userMappings = [] } = conv.current;
+      const { completionText, text, usage, messageId, piMessageId, userMappings = [], terminalError } = conv.current;
+      if (terminalError) {
+        emit(conv, 'turn_error', {
+          error: terminalError,
+          category: classifyProviderError(terminalError),
+          turn_id: userMappings.length === 1 ? userMappings[0].turn_id : (messageId ?? null),
+          pi_message_id: piMessageId ?? null,
+          thread_id: conv.id,
+        });
+        conv.current = null;
+        break;
+      }
       const finalText = completionText || text;
       if (finalText && finalText.trim()) {
         emit(conv, 'item_completed', {
@@ -132,8 +184,5 @@ export function handlePiEvent(conv, event, emit, createId = randomUUID) {
       conv.current = null;
       break;
     }
-    case 'agent_error':
-      emit(conv, 'turn_error', { message: event.error?.message ?? String(event.error ?? 'agent error') });
-      break;
   }
 }

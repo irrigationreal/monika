@@ -24,6 +24,7 @@ import type {
   SessionInspectorDto,
   TopicAutoRunDto,
   TopicDto,
+  TopicOperationalEventDto,
 } from '../lib/apiClient';
 import type { ReasoningStep } from '../lib/reasoning';
 
@@ -38,6 +39,7 @@ const topics = ref<TopicDto[]>([]);
 const selectedForumId = ref<string | null>(null);
 const selectedTopic = ref<TopicDto | null>(null);
 const posts = ref<PostDto[]>([]);
+const operationalEvents = ref<TopicOperationalEventDto[]>([]);
 const recentPosts = ref<RecentPostDto[]>([]);
 const forumLeaders = ref<ForumLeaderDto[]>([]);
 const forumLeadersLoading = ref(false);
@@ -121,6 +123,9 @@ const showLoginModal = ref(false);
 const dateFilter = ref<'day' | '2days' | 'week' | 'beginning'>('beginning');
 
 const { setTheme } = useTheme();
+const operationalEventApi = api as unknown as {
+  listOperationalEvents(topicId: string): Promise<{ items: TopicOperationalEventDto[] }>;
+};
 
 let stream: EventSource | null = null;
 let activePlanId: string | null = null;
@@ -667,6 +672,12 @@ export function useForumState() {
     posts.value = res.items;
   }
 
+  async function loadOperationalEvents(topicId: string): Promise<void> {
+    const res = await operationalEventApi.listOperationalEvents(topicId);
+    if (!isActiveTopic(topicId)) return;
+    operationalEvents.value = res.items;
+  }
+
   async function loadIdentities(topicId: string): Promise<void> {
     const res = await api.listIdentities(topicId);
     if (!isActiveTopic(topicId)) return;
@@ -938,6 +949,9 @@ export function useForumState() {
         resetRobotActivity();
       }
     });
+    stream.addEventListener('assistant_error', () => {
+      if (isActiveTopic(topicId)) void loadOperationalEvents(topicId);
+    });
     stream.addEventListener('assistant_message', () => {
       if (assistantMessagePending) return;
       assistantMessagePending = true;
@@ -1037,7 +1051,7 @@ export function useForumState() {
     if (!hydrateState) {
       resetTopicState();
     }
-    await Promise.all([loadPosts(topic.id), loadIdentities(topic.id), loadRobotPersonas(topic.id)]);
+    await Promise.all([loadPosts(topic.id), loadOperationalEvents(topic.id), loadIdentities(topic.id), loadRobotPersonas(topic.id)]);
     await loadAttachmentsForPosts(posts.value.map((post) => post.id));
     if (!isActiveTopic(topic.id) || loadId !== topicLoadCounter) {
       return;
@@ -1076,6 +1090,7 @@ export function useForumState() {
   function clearTopic(): void {
     selectedTopic.value = null;
     posts.value = [];
+    operationalEvents.value = [];
     identities.value = {};
     robotPersonas.value = {};
     sessionInfo.value = null;
@@ -1454,6 +1469,7 @@ export function useForumState() {
     selectedTopic,
     selectedTopicId,
     posts,
+    operationalEvents,
     recentPosts,
     forumLeaders,
     forumLeadersLoading,
@@ -1530,6 +1546,7 @@ export function useForumState() {
     loadForumLeaders,
     loadTopics,
     loadPosts,
+    loadOperationalEvents,
     loadIdentities,
     loadRobotPersonas,
     loadState,

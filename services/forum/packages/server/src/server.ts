@@ -82,6 +82,7 @@ import { AutoRunDirector } from './services/autoRunDirector';
 import { getEmailService } from './services/emailService';
 import { PiSessionSyncService } from './services/piSessionSyncService';
 import { PostDispatchService } from './services/postDispatchService';
+import { CompactionService } from './services/compactionService';
 import { WebhookService } from './services/webhookService';
 import { ForumStore } from './store';
 import { RedisStreamBus, createStreamBus } from './streamBus';
@@ -264,6 +265,7 @@ const postDispatchService = new PostDispatchService(store, codex, {
   maxConcurrent: Math.max(1, Math.min(10, MAX_CONCURRENT_TURNS)),
 });
 postDispatchService.start();
+const compactionService = new CompactionService(store, codex, postDispatchService);
 
 const piSessionSync = MONIKA_PI_SYNC_ENABLED
   ? new PiSessionSyncService(db, {
@@ -466,6 +468,7 @@ const registerApiRoutes: FastifyPluginAsync = async (api) => {
     webhookService,
     bus,
     postDispatchService,
+    compactionService,
     access,
     webIdentityId: bootstrapResult.webIdentityId,
   });

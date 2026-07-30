@@ -77,6 +77,9 @@ import type {
   RobotQueueItemDto,
   RobotSettingsDto,
   RobotStateDto,
+  TopicOperationalEventDto,
+  CreateCompactionRequestDto,
+  CompactionOperationDto,
   SearchResultsDto,
   SessionDto,
   SessionInspectorDto,
@@ -572,6 +575,44 @@ export const ToolRunDtoSchema: z.ZodType<ToolRunDto> = z.object({
   outputSummary: optionalNullableString,
   redactionsApplied: z.boolean(),
   visibility: ToolRunVisibilitySchema
+});
+
+export const TopicOperationalEventDtoSchema: z.ZodType<TopicOperationalEventDto> = z.object({
+  id: z.string(),
+  topicId: z.string(),
+  anchorPostId: z.string().nullable(),
+  type: z.enum(['turn_error', 'compaction']),
+  category: z.enum(['assistant', 'maintenance']),
+  status: z.enum(['failed', 'succeeded']),
+  summary: z.string(),
+  detail: z.record(z.string(), z.unknown()).nullable(),
+  sourceKind: z.enum(['echs_turn', 'compaction_operation']),
+  sourceId: z.string(),
+  createdAt: z.string()
+});
+
+export const CreateCompactionRequestSchema: z.ZodType<CreateCompactionRequestDto> = z.object({
+  operationId: z.string().min(1).max(200),
+  confirmation: z.literal('COMPACT'),
+  customInstructions: z.string().max(20_000).nullable(),
+  recoveryPrompt: z.string().trim().min(1).max(100_000)
+});
+
+export const CompactionOperationDtoSchema: z.ZodType<CompactionOperationDto> = z.object({
+  id: z.string(),
+  topicId: z.string(),
+  sessionId: z.string(),
+  initiatedBy: z.string(),
+  expectedLeafId: z.string(),
+  customInstructions: z.string().nullable(),
+  recoveryPrompt: z.string(),
+  status: z.enum(['pending', 'running', 'succeeded', 'failed']),
+  eventId: z.string().nullable(),
+  recoveryPostId: z.string().nullable(),
+  errorMessage: z.string().nullable(),
+  createdAt: z.string(),
+  startedAt: z.string().nullable(),
+  finishedAt: z.string().nullable()
 });
 
 export const RobotStateDtoSchema: z.ZodType<RobotStateDto> = z.object({
