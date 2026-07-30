@@ -417,6 +417,45 @@ export interface ToolRunDto {
   visibility: 'public' | 'internal' | 'private';
 }
 
+export interface TopicOperationalEventDto {
+  id: string;
+  topicId: string;
+  anchorPostId: string | null;
+  type: 'turn_error' | 'compaction';
+  category: 'assistant' | 'maintenance';
+  status: 'failed' | 'succeeded';
+  summary: string;
+  /** Authenticated viewers only; null is a deliberate public redaction. */
+  detail: Record<string, unknown> | null;
+  sourceKind: 'echs_turn' | 'compaction_operation';
+  sourceId: string;
+  createdAt: string;
+}
+
+export interface CreateCompactionRequestDto {
+  operationId: string;
+  confirmation: 'COMPACT';
+  customInstructions: string | null;
+  recoveryPrompt: string;
+}
+
+export interface CompactionOperationDto {
+  id: string;
+  topicId: string;
+  sessionId: string;
+  initiatedBy: string;
+  expectedLeafId: string;
+  customInstructions: string | null;
+  recoveryPrompt: string;
+  status: 'pending' | 'running' | 'succeeded' | 'failed';
+  eventId: string | null;
+  recoveryPostId: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
 export interface RobotStateDto {
   topicId: string;
   sessionId: string;

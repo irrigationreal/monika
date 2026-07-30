@@ -656,6 +656,22 @@ export class EchsBridge {
     });
   }
 
+  async getTopicCompactionLeaf(topicId: string): Promise<string | null> {
+    const opened = await this.openTopicConversation(topicId);
+    const response = await this.client.getConversationContext(opened.conversationId);
+    const context = (response as any)?.context ?? response;
+    return typeof context?.leafEntryId === 'string' ? context.leafEntryId : null;
+  }
+
+  async compactTopicConversation(topicId: string, opts: {
+    operationId: string;
+    expectedLeafId: string;
+    customInstructions?: string | null;
+  }): Promise<Record<string, unknown>> {
+    const opened = await this.openTopicConversation(topicId);
+    return this.client.compactConversation(opened.conversationId, opts);
+  }
+
   async createLinkedHandoffConversation(topicId: string, opts: {
     parentPiSessionId?: string | null;
     parentPiSessionPath?: string | null;
@@ -1886,21 +1902,39 @@ export class EchsBridge {
       }
       case 'turn_error': {
         const data = event.data as any;
-        const errorValue = data?.error ?? 'unknown error';
+        const errorValue = data?.error ?? data?.message ?? 'unknown error';
         const errorMsg = typeof errorValue === 'string' ? errorValue : safeJson(errorValue);
         console.error(`[ECHS] turn_error topic=${ctx.topicId} thread=${threadId} error=${errorMsg}`);
         const failedTurnId = ctx.currentTurnId;
         ctx.currentTurnId = null;
         ctx.turnStartedAt = null;
+        const anchorPostId = ctx.turnParentPostId ?? ctx.lastUserPostId ?? null;
         this.store.setRobotTurnError(ctx.topicId, {
           message: errorMsg,
-          postId: ctx.turnParentPostId ?? ctx.lastUserPostId ?? null,
+          postId: anchorPostId,
           turnId: failedTurnId,
+        });
+        const operationalEvent = this.store.createTopicOperationalEvent({
+          topicId: ctx.topicId,
+          anchorPostId,
+          type: 'turn_error',
+          category: 'assistant',
+          status: 'failed',
+          summary: 'Assistant response failed.',
+          detail: {
+            error: errorMsg,
+            category: typeof data?.category === 'string' ? data.category : 'unknown',
+            threadId,
+            turnId: data?.turn_id ?? failedTurnId,
+            piMessageId: data?.pi_message_id ?? null,
+          },
+          sourceKind: 'echs_turn',
+          sourceId: data?.pi_message_id ?? data?.turn_id ?? event.id ?? failedTurnId ?? `${threadId}:${randomUUID()}`,
         });
         this.emitState(ctx.topicId);
         this.bus.emit(ctx.topicId, {
           type: 'assistant_error',
-          data: { error: errorMsg, thread_id: threadId },
+          data: { error: errorMsg, thread_id: threadId, event_id: operationalEvent.id },
         });
         this.activeTurnThreads.delete(threadId);
         void this.processTurnQueue();

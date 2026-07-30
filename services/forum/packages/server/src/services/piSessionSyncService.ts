@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 
 import { EchsClient } from '../echsClient';
+import { ForumStore } from '../store';
 import { classifyPiSession } from './piSessionClassifier';
 
 import type { ForumTarget, SessionClassification } from './piSessionClassifier';
@@ -212,6 +213,80 @@ function extractForumPostId(text: string): string | null {
   return match?.[1]?.trim() || null;
 }
 
+type HistoricalTerminalError = {
+  userEntryId: string;
+  assistantEntryId: string;
+  error: string;
+};
+
+/**
+ * Finds only the final unrecovered provider failure in each active-branch user
+ * turn. Pi can emit an error, compact/retry, and then emit a successful
+ * assistant message in the same turn; those recovered attempts must stay
+ * invisible in the historical forum projection.
+ */
+export function detectHistoricalTerminalErrors(exported: ExportedSession): HistoricalTerminalError[] {
+  const activeIds = new Set(
+    exported.active_branch?.active_entry_ids ?? exported.entries.flatMap((entry) => (entry.id ? [entry.id] : []))
+  );
+  const found: HistoricalTerminalError[] = [];
+  let userEntryId: string | null = null;
+  let terminalError: PiEntry | null = null;
+
+  const flush = () => {
+    if (userEntryId && terminalError?.id && terminalError.errorMessage) {
+      found.push({ userEntryId, assistantEntryId: terminalError.id, error: terminalError.errorMessage });
+    }
+    terminalError = null;
+  };
+
+  for (const entry of exported.entries) {
+    if (!entry.id || !activeIds.has(entry.id) || entry.type !== 'message') continue;
+    if (entry.role === 'user') {
+      flush();
+      userEntryId = entry.id;
+      continue;
+    }
+    if (entry.role !== 'assistant' || !userEntryId) continue;
+    if (entry.stopReason === 'error' && entry.errorMessage) {
+      terminalError = entry;
+    } else if (terminalError && entry.stopReason && entry.stopReason !== 'error') {
+      // Match Pi's settled-turn semantics: any later non-error assistant end
+      // means the failed attempt recovered, including compact-and-retry flows.
+      terminalError = null;
+    }
+  }
+  flush();
+  return found;
+}
+
+function classifyHistoricalProviderError(error: string): string | null {
+  const text = error.toLowerCase();
+  if (
+    /context (?:length|window)|maximum context|context limit|too many tokens|prompt (?:is )?too long|token limit/.test(
+      text
+    )
+  ) {
+    return 'context_overflow';
+  }
+  if (/\brate[ -]?limit|\btoo many requests\b|\b429\b|quota exceeded/.test(text)) return 'rate_limit';
+  if (
+    /\bauthentication\b|\bunauthorized\b|\bforbidden\b|invalid (?:api )?key|api key.*(?:invalid|missing)|\b40[13]\b/.test(
+      text
+    )
+  ) {
+    return 'authentication';
+  }
+  if (
+    /\bprovider\b|\bupstream\b|service unavailable|temporarily unavailable|overloaded|internal server error|\b50[0234]\b/.test(
+      text
+    )
+  ) {
+    return 'provider';
+  }
+  return null;
+}
+
 export class PiSessionSyncService {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
@@ -220,12 +295,14 @@ export class PiSessionSyncService {
   private lastRunError: string | null = null;
   private lastRunStats: PiSyncHealth['lastRunStats'] = null;
   private readonly client: EchsClient;
+  private readonly store: ForumStore;
 
   constructor(
     private readonly db: Database.Database,
     options: { agentdBaseUrl: string; apiToken?: string | null; intervalMs: number }
   ) {
     this.client = new EchsClient({ baseUrl: options.agentdBaseUrl, apiToken: options.apiToken ?? null });
+    this.store = new ForumStore(db);
     this.intervalMs = options.intervalMs;
   }
 
@@ -515,8 +592,7 @@ export class PiSessionSyncService {
     opts?: { bumpTopic?: boolean; resolvedBy?: string | null }
   ): Promise<PiSyncBackfillResult> {
     const anomaly = this.db.prepare('select * from pi_sync_anomalies where id = ? limit 1').get(anomalyId) as
-      | PiSyncAnomalyRow
-      | undefined;
+      PiSyncAnomalyRow | undefined;
     if (!anomaly) return { ok: false, message: 'Anomaly not found.' };
     if (!['deferred', 'needs_manual_review'].includes(anomaly.status))
       return { ok: false, message: `Anomaly is ${anomaly.status}.` };
@@ -591,8 +667,7 @@ export class PiSessionSyncService {
 
   private needsSync(summary: PiSessionSummary): boolean {
     const link = this.db.prepare('select * from pi_session_links where pi_session_id = ? limit 1').get(summary.id) as
-      | { imported_at: string; metadata_json: string | null }
-      | undefined;
+      { imported_at: string; metadata_json: string | null } | undefined;
     if (!link) return true;
     const meta = parseJsonObject(link.metadata_json);
     if (meta['mtimeMs'] === summary.mtime_ms && meta['sizeBytes'] === summary.size_bytes) return false;
@@ -611,8 +686,7 @@ export class PiSessionSyncService {
 
   private ensureIdentity(displayName: string, kind: string, avatarUrl: string | null): string {
     const existing = this.db.prepare('select id from identities where display_name = ? limit 1').get(displayName) as
-      | { id: string }
-      | undefined;
+      { id: string } | undefined;
     if (existing) return existing.id;
     const id = randomUUID();
     const now = nowIso();
@@ -680,8 +754,7 @@ export class PiSessionSyncService {
          limit 1`
       )
       .get(exported.session.id) as
-      | { topicId: string; sessionId: string; metadataJson: string | null; tagsJson: string | null }
-      | undefined;
+      { topicId: string; sessionId: string; metadataJson: string | null; tagsJson: string | null } | undefined;
     const previousMeta = existing ? parseJsonObject(existing.metadataJson) : {};
     const meta = {
       ...previousMeta,
@@ -953,8 +1026,7 @@ export class PiSessionSyncService {
 
   private isRobotIdle(topicId: string): boolean {
     const row = this.db.prepare('select activity from robot_state where topic_id = ? limit 1').get(topicId) as
-      | { activity: string }
-      | undefined;
+      { activity: string } | undefined;
     return !row || row.activity === 'idle';
   }
 
@@ -1046,6 +1118,50 @@ export class PiSessionSyncService {
        where pi_session_id = ? and pi_message_id = ? and status in ('deferred', 'needs_manual_review')`
       )
       .run(now, resolution, postId, now, piSessionId, piMessageId);
+  }
+
+  private reconcileHistoricalTerminalErrors(exported: ExportedSession, target: SyncTarget): void {
+    const provenance = new Map((exported.message_provenance ?? []).map((item) => [item.piMessageId, item]));
+    for (const failure of detectHistoricalTerminalErrors(exported)) {
+      const postIds = new Set<string>();
+      const linkRows = this.db
+        .prepare(
+          `select post_id from pi_message_links
+           where pi_session_id = ? and pi_message_id = ? and post_id is not null`
+        )
+        .all(exported.session.id, failure.userEntryId) as Array<{ post_id: string }>;
+      for (const row of linkRows) postIds.add(row.post_id);
+
+      const direct = provenance.get(failure.userEntryId);
+      if (direct?.postId && (!direct.topicId || direct.topicId === target.topicId)) postIds.add(direct.postId);
+      if (postIds.size !== 1) continue;
+
+      const anchorPostId = [...postIds][0];
+      const anchor = this.db
+        .prepare('select id from posts where id = ? and topic_id = ? and deleted_at is null limit 1')
+        .get(anchorPostId, target.topicId) as { id: string } | undefined;
+      if (!anchor) continue;
+
+      const category = classifyHistoricalProviderError(failure.error);
+      this.store.createTopicOperationalEvent({
+        topicId: target.topicId,
+        anchorPostId: anchor.id,
+        type: 'turn_error',
+        category: 'assistant',
+        status: 'failed',
+        summary: 'Assistant response failed.',
+        detail: {
+          error: failure.error,
+          ...(category ? { category } : {}),
+          historical: true,
+          piSessionId: exported.session.id,
+          userPiMessageId: failure.userEntryId,
+          assistantPiMessageId: failure.assistantEntryId,
+        },
+        sourceKind: 'echs_turn',
+        sourceId: `pi_message:${failure.assistantEntryId}`,
+      });
+    }
   }
 
   private importMessages(exported: ExportedSession, target: SyncTarget, summary: PiSessionSummary): number {
@@ -1158,8 +1274,21 @@ export class PiSessionSyncService {
       }
 
       if (forumOrigin) {
-        const anomalyMetadata = { ...metadata, piSessionId: exported.session.id, forumOrigin: true, deferredToBridge: true };
-        this.upsertAnomaly(exported.session.id, target, entry, 'forum-origin-awaiting-bridge', text, anomalyMetadata, this.nextRetryAt(0));
+        const anomalyMetadata = {
+          ...metadata,
+          piSessionId: exported.session.id,
+          forumOrigin: true,
+          deferredToBridge: true,
+        };
+        this.upsertAnomaly(
+          exported.session.id,
+          target,
+          entry,
+          'forum-origin-awaiting-bridge',
+          text,
+          anomalyMetadata,
+          this.nextRetryAt(0)
+        );
         if (!link) {
           this.insertMessageLink({
             piSessionId: exported.session.id,
@@ -1173,13 +1302,24 @@ export class PiSessionSyncService {
         continue;
       }
 
-      const index = this.db.prepare('select first_indexed_at from pi_entry_index where pi_session_id = ? and entry_id = ?')
+      const index = this.db
+        .prepare('select first_indexed_at from pi_entry_index where pi_session_id = ? and entry_id = ?')
         .get(exported.session.id, entry.id) as { first_indexed_at: string };
       const settledAt = Date.parse(index.first_indexed_at) + EXTERNAL_SETTLEMENT_MS;
       if (!legacyRepair && !freshImportedSession && (Date.now() < settledAt || !this.isRobotIdle(topicId))) {
-        const retryAt = new Date(Math.max(settledAt, Date.now() + (!this.isRobotIdle(topicId) ? 30_000 : 0))).toISOString();
+        const retryAt = new Date(
+          Math.max(settledAt, Date.now() + (!this.isRobotIdle(topicId) ? 30_000 : 0))
+        ).toISOString();
         const anomalyMetadata = { ...metadata, piSessionId: exported.session.id, externalContinuation: true };
-        this.upsertAnomaly(exported.session.id, target, entry, 'external-message-settling', text, anomalyMetadata, retryAt);
+        this.upsertAnomaly(
+          exported.session.id,
+          target,
+          entry,
+          'external-message-settling',
+          text,
+          anomalyMetadata,
+          retryAt
+        );
         if (!link) {
           this.insertMessageLink({
             piSessionId: exported.session.id,
@@ -1214,10 +1354,16 @@ export class PiSessionSyncService {
           metadata: { ...metadata, externalContinuation: true },
         });
       }
-      this.resolveAnomalies(exported.session.id, entry.id, legacyRepair ? 'legacy_auto_repair' : 'projected_external_message', postId);
+      this.resolveAnomalies(
+        exported.session.id,
+        entry.id,
+        legacyRepair ? 'legacy_auto_repair' : 'projected_external_message',
+        postId
+      );
       if (!legacyRepair) bumpedAt = freshImportedSession ? at : nowIso();
       count += 1;
     }
+    this.reconcileHistoricalTerminalErrors(exported, target);
     if (bumpedAt) {
       this.db.prepare('update topics set updated_at = ? where id = ?').run(bumpedAt, topicId);
       this.db.prepare('update sessions set updated_at = ? where id = ?').run(bumpedAt, sessionId);

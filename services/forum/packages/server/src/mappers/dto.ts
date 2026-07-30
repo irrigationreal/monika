@@ -11,6 +11,8 @@ import type {
   PostDto,
   RobotPersonaDto,
   RobotStateDto,
+  TopicOperationalEventDto,
+  CompactionOperationDto,
   SessionDto,
   SessionInspectorDto,
   SessionMessageDto,
@@ -22,7 +24,7 @@ import type {
   UserPostHistoryResponseDto,
   ForumThemeKey
 } from '@irrigationreal/codex-forum-contracts';
-import type { ExternalRef, PlanArtifact, RobotState, ToolRunSummary } from '@irrigationreal/codex-forum-core';
+import type { CompactionOperation, ExternalRef, PlanArtifact, RobotState, ToolRunSummary, TopicOperationalEvent } from '@irrigationreal/codex-forum-core';
 import type { ChatCategoryRow, ChatMessageRow, ChatRoomRow } from '../db';
 import type {
   Attachment,
@@ -288,6 +290,14 @@ function mapToolRunSummaryToDto(run: ToolRunSummary): ToolRunDto {
     redactionsApplied: run.redactionsApplied,
     visibility: run.visibility as ToolRunDto['visibility']
   };
+}
+
+export function mapTopicOperationalEventToDto(event: TopicOperationalEvent, includeDetail: boolean): TopicOperationalEventDto {
+  return { ...event, detail: includeDetail ? event.detail : null };
+}
+
+export function mapCompactionOperationToDto(operation: CompactionOperation): CompactionOperationDto {
+  return { ...operation };
 }
 
 export function mapRobotStateToDto(state: RobotState): RobotStateDto {

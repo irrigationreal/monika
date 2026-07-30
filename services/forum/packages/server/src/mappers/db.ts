@@ -9,6 +9,8 @@ import type {
   SessionMessageRow,
   SessionRow,
   ToolRunRow,
+  TopicOperationalEventRow,
+  CompactionOperationRow,
   TopicAutoRunRow,
   TopicRow,
   UserFileRow
@@ -24,7 +26,9 @@ import type {
   RobotState,
   SurfaceKind,
   Topic,
-  TopicStatus
+  TopicStatus,
+  TopicOperationalEvent,
+  CompactionOperation
 } from '@irrigationreal/codex-forum-core';
 import type {
   Attachment,
@@ -169,6 +173,41 @@ export function mapRobotStateRowToDomain(row: RobotStateRow): RobotState {
         }
       : null,
     recentToolRuns: []
+  };
+}
+
+export function mapTopicOperationalEventRowToDomain(row: TopicOperationalEventRow): TopicOperationalEvent {
+  return {
+    id: row.id,
+    topicId: row.topic_id,
+    anchorPostId: row.anchor_post_id,
+    type: row.event_type as TopicOperationalEvent['type'],
+    category: row.category as TopicOperationalEvent['category'],
+    status: row.status as TopicOperationalEvent['status'],
+    summary: row.summary,
+    detail: row.detail_json ? JSON.parse(row.detail_json) as Record<string, unknown> : null,
+    sourceKind: row.source_kind as TopicOperationalEvent['sourceKind'],
+    sourceId: row.source_id,
+    createdAt: row.created_at
+  };
+}
+
+export function mapCompactionOperationRowToDomain(row: CompactionOperationRow): CompactionOperation {
+  return {
+    id: row.id,
+    topicId: row.topic_id,
+    sessionId: row.session_id,
+    initiatedBy: row.initiated_by,
+    expectedLeafId: row.expected_leaf_id,
+    customInstructions: row.custom_instructions,
+    recoveryPrompt: row.recovery_prompt,
+    status: row.status as CompactionOperation['status'],
+    eventId: row.event_id,
+    recoveryPostId: row.recovery_post_id,
+    errorMessage: row.error_message,
+    createdAt: row.created_at,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at
   };
 }
 

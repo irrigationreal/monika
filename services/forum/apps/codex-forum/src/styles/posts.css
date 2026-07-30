@@ -2361,3 +2361,37 @@
   padding: 1rem;
   color: var(--vb-text-muted, #53606c);
 }
+
+.vb-recovery-checkpoint-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, var(--vb-link, #285a91) 55%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--vb-link, #285a91) 10%, transparent);
+  color: var(--vb-link, #285a91);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.vb-compaction-modal {
+  max-width: 680px;
+}
+.vb-compaction-confirm {
+  margin: 12px 0;
+  align-items: flex-start;
+}
+.vb-compaction-advanced {
+  display: grid;
+  gap: 7px;
+  margin-top: 12px;
+}
+.vb-compaction-advanced label {
+  font-weight: 700;
+}
+.vb-compaction-error {
+  margin-top: 12px;
+  white-space: pre-wrap;
+}

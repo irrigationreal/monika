@@ -26,7 +26,7 @@ describe('Forum routes access controls', () => {
     db.close();
   });
 
-  async function buildApp() {
+  async function buildApp(compactionService?: any) {
     const app = Fastify({ logger: false });
     await app.register(sensible);
     const access = createAccessHelpers(app, store);
@@ -52,6 +52,7 @@ describe('Forum routes access controls', () => {
       codex,
       webhookService: { dispatch: () => {} } as any,
       bus,
+      compactionService,
       access,
       webIdentityId: store.createIdentity('web', 'human').id
     });
@@ -94,6 +95,39 @@ describe('Forum routes access controls', () => {
     expect(body.items[0]).not.toHaveProperty('plans');
     expect(JSON.stringify(body)).not.toContain('secret plan content');
     expect(JSON.stringify(body)).not.toContain('cat /secret/path');
+  });
+
+  it('redacts operational event detail for guests and includes it for authenticated members', async () => {
+    const app = await buildApp();
+    const forum = store.createForum('Forum', null, null, null, null, 'active', 'public');
+    const author = store.createIdentity('Author', 'human');
+    store.createAuthSession('member-token', author.id);
+    const { topic, post } = store.createTopic({ forumId: forum.id, title: 'Topic', body: 'starter', authorId: author.id });
+    store.createTopicOperationalEvent({
+      topicId: topic.id, anchorPostId: post.id, type: 'turn_error', category: 'assistant', status: 'failed',
+      summary: 'Assistant response failed.', detail: { error: 'private stack trace' }, sourceKind: 'echs_turn', sourceId: 'evt-1'
+    });
+
+    const guest = await app.inject({ method: 'GET', url: `/topics/${topic.id}/operational-events` });
+    const member = await app.inject({ method: 'GET', url: `/topics/${topic.id}/operational-events`, headers: { authorization: 'Bearer member-token' } });
+    expect(guest.json().items[0].detail).toBeNull();
+    expect(JSON.stringify(guest.json())).not.toContain('private stack trace');
+    expect(member.json().items[0].detail).toEqual({ error: 'private stack trace' });
+  });
+
+  it('requires an admin identity for manual compaction', async () => {
+    const compact = vi.fn();
+    const app = await buildApp({ compact, get: vi.fn() });
+    const forum = store.createForum('Forum', null, null, null, null, 'active', 'public');
+    const human = store.createIdentityWithPassword('Human', 'human', 'pw-hash', 'human');
+    store.createAuthSession('human-token', human.id);
+    const { topic } = store.createTopic({ forumId: forum.id, title: 'Topic', body: 'starter', authorId: human.id });
+    const payload = { operationId: 'op', confirmation: 'COMPACT', recoveryPrompt: 'recover' };
+    const guest = await app.inject({ method: 'POST', url: `/topics/${topic.id}/compactions`, payload });
+    const member = await app.inject({ method: 'POST', url: `/topics/${topic.id}/compactions`, headers: { authorization: 'Bearer human-token' }, payload });
+    expect(guest.statusCode).toBe(401);
+    expect(member.statusCode).toBe(403);
+    expect(compact).not.toHaveBeenCalled();
   });
 
   it('blocks guests from creating topics and posts (401)', async () => {

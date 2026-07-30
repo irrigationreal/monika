@@ -1247,6 +1247,56 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 33,
+    name: 'topic-operational-events-and-compactions',
+    up: (db) => {
+      db.exec(`
+        create table if not exists topic_operational_events (
+          id text primary key,
+          topic_id text not null,
+          anchor_post_id text,
+          event_type text not null check (event_type in ('turn_error', 'compaction')),
+          category text not null check (category in ('assistant', 'maintenance')),
+          status text not null check (status in ('failed', 'succeeded')),
+          summary text not null,
+          detail_json text,
+          source_kind text not null check (source_kind in ('echs_turn', 'compaction_operation')),
+          source_id text not null,
+          created_at text not null,
+          foreign key (topic_id) references topics(id) on delete cascade,
+          foreign key (anchor_post_id) references posts(id) on delete set null,
+          unique (source_kind, source_id)
+        );
+        create index if not exists idx_topic_operational_events_topic
+          on topic_operational_events(topic_id, created_at, id);
+
+        create table if not exists compaction_operations (
+          id text primary key,
+          topic_id text not null,
+          session_id text not null,
+          initiated_by text not null,
+          expected_leaf_id text not null,
+          custom_instructions text,
+          recovery_prompt text not null,
+          status text not null check (status in ('pending', 'running', 'succeeded', 'failed')),
+          event_id text,
+          recovery_post_id text,
+          error_message text,
+          created_at text not null,
+          started_at text,
+          finished_at text,
+          foreign key (topic_id) references topics(id) on delete cascade,
+          foreign key (session_id) references sessions(id) on delete cascade,
+          foreign key (initiated_by) references identities(id),
+          foreign key (event_id) references topic_operational_events(id),
+          foreign key (recovery_post_id) references posts(id)
+        );
+        create index if not exists idx_compaction_operations_topic
+          on compaction_operations(topic_id, created_at);
+      `);
+    },
+  },
 ];
 
 export const SCHEMA_VERSION: number = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;

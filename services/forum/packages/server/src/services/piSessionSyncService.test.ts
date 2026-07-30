@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 
 import { runMigrations } from '../migrations';
-import { PiSessionSyncService } from './piSessionSyncService';
+import { PiSessionSyncService, detectHistoricalTerminalErrors } from './piSessionSyncService';
 
 import type { ExportedSession } from './piSessionSyncService';
 
@@ -239,8 +239,9 @@ describe('PiSessionSyncService provenance-aware reconciliation', () => {
     );
 
     const robot = db.prepare("select id from identities where display_name = 'Monika'").get() as { id: string };
-    db.prepare('insert into posts (id, topic_id, author_id, body, source_message_id, silent, created_at) values (?, ?, ?, ?, ?, ?, ?)')
-      .run('bridge-answer', target.topic_id, robot.id, 'Forum answer', null, 0, '2026-07-13T10:00:02.000Z');
+    db.prepare(
+      'insert into posts (id, topic_id, author_id, body, source_message_id, silent, created_at) values (?, ?, ?, ?, ?, ?, ?)'
+    ).run('bridge-answer', target.topic_id, robot.id, 'Forum answer', null, 0, '2026-07-13T10:00:02.000Z');
     db.prepare("update pi_message_links set post_id = 'bridge-answer' where pi_message_id = 'a1'").run();
     expect(importExported(value)).toBe(0);
     expect(db.prepare("select status, resolution from pi_sync_anomalies where pi_message_id = 'a1'").get()).toEqual({
@@ -423,10 +424,64 @@ describe('PiSessionSyncService provenance-aware reconciliation', () => {
     expect(db.prepare("select post_id from pi_message_links where pi_message_id = 'u1'").get()).toEqual({
       post_id: expect.any(String),
     });
-    const topic = db.prepare("select topic_id from pi_session_links where pi_session_id = 'pi-session-1'").get() as { topic_id: string };
-    const before = (db.prepare('select updated_at from topics where id = ?').get(topic.topic_id) as { updated_at: string }).updated_at;
+    const topic = db.prepare("select topic_id from pi_session_links where pi_session_id = 'pi-session-1'").get() as {
+      topic_id: string;
+    };
+    const before = (
+      db.prepare('select updated_at from topics where id = ?').get(topic.topic_id) as { updated_at: string }
+    ).updated_at;
     expect(service.bumpRepairedTopic(topic.topic_id)).toEqual({ ok: true, message: 'Repaired topic bumped.' });
-    expect((db.prepare('select updated_at from topics where id = ?').get(topic.topic_id) as { updated_at: string }).updated_at).not.toBe(before);
+    expect(
+      (db.prepare('select updated_at from topics where id = ?').get(topic.topic_id) as { updated_at: string })
+        .updated_at
+    ).not.toBe(before);
     db.close();
+  });
+});
+
+describe('detectHistoricalTerminalErrors', () => {
+  const session = { id: 'pi-errors', path: '/tmp/pi-errors.jsonl', cwd: '/tmp' };
+  const make = (entries: ExportedSession['entries'], active: string[]): ExportedSession => ({
+    session,
+    entries,
+    active_branch: { leaf_id: active.at(-1) ?? null, active_entry_ids: active },
+  });
+
+  it('returns the final unrecovered error in a user turn', () => {
+    const value = make(
+      [
+        { type: 'message', id: 'u1', role: 'user', text: 'hello' },
+        { type: 'message', id: 'a1', role: 'assistant', stopReason: 'error', errorMessage: 'context window exceeded' },
+      ],
+      ['u1', 'a1']
+    );
+    expect(detectHistoricalTerminalErrors(value)).toEqual([
+      { userEntryId: 'u1', assistantEntryId: 'a1', error: 'context window exceeded' },
+    ]);
+  });
+
+  it('suppresses failures recovered before the next user turn', () => {
+    const value = make(
+      [
+        { type: 'message', id: 'u1', role: 'user', text: 'hello' },
+        { type: 'message', id: 'a1', role: 'assistant', stopReason: 'error', errorMessage: 'temporary overload' },
+        { type: 'compaction', id: 'c1' },
+        { type: 'message', id: 'a2', role: 'assistant', stopReason: 'stop', text: 'recovered' },
+      ],
+      ['u1', 'a1', 'c1', 'a2']
+    );
+    expect(detectHistoricalTerminalErrors(value)).toEqual([]);
+  });
+
+  it('ignores errors outside the active branch', () => {
+    const value = make(
+      [
+        { type: 'message', id: 'u1', role: 'user', text: 'hello' },
+        { type: 'message', id: 'abandoned', role: 'assistant', stopReason: 'error', errorMessage: 'abandoned error' },
+        { type: 'message', id: 'a2', role: 'assistant', stopReason: 'stop', text: 'active answer' },
+      ],
+      ['u1', 'a2']
+    );
+    expect(detectHistoricalTerminalErrors(value)).toEqual([]);
   });
 });

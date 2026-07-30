@@ -299,6 +299,37 @@ export interface PostDispatchRow {
   updated_at: string;
 }
 
+export interface TopicOperationalEventRow {
+  id: string;
+  topic_id: string;
+  anchor_post_id: string | null;
+  event_type: string;
+  category: string;
+  status: string;
+  summary: string;
+  detail_json: string | null;
+  source_kind: string;
+  source_id: string;
+  created_at: string;
+}
+
+export interface CompactionOperationRow {
+  id: string;
+  topic_id: string;
+  session_id: string;
+  initiated_by: string;
+  expected_leaf_id: string;
+  custom_instructions: string | null;
+  recovery_prompt: string;
+  status: string;
+  event_id: string | null;
+  recovery_post_id: string | null;
+  error_message: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
 export interface RobotAutomationRow {
   id: string;
   name: string;

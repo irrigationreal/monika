@@ -113,6 +113,21 @@ export class EchsClient {
   async closeConversation(conversationId: string): Promise<void> {
     await this.request(`/v1/conversations/${conversationId}/close`, { method: 'POST' });
   }
+
+  async compactConversation(conversationId: string, opts: {
+    operationId: string;
+    expectedLeafId: string;
+    customInstructions?: string | null;
+  }): Promise<Record<string, unknown>> {
+    return (await this.request(`/v1/conversations/${conversationId}/compact`, {
+      method: 'POST',
+      body: {
+        operation_id: opts.operationId,
+        expected_leaf_id: opts.expectedLeafId,
+        ...(opts.customInstructions ? { custom_instructions: opts.customInstructions } : {}),
+      },
+    })) as Record<string, unknown>;
+  }
   async createConversation(opts: {
     cwd?: string | null;
     workdir?: string | null;

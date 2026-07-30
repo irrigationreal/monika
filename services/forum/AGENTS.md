@@ -104,6 +104,22 @@ Do not add new tests unless explicitly instructed, unless the change is large or
 - Exclude posts already present in canonical Pi from later catch-up envelopes or the forum will feed imported CLI messages back into the same session.
 - A `pi_message_links` row with `post_id = null` is unresolved state, not a terminal dedupe marker. Rescans must revisit it.
 
+## Operational events and compaction
+
+Turn failures and manual compactions are durable topic operational events, not
+posts. Keep them out of post numbering, search, pagination counts, and Pi catch-up
+context. Raw diagnostics follow the same authenticated trace-visibility boundary.
+Manual compaction must remain admin-only and idle-only, use the canonical Pi leaf
+as an optimistic concurrency guard, and create the recovery-checkpoint post only
+after Pi compaction succeeds. See `docs/forum.md` for the complete workflow.
+
+Key files:
+
+- `packages/core/src/domain/operationalEvents.ts` — domain vocabulary
+- `packages/server/src/services/compactionService.ts` — durable forum workflow
+- `packages/server/src/echsBridge.ts` — terminal error ingestion and conversation reopening
+- `apps/codex-forum/src/components/OperationalEventBar.vue` — inter-post event rendering
+
 ## Live trace and Trace History
 
 The forum renders robot responses as a chronological trace of reasoning, text,
