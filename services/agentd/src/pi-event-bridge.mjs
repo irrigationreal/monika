@@ -150,7 +150,10 @@ export function handlePiEvent(conv, event, emit, createId = randomUUID) {
       break;
     case 'agent_settled': {
       if (!conv.current) break;
-      const { completionText, text, usage, messageId, piMessageId, userMappings = [], terminalError } = conv.current;
+      const {
+        completionText, text, usage, messageId, piMessageId, userMappings = [], terminalError,
+        sourceKind = null, subagentRunId = null, subagentRunIds = null, subagentOrigins = null, origin = null,
+      } = conv.current;
       if (terminalError) {
         emit(conv, 'turn_error', {
           error: terminalError,
@@ -170,6 +173,15 @@ export function handlePiEvent(conv, event, emit, createId = randomUUID) {
             id: piMessageId ?? null,
             role: 'assistant',
             content: [{ type: 'text', text: finalText }],
+            ...(sourceKind ? {
+              source_kind: sourceKind,
+              subagent_run_id: subagentRunId,
+              subagent_run_ids: subagentRunIds ?? (subagentRunId ? [subagentRunId] : []),
+              subagent_origins: subagentOrigins ?? [],
+              origin_turn_id: origin?.turnId ?? null,
+              origin_topic_id: origin?.topicId ?? null,
+              origin_post_id: origin?.postId ?? null,
+            } : {}),
           },
         });
       }
@@ -179,6 +191,15 @@ export function handlePiEvent(conv, event, emit, createId = randomUUID) {
         pi_message_id: piMessageId ?? null,
         user_pi_message_id: userMappings.length === 1 ? userMappings[0].user_pi_message_id : null,
         user_mappings: userMappings,
+        ...(sourceKind ? {
+          source_kind: sourceKind,
+          subagent_run_id: subagentRunId,
+          subagent_run_ids: subagentRunIds ?? (subagentRunId ? [subagentRunId] : []),
+          subagent_origins: subagentOrigins ?? [],
+          origin_turn_id: origin?.turnId ?? null,
+          origin_topic_id: origin?.topicId ?? null,
+          origin_post_id: origin?.postId ?? null,
+        } : {}),
         thread_id: conv.id,
       });
       conv.current = null;

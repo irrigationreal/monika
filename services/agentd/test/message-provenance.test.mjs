@@ -4,6 +4,7 @@ import test from 'node:test';
 import { SessionManager } from '@earendil-works/pi-coding-agent';
 import {
   MESSAGE_PROVENANCE_CUSTOM_TYPE,
+  appendSubagentCompletionProvenance,
   extractMessageProvenance,
   handleProvenanceEvent,
   normalizeForumProvenance,
@@ -31,6 +32,25 @@ function assistantMessage(text, timestamp = 2) {
     timestamp,
   };
 }
+
+test('persists idempotent subagent completion provenance without a fake user dispatch', () => {
+  const conv = conversation();
+  const continuation = {
+    sourceKind: 'subagent-completion', subagentRunId: 'run-1', subagentRunIds: ['run-1'],
+    subagentOrigins: [{ runId: 'run-1', postId: 'post-1' }],
+    origin: { turnId: 'turn-1', topicId: 'topic-1', postId: 'post-1' },
+  };
+  const first = appendSubagentCompletionProvenance(conv, 'assistant-1', continuation);
+  const second = appendSubagentCompletionProvenance(conv, 'assistant-1', continuation);
+  assert.equal(second, first);
+  assert.deepEqual(extractMessageProvenance(conv.session.sessionManager.getBranch()).map((entry) => ({
+    piMessageId: entry.piMessageId, origin: entry.origin, sourceKind: entry.sourceKind,
+    runId: entry.runId, originPostId: entry.originPostId,
+  })), [{
+    piMessageId: 'assistant-1', origin: 'subagent-completion', sourceKind: 'subagent-completion',
+    runId: 'run-1', originPostId: 'post-1',
+  }]);
+});
 
 test('normalizes forum provenance and rejects malformed origins', () => {
   assert.deepEqual(normalizeForumProvenance({ topic_id: 'topic-1', post_id: 'post-1' }), {
