@@ -130,6 +130,17 @@ A parent-only prompt extension defines role selection, execution modes, low-loss
 task packets, write isolation, validation, and the positive boundary for using
 `monika-delegate` when authored judgment materially improves the work.
 
+Execution location is separate from agent role. Every executable leaf may select
+`executionTarget: {kind:"local"}` or an administrator-configured named SSH target;
+omission always defaults local and never infers parent relocation. A process already
+locked to SSH must explicitly reuse the same named target for nested delegation;
+omission/local or a different name is rejected. SSH leaves require `async:true` so
+ambiguous mutation effects always have a durable lifecycle ledger; foreground SSH is
+rejected before a model turn. Pi, sessions, results, scheduling, and supervision stay local while the
+locked extension routes coding tools remotely after pinned-host preflight. There is
+no remote Pi daemon, remote job lease, reconnect guarantee, or local fallback. See
+[`config/extensions/SSH.md`](config/extensions/SSH.md).
+
 The container exports the dedicated roots globally so agentd and direct
 interactive Pi sessions apply the same isolation policy. Fresh and fork-context
 child JSONL lives under `/app/.pi/agent/sessions/subagent/` and is deliberately
@@ -144,7 +155,9 @@ the admin Robot Dashboard. Restart reconciliation is passive: it never opens his
 Pi sessions or wakes a model from recovered result/request files. Canonical completion
 provenance permits result-file acknowledgement after a crash; unproven legacy results
 remain pending for manual review. Dashboard sections separate live/uncertain blockers,
-pending delivery, and collapsed terminal history. Sleep remains a
+pending delivery, and collapsed terminal history. Pending delivery is nonblocking.
+Effects-unknown remote mutations block safe deployment and automatic replay until
+reconciled or operator-attested. Sleep remains a
 separate stateful-memory workflow under `sessions/forks/`. See
 [`docs/forum.md`](docs/forum.md#subagents-and-background-completions) for the
 agentd/forum lifecycle.
@@ -190,7 +203,7 @@ secrets instead of bind-mounting the host home directory. The deployment support
 ```text
 runtime/secrets/gitconfig   # full git config; may include commit.gpgsign and signingkey
 runtime/secrets/gnupg/      # GPG keyring copied to /tmp/gnupg at startup
-runtime/secrets/ssh/        # SSH config/keys mounted for git and explicit relocate
+runtime/secrets/ssh/        # SSH config/keys plus targets/*.json for locked execution targets
 ```
 
 At startup, `entrypoint.sh` copies `runtime/secrets/gitconfig` to writable
@@ -204,7 +217,10 @@ for example:
 ```bash
 sudo chown -R root:root runtime/secrets/ssh
 chmod 700 runtime/secrets/ssh
-chmod 600 runtime/secrets/ssh/*
+find runtime/secrets/ssh -maxdepth 1 -type f ! -name known_hosts -exec chmod 600 {} +
+chmod 400 runtime/secrets/ssh/known_hosts
+find runtime/secrets/ssh/targets -type d -exec chmod 500 {} +
+find runtime/secrets/ssh/targets -type f -name '*.json' -exec chmod 400 {} +
 ```
 
 ## Host-side Pi launcher

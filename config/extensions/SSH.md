@@ -1,102 +1,48 @@
-# SSH Extension (ssh.ts)
+# SSH extension and locked execution targets
 
-**Location:** `~/.pi/agent/extensions/ssh.ts`
+`ssh.ts` has two deliberately separate modes.
 
-This extension overrides built‑in tools to run on a remote host via SSH when `--ssh` is provided. It is auto‑loaded from `~/.pi/agent/extensions/`.
+## Locked subagent mode
 
-## Summary of behavior
+The `subagent` tool accepts a named leaf target:
 
-- Remote mode is enabled with `--ssh user@host` or `--ssh user@host:/remote/path`.
-- When SSH is active, these tools run remotely:
-  - `read`, `write`, `edit`, `ls`, `find`, `grep`, `bash`
-- Other tools (`pi_run`, `web_search`, `remember`, `recall`) remain local by design.
-- SSH uses non‑interactive options: `BatchMode=yes`, `ConnectTimeout=10`.
-- If `--ssh` is set but the connection fails, **tools error** (no silent local fallback).
+```json
+{"agent":"worker","task":"inspect the repository","async":true,"executionTarget":{"kind":"ssh","name":"stanza"}}
+```
 
-## Flags
+SSH leaves require `async:true`; foreground launches are rejected before the first model turn because ambiguous remote effects must always enter the durable lifecycle ledger. Omission always means local; target selection never infers a parent relocation. A process already locked to an SSH target must explicitly reuse that same named target for nested delegation. Omission/local or a different name is rejected rather than inheriting or falling back. Invalid, missing, changed, or unreachable targets fail closed with no local fallback.
+
+Administrators install descriptors under `PI_SUBAGENT_EXECUTION_TARGET_ROOT` (normally `/runtime/secrets/ssh/targets`). Deployments whose ignored `compose.yaml` predates this feature must copy the `PI_SUBAGENT_EXECUTION_TARGET_ROOT` and `PI_SUBAGENT_SSH_LOCK_EXTENSION` environment entries from `compose.yaml.example`; copying the example during initial setup is not an automatic migration. `<name>.json` is a closed version-1 object:
+
+```json
+{
+  "version": 1,
+  "name": "stanza",
+  "target": "deploy@stanza",
+  "hostname": "stanza",
+  "cwd": "/home/monika/repos/monika",
+  "allowedRoot": "/home/monika/repos",
+  "knownHosts": "/runtime/secrets/ssh/known_hosts"
+}
+```
+
+Names cannot contain paths. Descriptor files must resolve inside the registry. `knownHosts` must be a read-only regular file below `/runtime/secrets/ssh`. Host/user/options are never model input.
+
+Pi, its JSONL session, lifecycle files, scheduling, RPC, and supervision remain local. At container startup, the runtime attests the exact `ssh.ts` and `ssh-lock.mjs` bytes. Target recovery identity binds that code attestation together with the descriptor and `known_hosts` contents, so code changes or host-key rotation invalidate unattended resume. The local child Pi explicitly loads only those reviewed extensions; the extension verifies the binding, pinned host key, exact remote hostname, canonical cwd, and allowed root **before the first provider turn**. Locked mode does not register `relocate` and ignores ordinary SSH flags.
+
+All `read`, `write`, `edit`, `ls`, `find`, `grep`, `bash`, and `!` operations route to the verified target. File operations enforce `allowedRoot`. Writes use a same-directory temporary file, SHA-256 verification, symlink rejection, atomic rename, and final path/hash verification. Read-only transport failures retry at most once; mutations never retry.
+
+A timeout, abort, lost connection, signal, malformed completion trailer, or spawn failure during remote bash/mutation is `ssh_transport_ambiguous` with `effects_state: unknown`. The remote operation may still be running. Safe deployment and automatic replay remain blocked until the evidence is reconciled or an operator records an audited effects resolution. Never dismiss retained delivery as a substitute for that resolution.
+
+`allowedRoot` protects file tools; it is **not a bash sandbox**. Use a restricted remote account/container/chroot/forced command when arbitrary bash needs confinement. Remote authenticated content is trusted model input but is not descriptor attestation.
+
+## Interactive legacy relocation
+
+When `MONIKA_SSH_LOCK_DESCRIPTOR` is empty, the historical interactive flags remain available:
 
 - `--ssh user@host[:/remote/path]`
-- `--ssh-debug` → updates status bar with per‑tool remote/local info
-- `--ssh-verify /path` → checks and lists a remote path on connect
+- `--ssh-debug`
+- `--ssh-verify /path`
+- the `relocate` tool
 
-### CLI fallback parsing
-
-The extension also reads `process.argv` directly for `--ssh`, `--ssh-debug`, and `--ssh-verify` to support print/json mode where registered flags may not be wired early enough.
-
-## Remote AGENTS.md injection
-
-If `AGENTS.md` exists in the **remote cwd**, its contents are injected into the model context as a **user message** on each call. This is not a true “context file” (because extensions cannot modify the resource loader), but it is functionally equivalent for the model.
-
-Marker used in the injected message:
-
-```
-[Remote AGENTS.md]
-...
-```
-
-## Remote tool implementations
-
-### read / write / edit
-
-- Use `resolveRemotePath()` for consistent mapping.
-- `edit` uses the standard edit tool with remote read/write ops.
-- A transient “file not found” flash can occur in the UI during edit in SSH mode due to the edit tool’s pre‑flight access check and remote latency.
-
-### ls
-
-- Custom remote implementation using `ls -A -p` for directory markers.
-- Enforces local tool’s 50KB output cap and entry limits.
-
-### find
-
-- Uses **ripgrep** (`rg --files --hidden -g <pattern>`) on the remote.
-- Requires `rg` to be installed remotely.
-- Returns paths relative to the remote search directory.
-- Enforces output size and result limits similar to the local tool.
-
-### grep
-
-- Uses **ripgrep** in `--json` mode on the remote.
-- Requires `rg` to be installed remotely.
-- Reads matching files via `cat` over SSH to build context lines.
-- Enforces match limits and line truncation similar to the local tool.
-
-### bash
-
-- Runs `ssh remote "cd <remoteCwd> && <command>"`.
-
-## Known gotchas / pitfalls
-
-1. **Remote `rg` required for find/grep.**
-   - If `rg` isn’t installed, find/grep will error. There is no fallback to `fd` or `grep` because that would diverge from local behavior and .gitignore handling.
-
-2. **Path mapping assumes “local path == remote path” when absolute.**
-   - `resolveRemotePath()` maps:
-     - local paths that start with local cwd → remote cwd
-     - absolute paths → left as‑is
-     - relative paths → resolved under remote cwd
-
-3. **No true context files.**
-   - AGENTS.md is injected as a user message, not registered in the resource loader. The model sees it, but the UI won’t list it as a context file.
-
-4. **One remote per agent instance.**
-   - The extension stores a single `resolvedSsh`. Multiple remotes require multiple pi processes.
-
-5. **Non‑interactive SSH only.**
-   - Password prompts will fail (stdin is ignored). Key‑based auth is required.
-
-6. **`--ssh` parsing with colon.**
-   - Only `user@host:/absolute/path` is treated as a remote path; `:` in other contexts (e.g., IPv6) is handled safely.
-
-7. **Edit tool “file not found” flicker.**
-   - Caused by the edit tool’s early `access()` check and SSH latency. It doesn’t interrupt execution, but may show a brief UI error.
-
-8. **Auto‑load vs explicit `-e`.**
-   - The extension is auto‑loaded from `~/.pi/agent/extensions/`. Using `-e` can help confirm the correct file is loaded during debugging.
-
-## Development notes
-
-- `sshExec()` is the core primitive; all remote tools go through it.
-- Always use `resolveRemotePath()` for path mapping.
-- Keep output truncation behavior aligned with the built‑in tools to avoid model surprises.
-- When adding new remote tools, use the same “no silent local fallback” rule when `--ssh` is set.
+Legacy relocation is an operator convenience and is not the named-target security boundary. It may use the user's ordinary SSH configuration. Even in legacy mode, a requested but failed SSH connection never silently falls back to local tools.

@@ -21,7 +21,7 @@ This repo builds Monika's runtime containers and supporting services.
 - Use separate worktrees/directories for development branches. The autodeploy path must never run `git pull`; it may fetch/read git state to defer when the live checkout is dirty or behind upstream, but checkout updates remain deliberate operator actions.
 - Be careful editing `compose.yaml`, `scripts/deploy-if-safe`, `runtime/`, or anything bind-mounted into live containers from the live checkout. These files can affect the active runtime even before a container restart.
 - The runtime is standalone/container-owned. Do not reintroduce host mode, automatic host-shell execution, host-network deployment, or bind-mounted host `~/.pi` as canonical state.
-- Host/infra work should use explicit SSH relocation, not implicit host execution.
+- Host/infra work should use an explicit SSH relocation or administrator-configured locked execution target, never implicit host execution. Locked SSH leaves require `async:true` so effects uncertainty is durable.
 - When testing throwaway Monika containers, do **not** mount the live/in-use memstore database. Use ephemeral memstore state so two containers cannot lock or mutate the same SQLite DB.
 - The forum is a UI/projection service only. Pi JSONL sessions remain canonical.
 - Forum SQLite stores metadata/projection state; it must not talk directly to memstore or invent memory origins.

@@ -25,6 +25,10 @@ if [ -z "$IMAGE" ]; then
   exit 2
 fi
 
+# Deterministic locked-target checks use an injected fake transport; mandatory
+# image smoke never contacts an external SSH host.
+node --test "$SCRIPT_DIR/../ssh-lock.test.mjs"
+
 CONTAINER_NAME="${MONIKA_SMOKE_CONTAINER:-monika-smoke-$$}"
 AGENTD_CONTAINER_PORT="7724"
 MEMSTORE_SOCKET="/tmp/memstore.sock"
@@ -85,7 +89,7 @@ SMOKE_TMP_DIR="$(mktemp -d)"
 SMOKE_RUNTIME_SECRETS="$SMOKE_TMP_DIR/runtime-secrets"
 SMOKE_NETWORK="monika-smoke-net-$$"
 MOCK_MODEL_CONTAINER="monika-mock-model-$$"
-mkdir -p "$SMOKE_RUNTIME_SECRETS"
+mkdir -p "$SMOKE_RUNTIME_SECRETS/ssh/targets"
 docker network create "$SMOKE_NETWORK" >/dev/null
 docker run -d \
   --name "$MOCK_MODEL_CONTAINER" \
@@ -140,6 +144,8 @@ CONTAINER_ID="$(docker run -d \
   -e MONIKA_AGENTD_HOST=0.0.0.0 \
   -e MONIKA_AGENTD_PORT="$AGENTD_CONTAINER_PORT" \
   -e AGENTLOGS_HOME=/agentlogs-home \
+  -e PI_SUBAGENT_EXECUTION_TARGET_ROOT=/runtime/secrets/ssh/targets \
+  -e PI_SUBAGENT_SSH_LOCK_EXTENSION=/app/.pi/agent/extensions/ssh.ts \
   -v "$SMOKE_RUNTIME_SECRETS:/runtime/secrets:ro" \
   "$IMAGE")"
 AGENTD_PORT="$(docker port "$CONTAINER_NAME" "${AGENTD_CONTAINER_PORT}/tcp" | sed 's/.*://')"
@@ -186,6 +192,7 @@ pass "pi CLI pin active: ${PI_VERSION}"
 
 docker exec -i "$CONTAINER_NAME" node - <<'NODE_SUBAGENTS_PIN'
 const fs = require('node:fs');
+const { createHash } = require('node:crypto');
 if (process.env.PI_SUBAGENT_SESSION_ROOT !== '/app/.pi/agent/sessions/subagent') throw new Error('Dedicated subagent session root is not global');
 if (process.env.PI_SUBAGENT_RUNTIME_ROOT !== '/data/pi-subagents') throw new Error('Dedicated subagent runtime root is not global');
 const runtime = JSON.parse(fs.readFileSync('/run/monika-runtime-instance.json', 'utf8'));
@@ -193,6 +200,12 @@ if (runtime.version !== 1 || typeof runtime.id !== 'string' || !Number.isFinite(
 const asyncSource = fs.readFileSync('/opt/pi-subagents/src/runs/background/async-execution.ts', 'utf8');
 const runnerSource = fs.readFileSync('/opt/pi-subagents/src/runs/background/subagent-runner.ts', 'utf8');
 const watcherSource = fs.readFileSync('/opt/pi-subagents/src/runs/background/result-watcher.ts', 'utf8');
+const typesSource = fs.readFileSync('/opt/pi-subagents/src/shared/types.ts', 'utf8');
+const preflightSource = fs.readFileSync('/opt/pi-subagents/src/api/preflight.ts', 'utf8');
+if (!fs.existsSync('/opt/pi-subagents/src/runs/shared/execution-target.ts')) throw new Error('Execution-target runtime missing');
+if (!fs.existsSync('/app/.pi/agent/extensions/ssh-lock.mjs')) throw new Error('Locked SSH helper missing');
+if (!typesSource.includes('SUBAGENT_LIFECYCLE_ARTIFACT_VERSION = 4')) throw new Error('Lifecycle v4 missing');
+if (!preflightSource.includes('SUBAGENT_LAUNCH_CONTRACT_VERSION = 3')) throw new Error('Launch contract v3 missing');
 if (!asyncSource.includes('launch.json') || !asyncSource.includes('PI_SUBAGENTS_HOST_DRAINING')) throw new Error('Durable async launch/drain patch missing');
 if (!runnerSource.includes('Optional subagent artifact write failed')) throw new Error('Resilient artifact finalization patch missing');
 if (!watcherSource.includes('PI_SUBAGENTS_HOST_DRAINING')) throw new Error('Completion drain barrier patch missing');
@@ -204,6 +217,13 @@ if (reviewed.npmArtifactIntegrity !== 'sha512-pf7DxLBY9pFY3grOFgRfMqoS9QbElWP2UL
 }
 const settings = JSON.parse(fs.readFileSync('/app/.pi/agent/settings.json', 'utf8'));
 if (!settings.packages?.includes('/opt/pi-subagents')) throw new Error('Local reviewed pi-subagents package is not configured');
+if (process.env.MONIKA_SSH_LOCK_DESCRIPTOR) throw new Error('Default smoke runtime must remain local');
+if (!process.env.PI_SUBAGENT_EXECUTION_TARGET_ROOT) throw new Error('Execution target registry root is not configured');
+if (!/^[a-f0-9]{64}$/.test(process.env.PI_SUBAGENT_SSH_LOCK_CODE_DIGEST ?? '')) throw new Error('SSH lock code startup attestation missing');
+const sha = (value) => createHash('sha256').update(value).digest('hex');
+const extensionSha = sha(fs.readFileSync('/app/.pi/agent/extensions/ssh.ts'));
+const helperSha = sha(fs.readFileSync('/app/.pi/agent/extensions/ssh-lock.mjs'));
+if (sha(`${extensionSha}\n${helperSha}\n`) !== process.env.PI_SUBAGENT_SSH_LOCK_CODE_DIGEST) throw new Error('SSH lock code attestation mismatch');
 if (JSON.stringify(settings.subagents?.defaultExtensions) !== '[]') throw new Error('subagents.defaultExtensions must disable ambient extensions');
 for (const profile of ['advisor', 'delegate']) {
   if (settings.subagents?.agentOverrides?.[profile]?.disabled !== true) throw new Error(`Upstream ${profile} profile must be disabled`);

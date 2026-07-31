@@ -17,8 +17,25 @@
 
 import { spawn } from "node:child_process";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+// Runtime-owned plain ESM helper is copied beside this extension.
+// @ts-ignore no declaration file is needed in the Pi extension loader.
+import {
+	ATOMIC_WRITE_SCRIPT,
+	STARTUP_PROBE_SCRIPT,
+	appendEffectsRecord,
+	assertLockedDescriptorBinding,
+	effectsRecord,
+	loadLockedDescriptor,
+	lockedInputDecision,
+	mutationId,
+	parseCompletionTrailer,
+	redactLockedError,
+	runLockedSsh,
+	withBoundedReadRetry,
+} from "./ssh-lock.mjs";
 import {
 	type BashOperations,
 	createBashTool,
@@ -541,7 +558,170 @@ async function remoteGrep(
 	return { content: [{ type: "text", text: output }], details: Object.keys(details).length ? details : undefined };
 }
 
+type LockedState = "locked-pending" | "locked-verified" | "locked-failed";
+
+function registerLockedSsh(pi: ExtensionAPI, descriptorPath: string): void {
+	const fallbackCwd = process.cwd();
+	const evidencePath = process.env.PI_SUBAGENT_EFFECTS_EVIDENCE_PATH;
+	let state: LockedState = "locked-pending";
+	let failure = "SSH target verification is pending.";
+	let descriptor: any;
+	try {
+		const loaded = loadLockedDescriptor(descriptorPath, {
+			extensionPath: fileURLToPath(import.meta.url),
+			expectedCodeDigest: process.env.PI_SUBAGENT_SSH_LOCK_CODE_DIGEST,
+		});
+		descriptor = assertLockedDescriptorBinding(loaded, process.env.PI_SUBAGENT_EXECUTION_TARGET_NAME, process.env.PI_SUBAGENT_EXECUTION_TARGET_DIGEST);
+		appendEffectsRecord(evidencePath, { version: 1, ts: Date.now(), phase: "startup", effects_state: "none" });
+	} catch (error) {
+		state = "locked-failed";
+		failure = redactLockedError(error).error;
+	}
+
+	const blockedResult = () => ({
+		content: [{ type: "text" as const, text: JSON.stringify({ error: "ssh_lock_not_verified", state, detail: failure }) }],
+		isError: true,
+	});
+	const remotePath = (input: string | undefined): string => {
+		const raw = input?.trim() || ".";
+		if (raw === ".") return descriptor.cwd;
+		if (path.posix.isAbsolute(raw)) {
+			const local = normalizePosixPath(fallbackCwd);
+			const normalized = normalizePosixPath(raw);
+			if (isPathWithin(local, normalized)) return path.posix.join(descriptor.cwd, path.posix.relative(local, normalized));
+			return normalized;
+		}
+		return path.posix.join(descriptor.cwd, raw);
+	};
+	const runRead = (script: string, args: string[]) => withBoundedReadRetry(() => runLockedSsh(descriptor, script, args));
+	const pathGuard = `set -eu\np="$1"; root="$2"\ncase "$p" in /*) ;; *) exit 64;; esac\ncp=$(readlink -f -- "$p"); cr=$(readlink -f -- "$root")\ncase "$cp" in "$cr"|"$cr/"*) ;; *) exit 65;; esac\n`;
+	const readOps: ReadOperations = {
+		readFile: async (p) => (await runRead(`${pathGuard}cat -- "$cp"\n`, [remotePath(p), descriptor.allowedRoot])).stdout,
+		access: async (p) => { await runRead(`${pathGuard}test -r "$cp"\n`, [remotePath(p), descriptor.allowedRoot]); },
+		detectImageMimeType: async (p) => {
+			try {
+				const result = await runRead(`${pathGuard}file --mime-type -b -- "$cp"\n`, [remotePath(p), descriptor.allowedRoot]);
+				const mime = result.stdout.toString().trim();
+				return ["image/jpeg", "image/png", "image/gif", "image/webp"].includes(mime) ? mime : null;
+			} catch { return null; }
+		},
+	};
+	const writeFile = async (p: string, content: string | Buffer) => {
+		const id = mutationId();
+		appendEffectsRecord(evidencePath, effectsRecord("intent", "write", id));
+		const data = Buffer.isBuffer(content) ? content : Buffer.from(content);
+		const digest = (await import("node:crypto")).createHash("sha256").update(data).digest("hex");
+		try {
+			await runLockedSsh(descriptor, ATOMIC_WRITE_SCRIPT, [remotePath(p), descriptor.allowedRoot, digest], { stdin: data.toString("base64") });
+			appendEffectsRecord(evidencePath, effectsRecord("settled", "write", id, "confirmed"));
+		} catch (error) {
+			appendEffectsRecord(evidencePath, effectsRecord("settled", "write", id, "unknown"));
+			throw Object.assign(new Error("ssh_transport_ambiguous"), { cause: error, completion: "unknown", effects_state: "unknown" });
+		}
+	};
+	const writeOps: WriteOperations = {
+		writeFile,
+		mkdir: async (dir) => {
+			const id = mutationId();
+			appendEffectsRecord(evidencePath, effectsRecord("intent", "mkdir", id));
+			const script = `set -eu\np="$1"; root="$2"\ncr=$(readlink -f -- "$root"); planned=$(realpath -m -- "$p")\ncase "$planned" in "$cr"|"$cr/"*) ;; *) exit 65;; esac\nmkdir -p -- "$planned"\ncp=$(readlink -f -- "$planned"); case "$cp" in "$cr"|"$cr/"*) ;; *) exit 66;; esac\n`;
+			try {
+				await runLockedSsh(descriptor, script, [remotePath(dir), descriptor.allowedRoot]);
+				appendEffectsRecord(evidencePath, effectsRecord("settled", "mkdir", id, "confirmed"));
+			} catch (error) {
+				appendEffectsRecord(evidencePath, effectsRecord("settled", "mkdir", id, "unknown"));
+				throw Object.assign(new Error("ssh_transport_ambiguous"), { cause: error, completion: "unknown", effects_state: "unknown" });
+			}
+		},
+	};
+	const editOps: EditOperations = { readFile: readOps.readFile, access: readOps.access, writeFile };
+	const bashOps: BashOperations = {
+		exec: async (command, cwd, { onData, signal, timeout }) => {
+			const id = mutationId();
+			const token = mutationId().replaceAll("-", "");
+			appendEffectsRecord(evidencePath, effectsRecord("intent", "bash", id));
+			const script = `set +e\ncd -- "$1" || exit 70\nbash -lc "$2"\ncode=$?\nprintf '\\n__MONIKA_SSH_COMPLETE_${token}__:%s\\n' "$code"\nexit 0\n`;
+			try {
+				const result = await runLockedSsh(descriptor, script, [remotePath(cwd), command], { signal, timeoutMs: timeout ? timeout * 1000 : undefined });
+				const parsed = parseCompletionTrailer(result.stdout.toString("utf8"), token);
+				if (parsed.completion !== "known") throw Object.assign(new Error("ssh_transport_ambiguous"), parsed);
+				if (parsed.output) onData(Buffer.from(parsed.output));
+				if (result.stderr.length) onData(result.stderr);
+				appendEffectsRecord(evidencePath, effectsRecord("settled", "bash", id, "confirmed", { exitCode: parsed.exitCode }));
+				return { exitCode: parsed.exitCode };
+			} catch (error) {
+				appendEffectsRecord(evidencePath, effectsRecord("settled", "bash", id, "unknown"));
+				throw Object.assign(new Error("ssh_transport_ambiguous"), { cause: error, completion: "unknown", effects_state: "unknown" });
+			}
+		},
+	};
+
+	const localRead = createReadTool(fallbackCwd);
+	const localWrite = createWriteTool(fallbackCwd);
+	const localEdit = createEditTool(fallbackCwd);
+	const localLs = createLsTool(fallbackCwd);
+	const localFind = createFindTool(fallbackCwd);
+	const localGrep = createGrepTool(fallbackCwd);
+	const localBash = createBashTool(fallbackCwd);
+	pi.registerTool({ ...localRead, execute: (id, params, signal, onUpdate) => state === "locked-verified" ? createReadTool(fallbackCwd, readOps).execute(id, params, signal, onUpdate) : Promise.resolve(blockedResult()) });
+	pi.registerTool({ ...localWrite, execute: (id, params, signal, onUpdate) => state === "locked-verified" ? createWriteTool(fallbackCwd, writeOps).execute(id, params, signal, onUpdate) : Promise.resolve(blockedResult()) });
+	pi.registerTool({ ...localEdit, execute: (id, params, signal, onUpdate) => state === "locked-verified" ? createEditTool(fallbackCwd, editOps).execute(id, params, signal, onUpdate) : Promise.resolve(blockedResult()) });
+	pi.registerTool({ ...localBash, execute: (id, params, signal, onUpdate) => state === "locked-verified" ? createBashTool(fallbackCwd, bashOps).execute(id, params, signal, onUpdate) : Promise.resolve(blockedResult()) });
+	pi.registerTool({ ...localLs, async execute(_id, params) {
+		if (state !== "locked-verified") return blockedResult();
+		const typed = params as { path?: string; limit?: number };
+		try {
+			const result = await runRead(`${pathGuard}LC_ALL=C ls -A -p -- "$cp"\n`, [remotePath(typed.path), descriptor.allowedRoot]);
+			const entries = result.stdout.toString().trim().split("\n").filter(Boolean).sort((a: string, b: string) => a.localeCompare(b)).slice(0, typed.limit ?? DEFAULT_LS_LIMIT);
+			return { content: [{ type: "text" as const, text: entries.join("\n") || "(empty directory)" }] };
+		} catch (error) { return { ...blockedResult(), content: [{ type: "text" as const, text: JSON.stringify(redactLockedError(error)) }] }; }
+	} });
+	pi.registerTool({ ...localFind, async execute(_id, params) {
+		if (state !== "locked-verified") return blockedResult();
+		const typed = params as { pattern: string; path?: string; limit?: number };
+		const script = `${pathGuard}cd -- "$cp"\nset +e\nout=$(rg --files --hidden -g "$3"); code=$?\n[ "$code" -eq 0 ] || [ "$code" -eq 1 ] || exit "$code"\nprintf '%s\\n' "$out" | head -n "$4"\n`;
+		try { const result = await runRead(script, [remotePath(typed.path), descriptor.allowedRoot, typed.pattern, String(typed.limit ?? DEFAULT_FIND_LIMIT)]); return { content: [{ type: "text" as const, text: result.stdout.toString().trim() || "No files found matching pattern" }] }; }
+		catch (error) { return { ...blockedResult(), content: [{ type: "text" as const, text: JSON.stringify(redactLockedError(error)) }] }; }
+	} });
+	pi.registerTool({ ...localGrep, async execute(_id, params) {
+		if (state !== "locked-verified") return blockedResult();
+		const typed = params as { pattern: string; path?: string; limit?: number };
+		const script = `${pathGuard}set +e\nout=$(rg --line-number --color never -- "$3" "$cp"); code=$?\n[ "$code" -eq 0 ] || [ "$code" -eq 1 ] || exit "$code"\nprintf '%s\\n' "$out" | head -n "$4"\n`;
+		try { const result = await runRead(script, [remotePath(typed.path), descriptor.allowedRoot, typed.pattern, String(typed.limit ?? DEFAULT_GREP_LIMIT)]); return { content: [{ type: "text" as const, text: result.stdout.toString().trim() || "No matches found" }] }; }
+		catch (error) { return { ...blockedResult(), content: [{ type: "text" as const, text: JSON.stringify(redactLockedError(error)) }] }; }
+	} });
+
+	pi.on("session_start", async (_event, ctx) => {
+		if (state === "locked-failed") return;
+		try {
+			const result = await runLockedSsh(descriptor, STARTUP_PROBE_SCRIPT, [descriptor.cwd, descriptor.allowedRoot]);
+			const [hostname, cwd, allowedRoot, ...extra] = result.stdout.toString("utf8").trimEnd().split("\n");
+			if (extra.length || hostname !== descriptor.hostname || cwd !== descriptor.cwd || allowedRoot !== descriptor.allowedRoot || !isPathWithin(allowedRoot, cwd)) throw new Error("locked_probe_mismatch");
+			state = "locked-verified";
+			ctx.ui.setStatus("ssh", ctx.ui.theme.fg("accent", `SSH locked: ${descriptor.name}`));
+		} catch (error) {
+			state = "locked-failed";
+			failure = redactLockedError(error).error;
+			ctx.ui.setStatus("ssh", ctx.ui.theme.fg("error", `SSH locked failed: ${descriptor.name}`));
+		}
+	});
+	pi.on("input", async () => lockedInputDecision(state));
+	pi.on("tool_call", async () => state === "locked-verified" ? undefined : ({ block: true, reason: failure } as any));
+	pi.on("user_bash", (event) => state === "locked-verified" ? { operations: createRemoteBashOpsLocked(bashOps) } : { operations: createRemoteBashOpsLocked({ exec: async () => { throw new Error("ssh_lock_not_verified"); } } as BashOperations) });
+	pi.on("before_agent_start", async (event) => {
+		if (state !== "locked-verified") throw new Error("ssh_lock_not_verified");
+		return { systemPrompt: event.systemPrompt.replace(`Current working directory: ${event.systemPromptOptions?.cwd ?? fallbackCwd}`, `Current working directory: ${descriptor.cwd} (locked SSH target: ${descriptor.name})`) };
+	});
+}
+
+function createRemoteBashOpsLocked(ops: BashOperations): BashOperations { return ops; }
+
 export default function (pi: ExtensionAPI) {
+	const lockedDescriptor = process.env.MONIKA_SSH_LOCK_DESCRIPTOR?.trim();
+	if (lockedDescriptor) {
+		registerLockedSsh(pi, lockedDescriptor);
+		return;
+	}
 	pi.registerFlag("ssh", { description: "SSH remote: user@host or user@host:/path", type: "string" });
 	pi.registerFlag("ssh-debug", { description: "Enable SSH debug status output", type: "boolean" });
 	pi.registerFlag("ssh-verify", {

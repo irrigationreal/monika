@@ -16,6 +16,7 @@ import {
   prioritizeLifecycleRuns,
   quarantineLifecycleRun,
   resolvePendingSubagentDelivery,
+  resolveSubagentEffects,
   scanActiveLifecycleRuns,
   scanLifecycleSnapshot,
   validateLifecycleArtifact,
@@ -57,15 +58,16 @@ test('workload capping prioritizes blockers and reports omitted blocker details'
   const history = Array.from({ length: 70 }, (_, index) => ({ run_id: `history-${index}`, blocking: false, execution_state: 'terminal', delivery_state: 'settled-or-unavailable', updated_at: index }));
   const pending = { run_id: 'pending', blocking: false, execution_state: 'terminal', delivery_state: 'pending', updated_at: 1 };
   const blockers = Array.from({ length: 70 }, (_, index) => ({ run_id: `blocker-${index}`, blocking: true, execution_state: index === 0 ? 'uncertain' : 'active', delivery_state: 'pending', updated_at: index }));
-  const capped = capLifecycleRuns([...history, pending, ...blockers], 64);
-  assert.equal(capped.selected.every((run) => run.blocking), true);
+  const effectsUnknown = { run_id: 'effects-unknown', lifecycle_artifact_version: 4, blocking: false, execution_state: 'terminal', effects_state: 'unknown', delivery_state: 'settled', updated_at: 100 };
+  const capped = capLifecycleRuns([...history, pending, effectsUnknown, ...blockers], 64);
+  assert.equal(capped.selected.every((run) => run.blocking || run.effects_state === 'unknown'), true);
   assert.equal(capped.selected.length, 64);
-  assert.equal(capped.blockerCount, 70);
-  assert.equal(capped.omittedBlockerCount, 6);
-  assert.equal(capped.omitted, 77);
-  const mixed = prioritizeLifecycleRuns([...history, pending, blockers[0]], 64);
-  assert.equal(mixed[0].run_id, 'blocker-0');
-  assert.equal(mixed[1].run_id, 'pending');
+  assert.equal(capped.blockerCount, 71);
+  assert.equal(capped.omittedBlockerCount, 7);
+  assert.equal(capped.omitted, 78);
+  const mixed = prioritizeLifecycleRuns([...history, pending, blockers[0], effectsUnknown], 64);
+  assert.deepEqual(mixed.slice(0, 2).map((run) => run.run_id), ['effects-unknown', 'blocker-0']);
+  assert.equal(mixed[2].run_id, 'pending');
 });
 
 test('operator delivery resolution is audited and retains uncertain result bytes', async () => {
@@ -234,6 +236,102 @@ test('artifact validation rejects malformed identity and non-absolute paths', ()
   assert.equal(validateLifecycleArtifact(null), null);
   assert.equal(validateLifecycleArtifact({ lifecycleArtifactVersion: 1, runId: 'r', sessionId: 's', asyncDir: 'relative' }), null);
   assert.equal(validateLifecycleArtifact({ lifecycleArtifactVersion: 1, runId: 'other', sessionId: 's', asyncDir: '/tmp/x' }, { runId: 'r' }), null);
+});
+
+test('lifecycle v4 preserves separate state dimensions and only safe target identity', () => {
+  const artifact = validateLifecycleArtifact({
+    lifecycleArtifactVersion: 4, runId: 'r', sessionId: 's', asyncDir: '/tmp/r', state: 'complete',
+    execution_state: 'terminal', outcome_state: 'succeeded', effects_state: 'unknown', delivery_state: 'pending',
+    executionTarget: { kind: 'ssh', name: 'stanza' },
+  });
+  assert.equal(artifact.executionState, 'terminal');
+  assert.equal(artifact.effectsState, 'unknown');
+  assert.deepEqual(artifact.executionTarget, { kind: 'ssh', name: 'stanza' });
+  assert.equal(validateLifecycleArtifact({
+    lifecycleArtifactVersion: 4, runId: 'r', sessionId: 's', asyncDir: '/tmp/r', state: 'complete',
+    execution_state: 'terminal', outcome_state: 'succeeded', effects_state: 'unknown',
+  }), null);
+});
+
+test('terminal lifecycle v4 with effects unknown is quiescent but deployment-unsafe', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agentd-subagent-effects-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const asyncDir = path.join(root, 'remote-unknown'); await mkdir(asyncDir);
+  await writeFile(path.join(asyncDir, 'status.json'), JSON.stringify({
+    lifecycleArtifactVersion: 4, runId: 'remote-unknown', sessionId: 'parent-session', state: 'complete',
+    execution_state: 'terminal', outcome_state: 'succeeded', effects_state: 'unknown', delivery_state: 'pending',
+    executionTarget: { kind: 'ssh', name: 'stanza' }, processTerminal: observedProof('remote-unknown'), lastUpdate: 2,
+  }));
+  const snapshot = await scanLifecycleSnapshot({ lifecycleRoot: root, runtimeInstanceFile: path.join(root, 'absent-runtime') });
+  assert.equal(snapshot.active_count, 0, 'effects uncertainty does not fabricate a live runner');
+  assert.equal(snapshot.effects_unknown_count, 1, 'safe deployment remains fail-closed');
+  assert.equal(snapshot.runs[0].blocking, false);
+  assert.equal(snapshot.runs[0].effects_state, 'unknown');
+  await writeFile(path.join(asyncDir, 'effects-resolution.json'), JSON.stringify({
+    version: 1, kind: 'effects-attestation', runId: 'remote-unknown', effectsState: 'none', reason: 'forged sidecar', resolvedAt: 3,
+  }));
+  const forged = await scanLifecycleSnapshot({ lifecycleRoot: root, runtimeInstanceFile: path.join(root, 'absent-runtime') });
+  assert.equal(forged.effects_unknown_count, 1, 'an unaudited sidecar cannot unblock deployment');
+
+  const resolution = await resolveSubagentEffects({
+    lifecycleRoot: root, runId: 'remote-unknown', effectsState: 'confirmed',
+    reason: 'operator inspected the remote target and confirmed the partial write',
+    runtimeInstanceFile: path.join(root, 'absent-runtime'),
+  });
+  assert.equal(resolution.effectsState, 'confirmed');
+  const resolved = await scanLifecycleSnapshot({ lifecycleRoot: root, runtimeInstanceFile: path.join(root, 'absent-runtime') });
+  assert.equal(resolved.effects_unknown_count, 0);
+  assert.equal(resolved.runs[0].effects_state, 'confirmed');
+  assert.equal(resolved.runs[0].effects_resolution.reason, resolution.reason);
+  assert.match(await readFile(path.join(root, 'operator-resolutions.jsonl'), 'utf8'), /effects-attestation/);
+  const retried = await resolveSubagentEffects({
+    lifecycleRoot: root, runId: 'remote-unknown', effectsState: 'confirmed', reason: resolution.reason,
+    runtimeInstanceFile: path.join(root, 'absent-runtime'),
+  });
+  assert.deepEqual(retried, resolution, 'lost-response retries are idempotent');
+  await assert.rejects(() => resolveSubagentEffects({
+    lifecycleRoot: root, runId: 'remote-unknown', effectsState: 'none', reason: 'conflicting retry',
+    runtimeInstanceFile: path.join(root, 'absent-runtime'),
+  }), /already resolved/);
+});
+
+test('concurrent effects attestation retries do not remove each other\'s durable state', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agentd-subagent-effects-concurrent-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const asyncDir = path.join(root, 'remote-concurrent'); await mkdir(asyncDir);
+  await writeFile(path.join(asyncDir, 'status.json'), JSON.stringify({
+    lifecycleArtifactVersion: 4, runId: 'remote-concurrent', sessionId: 'parent-session', state: 'complete',
+    execution_state: 'terminal', outcome_state: 'failed', effects_state: 'unknown', delivery_state: 'pending',
+    executionTarget: { kind: 'ssh', name: 'stanza' }, processTerminal: observedProof('remote-concurrent'), lastUpdate: 2,
+  }));
+  const input = { lifecycleRoot: root, runId: 'remote-concurrent', effectsState: 'none', reason: 'operator proved no change', runtimeInstanceFile: path.join(root, 'none') };
+  const resolutions = await Promise.all([resolveSubagentEffects(input), resolveSubagentEffects(input)]);
+  assert.equal(resolutions.every((item) => item.effectsState === 'none'), true);
+  const snapshot = await scanLifecycleSnapshot({ lifecycleRoot: root, runtimeInstanceFile: path.join(root, 'none') });
+  assert.equal(snapshot.effects_unknown_count, 0);
+  assert.equal(snapshot.runs[0].effects_state, 'none');
+});
+
+test('effects attestation refuses active and legacy runs', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agentd-subagent-effects-reject-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  for (const [id, version, state, proof] of [
+    ['active', 4, 'running', null],
+    ['legacy', 3, 'complete', observedProof('legacy')],
+  ]) {
+    const asyncDir = path.join(root, id); await mkdir(asyncDir);
+    await writeFile(path.join(asyncDir, 'status.json'), JSON.stringify({
+      lifecycleArtifactVersion: version, runId: id, sessionId: 'parent-session', state,
+      ...(version >= 4 ? { execution_state: state === 'running' ? 'active' : 'terminal', outcome_state: 'unknown', effects_state: 'unknown', delivery_state: 'pending' } : {}),
+      ...(proof ? { processTerminal: proof } : {}), lastUpdate: 2,
+    }));
+  }
+  await assert.rejects(() => resolveSubagentEffects({
+    lifecycleRoot: root, runId: 'active', effectsState: 'none', reason: 'unsafe', runtimeInstanceFile: path.join(root, 'none'),
+  }), /durably inactive/);
+  await assert.rejects(() => resolveSubagentEffects({
+    lifecycleRoot: root, runId: 'legacy', effectsState: 'none', reason: 'not applicable', runtimeInstanceFile: path.join(root, 'none'),
+  }), /version 4/);
 });
 
 test('global lifecycle scan keeps unloaded and unproven runs deployment-active', async (t) => {

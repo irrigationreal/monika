@@ -557,7 +557,10 @@ export interface RobotSubagentRunDto {
   runId: string;
   state: string;
   executionState: 'active' | 'terminal' | 'interrupted' | 'uncertain' | 'quarantined';
+  outcomeState?: string | null;
+  effectsState?: 'none' | 'confirmed' | 'unknown' | null;
   deliveryState?: string | null;
+  executionTarget?: { kind: 'local' } | { kind: 'ssh'; name: string } | null;
   blocking: boolean;
   reason?: string | null;
   parentSessionId?: string | null;
@@ -574,6 +577,7 @@ export interface RobotDashboardDto {
   subagents?: {
     activeCount: number;
     uncertainCount: number;
+    effectsUnknownCount: number;
     runs: RobotSubagentRunDto[];
     groups: {
       blockers: RobotSubagentRunDto[];
