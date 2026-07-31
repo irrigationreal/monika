@@ -266,28 +266,32 @@ onBeforeUnmount(() => {
     class="vb-message-template-manager"
     :data-testid="system ? 'system-message-template-manager' : 'message-template-manager'"
   >
-    <p>Templates insert literal text into a draft. They never submit a post or change robot options.</p>
+    <p class="vb-template-intro">
+      Templates insert literal text into a draft. They never submit a post or change robot options.
+    </p>
     <div v-if="error" class="vb-login-error" role="alert">
       {{ error }}
       <button type="button" class="vb-small-btn" @click="load">Reload templates</button>
     </div>
     <div v-if="revisionConflict" class="vb-template-conflict" role="alert">
-      Your draft is preserved. Reload the latest version or save this draft as a copy.
-      <button type="button" class="vb-small-btn" @click="reloadConflict">Reload latest</button>
-      <button type="button" class="vb-small-btn" @click="saveConflictCopy">Save as copy</button>
+      <span>Your draft is preserved. Reload the latest version or save this draft as a copy.</span>
+      <div class="vb-template-notice-actions">
+        <button type="button" class="vb-small-btn" @click="reloadConflict">Reload latest</button>
+        <button type="button" class="vb-small-btn" @click="saveConflictCopy">Save as copy</button>
+      </div>
     </div>
     <div v-if="success" class="vb-success-banner" role="status" aria-live="polite">{{ success }}</div>
     <div class="vb-template-manager-grid">
       <div class="vb-template-list">
         <div class="vb-template-list-header">
-          <strong>{{ system ? 'System' : 'My' }} templates ({{ templates.length }} / {{ system ? 500 : 200 }})</strong
-          ><button type="button" class="vb-small-btn" @click="reset">New</button>
+          <strong>{{ system ? 'System' : 'My' }} templates ({{ templates.length }} / {{ system ? 500 : 200 }})</strong>
+          <button type="button" class="vb-small-btn" @click="reset">New</button>
         </div>
         <div v-if="!templates.length" class="vb-form-hint">No message templates yet.</div>
         <div v-for="(template, index) in templates" :key="template.id" class="vb-template-row">
           <button type="button" class="vb-template-name" @click="edit(template)">{{ template.name }}</button>
           <span>{{ template.category || 'Uncategorized' }} · {{ template.enabled ? 'Enabled' : 'Disabled' }}</span>
-          <div>
+          <div class="vb-template-row-actions">
             <button
               type="button"
               class="vb-small-btn"
@@ -306,15 +310,21 @@ onBeforeUnmount(() => {
             >
               ↓
             </button>
-            <button type="button" class="vb-small-btn" @click="duplicate(template)">Duplicate</button
-            ><button type="button" class="vb-small-btn vb-btn-danger" @click="remove(template)">Delete</button>
+            <button type="button" class="vb-small-btn" @click="duplicate(template)">Duplicate</button>
+            <button type="button" class="vb-small-btn vb-btn-danger" @click="remove(template)">Delete</button>
           </div>
         </div>
       </div>
       <div class="vb-template-form">
         <h3>{{ editing ? 'Edit' : 'Create' }} Message Template</h3>
-        <label>Name <input v-model="name" maxlength="80" data-testid="message-template-name" /></label>
-        <label>Category <input v-model="category" maxlength="40" list="message-template-categories" /></label>
+        <label class="vb-template-field">
+          <span>Name</span>
+          <input v-model="name" class="vb-template-control" maxlength="80" data-testid="message-template-name" />
+        </label>
+        <label class="vb-template-field">
+          <span>Category</span>
+          <input v-model="category" class="vb-template-control" maxlength="40" list="message-template-categories" />
+        </label>
         <datalist id="message-template-categories">
           <option
             v-for="item in [...new Set(templates.map((template) => template.category).filter(Boolean))]"
@@ -322,25 +332,54 @@ onBeforeUnmount(() => {
             :value="item || ''"
           />
         </datalist>
-        <label>Body <textarea v-model="body" rows="10" data-testid="message-template-body"></textarea></label>
-        <label>New-thread title (optional) <input v-model="threadTitle" maxlength="255" /></label>
-        <fieldset>
+        <label class="vb-template-field">
+          <span>Body</span>
+          <textarea
+            v-model="body"
+            class="vb-template-control vb-template-body-input"
+            rows="10"
+            data-testid="message-template-body"
+          ></textarea>
+        </label>
+        <label class="vb-template-field">
+          <span>New-thread title (optional)</span>
+          <input v-model="threadTitle" class="vb-template-control" maxlength="255" />
+        </label>
+        <fieldset class="vb-template-fieldset">
           <legend>Available in</legend>
-          <label><input v-model="contexts" type="checkbox" value="reply" /> Replies</label
-          ><label><input v-model="contexts" type="checkbox" value="new_thread" /> New threads</label>
+          <div class="vb-template-choice-group">
+            <label class="vb-template-inline-check"
+              ><input v-model="contexts" type="checkbox" value="reply" /> <span>Replies</span></label
+            >
+            <label class="vb-template-inline-check"
+              ><input v-model="contexts" type="checkbox" value="new_thread" /> <span>New threads</span></label
+            >
+          </div>
         </fieldset>
-        <fieldset>
+        <fieldset class="vb-template-fieldset">
           <legend>Forums</legend>
-          <label><input v-model="forumScope" type="radio" value="all" /> All forums</label
-          ><label><input v-model="forumScope" type="radio" value="selected" /> Selected forums</label>
-          <select v-if="forumScope === 'selected'" v-model="forumIds" multiple size="6">
+          <div class="vb-template-choice-group">
+            <label class="vb-template-inline-check"
+              ><input v-model="forumScope" type="radio" value="all" /> <span>All forums</span></label
+            >
+            <label class="vb-template-inline-check"
+              ><input v-model="forumScope" type="radio" value="selected" /> <span>Selected forums</span></label
+            >
+          </div>
+          <select v-if="forumScope === 'selected'" v-model="forumIds" class="vb-template-control" multiple size="6">
             <option v-for="forum in forums" :key="forum.id" :value="forum.id">
               {{ forum.name }}{{ forum.status === 'archived' ? ' (archived)' : '' }}
             </option>
           </select>
         </fieldset>
-        <label><input v-model="enabled" type="checkbox" /> Enabled</label>
-        <div class="vb-template-body-preview vb-rendered-content" v-html="bodyPreviewHtml"></div>
+        <label class="vb-template-inline-check vb-template-enabled">
+          <input v-model="enabled" type="checkbox" data-testid="message-template-enabled" />
+          <span data-testid="message-template-enabled-label">Enabled</span>
+        </label>
+        <div class="vb-template-preview-region" role="region" aria-label="Template preview">
+          <div class="vb-template-preview-label">Preview</div>
+          <div class="vb-template-body-preview vb-rendered-content" v-html="bodyPreviewHtml"></div>
+        </div>
         <div class="vb-modal-actions">
           <button
             type="button"
@@ -359,11 +398,35 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.vb-message-template-manager {
+  min-width: 0;
+  color: var(--text-primary);
+}
+
+.vb-template-intro {
+  margin: 0 0 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
 .vb-template-manager-grid {
   display: grid;
-  grid-template-columns: minmax(260px, 0.8fr) minmax(320px, 1.2fr);
+  grid-template-columns: minmax(240px, 0.8fr) minmax(300px, 1.2fr);
   gap: 16px;
+  min-width: 0;
 }
+
+.vb-template-list,
+.vb-template-form {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  box-shadow: 0 1px 3px var(--shadow-color);
+}
+
 .vb-template-list-header,
 .vb-template-row {
   display: flex;
@@ -371,45 +434,256 @@ onBeforeUnmount(() => {
   gap: 8px;
   align-items: center;
   flex-wrap: wrap;
-  padding: 8px;
-  border-bottom: 1px solid var(--vb-border, #aaa);
+  min-width: 0;
+  padding: 9px 4px;
+  border-bottom: 1px solid var(--border-default);
 }
+
+.vb-template-list-header {
+  color: var(--text-primary);
+}
+
+.vb-template-row {
+  color: var(--text-secondary);
+  transition: background-color var(--transition-fast);
+}
+
+.vb-template-row:hover {
+  background: var(--bg-surface-hover);
+}
+
 .vb-template-row > span {
   flex-basis: 100%;
-  font-size: 12px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
 }
+
 .vb-template-name {
-  font-weight: bold;
-  background: none;
+  min-width: 0;
+  max-width: 100%;
+  padding: 2px 0;
   border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: bold;
+  text-align: left;
   text-decoration: underline;
+  overflow-wrap: anywhere;
   cursor: pointer;
 }
+
+.vb-template-name:hover {
+  color: var(--text-secondary);
+}
+
+.vb-template-name:focus-visible {
+  outline: 2px solid var(--status-info);
+  outline-offset: 2px;
+}
+
+.vb-template-row-actions,
+.vb-template-notice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
 .vb-template-form {
   display: grid;
-  gap: 10px;
+  align-content: start;
+  gap: 12px;
 }
-.vb-template-form label {
+
+.vb-template-form h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-family: var(--font-heading);
+}
+
+.vb-template-field {
   display: grid;
-  gap: 4px;
+  gap: 5px;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-weight: bold;
 }
-.vb-template-form fieldset label {
-  display: inline-flex;
-  margin-right: 14px;
-}
-.vb-template-form select {
+
+.vb-template-control {
   width: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast),
+    background-color var(--transition-fast);
 }
+
+.vb-template-control:focus,
+.vb-template-control:focus-visible {
+  outline: none;
+  border-color: var(--brand-secondary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--status-info) 28%, transparent);
+}
+
+.vb-template-control:disabled {
+  border-color: var(--border-muted);
+  background: var(--bg-surface-muted);
+  color: var(--text-disabled);
+  cursor: not-allowed;
+}
+
+.vb-template-control option,
+.vb-template-control optgroup {
+  background: var(--bg-input);
+  color: var(--text-primary);
+}
+
+.vb-template-body-input {
+  min-height: 180px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.vb-template-fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--border-default);
+  border-radius: 3px;
+  background: var(--bg-surface-alt);
+  color: var(--text-secondary);
+}
+
+.vb-template-fieldset legend {
+  padding: 0 5px;
+  color: var(--text-primary);
+  font-weight: bold;
+}
+
+.vb-template-choice-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-bottom: 8px;
+}
+
+.vb-template-choice-group:last-child {
+  margin-bottom: 0;
+}
+
+.vb-template-inline-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: fit-content;
+  min-width: 0;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.vb-template-inline-check input[type='checkbox'],
+.vb-template-inline-check input[type='radio'] {
+  flex: 0 0 auto;
+  width: auto;
+  height: auto;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--brand-secondary);
+}
+
+.vb-template-inline-check input:focus-visible {
+  outline: 2px solid var(--status-info);
+  outline-offset: 2px;
+}
+
+.vb-template-enabled {
+  font-weight: bold;
+}
+
+.vb-template-preview-region {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-default);
+  border-radius: 3px;
+  background: var(--bg-surface-alt);
+}
+
+.vb-template-preview-label {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-default);
+  background: var(--bg-surface-muted);
+  color: var(--text-primary);
+  font-weight: bold;
+}
+
 .vb-template-body-preview {
-  min-height: 40px;
-  max-height: 140px;
+  min-height: 48px;
+  max-height: 180px;
   overflow: auto;
-  border: 1px solid var(--vb-border, #aaa);
-  padding: 8px;
+  padding: 10px;
+  color: var(--text-primary);
 }
+
+.vb-template-conflict,
+.vb-success-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 9px 10px;
+  border-radius: 3px;
+  color: var(--text-primary);
+  font-size: 11px;
+}
+
+.vb-template-conflict {
+  border: 1px solid var(--status-warning);
+  background: var(--status-warning-bg);
+}
+
+.vb-success-banner {
+  border: 1px solid var(--status-success);
+  background: var(--status-success-bg);
+}
+
 @media (max-width: 760px) {
   .vb-template-manager-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 600px) {
+  .vb-template-list,
+  .vb-template-form {
+    padding: 10px;
+  }
+
+  .vb-template-list-header,
+  .vb-template-row {
+    align-items: flex-start;
+  }
+
+  .vb-template-row-actions {
+    width: 100%;
+  }
+
+  .vb-template-row-actions .vb-small-btn {
+    flex: 1 1 auto;
+  }
+
+  .vb-template-choice-group {
+    flex-direction: column;
   }
 }
 </style>

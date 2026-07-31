@@ -103,7 +103,7 @@ watch(
     <input
       v-model="query"
       type="search"
-      class="vb-template-search"
+      class="vb-template-control vb-template-search"
       placeholder="Search templates"
       aria-label="Search message templates"
       data-testid="message-template-search"
@@ -111,6 +111,7 @@ watch(
     <select
       :id="`message-template-${context}`"
       v-model="selectedId"
+      class="vb-template-control vb-template-select"
       :disabled="loading || !filtered.length"
       data-testid="message-template-select"
     >
@@ -150,11 +151,20 @@ watch(
     </button>
     <router-link class="vb-template-manage" :to="{ name: 'user.messageTemplates' }">Manage</router-link>
     <div v-if="error" class="vb-form-error" role="alert">{{ error }}</div>
-    <div v-if="selected" class="vb-template-preview" data-testid="message-template-preview">
-      <div>
+    <div
+      v-if="selected"
+      class="vb-template-preview"
+      data-testid="message-template-preview"
+      role="region"
+      aria-label="Selected template preview"
+    >
+      <div class="vb-template-preview-heading">Preview</div>
+      <div class="vb-template-preview-meta">
         <strong>{{ selected.name }}</strong> <span>{{ selected.scope === 'personal' ? 'Personal' : 'System' }}</span>
       </div>
-      <div v-if="selected.threadTitle"><strong>Thread title:</strong> {{ selected.threadTitle }}</div>
+      <div v-if="selected.threadTitle" class="vb-template-preview-title">
+        <strong>Thread title:</strong> {{ selected.threadTitle }}
+      </div>
       <div class="vb-rendered-content vb-template-preview-body" v-html="previewHtml"></div>
       <button
         v-if="selected.scope === 'system'"
@@ -175,25 +185,118 @@ watch(
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
+  min-width: 0;
   margin-bottom: 8px;
+  color: var(--text-primary);
 }
+
+.vb-template-label {
+  color: var(--text-primary);
+  font-weight: bold;
+}
+
+.vb-template-control {
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast),
+    background-color var(--transition-fast);
+}
+
+.vb-template-control:focus,
+.vb-template-control:focus-visible {
+  outline: none;
+  border-color: var(--brand-secondary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--status-info) 28%, transparent);
+}
+
+.vb-template-control:disabled {
+  border-color: var(--border-muted);
+  background: var(--bg-surface-muted);
+  color: var(--text-disabled);
+  cursor: not-allowed;
+}
+
+.vb-template-control option,
+.vb-template-control optgroup {
+  background: var(--bg-input);
+  color: var(--text-primary);
+}
+
 .vb-template-search {
+  flex: 1 1 150px;
   min-width: 150px;
 }
-.vb-message-template-picker select {
+
+.vb-template-select {
+  flex: 1 1 220px;
   min-width: 220px;
+  cursor: pointer;
 }
+
+.vb-template-select:disabled {
+  cursor: not-allowed;
+}
+
 .vb-template-manage {
+  color: var(--text-primary);
   font-size: 12px;
+  text-decoration: underline;
 }
+
 .vb-template-preview {
   flex-basis: 100%;
-  border: 1px solid var(--vb-border, #aaa);
-  padding: 8px;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-default);
+  border-radius: 3px;
+  background: var(--bg-surface-alt);
+  color: var(--text-primary);
 }
+
+.vb-template-preview-heading {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-default);
+  background: var(--bg-surface-muted);
+  color: var(--text-primary);
+  font-weight: bold;
+}
+
+.vb-template-preview-meta,
+.vb-template-preview-title {
+  padding: 7px 9px 0;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
 .vb-template-preview-body {
   max-height: 180px;
   overflow: auto;
   margin: 6px 0;
+  padding: 0 9px;
+}
+
+.vb-template-preview > .vb-small-btn {
+  margin: 0 9px 9px;
+}
+
+@media (max-width: 600px) {
+  .vb-template-label,
+  .vb-template-search,
+  .vb-template-select {
+    flex-basis: 100%;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .vb-message-template-picker > .vb-small-btn {
+    flex: 1 1 auto;
+  }
 }
 </style>
