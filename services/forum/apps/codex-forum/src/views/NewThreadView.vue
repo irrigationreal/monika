@@ -3,7 +3,9 @@ import { ref, computed, onMounted, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { useForumState } from '../composables/useForumState';
 import { useMarkdown } from '../composables/useMarkdown';
-import { api } from '../lib/apiClient';
+import { api, type MessageTemplateDto } from '../lib/apiClient';
+import MessageTemplatePicker from '../components/MessageTemplatePicker.vue';
+import { applyTemplateToTextarea } from '../composables/useMessageTemplateInsertion';
 
 const router = useRouter();
 const route = useRoute();
@@ -12,6 +14,7 @@ const { renderContent } = useMarkdown();
 
 const title = ref('');
 const body = ref('');
+const editorTextareaRef = ref<HTMLTextAreaElement | null>(null);
 const isSubmitting = ref(false);
 const isUploading = ref(false);
 const errorMessage = ref('');
@@ -71,7 +74,7 @@ function formatBytes(bytes: number): string {
 }
 
 function insertBBCode(tag: string, defaultText?: string): void {
-  const textarea = document.querySelector('.vb-editor-textarea') as HTMLTextAreaElement | null;
+  const textarea = editorTextareaRef.value;
   if (!textarea) return;
 
   const start = textarea.selectionStart;
@@ -99,6 +102,13 @@ function insertBBCode(tag: string, defaultText?: string): void {
   setTimeout(() => {
     textarea.focus();
   }, 0);
+}
+
+async function applyMessageTemplate(template: MessageTemplateDto, replace: boolean): Promise<void> {
+  await applyTemplateToTextarea({ body, textarea: editorTextareaRef, templateBody: template.body, replace });
+  if (!template.threadTitle) return;
+  if (!title.value.trim()) title.value = template.threadTitle;
+  else if (replace && window.confirm('Replace the current thread title with the template title?')) title.value = template.threadTitle;
 }
 
 function renderPreview(text: string): string {
@@ -317,9 +327,16 @@ onMounted(async () => {
               <button type="button" class="vb-editor-btn" title="List" @click="insertBBCode('list')">&#9776;</button>
             </div>
 
+            <MessageTemplatePicker
+              context="new_thread"
+              :forum-id="routeForumId"
+              :has-draft="body.length > 0 || title.length > 0"
+              @apply="applyMessageTemplate"
+            />
             <!-- Textarea -->
             <div class="vb-form-row">
               <textarea
+                ref="editorTextareaRef"
                 v-model="body"
                 class="vb-editor-textarea"
                 rows="15"

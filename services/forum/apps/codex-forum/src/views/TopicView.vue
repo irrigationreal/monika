@@ -6,9 +6,11 @@ import DecryptText from '../components/DecryptText.vue';
 import LiveAssistantTurn from '../components/LiveAssistantTurn.vue';
 import OperationalEventBar from '../components/OperationalEventBar.vue';
 import PostTracePanel from '../components/PostTracePanel.vue';
+import MessageTemplatePicker from '../components/MessageTemplatePicker.vue';
 import ToolMiniView from '../components/ToolMiniView.vue';
 import { useForumState } from '../composables/useForumState';
 import { useMarkdown } from '../composables/useMarkdown';
+import { applyTemplateToTextarea } from '../composables/useMessageTemplateInsertion';
 import { api } from '../lib/apiClient';
 import { createClientOperationId } from '../lib/clientOperationId';
 import { parseReasoningSteps } from '../lib/reasoning';
@@ -20,6 +22,7 @@ import type {
   AttachmentDto,
   CompactionOperationDto,
   ForumDto,
+  MessageTemplateDto,
   PostDto,
   RobotPersonaDto,
   SessionInspectorDto,
@@ -57,6 +60,7 @@ const router = useRouter();
 const state = useForumState();
 
 const replyBody = ref('');
+const quickReplyTextareaRef = ref<HTMLTextAreaElement | null>(null);
 const editingPost = ref<PostDto | null>(null);
 const editBody = ref('');
 const showDeleteConfirm = ref<string | null>(null);
@@ -1287,6 +1291,10 @@ async function handleDelete(postId: string): Promise<void> {
   }
 }
 
+async function applyQuickReplyTemplate(template: MessageTemplateDto, replace: boolean): Promise<void> {
+  await applyTemplateToTextarea({ body: replyBody, textarea: quickReplyTextareaRef, templateBody: template.body, replace });
+}
+
 async function reply(): Promise<void> {
   if (!replyBody.value.trim()) return;
   const shouldClearReplyFiles = replyFiles.value.length > 0;
@@ -1806,16 +1814,16 @@ onUnmounted(() => {
     <div v-if="topicLineageLabel" class="vb-reply-context-meter vb-lineage-banner">
       <div class="vb-lineage-summary">
         <strong>{{ topicLineageLabel }}</strong>
-        <router-link v-if="topicPiSession?.parentTopicId" class="vb-lineage-link" :to="`/topics/${topicPiSession.parentTopicId}`">Open parent thread</router-link>
-        <span v-if="topicPiSession?.lineageSource" class="vb-context-model">· {{ topicPiSession.lineageSource }}</span>
+        <router-link v-if="topicPiSession?.['parentTopicId']" class="vb-lineage-link" :to="`/topics/${topicPiSession['parentTopicId']}`">Open parent thread</router-link>
+        <span v-if="topicPiSession?.['lineageSource']" class="vb-context-model">· {{ topicPiSession['lineageSource'] }}</span>
       </div>
       <details>
         <summary>Details</summary>
-        <div v-if="topicPiSession?.parentId"><strong>Parent session:</strong> {{ topicPiSession.parentId }}</div>
-        <div v-if="topicPiSession?.parentPath"><strong>Parent path:</strong> {{ topicPiSession.parentPath }}</div>
-        <div v-if="topicPiSession?.id"><strong>Current session:</strong> {{ topicPiSession.id }}</div>
-        <div v-if="topicPiSession?.path"><strong>Current path:</strong> {{ topicPiSession.path }}</div>
-        <div v-if="topicPiSession?.cwd"><strong>CWD:</strong> {{ topicPiSession.cwd }}</div>
+        <div v-if="topicPiSession?.['parentId']"><strong>Parent session:</strong> {{ topicPiSession['parentId'] }}</div>
+        <div v-if="topicPiSession?.['parentPath']"><strong>Parent path:</strong> {{ topicPiSession['parentPath'] }}</div>
+        <div v-if="topicPiSession?.['id']"><strong>Current session:</strong> {{ topicPiSession['id'] }}</div>
+        <div v-if="topicPiSession?.['path']"><strong>Current path:</strong> {{ topicPiSession['path'] }}</div>
+        <div v-if="topicPiSession?.['cwd']"><strong>CWD:</strong> {{ topicPiSession['cwd'] }}</div>
       </details>
     </div>
 
@@ -2603,7 +2611,13 @@ onUnmounted(() => {
           <span class="vb-robot-error-detail">{{ state.robotState.value.lastTurnError.message }}</span>
         </div>
         <label>Message:</label>
-        <textarea v-model="replyBody" rows="6" placeholder="Type your reply here..."></textarea>
+        <MessageTemplatePicker
+          context="reply"
+          :forum-id="state.selectedTopic.value?.forumId ?? null"
+          :has-draft="replyBody.length > 0"
+          @apply="applyQuickReplyTemplate"
+        />
+        <textarea ref="quickReplyTextareaRef" v-model="replyBody" rows="6" placeholder="Type your reply here..."></textarea>
         <div class="vb-reply-attachments">
           <label class="vb-attachment-label">Attachments:</label>
           <input ref="replyFileInputRef" class="vb-attachment-input" type="file" multiple @change="handleReplyFiles" />

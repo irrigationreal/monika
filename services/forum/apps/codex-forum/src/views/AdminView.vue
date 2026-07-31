@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useForumState } from '../composables/useForumState';
+import MessageTemplateManager from '../components/MessageTemplateManager.vue';
 import {
   api,
   type ForumDto,
@@ -38,8 +39,10 @@ const activeTab = ref<
   | 'deploy'
   | 'sync'
   | 'robots'
+  | 'message-templates'
   | 'tampers'
 >('forums');
+const messageTemplatesOpened = ref(false);
 
 // Forums list
 const forums = ref<ForumDto[]>([]);
@@ -414,6 +417,10 @@ const forumNameById = computed(() => {
     map.set(forum.id, forum.name);
   });
   return map;
+});
+
+watch(activeTab, (tab) => {
+  if (tab === 'message-templates') messageTemplatesOpened.value = true;
 });
 
 watch([activeTab, personaForumId], async ([tab]) => {
@@ -1938,6 +1945,13 @@ onMounted(async () => {
           @click="activeTab = 'sync'"
         >
           Sync Health
+        </button>
+        <button
+          class="vb-admin-tab"
+          :class="{ active: activeTab === 'message-templates' }"
+          @click="activeTab = 'message-templates'"
+        >
+          Message Templates
         </button>
         <button
           class="vb-admin-tab"
@@ -3737,6 +3751,12 @@ onMounted(async () => {
       </div>
 
       <!-- Robot Automations Tab -->
+      <!-- Message Templates Tab -->
+      <div v-if="messageTemplatesOpened" v-show="activeTab === 'message-templates'" class="vb-admin-panel">
+        <h3 class="vb-admin-section-title">System Message Templates</h3>
+        <MessageTemplateManager system />
+      </div>
+
       <div v-if="activeTab === 'robots'" class="vb-admin-panel">
         <!-- Robot Settings Section -->
         <h3 class="vb-admin-section-title">Robot Settings</h3>

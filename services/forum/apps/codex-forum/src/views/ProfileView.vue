@@ -466,6 +466,7 @@ onMounted(async () => {
             </div>
             <div class="vb-modal-actions">
               <button class="vb-btn" @click="startEdit">Edit Profile</button>
+              <router-link class="vb-btn vb-btn-secondary" :to="{ name: 'user.messageTemplates' }">Message Templates</router-link>
               <button class="vb-btn vb-btn-secondary" @click="goHome">Back to Forum</button>
             </div>
           </template>

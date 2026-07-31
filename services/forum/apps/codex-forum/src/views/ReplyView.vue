@@ -3,6 +3,9 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useForumState } from '../composables/useForumState';
 import { useMarkdown } from '../composables/useMarkdown';
+import MessageTemplatePicker from '../components/MessageTemplatePicker.vue';
+import { applyTemplateToTextarea } from '../composables/useMessageTemplateInsertion';
+import type { MessageTemplateDto } from '../lib/apiClient';
 
 const router = useRouter();
 const route = useRoute();
@@ -10,6 +13,7 @@ const state = useForumState();
 const { renderContent } = useMarkdown();
 
 const body = ref('');
+const editorTextareaRef = ref<HTMLTextAreaElement | null>(null);
 const isSubmitting = ref(false);
 const isUploading = ref(false);
 const errorMessage = ref('');
@@ -103,7 +107,7 @@ function formatReasoningLabel(value: string): string {
 }
 
 function insertBBCode(tag: string, defaultText?: string): void {
-  const textarea = document.querySelector('.vb-editor-textarea') as HTMLTextAreaElement | null;
+  const textarea = editorTextareaRef.value;
   if (!textarea) return;
 
   const start = textarea.selectionStart;
@@ -130,6 +134,10 @@ function insertBBCode(tag: string, defaultText?: string): void {
   setTimeout(() => {
     textarea.focus();
   }, 0);
+}
+
+async function applyMessageTemplate(template: MessageTemplateDto, replace: boolean): Promise<void> {
+  await applyTemplateToTextarea({ body, textarea: editorTextareaRef, templateBody: template.body, replace });
 }
 
 function renderPreview(text: string): string {
@@ -474,8 +482,15 @@ onMounted(async () => {
               Robot is responding right now — submitting this reply will interrupt and steer the agent.
             </div>
 
+            <MessageTemplatePicker
+              context="reply"
+              :forum-id="state.selectedTopic.value?.forumId ?? null"
+              :has-draft="body.length > 0"
+              @apply="applyMessageTemplate"
+            />
             <div class="vb-form-row">
               <textarea
+                ref="editorTextareaRef"
                 v-model="body"
                 class="vb-editor-textarea"
                 rows="12"

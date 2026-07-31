@@ -7,6 +7,7 @@ import type {
   ForumDto,
   IdentityDto,
   InviteDto,
+  MessageTemplateDto,
   PlanDto,
   PostDto,
   RobotPersonaDto,
@@ -24,7 +25,7 @@ import type {
   UserPostHistoryResponseDto,
   ForumThemeKey
 } from '@irrigationreal/codex-forum-contracts';
-import type { CompactionOperation, ExternalRef, PlanArtifact, RobotState, ToolRunSummary, TopicOperationalEvent } from '@irrigationreal/codex-forum-core';
+import type { CompactionOperation, ExternalRef, MessageTemplate, PlanArtifact, RobotState, ToolRunSummary, TopicOperationalEvent } from '@irrigationreal/codex-forum-core';
 import type { ChatCategoryRow, ChatMessageRow, ChatRoomRow } from '../db';
 import type {
   Attachment,
@@ -45,6 +46,25 @@ import type {
 } from './domain';
 
 type ChatCategorySummaryRow = ChatCategoryRow & { room_count: number };
+
+export function mapMessageTemplateToDto(template: MessageTemplate): MessageTemplateDto {
+  return {
+    id: template.id,
+    scope: template.scope,
+    name: template.name,
+    category: template.category,
+    body: template.body,
+    threadTitle: template.threadTitle,
+    forumScope: template.forumScope,
+    forumIds: template.forumIds,
+    contexts: template.contexts,
+    enabled: template.enabled,
+    sortOrder: template.sortOrder,
+    revision: template.revision,
+    createdAt: template.createdAt,
+    updatedAt: template.updatedAt
+  };
+}
 
 export function mapTopicToDto(topic: TopicReadModel): TopicDto {
   const dto: TopicDto = {

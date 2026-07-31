@@ -3,6 +3,7 @@ import type {
   ExternalRefRow,
   IdentityRow,
   InviteRow,
+  MessageTemplateRow,
   PlanRow,
   PostRow,
   RobotStateRow,
@@ -21,6 +22,7 @@ import type {
   ExternalScopeKind,
   Identity,
   IdentityKind,
+  MessageTemplate,
   Post,
   RobotActivity,
   RobotState,
@@ -93,6 +95,32 @@ export function mapUserFileRowToDomain(row: UserFileRow): UserFile {
     mimeType: row.mime_type,
     sizeBytes: row.size_bytes,
     createdAt: row.created_at
+  };
+}
+
+export function mapMessageTemplateRowToDomain(
+  row: MessageTemplateRow,
+  contexts: MessageTemplate['contexts'],
+  forumIds: string[]
+): MessageTemplate {
+  return {
+    id: row.id,
+    scope: row.scope as MessageTemplate['scope'],
+    ownerIdentityId: row.owner_identity_id,
+    name: row.name,
+    category: row.category,
+    body: row.body,
+    threadTitle: row.thread_title,
+    forumScope: row.forum_scope as MessageTemplate['forumScope'],
+    forumIds,
+    contexts,
+    enabled: Boolean(row.enabled),
+    sortOrder: row.sort_order,
+    revision: row.revision,
+    createdBy: row.created_by,
+    updatedBy: row.updated_by,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
   };
 }
 

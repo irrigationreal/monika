@@ -99,6 +99,17 @@ Defaults:
 - UI dev server: `http://localhost:5173`
 - API base URL env: `CODEX_FORUM_BASE_URL`
 
+## Message Templates
+
+Users can keep private, account-level Message Templates and insert them into quick
+reply, full reply, and new-thread drafts. Templates support optional categories,
+reply/new-thread applicability, optional new-thread titles, and all-forum or
+exact-forum scope. Administrators maintain a separate system template library.
+Selection inserts literal editable text; it never submits or changes robot options.
+
+Manage personal templates at `/profile/message-templates` and system templates in
+the Admin Panel. See `docs/CURL_EXAMPLES.md` and the OpenAPI document for APIs.
+
 ## API + integrations
 
 The API is designed for automation and external adapters:

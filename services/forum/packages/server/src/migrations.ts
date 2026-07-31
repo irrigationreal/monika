@@ -1308,6 +1308,51 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 35,
+    name: 'message-templates',
+    up: (db) => {
+      db.exec(`
+        create table message_templates (
+          id text primary key,
+          scope text not null check (scope in ('personal', 'system')),
+          owner_identity_id text,
+          name text not null,
+          category text,
+          body text not null,
+          thread_title text,
+          forum_scope text not null check (forum_scope in ('all', 'selected')),
+          enabled integer not null default 1,
+          sort_order integer not null default 0,
+          revision integer not null default 1,
+          created_by text,
+          updated_by text,
+          created_at text not null,
+          updated_at text not null,
+          check ((scope = 'personal' and owner_identity_id is not null) or (scope = 'system' and owner_identity_id is null)),
+          foreign key (owner_identity_id) references identities(id) on delete cascade,
+          foreign key (created_by) references identities(id) on delete set null,
+          foreign key (updated_by) references identities(id) on delete set null
+        );
+        create table message_template_contexts (
+          template_id text not null,
+          context text not null check (context in ('reply', 'new_thread')),
+          primary key (template_id, context),
+          foreign key (template_id) references message_templates(id) on delete cascade
+        );
+        create table message_template_forums (
+          template_id text not null,
+          forum_id text not null,
+          primary key (template_id, forum_id),
+          foreign key (template_id) references message_templates(id) on delete cascade,
+          foreign key (forum_id) references forums(id) on delete cascade
+        );
+        create index idx_message_templates_personal on message_templates(owner_identity_id, sort_order, created_at);
+        create index idx_message_templates_system on message_templates(scope, sort_order, created_at);
+        create index idx_message_template_forums_forum on message_template_forums(forum_id, template_id);
+      `);
+    },
+  },
 ];
 
 export const SCHEMA_VERSION: number = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;

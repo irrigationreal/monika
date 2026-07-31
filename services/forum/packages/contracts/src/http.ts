@@ -2,12 +2,15 @@ import type {
   ExternalRefDto,
   ForumDto,
   IdentityDto,
+  MessageTemplateDto,
+  MessageTemplateListResponseDto,
   PostDto,
   RobotStateDto,
   SessionDto,
   SessionInspectorDto,
   TopicDto
 } from './dto';
+import type { MessageTemplateContext, MessageTemplateForumScope } from '@irrigationreal/codex-forum-core';
 import type { ForumThemeKey } from './themes';
 import type { PageResponse } from './pagination';
 
@@ -77,6 +80,25 @@ export interface RegisterRequest {
   password?: string;
   email?: string;
   inviteCode?: string;
+}
+
+export interface MessageTemplateWriteRequest {
+  name: string;
+  category?: string | null;
+  body: string;
+  threadTitle?: string | null;
+  forumScope: MessageTemplateForumScope;
+  forumIds: string[];
+  contexts: MessageTemplateContext[];
+  enabled: boolean;
+}
+
+export interface MessageTemplateUpdateRequest extends MessageTemplateWriteRequest {
+  revision: number;
+}
+
+export interface MessageTemplateReorderRequest {
+  items: { id: string; revision: number }[];
 }
 
 export interface UpdatePrivateEmailRequest {
@@ -315,6 +337,17 @@ export interface ForumApi {
   getRobotState(topicId: string): Promise<RobotStateDto>;
   listIdentities(topicId: string, page?: number, pageSize?: number): Promise<PageResponse<IdentityDto>>;
   getIdentity(identityId: string): Promise<IdentityDto>;
+  listEffectiveMessageTemplates(context: MessageTemplateContext, forumId: string): Promise<MessageTemplateListResponseDto>;
+  listMyMessageTemplates(): Promise<MessageTemplateListResponseDto>;
+  createMessageTemplate(req: MessageTemplateWriteRequest): Promise<MessageTemplateDto>;
+  updateMessageTemplate(id: string, req: MessageTemplateUpdateRequest): Promise<MessageTemplateDto>;
+  deleteMessageTemplate(id: string, revision: number): Promise<{ ok: boolean }>;
+  reorderMessageTemplates(req: MessageTemplateReorderRequest): Promise<MessageTemplateListResponseDto>;
+  listSystemMessageTemplates(): Promise<MessageTemplateListResponseDto>;
+  createSystemMessageTemplate(req: MessageTemplateWriteRequest): Promise<MessageTemplateDto>;
+  updateSystemMessageTemplate(id: string, req: MessageTemplateUpdateRequest): Promise<MessageTemplateDto>;
+  deleteSystemMessageTemplate(id: string, revision: number): Promise<{ ok: boolean }>;
+  reorderSystemMessageTemplates(req: MessageTemplateReorderRequest): Promise<MessageTemplateListResponseDto>;
   listExternalRefs(topicId: string): Promise<ExternalRefDto[]>;
   getSessionByTopic(topicId: string): Promise<SessionDto | null>;
   getSession(sessionId: string): Promise<SessionDto | null>;

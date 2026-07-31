@@ -446,6 +446,38 @@ restarting the container terminates the session.
 - Forum never talks directly to memstore and never invents memory origins. Memory
   dedupe must use canonical Pi session path/id.
 
+## Message Templates
+
+Authenticated forum users can manage private, account-owned **Message Templates**
+from User Control Panel → Message Templates. Administrators can separately manage
+system templates from the Admin Panel. Templates contain a literal message body,
+an optional new-thread title, an optional organizational category, reply and/or
+new-thread applicability, and either all-forum or exact-forum scope.
+
+The effective-template API authorizes the current forum and filters applicability
+on the server before returning template names or bodies. For selected-forum
+templates, effective responses expose only the requested forum association; full
+scope membership remains confined to the owner's management API. Personal
+templates are never exposed through the system administration API, and
+impersonation tokens do
+not grant access to another account's personal template library. Updates, deletes,
+and ordering use optimistic integer revisions so stale browser tabs cannot silently
+overwrite newer changes.
+
+Selecting a template copies its text into the browser draft. It does not submit,
+select a model, change robot or silent-post behavior, expand variables, or create
+special provenance. Only the ordinary resulting post body/title reaches forum
+posts and canonical Pi JSONL. Editing or deleting a template cannot alter an
+existing post or Pi session. Template metadata remains private forum authoring
+state and is excluded from forum search, SSE, sync, and memstore.
+
+API surfaces:
+
+- `GET /api/message-templates/effective?context=reply|new_thread&forumId=...`
+- Personal management under `/api/message-templates` and
+  `/api/message-templates/mine`
+- Admin-managed system templates under `/api/admin/message-templates`
+
 ## Forum attachments and artifacts
 
 Attachment support is implemented as a hybrid reference model rather than treating

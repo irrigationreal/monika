@@ -4,6 +4,9 @@ import type {
   AccessRulePrincipalKind,
   AccessRuleScopeKind,
   ForumVisibility,
+  MessageTemplateContext,
+  MessageTemplateForumScope,
+  MessageTemplateScope,
   RobotMode
 } from '@irrigationreal/codex-forum-core';
 import type { ForumThemeKey } from './themes';
@@ -236,6 +239,27 @@ export interface UserFileDto {
   mimeType: string;
   sizeBytes: number;
   createdAt: string;
+}
+
+export interface MessageTemplateDto {
+  id: string;
+  scope: MessageTemplateScope;
+  name: string;
+  category: string | null;
+  body: string;
+  threadTitle: string | null;
+  forumScope: MessageTemplateForumScope;
+  forumIds: string[];
+  contexts: MessageTemplateContext[];
+  enabled: boolean;
+  sortOrder: number;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MessageTemplateListResponseDto {
+  templates: MessageTemplateDto[];
 }
 
 export interface ApiKeyDto {

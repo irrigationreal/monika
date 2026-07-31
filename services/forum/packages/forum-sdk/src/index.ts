@@ -72,6 +72,11 @@ import type {
   OidcUnlinkResponseDto,
   MatrixBridgeStatusDto,
   MatrixRoomMappingDto,
+  MessageTemplateDto,
+  MessageTemplateListResponseDto,
+  MessageTemplateReorderRequest,
+  MessageTemplateUpdateRequest,
+  MessageTemplateWriteRequest,
   ModelCatalogDto,
   ModelInfoDto,
   NotificationDto,
@@ -160,6 +165,11 @@ export type {
   VerifyResponseDto,
   MatrixBridgeStatusDto,
   MatrixRoomMappingDto,
+  MessageTemplateDto,
+  MessageTemplateListResponseDto,
+  MessageTemplateReorderRequest,
+  MessageTemplateUpdateRequest,
+  MessageTemplateWriteRequest,
   ModelCatalogDto,
   ModelInfoDto,
   NotificationDto,
@@ -279,6 +289,26 @@ function createApi({
         method: 'PATCH',
         body: JSON.stringify(updates)
       }),
+    listEffectiveMessageTemplates: (context: MessageTemplateDto['contexts'][number], forumId: string) =>
+      json<MessageTemplateListResponseDto>(`/message-templates/effective?context=${encodeURIComponent(context)}&forumId=${encodeURIComponent(forumId)}`),
+    listMyMessageTemplates: () => json<MessageTemplateListResponseDto>('/message-templates/mine'),
+    createMessageTemplate: (input: MessageTemplateWriteRequest) =>
+      json<MessageTemplateDto>('/message-templates', { method: 'POST', body: JSON.stringify(input) }),
+    updateMessageTemplate: (id: string, input: MessageTemplateUpdateRequest) =>
+      json<MessageTemplateDto>(`/message-templates/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(input) }),
+    deleteMessageTemplate: (id: string, revision: number) =>
+      json<{ ok: boolean }>(`/message-templates/${encodeURIComponent(id)}?revision=${String(revision)}`, { method: 'DELETE' }),
+    reorderMessageTemplates: (input: MessageTemplateReorderRequest) =>
+      json<MessageTemplateListResponseDto>('/message-templates/reorder', { method: 'POST', body: JSON.stringify(input) }),
+    listSystemMessageTemplates: () => json<MessageTemplateListResponseDto>('/admin/message-templates'),
+    createSystemMessageTemplate: (input: MessageTemplateWriteRequest) =>
+      json<MessageTemplateDto>('/admin/message-templates', { method: 'POST', body: JSON.stringify(input) }),
+    updateSystemMessageTemplate: (id: string, input: MessageTemplateUpdateRequest) =>
+      json<MessageTemplateDto>(`/admin/message-templates/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(input) }),
+    deleteSystemMessageTemplate: (id: string, revision: number) =>
+      json<{ ok: boolean }>(`/admin/message-templates/${encodeURIComponent(id)}?revision=${String(revision)}`, { method: 'DELETE' }),
+    reorderSystemMessageTemplates: (input: MessageTemplateReorderRequest) =>
+      json<MessageTemplateListResponseDto>('/admin/message-templates/reorder', { method: 'POST', body: JSON.stringify(input) }),
     getIdentityPermissions: (identityId: string) =>
       json<IdentityPermissionsDto>(`/identities/${identityId}/permissions`),
     getUserProfile: (identityId: string) =>
