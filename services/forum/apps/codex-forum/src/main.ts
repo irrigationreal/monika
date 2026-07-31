@@ -11,6 +11,7 @@ import './styles/components.css';
 import './styles/posts.css';
 import './styles/timeline.css';
 import './styles/chat.css';
+import './styles/analytics.css';
 import './styles/responsive.css';
 
 // Global event delegation for actions in rendered (v-html) content.

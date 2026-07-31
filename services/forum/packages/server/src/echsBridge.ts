@@ -805,6 +805,16 @@ export class EchsBridge {
     return this.client.getQuiescence();
   }
 
+  async getAnalytics(input: {
+    from: string;
+    to: string;
+    bucket: 'day' | 'week';
+    piSessionIds: string[];
+    minToolSamples?: number;
+  }): Promise<Record<string, unknown>> {
+    return this.client.getAnalytics(input);
+  }
+
   async isThreadLoaded(threadId: string): Promise<boolean> {
     const conversation = await this.client.getConversation(threadId);
     return Boolean(conversation);

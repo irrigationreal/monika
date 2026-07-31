@@ -110,6 +110,17 @@ Selection inserts literal editable text; it never submits or changes robot optio
 Manage personal templates at `/profile/message-templates` and system templates in
 the Admin Panel. See `docs/CURL_EXAMPLES.md` and the OpenAPI document for APIs.
 
+## Admin analytics
+
+Administrators can open `/admin/analytics` to inspect privacy-safe canonical Pi
+usage, tool reliability, normalized error clusters, parent-observed subagent wait
+time, delegation outcomes, model-vendor usage, and forum-native distinctive
+vocabulary. The forum authorizes and scopes the request, then asks agentd for
+aggregate runtime metrics over allowlisted linked Pi sessions. Forum SQLite is
+used only for vocabulary derived from visible post bodies; no analytics tables,
+memstore access, or model calls are added. See `../../docs/forum.md` for formulas
+and privacy boundaries.
+
 ## API + integrations
 
 The API is designed for automation and external adapters:

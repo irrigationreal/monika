@@ -216,11 +216,14 @@ async function classifyRunDirectory(asyncDir, { runtime = null, processInspector
     else if (logicalTerminal) { reason = string(proof?.reason) ?? 'terminal-proof-unavailable'; }
     else { executionState = 'active'; reason = status ? null : 'launch-not-yet-settled'; }
   }
+  const profiles = [...new Set((Array.isArray(statusRaw?.steps) ? statusRaw.steps : [])
+    .map((step) => string(record(step)?.agent)).filter(Boolean))];
+  const profile = profiles.length === 1 ? profiles[0] : profiles.length > 1 ? 'mixed' : null;
   const resultFile = resultsRoot ? path.join(resultsRoot, `${id}.json`) : null;
   const deliveryState = resultFile && await fs.access(resultFile).then(() => true).catch(() => false) ? 'pending' : 'settled-or-unavailable';
   return { run_id: id, state: status?.state ?? safeState(launch?.state), execution_state: executionState, delivery_state: deliveryState,
     blocking, reason, parent_session_id: status?.sessionId ?? string(launch?.sessionId), parent_session_path: status?.sessionId ?? string(launch?.sessionId),
-    async_dir: asyncDir, mode: status?.mode ?? string(launch?.mode), pid: runnerPid,
+    async_dir: asyncDir, mode: status?.mode ?? string(launch?.mode), profile, pid: runnerPid,
     started_at: status?.startedAt ?? launch?.registeredAt ?? null, updated_at: status?.updatedAt ?? launch?.updatedAt ?? null,
     processTerminal: proof, runtime_instance_id: launchRuntimeId, origin: null };
 }

@@ -1,0 +1,10 @@
+export { default as Area } from './Area.vue';
+export { AreaChart } from './area-chart';
+export { default as Bar } from './Bar.vue';
+export { BarChart } from './bar-chart';
+export type { AreaVariant, ChartConfig, Margins, StrokeVariant } from './chart-context';
+export { default as Grid } from './Grid.vue';
+export { cssColor, type DitherColor } from './palette';
+export type { ChartRow, StackType } from './scales';
+export { default as XAxis } from './XAxis.vue';
+export { default as YAxis } from './YAxis.vue';

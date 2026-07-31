@@ -145,6 +145,14 @@ onMounted(async () => {
         <router-link
           v-if="state.currentUser.value?.kind === 'admin'"
           class="vb-small-btn"
+          :to="{ name: 'admin.analytics' }"
+          @click.stop
+        >
+          Analytics
+        </router-link>
+        <router-link
+          v-if="state.currentUser.value?.kind === 'admin'"
+          class="vb-small-btn"
           :to="{ name: 'admin.robotDashboard' }"
           @click.stop
         >

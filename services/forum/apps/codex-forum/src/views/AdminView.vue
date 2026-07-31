@@ -1865,6 +1865,9 @@ onMounted(async () => {
 <template>
   <section class="vb-section">
     <div class="vb-table-header">Admin Panel</div>
+    <div v-if="isAdmin" class="vb-admin-actions">
+      <router-link class="vb-small-btn" :to="{ name: 'admin.analytics' }">Analytics</router-link>
+    </div>
 
     <div v-if="!isAdmin" class="vb-admin-content">
       <p>You must be an administrator to access this page.</p>

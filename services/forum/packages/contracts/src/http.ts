@@ -1,4 +1,5 @@
 import type {
+  AdminAnalyticsDto,
   ExternalRefDto,
   ForumDto,
   IdentityDto,
@@ -352,6 +353,12 @@ export interface ForumApi {
   getSessionByTopic(topicId: string): Promise<SessionDto | null>;
   getSession(sessionId: string): Promise<SessionDto | null>;
   getSessionInspector(sessionId: string): Promise<SessionInspectorDto>;
+  getAdminAnalytics(input: {
+    from: string;
+    to: string;
+    bucket: 'day' | 'week';
+    forumId?: string | null;
+  }): Promise<AdminAnalyticsDto>;
 }
 
 export interface ForumStreamApi {

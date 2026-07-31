@@ -20,10 +20,12 @@ import { bootstrap, migrate, openDb } from './db';
 import { EchsClient } from './echsClient';
 import { InMemoryMessageTamperLayer } from './messageTamper';
 import { createModelCatalog } from './modelCatalog';
+import { SqliteForumAnalyticsReadModel } from './readModels/analyticsReadModel';
 import { SqliteStatsReadModel } from './readModels/statsReadModel';
 import { SqliteMessageTemplateRepository } from './repositories/sqliteMessageTemplateRepository';
 import { registerAdapterRoutes } from './routes/adapterRoutes';
 import { registerAdminRoutes } from './routes/adminRoutes';
+import { registerAnalyticsRoutes } from './routes/analyticsRoutes';
 import { registerAttachmentRoutes } from './routes/attachmentRoutes';
 import { registerAuthRoutes } from './routes/authRoutes';
 import { registerChatRoutes } from './routes/chatRoutes';
@@ -82,6 +84,7 @@ import {
   WORK_DIR,
 } from './runtimeConfig';
 import { AutoRunDirector } from './services/autoRunDirector';
+import { AnalyticsService } from './services/analyticsService';
 import { getEmailService } from './services/emailService';
 import { PiSessionSyncService } from './services/piSessionSyncService';
 import { PostDispatchService } from './services/postDispatchService';
@@ -111,6 +114,7 @@ const store = new ForumStore(db);
 void createCoreServices(db);
 void new ForumQueries(db);
 void new SqliteStatsReadModel(db);
+const analyticsReadModel = new SqliteForumAnalyticsReadModel(db);
 const recoveredRobotStates = store.resetRobotActivities('idle');
 if (recoveredRobotStates > 0) {
   console.warn(`[RobotStop] source=startup_reset count=${recoveredRobotStates}`);
@@ -257,6 +261,8 @@ const codex = new AgentBridge(store, bus, {
       }
     : { enabled: false, scriptPath: TTS_SCRIPT, uploadsDir: UPLOADS_DIR },
 });
+
+const analyticsService = new AnalyticsService(analyticsReadModel, (input) => codex.getAnalytics(input));
 
 // The Director should be able to kick the robot forward by posting a directive.
 autoRunDirector.setRobotDispatcher(({ topicId, body, parentPostId, model, reasoningEffort }) =>
@@ -466,6 +472,7 @@ const registerApiRoutes: FastifyPluginAsync = async (api) => {
   registerSystemRoutes({ app: api, modelCatalog, access, deploymentStatus: forumDeploymentStatus });
   registerAuthRoutes({ app: api, store, featureFlags, linkIssuer, emailService, access });
   registerAdminRoutes({ app: api, store, db, access, codex, piSessionSync });
+  registerAnalyticsRoutes({ app: api, access, service: analyticsService });
   registerForumRoutes({
     app: api,
     store,

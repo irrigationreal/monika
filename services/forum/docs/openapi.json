@@ -12054,6 +12054,511 @@
         }
       }
     },
+    "/admin/analytics": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Forum and canonical Pi analytics",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "required": true,
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "required": true,
+            "name": "to",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "day",
+                "week"
+              ],
+              "default": "day"
+            },
+            "required": false,
+            "name": "bucket",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": false,
+            "name": "forumId",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "generatedAt": {
+                      "type": "string"
+                    },
+                    "window": {
+                      "type": "object",
+                      "properties": {
+                        "from": {
+                          "type": "string"
+                        },
+                        "to": {
+                          "type": "string"
+                        },
+                        "bucket": {
+                          "type": "string",
+                          "enum": [
+                            "day",
+                            "week"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "from",
+                        "to",
+                        "bucket"
+                      ]
+                    },
+                    "selectedForumId": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "forums": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "name"
+                        ]
+                      }
+                    },
+                    "vocabulary": {
+                      "type": "object",
+                      "properties": {
+                        "algorithmVersion": {
+                          "type": "number",
+                          "enum": [
+                            1
+                          ]
+                        },
+                        "groups": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "forumId": {
+                                "type": "string"
+                              },
+                              "forumName": {
+                                "type": "string"
+                              },
+                              "audience": {
+                                "type": "string",
+                                "enum": [
+                                  "human",
+                                  "assistant"
+                                ]
+                              },
+                              "postCount": {
+                                "type": "number"
+                              },
+                              "terms": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "term": {
+                                      "type": "string"
+                                    },
+                                    "score": {
+                                      "type": "number"
+                                    },
+                                    "count": {
+                                      "type": "number"
+                                    },
+                                    "documentCount": {
+                                      "type": "number"
+                                    }
+                                  },
+                                  "required": [
+                                    "term",
+                                    "score",
+                                    "count",
+                                    "documentCount"
+                                  ]
+                                }
+                              }
+                            },
+                            "required": [
+                              "forumId",
+                              "forumName",
+                              "audience",
+                              "postCount",
+                              "terms"
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "algorithmVersion",
+                        "groups"
+                      ]
+                    },
+                    "runtime": {
+                      "type": "object",
+                      "properties": {
+                        "available": {
+                          "type": "boolean"
+                        },
+                        "warning": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "metrics": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "coverage": {
+                              "type": "object",
+                              "additionalProperties": {
+                                "type": "number"
+                              }
+                            },
+                            "usage": {
+                              "type": "object",
+                              "properties": {
+                                "successfulResponses": {
+                                  "type": "number"
+                                },
+                                "medianTokens": {
+                                  "type": "number",
+                                  "nullable": true
+                                },
+                                "byModel": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "vendor": {
+                                        "type": "string"
+                                      },
+                                      "model": {
+                                        "type": "string"
+                                      },
+                                      "responses": {
+                                        "type": "number"
+                                      },
+                                      "totalTokens": {
+                                        "type": "number"
+                                      },
+                                      "medianTokens": {
+                                        "type": "number",
+                                        "nullable": true
+                                      }
+                                    },
+                                    "required": [
+                                      "vendor",
+                                      "model",
+                                      "responses",
+                                      "totalTokens",
+                                      "medianTokens"
+                                    ]
+                                  }
+                                }
+                              },
+                              "required": [
+                                "successfulResponses",
+                                "medianTokens",
+                                "byModel"
+                              ]
+                            },
+                            "tools": {
+                              "type": "object",
+                              "properties": {
+                                "worst": {
+                                  "type": "object",
+                                  "nullable": true,
+                                  "properties": {
+                                    "operation": {
+                                      "type": "string"
+                                    },
+                                    "calls": {
+                                      "type": "number"
+                                    },
+                                    "failures": {
+                                      "type": "number"
+                                    },
+                                    "failureRate": {
+                                      "type": "number"
+                                    }
+                                  },
+                                  "required": [
+                                    "operation",
+                                    "calls",
+                                    "failures",
+                                    "failureRate"
+                                  ]
+                                },
+                                "rows": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "operation": {
+                                        "type": "string"
+                                      },
+                                      "calls": {
+                                        "type": "number"
+                                      },
+                                      "failures": {
+                                        "type": "number"
+                                      },
+                                      "failureRate": {
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "operation",
+                                      "calls",
+                                      "failures",
+                                      "failureRate"
+                                    ]
+                                  }
+                                }
+                              },
+                              "required": [
+                                "worst",
+                                "rows"
+                              ]
+                            },
+                            "errors": {
+                              "type": "object",
+                              "properties": {
+                                "top": {
+                                  "type": "object",
+                                  "nullable": true,
+                                  "properties": {
+                                    "source": {
+                                      "type": "string",
+                                      "enum": [
+                                        "tool",
+                                        "provider",
+                                        "subagent"
+                                      ]
+                                    },
+                                    "category": {
+                                      "type": "string"
+                                    },
+                                    "operation": {
+                                      "type": "string",
+                                      "nullable": true
+                                    },
+                                    "affectedTurns": {
+                                      "type": "number"
+                                    }
+                                  },
+                                  "required": [
+                                    "source",
+                                    "category",
+                                    "affectedTurns"
+                                  ]
+                                },
+                                "rows": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "source": {
+                                        "type": "string",
+                                        "enum": [
+                                          "tool",
+                                          "provider",
+                                          "subagent"
+                                        ]
+                                      },
+                                      "category": {
+                                        "type": "string"
+                                      },
+                                      "operation": {
+                                        "type": "string",
+                                        "nullable": true
+                                      },
+                                      "affectedTurns": {
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "source",
+                                      "category",
+                                      "affectedTurns"
+                                    ]
+                                  }
+                                }
+                              },
+                              "required": [
+                                "top",
+                                "rows"
+                              ]
+                            },
+                            "waiting": {
+                              "type": "object",
+                              "properties": {
+                                "count": {
+                                  "type": "number"
+                                },
+                                "p95Ms": {
+                                  "type": "number",
+                                  "nullable": true
+                                },
+                                "excluded": {
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "count",
+                                "p95Ms",
+                                "excluded"
+                              ]
+                            },
+                            "delegation": {
+                              "type": "object",
+                              "properties": {
+                                "successful": {
+                                  "type": "number"
+                                },
+                                "unsuccessful": {
+                                  "type": "number"
+                                },
+                                "unsuccessfulRate": {
+                                  "type": "number",
+                                  "nullable": true
+                                },
+                                "unknown": {
+                                  "type": "number"
+                                },
+                                "byProfileMode": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "profile": {
+                                        "type": "string"
+                                      },
+                                      "mode": {
+                                        "type": "string"
+                                      },
+                                      "successful": {
+                                        "type": "number"
+                                      },
+                                      "unsuccessful": {
+                                        "type": "number"
+                                      },
+                                      "unsuccessfulRate": {
+                                        "type": "number",
+                                        "nullable": true
+                                      }
+                                    },
+                                    "required": [
+                                      "profile",
+                                      "mode",
+                                      "successful",
+                                      "unsuccessful",
+                                      "unsuccessfulRate"
+                                    ]
+                                  }
+                                }
+                              },
+                              "required": [
+                                "successful",
+                                "unsuccessful",
+                                "unsuccessfulRate",
+                                "unknown",
+                                "byProfileMode"
+                              ]
+                            },
+                            "modelUsageOverTime": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "bucket": {
+                                    "type": "string"
+                                  },
+                                  "vendor": {
+                                    "type": "string"
+                                  },
+                                  "responses": {
+                                    "type": "number"
+                                  },
+                                  "totalTokens": {
+                                    "type": "number"
+                                  }
+                                },
+                                "required": [
+                                  "bucket",
+                                  "vendor",
+                                  "responses",
+                                  "totalTokens"
+                                ]
+                              }
+                            }
+                          },
+                          "required": [
+                            "coverage",
+                            "usage",
+                            "tools",
+                            "errors",
+                            "waiting",
+                            "delegation",
+                            "modelUsageOverTime"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "available"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "generatedAt",
+                    "window",
+                    "forums",
+                    "vocabulary",
+                    "runtime"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/robot/dashboard": {
       "get": {
         "tags": [
@@ -12186,6 +12691,99 @@
                           "sessionId"
                         ]
                       }
+                    },
+                    "subagents": {
+                      "type": "object",
+                      "properties": {
+                        "activeCount": {
+                          "type": "number"
+                        },
+                        "uncertainCount": {
+                          "type": "number"
+                        },
+                        "runs": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "runId": {
+                                "type": "string"
+                              },
+                              "state": {
+                                "type": "string"
+                              },
+                              "executionState": {
+                                "type": "string",
+                                "enum": [
+                                  "active",
+                                  "terminal",
+                                  "interrupted",
+                                  "uncertain",
+                                  "quarantined"
+                                ]
+                              },
+                              "deliveryState": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "blocking": {
+                                "type": "boolean"
+                              },
+                              "reason": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "parentSessionId": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "topicId": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "topicTitle": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "postId": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "startedAt": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "updatedAt": {
+                                "type": "string",
+                                "nullable": true
+                              }
+                            },
+                            "required": [
+                              "runId",
+                              "state",
+                              "executionState",
+                              "blocking"
+                            ]
+                          }
+                        },
+                        "omitted": {
+                          "type": "number"
+                        },
+                        "available": {
+                          "type": "boolean"
+                        },
+                        "error": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "activeCount",
+                        "uncertainCount",
+                        "runs",
+                        "omitted",
+                        "available"
+                      ]
                     },
                     "settings": {
                       "type": "object",

@@ -82,6 +82,11 @@ const breadcrumbs = computed((): BreadcrumbItem[] => {
     crumbs.push({ label: 'Admin Panel' });
   }
 
+  if (route.name === 'admin.analytics' || route.name === 'admin.robotDashboard') {
+    crumbs.push({ label: 'Admin Panel', to: { name: 'admin' } });
+    crumbs.push({ label: route.name === 'admin.analytics' ? 'Analytics' : 'Robot Dashboard' });
+  }
+
   if (route.name === 'developer.portal') {
     crumbs.push({ label: 'Developer Portal' });
   }
@@ -176,6 +181,7 @@ onMounted(async () => {
             <router-link v-if="state.isLoggedIn.value" :to="{ name: 'chat.home' }">Chat</router-link>
             <router-link v-if="state.isLoggedIn.value" :to="{ name: 'developer.portal' }">Developers</router-link>
             <router-link v-if="state.isLoggedIn.value" :to="{ name: 'api.docs' }">API Docs</router-link>
+            <router-link v-if="isAdmin" :to="{ name: 'admin.analytics' }">Analytics</router-link>
             <router-link v-if="isAdmin" :to="{ name: 'admin' }">Admin</router-link>
             <template v-if="state.isLoggedIn.value">
               <button class="vb-link-btn" type="button" @click="handleLogout">Log Out</button>

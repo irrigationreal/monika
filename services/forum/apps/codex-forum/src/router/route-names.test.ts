@@ -29,6 +29,7 @@ describe('router route names', () => {
     const routeNames = new Set(router.getRoutes().map((route) => route.name).filter(Boolean));
     expect(routeNames.has('forum.home')).toBe(true);
     expect(routeNames.has('forum.view')).toBe(true);
+    expect(routeNames.has('admin.analytics')).toBe(true);
   });
 
   it('does not reference the removed forum index route name anywhere in the app', async () => {

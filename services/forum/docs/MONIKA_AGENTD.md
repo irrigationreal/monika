@@ -20,11 +20,39 @@ cp compose.yaml.example compose.yaml
 docker compose up -d --build
 ```
 
-For architecture, endpoint, sync, taxonomy, attachment, and handoff details, see:
+For architecture, endpoint, sync, taxonomy, attachment, handoff, and analytics details, see:
 
 ```text
 docs/forum.md
 ```
+
+## Internal analytics query
+
+The forum server calls `POST /v1/admin/analytics/query` with an aggregate-only,
+bounded request:
+
+```json
+{
+  "from": "2026-07-01T00:00:00.000Z",
+  "to": "2026-08-01T00:00:00.000Z",
+  "bucket": "day",
+  "pi_session_ids": ["allowlisted-canonical-session-id"],
+  "min_tool_samples": 5
+}
+```
+
+The range is `[from, to)`, cannot exceed 366 days, and supports UTC `day` or
+Monday-based `week` buckets. At most 5,000 session IDs may be supplied. The forum
+resolves those IDs from its authorized topic links; agentd does not infer forum
+or tenant ownership. Agentd returns only sanitized aggregates and coverage
+counts. It never returns message text, raw errors, tool arguments/results,
+paths, or canonical IDs. The process-local aggregate cache defaults to a
+30-second TTL (`MONIKA_AGENTD_ANALYTICS_CACHE_TTL_MS`).
+
+The browser-facing route is `GET /api/admin/analytics`; it requires an admin
+identity and combines the canonical runtime result with forum-native distinctive
+vocabulary. Runtime failure is represented as `runtime.available=false` while
+forum vocabulary remains available.
 
 ## SSE event types
 
