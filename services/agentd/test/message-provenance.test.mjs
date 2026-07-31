@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -102,25 +102,29 @@ test('proven results settle before bind while deletion failures remain pending',
     appendSubagentCompletionProvenance(conv, assistantId, {
       sourceKind: 'subagent-completion', subagentRunId: 'run-ok', subagentRunIds: ['run-ok', 'run-fail'], subagentOrigins: [], origin: null,
     });
-    await writeFile(path.join(root, 'run-ok.json'), '{}');
-    await writeFile(path.join(root, 'run-fail.json'), '{}');
+    const lifecycleRoot = path.join(root, 'lifecycle'); const resultsRoot = path.join(root, 'results'); const operatorRoot = path.join(root, 'operator');
+    await import('node:fs/promises').then((mod) => Promise.all([mod.mkdir(lifecycleRoot), mod.mkdir(resultsRoot), mod.mkdir(operatorRoot)]));
+    for (const runId of ['run-ok', 'run-fail']) {
+      const asyncDir = path.join(lifecycleRoot, runId); await import('node:fs/promises').then((mod) => mod.mkdir(asyncDir));
+      await writeFile(path.join(asyncDir, 'status.json'), JSON.stringify({ lifecycleArtifactVersion: 3, runId, sessionId: `session-${runId}`, asyncDir, state: 'complete', lastUpdate: 1 }));
+      await writeFile(path.join(resultsRoot, `${runId}.json`), '{}');
+    }
     const order = [];
     const outcomes = await settleCompletedSubagentResults(conv.session.sessionManager.getBranch(), {
-      resultsRoot: root,
-      remove: async (file, options) => {
-        order.push(`remove:${path.basename(file)}`);
-        if (file.endsWith('run-fail.json')) throw new Error('injected cleanup failure');
-        await rm(file, options);
-      },
+      resultsRoot, lifecycleRoot, operatorRoot,
+      beforeAck: async (ack) => { order.push(`ack:${ack.runId}`); if (ack.runId === 'run-fail') throw new Error('injected ack failure'); },
+      beforeCustody: async ({ source }) => { order.push(`custody:${path.basename(source)}`); },
     });
     order.push('bind');
-    assert.deepEqual(order, ['remove:run-ok.json', 'remove:run-fail.json', 'bind']);
+    assert.deepEqual(order, ['ack:run-ok', 'custody:run-ok.json', 'ack:run-fail', 'bind']);
     assert.deepEqual(outcomes, [
-      { runId: 'run-ok', settled: true, error: null },
-      { runId: 'run-fail', settled: false, error: 'injected cleanup failure' },
+      { runId: 'run-ok', runKey: 'top:run-ok', settled: true, error: null },
+      { runId: 'run-fail', runKey: null, settled: false, error: 'injected ack failure' },
     ]);
-    await assert.rejects(() => import('node:fs/promises').then((mod) => mod.access(path.join(root, 'run-ok.json'))));
-    await import('node:fs/promises').then((mod) => mod.access(path.join(root, 'run-fail.json')));
+    await assert.rejects(() => import('node:fs/promises').then((mod) => mod.access(path.join(resultsRoot, 'run-ok.json'))));
+    await import('node:fs/promises').then((mod) => mod.access(path.join(resultsRoot, 'run-fail.json')));
+    const ack = JSON.parse(await readFile(path.join(lifecycleRoot, 'run-ok', 'delivery-ack.json'), 'utf8'));
+    assert.equal(ack.runKey, 'top:run-ok');
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

@@ -1,5 +1,5 @@
-import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { findLifecycleRunIdentities, removeAcknowledgedResultWithCustody, resultPathForIdentity, writeSubagentDeliveryAck } from './subagent-lifecycle.mjs';
 
 export const MESSAGE_PROVENANCE_CUSTOM_TYPE = 'monika.message.provenance';
 export const MESSAGE_PROVENANCE_VERSION = 1;
@@ -199,8 +199,8 @@ export function extractMessageProvenance(entries) {
 }
 
 /** Canonical proof that recovered completion results were already applied. */
-export function extractCompletedSubagentRunIds(entries) {
-  const ids = new Set();
+function extractCompletedSubagentProofs(entries) {
+  const proofs = new Map();
   for (let index = 0; index < entries.length; index += 1) {
     const entry = entries[index];
     const data = entry?.type === 'custom' && entry.customType === MESSAGE_PROVENANCE_CUSTOM_TYPE ? entry.data : null;
@@ -216,22 +216,28 @@ export function extractCompletedSubagentRunIds(entries) {
     if (!visible || typeof stopReason !== 'string' || ['error', 'aborted', 'cancelled'].includes(stopReason)) continue;
     const candidates = Array.isArray(data.runIds) ? data.runIds : [data.runId];
     for (const id of candidates) {
-      if (typeof id === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id)) ids.add(id);
+      if (typeof id === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id)) proofs.set(id, { entryId: entry.id, piMessageId: data.piMessageId });
     }
   }
-  return ids;
+  return proofs;
 }
+export function extractCompletedSubagentRunIds(entries) { return new Set(extractCompletedSubagentProofs(entries).keys()); }
 
-export async function settleCompletedSubagentResults(entries, { resultsRoot, remove = fs.rm } = {}) {
-  if (!path.isAbsolute(resultsRoot ?? '')) throw new Error('absolute resultsRoot is required');
+export async function settleCompletedSubagentResults(entries, { resultsRoot, lifecycleRoot, operatorRoot, beforeAck, beforeCustody } = {}) {
+  if (!path.isAbsolute(resultsRoot ?? '') || !path.isAbsolute(lifecycleRoot ?? '') || !path.isAbsolute(operatorRoot ?? '')) throw new Error('absolute resultsRoot, lifecycleRoot, and operatorRoot are required');
   const outcomes = [];
-  for (const runId of extractCompletedSubagentRunIds(entries)) {
-    const file = path.join(resultsRoot, `${runId}.json`);
+  for (const [runId, proof] of extractCompletedSubagentProofs(entries)) {
     try {
-      await remove(file, { force: true });
-      outcomes.push({ runId, settled: true, error: null });
+      const matches = await findLifecycleRunIdentities(lifecycleRoot, runId);
+      if (matches.length !== 1) throw new Error(matches.length ? 'run identity is ambiguous' : 'run lifecycle directory not found');
+      const identity = matches[0]; const file = resultPathForIdentity(resultsRoot, identity);
+      const acknowledgement = await writeSubagentDeliveryAck({ lifecycleRoot, asyncDir: identity.asyncDir, resultsRoot, operatorRoot, runId, runKey: identity.runKey,
+        resultFile: file, proofKind: 'canonical-message-provenance', proofReference: `${proof.entryId}:${proof.piMessageId}`,
+        beforePublish: beforeAck });
+      await removeAcknowledgedResultWithCustody(file, acknowledgement.ack, { expectedIdentity: acknowledgement.resultIdentity, beforeCustody });
+      outcomes.push({ runId, runKey: identity.runKey, settled: true, error: null });
     } catch (error) {
-      outcomes.push({ runId, settled: false, error: error instanceof Error ? error.message : String(error) });
+      outcomes.push({ runId, runKey: null, settled: false, error: error instanceof Error ? error.message : String(error) });
     }
   }
   return outcomes;

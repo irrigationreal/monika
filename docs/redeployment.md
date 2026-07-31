@@ -77,8 +77,20 @@ provenance is the only automatic acknowledgement proof. For an unresolved legacy
 result, an operator can post `{ "action": "dismiss"|"supersede", "reason": "..." }`
 to `/v1/admin/subagents/<run-id>/resolve-delivery`. The endpoint retains the exact
 result under `/data/pi-subagent-operator-state/retained-results/`, publishes a
-no-follow sidecar and audit before removing the pending source, and never creates
-an assistant completion. Partial failures leave the source pending and retryable. Roll out agentd and forum together: forum startup is
+no-follow sidecar, durable delivery acknowledgement, and audit before removing
+the pending source, and never creates an assistant completion. Partial failures
+leave the source pending and retryable. Scoped nested run keys must be supplied
+when a basename is ambiguous.
+
+`GET /v1/admin/subagents/retention` is the operator dry run. Its digest,
+counts, and byte totals are deterministic for the observed inventory. Applying
+that exact preview uses `POST /v1/admin/subagents/retention` with
+`{ "apply": true, "inventory_digest": "...", "reason": "..." }` and is rejected if the digest changed, any
+parent is loaded/leased, agentd is draining, or lifecycle state is active or
+uncertain. The endpoint cannot discard resumable or unproven histories; those
+remain a deliberate manual-policy boundary rather than an unsafe bulk action.
+
+Roll out agentd and forum together: forum startup is
 passive, then reconciles dispatch generations before enabling retries. A forum-only
 restart may reattach conversations still loaded in agentd; a full runtime restart
 leaves historical Pi sessions unloaded until explicit work.

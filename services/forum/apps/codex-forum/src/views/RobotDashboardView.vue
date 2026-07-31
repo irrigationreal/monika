@@ -57,6 +57,13 @@ function subagentStateClass(state: string): string {
   return 'vb-status-pill--done';
 }
 
+function formatBytes(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return '0 B';
+  const units = ['B', 'KiB', 'MiB', 'GiB'];
+  const index = Math.min(units.length - 1, Math.floor(Math.log(value) / Math.log(1024)));
+  return `${(value / (1024 ** index)).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+}
+
 function activityClass(activity: RobotJobDto['activity']): string {
   switch (activity) {
     case 'thinking': return 'vb-status-pill--running';
@@ -293,6 +300,14 @@ onBeforeUnmount(() => {
             <div class="vb-v">{{ subagents?.available ? subagents.uncertainCount : 'unknown' }}</div>
           </div>
           <div class="vb-kv">
+            <div class="vb-k">Tracked removable bytes</div>
+            <div class="vb-v">{{ subagents?.retention?.available ? formatBytes(subagents.retention.trackedRemovableBytes) : 'inventory pending' }}</div>
+          </div>
+          <div class="vb-kv">
+            <div class="vb-k">Retention preview</div>
+            <div class="vb-v">{{ subagents?.retention?.available ? `${subagents.retention.counts.eligible} eligible · ${subagents.retention.counts.protected} protected` : 'unavailable' }}</div>
+          </div>
+          <div class="vb-kv">
             <div class="vb-k">Refreshed</div>
             <div class="vb-v">{{ lastRefreshedAt ? formatDateTime(lastRefreshedAt) : 'n/a' }}</div>
           </div>
@@ -372,6 +387,15 @@ onBeforeUnmount(() => {
     <div class="vb-forum-list vb-forum-list--subagents">
       <div class="vb-category-header">
         <div class="vb-category-title">Background Subagents</div>
+      </div>
+      <div v-if="subagents?.retention" class="vb-empty-state vb-empty-state--notice" style="margin: 10px;">
+        <div class="vb-empty-state-text">
+          Retention dry-run: {{ subagents.retention.counts.eligible }} eligible ({{ formatBytes(subagents.retention.eligibleBytes) }} expected reclaimable),
+          {{ subagents.retention.counts.waiting }} waiting, {{ subagents.retention.counts.protected }} protected,
+          {{ subagents.retention.counts.compacted }} compacted, {{ subagents.retention.counts.error }} errors.
+          Automatic compaction removes only bulky lifecycle logs after {{ subagents.retention.retentionDays }} days with terminal, non-resumable, centrally acknowledged delivery proof; child sessions are always preserved.
+          <span v-if="subagents.retention.lastError"> Last error: {{ subagents.retention.lastError }}</span>
+        </div>
       </div>
       <div v-if="subagents && !subagents.available" class="vb-login-error" style="margin: 10px;">
         Agentd workload unavailable: {{ subagents.error ?? 'unknown error' }}

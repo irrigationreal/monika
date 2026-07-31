@@ -37,6 +37,7 @@ export interface EchsConversationState {
 
 export interface EchsSubagentRun {
   run_id: string;
+  run_key?: string;
   state: string;
   execution_state: 'active' | 'terminal' | 'interrupted' | 'uncertain' | 'quarantined';
   outcome_state?: string | null;
@@ -51,6 +52,19 @@ export interface EchsSubagentRun {
   started_at?: number | string | null;
   updated_at?: number | string | null;
   origin?: { topicId?: string | null; postId?: string | null; turnId?: string | null } | null;
+}
+
+export interface EchsSubagentRetention {
+  ok: boolean;
+  digest: string | null;
+  generatedAt: number | null;
+  retentionMs: number;
+  counts: { protected: number; waiting: number; eligible: number; compacted: number; error: number };
+  bytes: { tracked_removable: number; eligible: number };
+  omitted: number;
+  running: boolean;
+  last_run_at?: number | null;
+  last_error?: string | null;
 }
 
 export interface EchsSubagentWorkload {
@@ -121,6 +135,10 @@ export class EchsClient {
 
   async getSubagentWorkload(): Promise<EchsSubagentWorkload> {
     return (await this.request('/v1/admin/subagents')) as EchsSubagentWorkload;
+  }
+
+  async getSubagentRetention(): Promise<EchsSubagentRetention> {
+    return (await this.request('/v1/admin/subagents/retention')) as EchsSubagentRetention;
   }
 
   async getQuiescence(): Promise<Record<string, unknown>> {

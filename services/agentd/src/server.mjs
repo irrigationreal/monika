@@ -53,12 +53,19 @@ import {
   extractSubagentRuns,
   hasActiveBackgroundWork,
   mergeMappedLifecycleRuns,
-  pruneTerminalSubagentRuns,
   quarantineLifecycleRun,
   resolvePendingSubagentDelivery,
   resolveSubagentEffects,
   scanLifecycleSnapshot,
 } from "./subagent-lifecycle.mjs";
+import {
+  compactSubagentRetention,
+  conversationHasPendingRetentionMutations,
+  inventorySubagentRetention,
+  retentionApplyInput,
+  SubagentRetentionCoordinator,
+  summarizeSubagentRetention,
+} from "./subagent-retention.mjs";
 import {
   createAgentSessionFromServices,
   createAgentSessionRuntime,
@@ -148,6 +155,9 @@ const ANALYTICS_CACHE_TTL_MS = Number(
   process.env.MONIKA_AGENTD_ANALYTICS_CACHE_TTL_MS ?? 30_000,
 );
 const analyticsCache = new AnalyticsTtlCache({ ttlMs: ANALYTICS_CACHE_TTL_MS });
+
+const retentionCoordinator = new SubagentRetentionCoordinator();
+let retentionCache = { inventory: null, result: null, error: null, lastRunAt: null };
 
 let cachedBuildInfo;
 function buildInfo() {
@@ -373,7 +383,59 @@ async function subagentSnapshot() {
   return scanLifecycleSnapshot({
     lifecycleRoot: SUBAGENT_LIFECYCLE_ROOT,
     resultsRoot: SUBAGENT_RESULTS_ROOT,
+    operatorRoot: SUBAGENT_OPERATOR_ROOT,
     runtimeInstanceFile: RUNTIME_INSTANCE_FILE,
+  });
+}
+
+function loadedParentProtection() {
+  const loaded = [...conversations.values()];
+  return {
+    protectedParentSessionIds: new Set(loaded.map((conv) => conv.piSessionId).filter(Boolean)),
+    protectedParentSessionPaths: new Set(loaded.map((conv) => conv.sessionPath).filter(Boolean)),
+  };
+}
+function retentionDto({ inventory = retentionCache.inventory, result = retentionCache.result, error = retentionCache.error } = {}) {
+  return summarizeSubagentRetention({ inventory, result, error, running: retentionCoordinator.inProgress, lastRunAt: retentionCache.lastRunAt });
+}
+async function retentionInventory() {
+  const snapshot = await subagentSnapshot();
+  const inventory = await inventorySubagentRetention({
+    lifecycleRoot: SUBAGENT_LIFECYCLE_ROOT,
+    sessionRoot: SUBAGENT_SESSION_ROOT,
+    resultsRoot: SUBAGENT_RESULTS_ROOT,
+    operatorRoot: SUBAGENT_OPERATOR_ROOT,
+    activeRunKeys: new Set(snapshot.runs.filter((run) => run.blocking).flatMap((run) => [run.run_key, run.run_id]).filter(Boolean)),
+    hasSessionLease: (sessionRef) => {
+      const canonicalId = path.basename(sessionRef ?? '', '.jsonl').split('_').pop();
+      return Boolean(sessionOwnership.get(sessionRef) || (canonicalId && sessionOwnership.get(canonicalId)));
+    },
+    ...loadedParentProtection(),
+  });
+  retentionCache = { ...retentionCache, inventory, error: null };
+  return inventory;
+}
+async function applyRetention(expectedDigest, { operator = false, reason = 'automatic-daily-retention' } = {}) {
+  if (operator && (draining || [...conversations.values()].some(conversationIsActive)
+    || [...conversations.values()].some(conversationHasPendingRetentionMutations) || sessionOwnership.list().length > 0)) throw new Error('retention apply requires no draining, active conversations, or interactive Pi sessions');
+  return retentionCoordinator.run(async () => {
+    const snapshot = await subagentSnapshot();
+    const result = await compactSubagentRetention({
+      lifecycleRoot: SUBAGENT_LIFECYCLE_ROOT,
+      sessionRoot: SUBAGENT_SESSION_ROOT,
+      resultsRoot: SUBAGENT_RESULTS_ROOT,
+      operatorRoot: SUBAGENT_OPERATOR_ROOT,
+      expectedDigest,
+      requestedReason: reason,
+      activeRunKeys: new Set(snapshot.runs.filter((run) => run.blocking).flatMap((run) => [run.run_key, run.run_id]).filter(Boolean)),
+      hasSessionLease: (sessionRef) => {
+        const canonicalId = path.basename(sessionRef ?? '', '.jsonl').split('_').pop();
+        return Boolean(sessionOwnership.get(sessionRef) || (canonicalId && sessionOwnership.get(canonicalId)));
+      },
+      ...loadedParentProtection(),
+    });
+    retentionCache = { ...retentionCache, result, error: null, lastRunAt: Date.now() };
+    return result;
   });
 }
 
@@ -433,6 +495,11 @@ async function deployState() {
     });
   if (idle.length > 0)
     drainRequired.push({ code: "idle_loaded_conversations", count: idle.length });
+  // Retention cleanup can begin while deployState is awaiting lifecycle or
+  // memstore state. Recheck immediately before the synchronous decision is
+  // built so quiescence never reports safe_to_stop during unlink/tombstone work.
+  if (retentionCoordinator.inProgress)
+    blockers.push({ code: "subagent_retention_cleanup", count: 1 });
   return {
     ok: blockers.length === 0 && drainRequired.length === 0,
     status:
@@ -979,7 +1046,11 @@ function canonicalAssistantHasVisibleText(conv, piMessageId) {
 async function settleCanonicallyAppliedSubagentResults(conv) {
   const outcomes = await settleCompletedSubagentResults(
     conv.session.sessionManager.getBranch(),
-    { resultsRoot: SUBAGENT_RESULTS_ROOT },
+    {
+      resultsRoot: SUBAGENT_RESULTS_ROOT,
+      lifecycleRoot: SUBAGENT_LIFECYCLE_ROOT,
+      operatorRoot: SUBAGENT_OPERATOR_ROOT,
+    },
   );
   for (const outcome of outcomes) {
     if (!outcome.settled)
@@ -1958,6 +2029,31 @@ const server = http.createServer(async (req, res) => {
         });
       }
     }
+    if (
+      (method === "GET" || method === "POST") &&
+      url.pathname === "/v1/admin/subagents/retention"
+    ) {
+      try {
+        if (method === "POST") {
+          const request = retentionApplyInput(await readBody(req));
+          await applyRetention(request.inventoryDigest, {
+            operator: true,
+            reason: request.reason,
+          });
+          return json(res, 200, retentionDto());
+        }
+        const inventory = await retentionInventory();
+        return json(res, 200, retentionDto({ inventory, error: null }));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        retentionCache = { ...retentionCache, error: message };
+        return json(
+          res,
+          method === "GET" ? 503 : 409,
+          retentionDto({ error: message }),
+        );
+      }
+    }
     const deliveryResolutionMatch =
       method === "POST" &&
       url.pathname.match(/^\/v1\/admin\/subagents\/([^/]+)\/resolve-delivery$/);
@@ -1969,6 +2065,7 @@ const server = http.createServer(async (req, res) => {
           resultsRoot: SUBAGENT_RESULTS_ROOT,
           operatorRoot: SUBAGENT_OPERATOR_ROOT,
           runId: decodeURIComponent(deliveryResolutionMatch[1]),
+          runKey: body.run_key ?? body.runKey,
           action: body.action,
           reason: body.reason,
         });
@@ -2388,31 +2485,28 @@ function startSubagentRetention() {
   const prune = async () => {
     const snapshot = await subagentSnapshot();
     await reconcileLoadedSubagents(snapshot);
-    return pruneTerminalSubagentRuns({
-      lifecycleRoot: SUBAGENT_LIFECYCLE_ROOT,
-      sessionRoot: SUBAGENT_SESSION_ROOT,
-      activeRunIds: new Set(
-        snapshot.runs.filter((run) => run.blocking).map((run) => run.run_id),
-      ),
-      hasSessionLease: (sessionRef) => {
-        const canonicalId = path
-          .basename(sessionRef, ".jsonl")
-          .split("_")
-          .pop();
-        return Boolean(
-          sessionOwnership.get(sessionRef) ||
-          (canonicalId && sessionOwnership.get(canonicalId)),
-        );
-      },
-    });
+    const inventory = await retentionInventory();
+    const compacted =
+      inventory.eligible_count > 0 ? await applyRetention(inventory.digest) : null;
+    retentionCache = {
+      ...retentionCache,
+      inventory,
+      result: compacted,
+      error: null,
+      lastRunAt: Date.now(),
+    };
+    return { inventory, compacted };
   };
   const runPrune = () =>
-    prune().catch((err) =>
-      console.warn(
-        "[agentd] subagent retention failed:",
-        err instanceof Error ? err.message : String(err),
-      ),
-    );
+    prune().catch((err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      retentionCache = {
+        ...retentionCache,
+        error: message,
+        lastRunAt: Date.now(),
+      };
+      console.warn("[agentd] subagent retention failed:", message);
+    });
   void runPrune();
   const interval = setInterval(runPrune, 24 * 60 * 60 * 1000);
   interval.unref?.();
@@ -2430,6 +2524,7 @@ server.listen(PORT, HOST, () => {
 process.on("SIGTERM", async () => {
   forumCatalogRefresh.stop();
   setDraining(true, { reason: "sigterm", autoCancel: false });
+  await retentionCoordinator.wait();
   for (const conv of conversations.values()) {
     try {
       await closeConversation(conv, "sigterm");
