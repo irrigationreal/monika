@@ -199,6 +199,53 @@ function clampPositiveInt(value: number | null | undefined, fallback: number): n
   return Math.floor(value);
 }
 
+type ContinuationMetadata = {
+  sourceKind: 'subagent-completion';
+  runId: string | null;
+  runIds: string[];
+  origins: Array<{ runId: string | null; turnId: string | null; postId: string | null; topicId: string | null }>;
+  originTurnId: string | null;
+  originPostId: string | null;
+  originTopicId: string | null;
+};
+
+function readSubagentCompletionMetadata(...values: unknown[]): ContinuationMetadata | null {
+  for (const value of values) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+    const data = value as Record<string, unknown>;
+    const sourceKind = data['sourceKind'] ?? data['source_kind'];
+    if (sourceKind !== 'subagent-completion') continue;
+    const stringOrNull = (candidate: unknown): string | null =>
+      typeof candidate === 'string' && candidate.trim() ? candidate.trim() : null;
+    const runId = stringOrNull(data['runId'] ?? data['run_id']);
+    const rawRunIds = data['runIds'] ?? data['run_ids'] ?? data['subagent_run_ids'];
+    const runIds = Array.isArray(rawRunIds)
+      ? rawRunIds.map(stringOrNull).filter((id): id is string => Boolean(id)).slice(0, 100)
+      : runId ? [runId] : [];
+    const rawOrigins = data['origins'] ?? data['subagent_origins'];
+    const origins = Array.isArray(rawOrigins) ? rawOrigins.slice(0, 100).flatMap((origin) => {
+      if (!origin || typeof origin !== 'object' || Array.isArray(origin)) return [];
+      const item = origin as Record<string, unknown>;
+      return [{
+        runId: stringOrNull(item['runId'] ?? item['run_id']),
+        turnId: stringOrNull(item['turnId'] ?? item['turn_id']),
+        postId: stringOrNull(item['postId'] ?? item['post_id']),
+        topicId: stringOrNull(item['topicId'] ?? item['topic_id']),
+      }];
+    }) : [];
+    return {
+      sourceKind,
+      runId,
+      runIds,
+      origins,
+      originTurnId: stringOrNull(data['originTurnId'] ?? data['origin_turn_id']),
+      originPostId: stringOrNull(data['originPostId'] ?? data['origin_post_id']),
+      originTopicId: stringOrNull(data['originTopicId'] ?? data['origin_topic_id']),
+    };
+  }
+  return null;
+}
+
 function sha256File(path: string): string {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
@@ -435,6 +482,7 @@ interface ThreadContext {
   totalInputTokens: number;
   totalOutputTokens: number;
   activeSubagents: Map<string, { task: string; startedAt: number }>;
+  currentContinuation?: ContinuationMetadata | null;
   /** Timestamp of last SSE event received (including keepalives). */
   lastStreamEventAt: number | null;
   /** Character offsets into reasoningSummary recorded at each tool start. */
@@ -757,21 +805,31 @@ export class EchsBridge {
     let resumed = 0;
     let skipped = 0;
     for (const session of sessions) {
-      const threadId = session.agent_thread_id ?? null;
+      let threadId = session.agent_thread_id ?? null;
       if (!threadId) {
         skipped += 1;
         continue;
       }
-      const conversation = await this.client.getConversation(threadId);
+      let conversation = await this.client.getConversation(threadId);
       if (!conversation) {
         console.warn(
-          `[ECHS] resumeAllThreads: conversation missing for threadId=${threadId} topicId=${session.topic_id}, resetting`
+          `[ECHS] resumeAllThreads: conversation missing for threadId=${threadId} topicId=${session.topic_id}, reopening canonical Pi session`
         );
-        this.store.clearSessionAgentThread(session.id);
-        this.store.setRobotActivity(session.topic_id, 'idle');
-        this.emitState(session.topic_id);
-        skipped += 1;
-        continue;
+        try {
+          const reopened = await this.openTopicConversation(session.topic_id);
+          threadId = reopened.conversationId;
+          conversation = await this.client.getConversation(threadId);
+        } catch (err) {
+          console.warn('[ECHS] resumeAllThreads: canonical reopen failed:', err instanceof Error ? err.message : err);
+          conversation = null;
+        }
+        if (!conversation) {
+          this.store.clearSessionAgentThread(session.id);
+          this.store.setRobotActivity(session.topic_id, 'idle');
+          this.emitState(session.topic_id);
+          skipped += 1;
+          continue;
+        }
       }
       const activeThreadId = conversation.active_thread_id ?? null;
       let threadStatus: string | null = null;
@@ -1680,6 +1738,24 @@ export class EchsBridge {
         const data = event.data as any;
         ctx.currentTurnId = data?.message_id ?? data?.messageId ?? ctx.currentTurnId;
         ctx.turnStartedAt = Date.now();
+        ctx.currentContinuation = readSubagentCompletionMetadata(data);
+        if (ctx.currentContinuation) {
+          const originTopicMatches = !ctx.currentContinuation.originTopicId
+            || ctx.currentContinuation.originTopicId === ctx.topicId;
+          const originPost = originTopicMatches && ctx.currentContinuation.originPostId
+            ? this.store.getPost(ctx.currentContinuation.originPostId)
+            : null;
+          ctx.turnParentPostId = originPost?.topic_id === ctx.topicId ? originPost.id : null;
+          // Extension-triggered completion is its own parent turn, not part of
+          // whichever forum response happened to run most recently.
+          ctx.planId = null;
+          ctx.reasoningSummary = '';
+          ctx.reasoningCheckpoints = [];
+          ctx.assistantText = '';
+          ctx.assistantCheckpoints = [];
+          ctx.lastAssistantAt = null;
+          this.bus.emit(ctx.topicId, { type: 'assistant_reset', data: { reason: 'new_turn' } });
+        }
         this.activeTurnThreads.add(threadId);
         this.store.upsertRobotState({
           topicId: ctx.topicId,
@@ -1689,6 +1765,25 @@ export class EchsBridge {
           reasoningEffort: ctx.reasoningEffort,
           currentPlanId: ctx.planId,
         });
+        this.emitState(ctx.topicId);
+        break;
+      }
+      case 'subagent_continuation': {
+        const continuation = readSubagentCompletionMetadata(event.data);
+        if (!continuation) break;
+        ctx.currentContinuation = continuation;
+        const originTopicMatches = !continuation.originTopicId || continuation.originTopicId === ctx.topicId;
+        const originPost = originTopicMatches && continuation.originPostId
+          ? this.store.getPost(continuation.originPostId)
+          : null;
+        ctx.turnParentPostId = originPost?.topic_id === ctx.topicId ? originPost.id : null;
+        ctx.planId = null;
+        ctx.reasoningSummary = '';
+        ctx.reasoningCheckpoints = [];
+        ctx.assistantText = '';
+        ctx.assistantCheckpoints = [];
+        ctx.lastAssistantAt = null;
+        this.bus.emit(ctx.topicId, { type: 'assistant_reset', data: { reason: 'new_turn' } });
         this.emitState(ctx.topicId);
         break;
       }
@@ -1820,7 +1915,20 @@ export class EchsBridge {
         if (item?.type === 'message' && item?.role === 'assistant') {
           const text = extractAssistantText(item);
           if (text?.trim()) {
-            this.persistAssistantMessage(threadId, ctx, text, { piMessageId: item.id ?? null }).catch(() => undefined);
+            const continuation = readSubagentCompletionMetadata(data, item, item?.metadata) ?? ctx.currentContinuation ?? null;
+            const completionOriginPost = continuation?.originPostId
+              && (!continuation.originTopicId || continuation.originTopicId === ctx.topicId)
+              ? this.store.getPost(continuation.originPostId)
+              : null;
+            const completionParentPostId = completionOriginPost?.topic_id === ctx.topicId
+              ? completionOriginPost.id
+              : (continuation ? null : undefined);
+            const canonicalPiMessageId = data?.pi_message_id ?? data?.piMessageId ?? item.id ?? null;
+            this.persistAssistantMessage(threadId, ctx, text, {
+              parentPostId: completionParentPostId,
+              piMessageId: canonicalPiMessageId,
+              continuation,
+            }).catch(() => undefined);
             void this.syncReasoningFromHistory(threadId, ctx);
             void this.forceReasoningBackfill(threadId);
             setTimeout(() => {
@@ -1835,6 +1943,7 @@ export class EchsBridge {
         const turnParentPostId = ctx.turnParentPostId;
         ctx.currentTurnId = null;
         ctx.turnStartedAt = null;
+        ctx.currentContinuation = null;
         void this.forceReasoningBackfill(threadId);
         this.store.upsertRobotState({
           topicId: ctx.topicId,
@@ -1855,6 +1964,7 @@ export class EchsBridge {
       case 'turn_interrupted': {
         ctx.currentTurnId = null;
         ctx.turnStartedAt = null;
+        ctx.currentContinuation = null;
         this.store.upsertRobotState({
           topicId: ctx.topicId,
           sessionId: ctx.sessionId,
@@ -1908,6 +2018,7 @@ export class EchsBridge {
         const failedTurnId = ctx.currentTurnId;
         ctx.currentTurnId = null;
         ctx.turnStartedAt = null;
+        ctx.currentContinuation = null;
         const anchorPostId = ctx.turnParentPostId ?? ctx.lastUserPostId ?? null;
         this.store.setRobotTurnError(ctx.topicId, {
           message: errorMsg,
@@ -2220,18 +2331,46 @@ export class EchsBridge {
     threadId: string,
     ctx: ThreadContext,
     text: string,
-    opts?: { parentPostId?: string | null; piMessageId?: string | null }
+    opts?: {
+      parentPostId?: string | null;
+      piMessageId?: string | null;
+      continuation?: ContinuationMetadata | null;
+    }
   ): Promise<void> {
     let finalText = text;
 
+    const piSessionLink = opts?.piMessageId ? this.store.getPiSessionLinkByTopic(ctx.topicId) : null;
+    if (piSessionLink && opts?.piMessageId) {
+      const canonicalLink = this.store.getPiMessageLink(piSessionLink.pi_session_id, opts.piMessageId);
+      const runLink = opts.continuation
+        ? this.store.findPiMessageLinkBySubagentRun(piSessionLink.pi_session_id, opts.continuation.runIds)
+        : null;
+      if (canonicalLink?.post_id || runLink?.post_id) {
+        if (!canonicalLink?.post_id && runLink?.post_id) {
+          this.store.createPiMessageLink({
+            piSessionId: piSessionLink.pi_session_id,
+            piMessageId: opts.piMessageId,
+            postId: runLink.post_id,
+            role: 'assistant',
+            metadata: { forumOrigin: true, linkedBy: 'subagent-run-id', ...(opts.continuation ?? {}) },
+          });
+        }
+        ctx.lastAssistantAt = Date.now();
+        return;
+      }
+    }
+
     const topic = this.store.getTopic(ctx.topicId);
     const forumId = topic?.forum_id ?? null;
+    const resolvedParentPostId = opts?.continuation
+      ? (opts.parentPostId ?? null)
+      : (opts?.parentPostId ?? ctx.lastUserPostId);
 
     const tamperContext: MessageTamperContext = {
       topicId: ctx.topicId,
       sessionId: ctx.sessionId,
       forumId,
-      parentPostId: opts?.parentPostId ?? ctx.lastUserPostId,
+      parentPostId: resolvedParentPostId,
       actorId: null,
     };
 
@@ -2257,6 +2396,26 @@ export class EchsBridge {
     if (!robotIdentity) {
       return;
     }
+    // Tamper hooks are asynchronous. Historical Pi sync may have projected this
+    // run while they were executing, so re-check run identity immediately before
+    // creating a visible post rather than relying on body equality.
+    if (piSessionLink && opts?.piMessageId && opts.continuation) {
+      const racedRunLink = this.store.findPiMessageLinkBySubagentRun(
+        piSessionLink.pi_session_id,
+        opts.continuation.runIds,
+      );
+      if (racedRunLink?.post_id) {
+        this.store.createPiMessageLink({
+          piSessionId: piSessionLink.pi_session_id,
+          piMessageId: opts.piMessageId,
+          postId: racedRunLink.post_id,
+          role: 'assistant',
+          metadata: { forumOrigin: true, linkedBy: 'subagent-run-id-after-tamper', ...opts.continuation },
+        });
+        ctx.lastAssistantAt = Date.now();
+        return;
+      }
+    }
     const { cleanedText: withoutArtifacts, artifacts } = extractArtifactMarkers(finalText);
     const { cleanedText: withoutForumRefs, ids: pendingAttachmentIds } = extractForumAttachmentRefs(withoutArtifacts);
     const { cleanedText, requested } = extractRobotTtsMarker(withoutForumRefs);
@@ -2279,14 +2438,15 @@ export class EchsBridge {
           console.warn('Artifact attachment failed for post ' + duplicatePost.id + ': ' + (err instanceof Error ? err.message : String(err)));
         });
       }
-      if (opts?.piMessageId) {
-        const piSessionLink = this.store.getPiSessionLinkByTopic(ctx.topicId);
-        if (piSessionLink) {
-          this.store.createPiMessageLink({
-            piSessionId: piSessionLink.pi_session_id, piMessageId: opts.piMessageId, postId: duplicatePost.id,
-            role: 'assistant', metadata: { forumOrigin: true, linkedBy: 'agentd-canonical-id' },
-          });
-        }
+      if (opts?.piMessageId && piSessionLink) {
+        this.store.createPiMessageLink({
+          piSessionId: piSessionLink.pi_session_id, piMessageId: opts.piMessageId, postId: duplicatePost.id,
+          role: 'assistant', metadata: {
+            forumOrigin: true,
+            linkedBy: 'agentd-canonical-id',
+            ...(opts.continuation ?? {}),
+          },
+        });
       }
       ctx.lastAssistantAt = Date.now();
       return;
@@ -2297,18 +2457,19 @@ export class EchsBridge {
       topicId: ctx.topicId,
       body: cleanedText,
       authorId: robotIdentity.id,
-      parentPostId: opts?.parentPostId ?? ctx.lastUserPostId,
+      parentPostId: resolvedParentPostId,
       sourceMessageId: sessionMessage.id,
     });
-    if (opts?.piMessageId) {
-      const piSessionLink = this.store.getPiSessionLinkByTopic(ctx.topicId);
-      if (piSessionLink) {
-        this.store.createPiMessageLink({
-          piSessionId: piSessionLink.pi_session_id, piMessageId: opts.piMessageId, postId: post.id,
-          sessionMessageId: sessionMessage.id, role: 'assistant',
-          metadata: { forumOrigin: true, linkedBy: 'agentd-canonical-id' },
-        });
-      }
+    if (opts?.piMessageId && piSessionLink) {
+      this.store.createPiMessageLink({
+        piSessionId: piSessionLink.pi_session_id, piMessageId: opts.piMessageId, postId: post.id,
+        sessionMessageId: sessionMessage.id, role: 'assistant',
+        metadata: {
+          forumOrigin: true,
+          linkedBy: 'agentd-canonical-id',
+          ...(opts.continuation ?? {}),
+        },
+      });
     }
     if (requested) {
       this.attachTtsToPost(post.id, cleanedText).catch(() => undefined);

@@ -1,8 +1,8 @@
 import Database from 'better-sqlite3';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { runMigrations } from '../migrations';
-import { PiSessionSyncService, detectHistoricalTerminalErrors } from './piSessionSyncService';
+import { PiSessionSyncService, detectHistoricalTerminalErrors, isSubagentPiSession } from './piSessionSyncService';
 
 import type { ExportedSession } from './piSessionSyncService';
 
@@ -85,6 +85,45 @@ describe('PiSessionSyncService forum cwd reconciliation', () => {
     expect(ensureForum('/workspace')).toBe('forum-1');
     expect(db.prepare('select cwd from forums where id = ?').get('forum-1')).toEqual({ cwd: '/workspace/custom' });
 
+    db.close();
+  });
+});
+
+describe('PiSessionSyncService child-session omission', () => {
+  it('recognizes explicit subagent kinds and the dedicated subagent path root', () => {
+    expect(isSubagentPiSession({ kind: 'subagent', path: '/tmp/child.jsonl' })).toBe(true);
+    expect(isSubagentPiSession({ kind: null, path: '/app/.pi/agent/sessions/subagent/run/child.jsonl' })).toBe(true);
+    expect(isSubagentPiSession({ kind: 'sleep', path: '/app/.pi/agent/sessions/sleep/child.jsonl' })).toBe(false);
+  });
+
+  it('skips child summaries before export during normal sync', async () => {
+    const { db, service } = createSyncFixture();
+    const client = (service as any).client;
+    vi.spyOn(client, 'listPiSessions').mockResolvedValue({
+      sessions: [{ id: 'child-1', kind: 'subagent', path: '/app/.pi/agent/sessions/subagent/child.jsonl' }],
+    });
+    const exportSpy = vi.spyOn(client, 'exportPiSession');
+
+    const result = await service.runManualSync();
+    expect(result.sessionsChecked).toBe(0);
+    expect(exportSpy).not.toHaveBeenCalled();
+    expect(db.prepare('select count(*) as count from topics').get()).toEqual({ count: 0 });
+    db.close();
+  });
+
+  it('does not create a forum, topic, or session when a child export reaches the importer', () => {
+    const { db, importExported } = createSyncFixture();
+    const child = exported(
+      [{ type: 'message', id: 'u1', role: 'user', text: 'private delegated task', hasVisibleText: true }],
+      ['u1']
+    );
+    child.session.kind = 'subagent';
+    child.session.path = '/app/.pi/agent/sessions/subagent/run/child.jsonl';
+
+    expect(importExported(child)).toBe(0);
+    expect(db.prepare('select count(*) as count from topics').get()).toEqual({ count: 0 });
+    expect(db.prepare('select count(*) as count from sessions').get()).toEqual({ count: 0 });
+    expect(db.prepare('select count(*) as count from pi_session_links').get()).toEqual({ count: 0 });
     db.close();
   });
 });
@@ -247,6 +286,48 @@ describe('PiSessionSyncService provenance-aware reconciliation', () => {
     expect(db.prepare("select status, resolution from pi_sync_anomalies where pi_message_id = 'a1'").get()).toEqual({
       status: 'resolved',
       resolution: 'linked_by_bridge',
+    });
+    db.close();
+  });
+
+  it('projects a subagent completion once, under its originating post, without a fake user post', () => {
+    const { db, importExported } = createSyncFixture();
+    importExported(exported([{ type: 'session', id: 'header' }], ['header']));
+    const target = db.prepare("select topic_id from pi_session_links where pi_session_id = 'pi-session-1'").get() as {
+      topic_id: string;
+    };
+    const human = db.prepare("select id from identities where display_name = 'Pi CLI'").get() as { id: string };
+    db.prepare(
+      'insert into posts (id, topic_id, author_id, body, source_message_id, silent, created_at) values (?, ?, ?, ?, ?, ?, ?)'
+    ).run('origin-post', target.topic_id, human.id, 'Start background work', null, 0, '2026-07-13T10:00:00.000Z');
+    db.prepare(
+      'insert into posts (id, topic_id, author_id, body, source_message_id, silent, created_at) values (?, ?, ?, ?, ?, ?, ?)'
+    ).run('newer-post', target.topic_id, human.id, 'A newer active request', null, 0, '2026-07-13T10:00:01.000Z');
+
+    const completed = exported(
+      [
+        { type: 'session', id: 'header' },
+        {
+          type: 'message', id: 'completion-a1', parentId: 'header', role: 'assistant', text: 'Background result',
+          hasVisibleText: true, stopReason: 'stop', timestamp: '2026-07-13T10:00:02.000Z',
+        },
+      ],
+      ['header', 'completion-a1'],
+      [{
+        piMessageId: 'completion-a1', origin: 'subagent-completion', sourceKind: 'subagent-completion',
+        runId: 'run-1', originTurnId: 'turn-origin', originPostId: 'origin-post', originTopicId: target.topic_id,
+      }]
+    );
+
+    expect(importExported(completed)).toBe(1);
+    expect(importExported(completed)).toBe(0);
+    expect(db.prepare("select body, parent_post_id from posts where source_message_id = 'completion-a1'").get()).toEqual({
+      body: 'Background result', parent_post_id: 'origin-post',
+    });
+    expect(db.prepare("select count(*) as count from posts where body not in ('Start background work', 'A newer active request', 'Background result')").get()).toEqual({ count: 0 });
+    expect(db.prepare("select count(*) as count from posts where source_message_id = 'completion-a1'").get()).toEqual({ count: 1 });
+    expect(JSON.parse((db.prepare("select metadata_json from pi_message_links where pi_message_id = 'completion-a1'").get() as any).metadata_json)).toMatchObject({
+      sourceKind: 'subagent-completion', runId: 'run-1', originPostId: 'origin-post',
     });
     db.close();
   });

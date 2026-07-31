@@ -32,7 +32,10 @@ tests/forum/e2e.sh
 ```
 
 See `tests/forum/README.md` for the split between Vitest, mocked Playwright E2E,
-and opt-in live backend canaries.
+and opt-in live backend canaries. Forum unit coverage verifies that dedicated
+subagent child paths are omitted from sync and that live and historical async
+completion continuations project once beneath their recorded origin without a
+fake user post.
 
 ## Agentd tests
 
@@ -45,17 +48,28 @@ pnpm test
 ```
 
 The container build runs this suite after installing agentd's frozen production
-lockfile, so the tests exercise the same Pi packages shipped in the image.
+lockfile, so the tests exercise the same Pi packages shipped in the image. The
+subagent lifecycle tests cover durable origin capture, separation of logical and
+process-terminal completion, grouped completion attribution, restart artifact
+reconciliation, public v1 stop RPC use, global persisted-run scans,
+canonical completion provenance, and conservative 14-day terminal-session
+retention.
 
 ## Stateful-memory tests
 
-Progressive recall selection, excerpt bounds, pagination, and enrichment budgets have a
-provider-independent Node test:
+Progressive recall selection, excerpt bounds, pagination, enrichment budgets, and
+pi-subagents child context boundaries have provider-independent Node tests:
 
 ```bash
 nix-shell -p nodejs_22 --run \
-  'node --experimental-default-type=module --test tests/stateful-memory/recall-utils.test.js'
+  'node --experimental-default-type=module --test \
+    tests/stateful-memory/recall-utils.test.js \
+    tests/stateful-memory/child-context.test.js'
 ```
+
+The child-context suite verifies topic-only specialist prompts, the
+`monika-delegate` stable persona trio, absence of WAKE/FACTS/observations and
+memory tools, explicit `extensions` allowlists, and child-local compaction.
 
 Memstore's Go suite covers FTS search, save deduplication, and append-only observation
 supersession/retraction:
@@ -84,15 +98,15 @@ The script verifies:
 3. agentd answers `/healthz`;
 4. `pi --version` reports the repository's exact Pi pin;
 5. npm's 10-day dependency cooldown, pnpm 10.26.2, and the pinned agent-browser version are active;
-6. interactive project-trust state is linked into persistent `/data`;
-7. agentd sends a complete Pi turn—including the bundled `pi_run` extension
-   tool—to a local OpenAI Responses fixture;
-8. every strict function schema in the serialized request satisfies OpenAI's
+6. the reviewed pi-subagents 0.37.2 gitHead (`8063333661476ca48afbca826dc4aab8707c72d3`) is installed, `defaultExtensions=[]` and isolated child profiles are configured, and legacy force-tools/delegate extensions are absent;
+7. interactive project-trust state is linked into persistent `/data`;
+8. agentd sends a complete Pi turn to a local OpenAI Responses fixture, which requires `pi_run`, `browser`, `subagent`, `subagent_wait`, and `subagent_supervisor` while rejecting the legacy `delegate` tool;
+9. every strict function schema in the serialized request satisfies OpenAI's
    `additionalProperties: false` and required-property rules;
-9. an interactive Pi ownership lease evicts an idle agentd runtime, blocks forum reopen and deployment, heartbeats, and releases cleanly;
-10. agentd quiescence reports the reloaded idle conversation and deploy drain closes it;
-11. `scripts/deploy-if-safe --backup-only` can create and verify an isolated runtime capsule backup through a mock forum quiescence endpoint;
-12. the container stops cleanly on SIGTERM.
+10. an interactive Pi ownership lease evicts an idle agentd runtime, blocks forum reopen and deployment, heartbeats, and releases cleanly;
+11. agentd quiescence reports the reloaded idle conversation and deploy drain closes it;
+12. `scripts/deploy-if-safe --backup-only` can create and verify an isolated runtime capsule backup through a mock forum quiescence endpoint;
+13. the container stops cleanly on SIGTERM.
 
 The model fixture runs in a second throwaway container on an isolated Docker
 network. It exercises Pi's real extension loading, tool serialization, provider

@@ -184,6 +184,33 @@ if [ "$PI_VERSION" != "0.82.1" ]; then
 fi
 pass "pi CLI pin active: ${PI_VERSION}"
 
+docker exec -i "$CONTAINER_NAME" node - <<'NODE_SUBAGENTS_PIN'
+const fs = require('node:fs');
+const reviewed = JSON.parse(fs.readFileSync('/opt/pi-subagents/REVIEWED_SOURCE.json', 'utf8'));
+if (reviewed.version !== '0.37.2') throw new Error(`Unexpected pi-subagents version: ${reviewed.version}`);
+if (reviewed.gitHead !== '8063333661476ca48afbca826dc4aab8707c72d3') throw new Error(`Unexpected pi-subagents gitHead: ${reviewed.gitHead}`);
+if (reviewed.npmArtifactIntegrity !== 'sha512-pf7DxLBY9pFY3grOFgRfMqoS9QbElWP2ULOCOnmJNrCEvjlA81fiyp0wk1vSaJPJ/rjsP0lA1sAk7S/QD+Olpg==') {
+  throw new Error(`Unexpected reviewed npm integrity: ${reviewed.npmArtifactIntegrity}`);
+}
+const settings = JSON.parse(fs.readFileSync('/app/.pi/agent/settings.json', 'utf8'));
+if (!settings.packages?.includes('/opt/pi-subagents')) throw new Error('Local reviewed pi-subagents package is not configured');
+if (JSON.stringify(settings.subagents?.defaultExtensions) !== '[]') throw new Error('subagents.defaultExtensions must disable ambient extensions');
+for (const profile of ['advisor', 'delegate']) {
+  if (settings.subagents?.agentOverrides?.[profile]?.disabled !== true) throw new Error(`Upstream ${profile} profile must be disabled`);
+}
+for (const file of fs.readdirSync('/opt/pi-subagents/agents')) {
+  const source = fs.readFileSync(`/opt/pi-subagents/agents/${file}`, 'utf8');
+  if (/^memory\s*:/m.test(source)) throw new Error(`Bundled agent enables MEMORY.md by default: ${file}`);
+}
+NODE_SUBAGENTS_PIN
+pass "pi-subagents 0.37.2 reviewed source pin, isolated extensions, and opt-in memory defaults active"
+
+if docker exec "$CONTAINER_NAME" sh -c 'test -e /app/.pi/agent/extensions/force-tools.ts || test -e /app/.pi/agent/extensions/delegate'; then
+  echo "Legacy force-tools/delegate extension is present"
+  exit 1
+fi
+pass "legacy force-tools and delegate extensions absent"
+
 PI_TRUST_TARGET="$(docker exec "$CONTAINER_NAME" readlink /app/.pi/agent/trust.json)"
 if [ "$PI_TRUST_TARGET" != "/data/pi-agent-trust/trust.json" ]; then
   echo "Expected persistent Pi trust state link, got: ${PI_TRUST_TARGET:-<not a symlink>}"

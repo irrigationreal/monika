@@ -129,6 +129,56 @@ and error events. The echsBridge adds a `tool_started` event (not from agentd) t
 the SSE bus when each tool run is created, enabling per-tool checkpoint recording
 for trace interleaving. See "Live trace and saved trace architecture" below.
 
+### Subagents and background completions
+
+The parent agentd runtime loads the reviewed `pi-subagents` 0.37.2 package. Parent
+sessions expose `subagent`, `subagent_wait`, and `subagent_supervisor`; the package
+supports foreground execution, parallel groups, chains, dynamic fanout, and async
+runs. Agent profiles define direct child tools instead of inheriting the parent's
+tool set. `subagents.defaultExtensions` is `[]`, so ambient extensions are absent
+unless a profile explicitly opts in.
+
+Specialist children receive project instructions plus turn-routed topic addenda,
+but no Monika persona or autobiographical memory. `monika-delegate` is the explicit
+identity-bearing profile: it receives the stable SOUL.md, STYLE.md, and REGISTER.md
+persona trio plus routed topics, not WAKE.md, FACTS.md, observations, or memstore
+recall. Neither child path loads stateful-memory's tools, save/shutdown hooks, or
+sleep command. Sleep remains its own sequential full-persona fork workflow under
+`/app/.pi/agent/sessions/forks/`.
+
+Agentd sets the child session root to
+`/app/.pi/agent/sessions/subagent/`. Forum sync rejects both that path and explicit
+`kind: subagent` listings, so disposable child transcripts never become forum
+topics or memstore sessions. This is distinct from the legacy `System / Delegates`
+taxonomy, which remains only for importing historical custom-delegate sessions
+marked with `=== FOCUSED TASK MODE ===`.
+
+For async work, agentd owns the lifetime rather than allowing print-mode auto-drain
+to hold the initiating forum response open. Package lifecycle, result, and recovery
+artifacts persist below `/data/pi-subagents/`; the child JSONL remains in the
+dedicated session root. Agentd records a `monika.subagent.run` entry in the
+canonical parent JSONL with the run ID, originating turn/topic/post, and async
+directory. Active runs block idle reaping, conversation close, interactive
+ownership takeover until stopped, and deployment quiescence. Interrupt/takeover
+requests use pi-subagents' public v1 stop RPC; drain does not close conversations
+that still own active work.
+
+After restart, agentd restores run mappings from the parent JSONL, reconciles the
+persistent `status.json` artifact and package lifecycle events, and asks the
+package to trigger recovered results. Logical completion alone does not release
+lifecycle ownership: exact observed process-terminal proof is required. The
+package's natural `subagent-notify` continuation is attributed as
+`source_kind: subagent-completion`, persisted as canonical message provenance, and
+projected exactly once beneath the originating forum post when available. Grouped
+notifications retain all contributing run origins. Live bridge projection and
+later sync share the canonical Pi message link, preventing duplicate completion
+posts.
+
+Agentd runs conservative retention daily. A child session is removed only after
+14 days when its status is proven terminal, it is not active, and its parent
+session has no ownership lease. Malformed, uncertain, active, leased, and
+unproven-terminal runs are retained; lifecycle artifacts remain for diagnostics.
+
 ## Forum integration state
 
 The live standalone forum DB is `runtime/forum/data.db`; uploads are under
@@ -350,6 +400,8 @@ restarting the container terminates the session.
   point at `src/index.ts`.
 - Explicit checkpoint memory save without closing is not implemented. Use close
   for a safe stateful-memory save path, because close emits Pi `session_shutdown`.
+  Close returns `409 active_subagent_runs` while background work still owns the
+  parent conversation.
 - Forum model selection/thinking level is mapped onto Pi `setModel()` /
   `setThinkingLevel()` using Pi model IDs directly.
 - A context meter is available in the reply UI using the best Pi-provided usage
@@ -360,12 +412,14 @@ restarting the container terminates the session.
 - Pi JSONL sessions remain canonical for agent conversation state.
 - Forum SQLite is a projection/metadata layer.
 - One forum topic should map to one Pi session.
-- Historical import and ongoing sync should include all sessions, but curated cwd
-  mappings and system forums should prevent the main project forums from becoming
-  noisy.
-- Fork/delegate/sleep sessions are imported and routed to system areas. New
-  delegate/sleep/handoff extension paths append `monika.lineage` custom JSONL
-  entries for future imports/sync.
+- Historical import and ongoing sync include canonical user-facing sessions, but
+  omit disposable pi-subagents child sessions under the dedicated child root.
+  Curated cwd mappings and system forums prevent other internal sessions from
+  making project forums noisy.
+- Sleep forks and historical custom-delegate/fork sessions are imported into
+  system areas. `System / Delegates` and its focused-task marker describe legacy
+  compatibility, not the current pi-subagents child path. Handoff and sleep
+  lineage remain represented by canonical `monika.lineage` JSONL entries.
 - Forum never talks directly to memstore and never invents memory origins. Memory
   dedupe must use canonical Pi session path/id.
 

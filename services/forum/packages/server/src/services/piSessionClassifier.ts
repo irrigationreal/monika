@@ -119,6 +119,9 @@ function firstUserText(entries: PiSessionClassifierEntry[]): string {
   );
 }
 
+// Legacy importer compatibility for sessions created by Monika's removed custom
+// delegate extension. Current pi-subagents children are excluded by sync kind/path
+// before taxonomy classification and must not be routed to System / Delegates.
 function isDelegateSession(entries: PiSessionClassifierEntry[]): boolean {
   return firstUserText(entries).includes('=== FOCUSED TASK MODE ===');
 }

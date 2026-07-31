@@ -58,6 +58,18 @@ export type PiMessageProvenance = {
   topicId?: string | null;
   postId?: string | null;
   messageKind?: string | null;
+  source_kind?: string | null;
+  sourceKind?: string | null;
+  run_id?: string | null;
+  runId?: string | null;
+  run_ids?: string[] | null;
+  runIds?: string[] | null;
+  origin_turn_id?: string | null;
+  originTurnId?: string | null;
+  origin_post_id?: string | null;
+  originPostId?: string | null;
+  origin_topic_id?: string | null;
+  originTopicId?: string | null;
 };
 
 export type ExportedSession = {
@@ -156,6 +168,38 @@ const LIVE_DUPLICATE_WINDOW_MS = 5 * 60 * 1000;
 const LIVE_ANOMALY_RETRY_LIMIT_MS = 10 * 60 * 1000;
 const LIVE_ANOMALY_BACKOFF_MS = [30_000, 60_000, 120_000, 300_000];
 const EXTERNAL_SETTLEMENT_MS = 60_000;
+const SUBAGENT_SESSION_ROOT = '/app/.pi/agent/sessions/subagent';
+
+function normalizedSessionPath(path: string | null | undefined): string {
+  return (path ?? '').replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
+export function isSubagentPiSession(summary: Pick<PiSessionSummary, 'kind' | 'path'>): boolean {
+  const kind = summary.kind?.trim().toLowerCase();
+  if (kind === 'subagent') return true;
+  const path = normalizedSessionPath(summary.path);
+  return path === SUBAGENT_SESSION_ROOT || path.startsWith(`${SUBAGENT_SESSION_ROOT}/`);
+}
+
+function provenanceSourceKind(value: PiMessageProvenance | undefined): string | null {
+  return value?.sourceKind ?? value?.source_kind ?? (value?.origin === 'subagent-completion' ? value.origin : null);
+}
+
+function provenanceRunIds(value: PiMessageProvenance | undefined): string[] {
+  const primary = value?.runId ?? value?.run_id ?? null;
+  const list = value?.runIds ?? value?.run_ids ?? [];
+  return [...new Set([...(Array.isArray(list) ? list : []), ...(primary ? [primary] : [])]
+    .filter((id): id is string => typeof id === 'string' && Boolean(id.trim()))
+    .map((id) => id.trim()))].slice(0, 100);
+}
+
+function provenanceOriginPostId(value: PiMessageProvenance | undefined): string | null {
+  return value?.originPostId ?? value?.origin_post_id ?? value?.postId ?? null;
+}
+
+function provenanceOriginTopicId(value: PiMessageProvenance | undefined): string | null {
+  return value?.originTopicId ?? value?.origin_topic_id ?? value?.topicId ?? null;
+}
 
 function stripArtifactMarkers(text: string): string {
   return text
@@ -361,7 +405,7 @@ export class PiSessionSyncService {
       this.seedLegacySkippedAnomalies();
       const listed = await this.client.listPiSessions();
       const sessions = ((listed?.sessions ?? []) as PiSessionSummary[]).filter((summary) =>
-        opts.piSessionId ? summary.id === opts.piSessionId : true
+        !isSubagentPiSession(summary) && (opts.piSessionId ? summary.id === opts.piSessionId : true)
       );
       let checked = 0;
       let importedPosts = 0;
@@ -677,6 +721,9 @@ export class PiSessionSyncService {
   }
 
   private importExported(exported: ExportedSession, summary: PiSessionSummary): number {
+    // Defense in depth: manual sync/export callers must not create topics for
+    // pi-subagents child sessions even if a listing omitted kind metadata.
+    if (isSubagentPiSession(summary) || isSubagentPiSession(exported.session)) return 0;
     return this.db.transaction(() => {
       const classification = classifyPiSession(exported.session, exported.entries);
       const target = this.ensureSession(exported, summary, classification);
@@ -1233,7 +1280,10 @@ export class PiSessionSyncService {
       const text = entry.role === 'assistant' ? stripArtifactMarkers(rawText) : rawText;
       if (!text.trim()) continue;
       const directProvenance = provenance.get(entry.id);
+      const sourceKind = provenanceSourceKind(directProvenance);
+      const subagentCompletion = entry.role === 'assistant' && sourceKind === 'subagent-completion';
       const forumOrigin = directProvenance?.origin === 'forum'
+        || subagentCompletion
         || rawText.includes('[FORUM TURN]')
         || (entry.role === 'assistant' && hasForumTrigger(entry));
       const authorId = entry.role === 'user' ? neonId : robotId;
@@ -1243,17 +1293,40 @@ export class PiSessionSyncService {
         || legacyMeta['deferredLiveForumPost']
         || legacyMeta['seededFromLegacySkippedLiveForumPost']
       ));
-      const explicitPostId = entry.role === 'user' ? (directProvenance?.postId ?? extractForumPostId(rawText)) : null;
-      const explicitPost = explicitPostId
+      const provenanceTopicId = provenanceOriginTopicId(directProvenance);
+      const explicitPostId = subagentCompletion
+        ? provenanceOriginPostId(directProvenance)
+        : entry.role === 'user' ? (directProvenance?.postId ?? extractForumPostId(rawText)) : null;
+      const explicitPost = explicitPostId && (!provenanceTopicId || provenanceTopicId === topicId)
         ? this.db.prepare('select id from posts where id = ? and topic_id = ? limit 1').get(explicitPostId, topicId) as { id: string } | undefined
         : undefined;
-      const existingPost = explicitPost ?? ((forumOrigin || legacyRepair)
-        ? this.findUnlinkedMatchingPost(topicId, authorId, text, entry.timestamp ?? null)
-        : null);
+      const completionRunIds = subagentCompletion ? provenanceRunIds(directProvenance) : [];
+      const completionSourceMetadata = subagentCompletion ? {
+        sourceKind,
+        runId: directProvenance?.runId ?? directProvenance?.run_id ?? null,
+        runIds: completionRunIds,
+        originTurnId: directProvenance?.originTurnId ?? directProvenance?.origin_turn_id ?? null,
+        originPostId: explicitPost?.id ?? explicitPostId,
+        originTopicId: provenanceTopicId ?? topicId,
+      } : {};
+      const existingRunLink = subagentCompletion && completionRunIds.length > 0
+        ? this.db.prepare(
+          `select post_id from pi_message_links
+           where pi_session_id = ? and post_id is not null
+             and (json_extract(metadata_json, '$.runId') in (select value from json_each(?))
+               or exists (select 1 from json_each(metadata_json, '$.runIds') where value in (select value from json_each(?))))
+           order by imported_at asc limit 1`
+        ).get(exported.session.id, json(completionRunIds), json(completionRunIds)) as { post_id: string } | undefined
+        : undefined;
+      const existingPost = existingRunLink
+        ? this.db.prepare('select id from posts where id = ? and topic_id = ? limit 1').get(existingRunLink.post_id, topicId) as { id: string } | undefined
+        : (!subagentCompletion ? explicitPost : undefined) ?? ((forumOrigin || legacyRepair)
+          ? this.findUnlinkedMatchingPost(topicId, authorId, text, entry.timestamp ?? null)
+          : null);
       if (existingPost) {
         if (link) {
           this.db.prepare('update pi_message_links set post_id = ?, metadata_json = ? where id = ?')
-            .run(existingPost.id, json({ ...metadata, reconciledExistingPost: true, forumOrigin }), link.id);
+            .run(existingPost.id, json({ ...metadata, reconciledExistingPost: true, forumOrigin, ...completionSourceMetadata }), link.id);
         } else {
           this.insertMessageLink({
             piSessionId: exported.session.id,
@@ -1261,10 +1334,44 @@ export class PiSessionSyncService {
             postId: existingPost.id,
             sessionMessageId: null,
             role: entry.role,
-            metadata: { ...metadata, reconciledExistingPost: true, forumOrigin },
+            metadata: { ...metadata, reconciledExistingPost: true, forumOrigin, ...completionSourceMetadata },
           });
         }
         this.resolveAnomalies(exported.session.id, entry.id, 'matched_existing_post', existingPost.id);
+        continue;
+      }
+
+      if (subagentCompletion) {
+        const postId = randomUUID();
+        const sessionMessageId = randomUUID();
+        const at = entry.timestamp ?? nowIso();
+        this.db.prepare(
+          'insert into posts (id, topic_id, tenant_id, parent_post_id, author_id, body, source_message_id, silent, created_at, edited_at, deleted_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        ).run(postId, topicId, null, explicitPost?.id ?? null, robotId, text, entry.id, 0, at, null, null);
+        this.db.prepare('insert into session_messages (id, session_id, role, content, created_at, visibility) values (?, ?, ?, ?, ?, ?)')
+          .run(sessionMessageId, sessionId, 'assistant', text, at, 'public');
+        const completionMetadata = {
+          ...metadata,
+          forumOrigin: true,
+          ...completionSourceMetadata,
+          linkedBy: 'historical-subagent-completion',
+        };
+        if (link) {
+          this.db.prepare('update pi_message_links set post_id = ?, session_message_id = ?, metadata_json = ? where id = ?')
+            .run(postId, sessionMessageId, json(completionMetadata), link.id);
+        } else {
+          this.insertMessageLink({
+            piSessionId: exported.session.id,
+            piMessageId: entry.id,
+            postId,
+            sessionMessageId,
+            role: 'assistant',
+            metadata: completionMetadata,
+          });
+        }
+        this.resolveAnomalies(exported.session.id, entry.id, 'projected_subagent_completion', postId);
+        bumpedAt = nowIso();
+        count += 1;
         continue;
       }
 

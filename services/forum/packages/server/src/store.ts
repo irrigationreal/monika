@@ -2936,6 +2936,19 @@ export class ForumStore {
     return row ?? null;
   }
 
+  findPiMessageLinkBySubagentRun(piSessionId: string, runIds: string[]): PiMessageLinkRow | null {
+    const ids = [...new Set(runIds.filter((id) => typeof id === 'string' && id.trim()).map((id) => id.trim()))].slice(0, 100);
+    if (ids.length === 0) return null;
+    const row = this.db.prepare(
+      `select * from pi_message_links
+       where pi_session_id = ? and post_id is not null
+         and (json_extract(metadata_json, '$.runId') in (select value from json_each(?))
+           or exists (select 1 from json_each(metadata_json, '$.runIds') where value in (select value from json_each(?))))
+       order by imported_at asc limit 1`
+    ).get(piSessionId, JSON.stringify(ids), JSON.stringify(ids)) as PiMessageLinkRow | undefined;
+    return row ?? null;
+  }
+
   createPiMessageLink(input: {
     piSessionId: string;
     piMessageId: string;
