@@ -139,9 +139,12 @@ return through the canonical parent transcript; the parent alone decides what to
 write as durable memory. Async lifecycle/results live under
 `/data/pi-subagents/`. Agentd reconciles that ledger independently of result
 projection before quiescence decisions, uses container epochs plus PID start
-identity across restarts, fails closed on uncertainty, exposes background work in
-the admin Robot Dashboard, restores package results after restart, and projects
-completion as a provenance-bearing continuation of the parent session. Sleep remains a
+identity across restarts, fails closed on uncertainty, and exposes background work in
+the admin Robot Dashboard. Restart reconciliation is passive: it never opens historical
+Pi sessions or wakes a model from recovered result/request files. Canonical completion
+provenance permits result-file acknowledgement after a crash; unproven legacy results
+remain pending for manual review. Dashboard sections separate live/uncertain blockers,
+pending delivery, and collapsed terminal history. Sleep remains a
 separate stateful-memory workflow under `sessions/forks/`. See
 [`docs/forum.md`](docs/forum.md#subagents-and-background-completions) for the
 agentd/forum lifecycle.

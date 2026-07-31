@@ -70,6 +70,17 @@ The script intentionally orchestrates only Docker and image tags. The knowledge 
 
 Normal reconciliation never deletes or fabricates process proof. If a legacy or damaged run remains uncertain after runtime/PID reconciliation, inspect it with `GET /v1/admin/subagents`. The loopback-only `POST /v1/admin/subagents/<run-id>/quarantine` endpoint is an audited last resort: it requires the exact runner process-instance ID and a non-empty operator reason, refuses a matching live process, writes `operator-resolution.json`, and appends `operator-resolutions.jsonl`. Quarantine preserves all diagnostics. It is not part of normal autodeploy and must only follow independent process verification.
 
+Pending completion delivery is separate from execution safety. Canonical completion
+provenance is the only automatic acknowledgement proof. For an unresolved legacy
+result, an operator can post `{ "action": "dismiss"|"supersede", "reason": "..." }`
+to `/v1/admin/subagents/<run-id>/resolve-delivery`. The endpoint retains the exact
+result under `/data/pi-subagent-operator-state/retained-results/`, publishes a
+no-follow sidecar and audit before removing the pending source, and never creates
+an assistant completion. Partial failures leave the source pending and retryable. Roll out agentd and forum together: forum startup is
+passive, then reconciles dispatch generations before enabling retries. A forum-only
+restart may reattach conversations still loaded in agentd; a full runtime restart
+leaves historical Pi sessions unloaded until explicit work.
+
 Use `--backup-only` to create a quiescence-gated backup without applying images:
 
 ```bash

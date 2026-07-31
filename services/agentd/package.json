@@ -10,6 +10,6 @@
   },
   "scripts": {
     "start": "node src/server.mjs",
-    "test": "node --test test/*.test.mjs"
+    "test": "sh -c 'root=$(mktemp -d); trap \"rm -rf $root\" EXIT; PI_SUBAGENT_RUNTIME_ROOT=$root/runtime PI_SUBAGENT_SESSION_ROOT=$root/sessions PI_SUBAGENT_OPERATOR_ROOT=$root/operator MONIKA_RUNTIME_INSTANCE_FILE=$root/runtime-instance.json node --test test/*.test.mjs'"
   }
 }

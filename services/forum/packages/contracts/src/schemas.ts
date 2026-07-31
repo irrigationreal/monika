@@ -708,7 +708,14 @@ export const RobotDashboardDtoSchema: z.ZodType<RobotDashboardDto> = z.object({
     activeCount: z.number(),
     uncertainCount: z.number(),
     runs: z.array(RobotSubagentRunDtoSchema),
+    groups: z.object({
+      blockers: z.array(RobotSubagentRunDtoSchema),
+      pendingDelivery: z.array(RobotSubagentRunDtoSchema),
+      history: z.array(RobotSubagentRunDtoSchema)
+    }),
     omitted: z.number(),
+    blockerCount: z.number(),
+    omittedBlockerCount: z.number(),
     available: z.boolean(),
     error: optionalNullableString
   }).optional(),

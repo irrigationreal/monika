@@ -49,13 +49,22 @@ pnpm test
 
 The container build runs this suite after installing agentd's frozen production
 lockfile, so the tests exercise the same Pi packages shipped in the image. The
-subagent lifecycle tests use temporary files and injected process inspection—no
-Docker timing, sleeps, model calls, or live state. They cover durable origin and
-pre-spawn launch capture, event-independent convergence of stale loaded leases,
-strict process-terminal proof, container-epoch legacy migration, same-runtime
-PID/start-identity survival and death, fail-closed traversal, audited quarantine,
-grouped completion attribution, public v1 stop RPC use, canonical completion
-provenance, and conservative 14-day terminal-session retention.
+agentd test command creates explicit temporary runtime, result/session, and
+runtime-instance roots; tests must never inherit the live `/data/pi-subagents`
+root. The subagent lifecycle tests use temporary files and injected process
+inspection—no Docker timing, sleeps, model calls, or live state. They cover
+passive restart recovery with zero recovered Pi messages/transcript writes,
+structurally validated canonical completion acknowledgement, audited manual
+delivery resolution, durable origin and pre-spawn launch capture,
+event-independent convergence of stale loaded leases, strict process-terminal
+proof, container-epoch legacy migration, same-runtime PID/start-identity survival
+and death, fail-closed traversal, audited quarantine, grouped completion
+attribution, public v1 stop RPC use, runtime-root isolation, and conservative
+14-day terminal-session retention. The reviewed pi-subagents patch wraps its unit,
+integration, and E2E scripts in a fresh HOME, temp runtime/results/session root,
+and runtime-instance path, so package tests cannot touch deployment state. Forum
+tests cover loaded-only startup reattachment, dispatch-generation
+retry/cancellation fencing, and dashboard blocker/delivery/history grouping.
 
 ## Stateful-memory tests
 

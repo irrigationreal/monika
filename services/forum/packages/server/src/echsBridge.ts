@@ -504,7 +504,7 @@ interface QueuedTurn {
   sessionId: string;
   body: string;
   parentPostId: string | null;
-  options?: { model?: string | null; reasoningEffort?: string | null; mode?: 'queue' | 'steer' };
+  options?: { model?: string | null; reasoningEffort?: string | null; mode?: 'queue' | 'steer'; dispatchId?: string; generation?: number };
   queuedAt: string;
 }
 
@@ -846,50 +846,37 @@ export class EchsBridge {
     return { paused, skipped };
   }
 
-  async resumeAllThreads(opts?: { sinceMs?: number }): Promise<{ resumed: number; skipped: number }> {
+  /**
+   * Passively reconcile forum projection state with conversations already held
+   * by this agentd process. This must never open a Pi session: after a full
+   * runtime restart historical sessions stay unloaded until explicit new work.
+   */
+  async reconcileLoadedThreads(opts?: { sinceMs?: number }): Promise<{ reattached: number; missing: number }> {
     const sessions = this.store.listSessionsWithThreads({
       ...(opts?.sinceMs !== undefined ? { sinceMs: opts.sinceMs } : {}),
       backend: 'echs',
     });
-    let resumed = 0;
-    let skipped = 0;
+    let reattached = 0;
+    let missing = 0;
     for (const session of sessions) {
-      let threadId = session.agent_thread_id ?? null;
+      const threadId = session.agent_thread_id ?? null;
       if (!threadId) {
-        skipped += 1;
+        missing += 1;
         continue;
       }
-      let conversation = await this.client.getConversation(threadId);
+      const conversation = await this.client.getConversation(threadId);
       if (!conversation) {
         console.warn(
-          `[ECHS] resumeAllThreads: conversation missing for threadId=${threadId} topicId=${session.topic_id}, reopening canonical Pi session`
+          `[ECHS] startup reconcile: conversation is not loaded for threadId=${threadId} topicId=${session.topic_id}; leaving canonical Pi session idle`
         );
-        try {
-          const reopened = await this.openTopicConversation(session.topic_id);
-          threadId = reopened.conversationId;
-          conversation = await this.client.getConversation(threadId);
-        } catch (err) {
-          console.warn('[ECHS] resumeAllThreads: canonical reopen failed:', err instanceof Error ? err.message : err);
-          conversation = null;
-        }
-        if (!conversation) {
-          this.store.clearSessionAgentThread(session.id);
-          this.store.setRobotActivity(session.topic_id, 'idle');
-          this.emitState(session.topic_id);
-          skipped += 1;
-          continue;
-        }
+        this.store.clearSessionAgentThread(session.id);
+        this.store.setRobotActivity(session.topic_id, 'idle');
+        this.emitState(session.topic_id);
+        missing += 1;
+        continue;
       }
       const activeThreadId = conversation.active_thread_id ?? null;
-      let threadStatus: string | null = null;
-      if (activeThreadId) {
-        try {
-          const threadState = await this.client.getThread(activeThreadId);
-          threadStatus = threadState?.state?.status ?? null;
-        } catch {
-          threadStatus = null;
-        }
-      }
+      const conversationActive = conversation.activity === 'active';
       this.threadMap.set(threadId, {
         topicId: session.topic_id,
         sessionId: session.id,
@@ -923,8 +910,7 @@ export class EchsBridge {
         }
       }
       // If thread is running, keep robot state fresh.
-      const status = threadStatus;
-      if (status === 'running') {
+      if (conversationActive) {
         this.store.upsertRobotState({
           topicId: session.topic_id,
           sessionId: session.id,
@@ -935,9 +921,13 @@ export class EchsBridge {
         });
         this.emitState(session.topic_id);
       }
-      resumed += 1;
+      if (!conversationActive) {
+        this.store.setRobotActivity(session.topic_id, 'idle');
+        this.emitState(session.topic_id);
+      }
+      reattached += 1;
     }
-    return { resumed, skipped };
+    return { reattached, missing };
   }
 
   async sendUserMessage(
@@ -987,7 +977,7 @@ export class EchsBridge {
   async dispatchPostToAgent(
     topicId: string,
     postId: string,
-    options?: { mode?: 'queue' | 'steer'; model?: string | null; reasoningEffort?: string | null }
+    options?: { mode?: 'queue' | 'steer'; model?: string | null; reasoningEffort?: string | null; dispatchId?: string; generation?: number }
   ): Promise<void> {
     const post = this.store.getPost(postId);
     if (!post || post.topic_id !== topicId) {
@@ -999,7 +989,10 @@ export class EchsBridge {
       sessionId: session.id,
       body: post.body,
       parentPostId: post.id,
-      options: { model: options?.model ?? null, reasoningEffort: options?.reasoningEffort ?? null, mode: options?.mode ?? 'queue' },
+      options: {
+        model: options?.model ?? null, reasoningEffort: options?.reasoningEffort ?? null, mode: options?.mode ?? 'queue',
+        dispatchId: options?.dispatchId, generation: options?.generation,
+      },
       queuedAt: new Date().toISOString(),
     };
     await this.dispatchUserMessage(turn);
@@ -1026,12 +1019,22 @@ export class EchsBridge {
   async interruptTopic(topicId: string): Promise<{ ok: boolean; message: string }> {
     const session = this.store.getSessionByTopic(topicId);
     const threadId = session?.agent_thread_id ?? null;
+    const queuedBefore = this.turnQueue.length;
+    // Publish the durable cancellation fence before any await. A concurrently
+    // delayed dispatch carries the older generation and agentd rejects it.
+    const fence = this.store.advanceTopicDispatchGeneration(topicId);
+    this.turnQueue = this.turnQueue.filter((turn) => turn.topicId !== topicId);
+    const localCancelled = queuedBefore - this.turnQueue.length;
     if (!threadId) {
-      return { ok: false, message: 'No active ECHS thread for topic.' };
+      this.store.setRobotActivity(topicId, 'idle');
+      this.emitState(topicId);
+      return { ok: true, message: `Cancelled ${localCancelled} local and ${fence.cancelled} durable queued dispatch(es).` };
     }
     try {
-      await this.client.interruptConversation(threadId);
-      return { ok: true, message: 'Interrupt requested.' };
+      await this.client.interruptConversation(threadId, fence.generation);
+      this.store.setRobotActivity(topicId, 'idle');
+      this.emitState(topicId);
+      return { ok: true, message: `Interrupt requested; cancelled ${localCancelled} local and ${fence.cancelled} durable queued dispatch(es).` };
     } catch (err) {
       return { ok: false, message: err instanceof Error ? err.message : 'Interrupt failed.' };
     }
@@ -1273,6 +1276,29 @@ export class EchsBridge {
     }, 30_000);
     timer.unref?.();
     this.assistantBackfillTimers.set(threadId, timer);
+  }
+
+  private publishAcceptedDispatchState(input: {
+    topicId: string;
+    sessionId: string;
+    generation?: number;
+    model: string | null;
+    reasoningEffort: string | null;
+  }): boolean {
+    if (input.generation !== undefined && !this.store.isTopicDispatchGenerationCurrent(input.topicId, input.generation)) {
+      return false;
+    }
+    this.store.upsertRobotState({
+      topicId: input.topicId,
+      sessionId: input.sessionId,
+      activity: 'thinking',
+      model: input.model,
+      reasoningEffort: input.reasoningEffort,
+      currentPlanId: null,
+    });
+    this.emitState(input.topicId);
+    this.bus.emit(input.topicId, { type: 'assistant_reset', data: { reason: 'new_turn' } });
+    return true;
   }
 
   private async dispatchUserMessage(turn: QueuedTurn): Promise<void> {
@@ -1608,18 +1634,6 @@ export class EchsBridge {
       };
       this.threadMap.set(threadId, threadCtx);
 
-      this.store.upsertRobotState({
-        topicId,
-        sessionId: session.id,
-        activity: 'thinking',
-        model,
-        reasoningEffort,
-        currentPlanId: null,
-      });
-      this.emitState(topicId);
-
-      this.bus.emit(topicId, { type: 'assistant_reset', data: { reason: 'new_turn' } });
-
       const tamperContext: MessageTamperContext = {
         topicId,
         sessionId: session.id,
@@ -1661,6 +1675,9 @@ export class EchsBridge {
       try {
         enqueueResult = await this.client.enqueueConversationMessage(threadId, messageBody, {
           mode: enqueueMode,
+          messageId: options?.dispatchId ?? null,
+          dispatchId: options?.dispatchId,
+          generation: options?.generation,
           configure,
           attachments: triggerAttachments,
           provenance: parentPostId ? { origin: 'forum', topicId, postId: parentPostId } : undefined,
@@ -1668,6 +1685,9 @@ export class EchsBridge {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         if (message.includes('conversation not found') || message.includes('ECHS 404')) {
+          if (options?.generation !== undefined && !this.store.isTopicDispatchGenerationCurrent(topicId, options.generation)) {
+            throw new Error('stale_dispatch_generation');
+          }
           console.warn(`[ECHS] conversation missing for topic ${topicId}; recreating thread`);
           this.threadMap.delete(threadId);
           this.activeTurnThreads.delete(threadId);
@@ -1679,6 +1699,9 @@ export class EchsBridge {
           enqueueMode = resolveEnqueueMode(threadId, isFirstMessage);
           enqueueResult = await this.client.enqueueConversationMessage(threadId, messageBody, {
             mode: enqueueMode,
+            messageId: options?.dispatchId ?? null,
+            dispatchId: options?.dispatchId,
+            generation: options?.generation,
             configure,
             attachments: triggerAttachments,
             provenance: parentPostId ? { origin: 'forum', topicId, postId: parentPostId } : undefined,
@@ -1687,6 +1710,26 @@ export class EchsBridge {
           throw err;
         }
       }
+      // Agentd may have accepted and completed this exact dispatch before a
+      // forum crash or lost HTTP response. Settle the durable forum cursor,
+      // but never manufacture a second local turn for that deduplicated retry.
+      if (enqueueResult.deduplicated) {
+        if (parentPostId) this.store.setSessionLastDispatchedPostId(session.id, parentPostId);
+        if (pendingMoveToClear) this.store.clearTopicMovePrompt(pendingMoveToClear);
+        return;
+      }
+
+      // An interrupt may advance the durable generation while enqueue is
+      // awaiting agentd. Never let the superseded completion restore local
+      // activity or turn bookkeeping after the interrupt published idle.
+      if (!this.publishAcceptedDispatchState({
+        topicId,
+        sessionId: session.id,
+        generation: options?.generation,
+        model,
+        reasoningEffort,
+      })) return;
+
       const messageId = enqueueResult.messageId;
       void this.emitContext(topicId);
       this.schedulePlanSync(threadId);

@@ -110,8 +110,17 @@ The Robot Dashboard is an admin projection of parent forum jobs plus agentd-owne
 subagent workload. Disposable children must not become robot identities, topics,
 or forum sessions. Fetch execution state through agentd's internal API; never read
 `/data/pi-subagents` from the forum container. Treat `uncertain` and an unavailable
-workload endpoint as operationally visible/fail-closed states. Deploy on Finish
-must retain its durable request after exit 75.
+workload endpoint as operationally visible/fail-closed states. Present live/uncertain
+blockers separately from pending completion delivery/manual recovery and collapsed
+terminal history; agentd `active_count`/`uncertain_count` remain authoritative.
+Deploy on Finish must retain its durable request after exit 75.
+
+Forum startup reconciliation is passive: call `getConversation` only, reattach
+already-loaded conversations, and clear stale links for missing ones. Never call
+`openTopicConversation`, bind a newly loaded Pi runtime, consume recovered results,
+or dispatch a turn merely because forum/agentd restarted. Reconcile durable post
+dispatch generations before starting `PostDispatchService`; interrupt advances the
+topic generation and cancels older queued work.
 
 Key files:
 

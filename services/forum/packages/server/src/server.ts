@@ -268,7 +268,6 @@ await codex.start();
 const postDispatchService = new PostDispatchService(store, codex, {
   maxConcurrent: Math.max(1, Math.min(10, MAX_CONCURRENT_TURNS)),
 });
-postDispatchService.start();
 const compactionService = new CompactionService(store, codex, postDispatchService);
 
 const piSessionSync = MONIKA_PI_SYNC_ENABLED
@@ -290,13 +289,16 @@ if (savedMaxConcurrentTurns) {
 }
 
 try {
-  const { resumed, skipped } = await codex.resumeAllThreads();
-  if (resumed > 0 || skipped > 0) {
-    console.log(`Resumed ${resumed} agent thread(s) on startup (${skipped} skipped).`);
+  const { reattached, missing } = await codex.reconcileLoadedThreads();
+  const superseded = store.reconcilePostDispatchGenerations();
+  if (reattached > 0 || missing > 0 || superseded > 0) {
+    console.log(`Startup reconciliation reattached ${reattached} loaded conversation(s), marked ${missing} unloaded, and superseded ${superseded} stale dispatch(es).`);
   }
 } catch (err) {
-  console.warn('Failed to resume agent threads on startup:', err instanceof Error ? err.message : err);
+  console.warn('Passive startup reconciliation failed; durable dispatch processing remains stopped:', err instanceof Error ? err.message : err);
+  throw err;
 }
+postDispatchService.start();
 
 const app = Fastify({ logger: true, bodyLimit: MAX_REQUEST_BODY_BYTES, trustProxy: TRUST_PROXY });
 const access = createAccessHelpers(app, store);

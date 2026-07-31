@@ -17,6 +17,7 @@ export interface EchsThreadState {
 export interface EchsConversationRecord {
   conversation_id: string;
   active_thread_id?: string | null;
+  activity?: 'active' | 'idle';
   model?: string | null;
   reasoning?: string | null;
   cwd?: string | null;
@@ -54,6 +55,8 @@ export interface EchsSubagentWorkload {
   uncertain_count: number;
   runs: EchsSubagentRun[];
   omitted: number;
+  blocker_count?: number;
+  omitted_blocker_count?: number;
 }
 
 export interface EchsThreadHistory {
@@ -295,33 +298,40 @@ export class EchsClient {
     opts?: {
       mode?: 'queue' | 'steer';
       messageId?: string | null;
+      dispatchId?: string;
+      generation?: number;
       configure?: Record<string, unknown>;
       attachments?: unknown[];
       provenance?: { origin: 'forum'; topicId: string; postId: string };
     }
-  ): Promise<{ messageId: string; threadId?: string | null; compacted?: boolean }> {
+  ): Promise<{ messageId: string; threadId?: string | null; compacted?: boolean; deduplicated?: boolean }> {
     const payload: Record<string, unknown> = {
       mode: opts?.mode ?? 'queue',
       content,
     };
     if (opts?.messageId) payload['message_id'] = opts.messageId;
+    if (opts?.dispatchId) payload['dispatch_id'] = opts.dispatchId;
+    if (opts?.generation !== undefined) payload['generation'] = opts.generation;
     if (opts?.configure) payload['configure'] = opts.configure;
     if (opts?.attachments) payload['attachments'] = opts.attachments;
     if (opts?.provenance) payload['provenance'] = opts.provenance;
     const result = (await this.request(`/v1/conversations/${conversationId}/messages`, {
       method: 'POST',
       body: payload,
-    })) as { message_id: string; thread_id?: string | null; compacted?: boolean };
-    const out: { messageId: string; threadId?: string | null; compacted?: boolean } = {
+    })) as { message_id: string; thread_id?: string | null; compacted?: boolean; deduplicated?: boolean };
+    const out: { messageId: string; threadId?: string | null; compacted?: boolean; deduplicated?: boolean } = {
       messageId: result.message_id,
       threadId: result.thread_id ?? null,
     };
     if (result.compacted !== undefined) out.compacted = result.compacted;
+    if (result.deduplicated !== undefined) out.deduplicated = result.deduplicated;
     return out;
   }
 
-  async interruptConversation(conversationId: string): Promise<void> {
-    await this.request(`/v1/conversations/${conversationId}/interrupt`, { method: 'POST' });
+  async interruptConversation(conversationId: string, generation?: number): Promise<void> {
+    await this.request(`/v1/conversations/${conversationId}/interrupt`, {
+      method: 'POST', body: generation === undefined ? {} : { generation },
+    });
   }
 
   async pauseConversation(conversationId: string): Promise<void> {
