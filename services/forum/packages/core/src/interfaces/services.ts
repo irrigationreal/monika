@@ -1,25 +1,17 @@
+import type { Forum, ForumStatus, ForumVisibility, IdentityPublic, Post, RobotMode, Topic } from '../domain/entities';
 import type {
-  Forum,
-  Topic,
-  Post,
-  IdentityPublic,
-  RobotMode,
-  ForumStatus,
-  ForumVisibility
-} from '../domain/entities';
-import type {
+  EventId,
+  ExternalId,
   ForumId,
-  TopicId,
-  PostId,
   IdentityId,
+  PostId,
   SessionId,
   SurfaceId,
-  ExternalId,
-  EventId,
-  TenantId
+  TenantId,
+  TopicId,
 } from '../domain/ids';
-import type { RobotState } from '../state/robot';
 import type { SurfaceEvent } from '../domain/surfaces';
+import type { RobotState } from '../state/robot';
 import type { ForumListOptions } from './repositories';
 
 export interface CreateForumInput {
@@ -40,6 +32,7 @@ export interface CreateTopicInput {
   body: string;
   authorId: IdentityId;
   robotMode?: RobotMode | null;
+  autoCompactEnabled?: boolean;
   silent?: boolean;
   attachmentsPending?: boolean;
   model?: string | null;
@@ -53,6 +46,8 @@ export interface CreatePostInput {
   authorId: IdentityId;
   parentPostId?: PostId | null;
   sourceMessageId?: string | null;
+  autoCompactEnabled?: boolean;
+  autoCompactRevision?: number;
   silent?: boolean;
   attachmentsPending?: boolean;
   model?: string | null;

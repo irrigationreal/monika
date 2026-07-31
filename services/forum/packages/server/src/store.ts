@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { nowIso } from './db';
+import { mapCompactionOperationRowToDomain, mapTopicOperationalEventRowToDomain } from './mappers/db';
 import { STORE_CACHE_MAX_ENTRIES, STORE_ENTITY_CACHE_TTL_MS, STORE_STATS_CACHE_TTL_MS } from './runtimeConfig';
 
 import type {
@@ -8,13 +9,13 @@ import type {
   AccessRuleEffect,
   AccessRulePrincipalKind,
   AccessRuleScopeKind,
+  CompactionOperation,
   CreatePostInput,
   CreateTopicInput,
-  CompactionOperation,
-  TopicOperationalEvent,
   ForumListOptions,
   ForumStatus,
   ForumVisibility,
+  TopicOperationalEvent,
   TopicStatus,
 } from '@irrigationreal/codex-forum-core';
 import type Database from 'better-sqlite3';
@@ -23,7 +24,6 @@ import type {
   AccessRuleRow,
   ApiKeyRow,
   AttachmentRow,
-  PendingAttachmentRow,
   AuthSessionRow,
   ChatCategoryRow,
   ChatMessageRow,
@@ -38,6 +38,7 @@ import type {
   InviteRow,
   MessageTamperRow,
   NotificationRow,
+  PendingAttachmentRow,
   PlanRow,
   PostDispatchRow,
   PostRow,
@@ -62,7 +63,6 @@ import type {
   UserFileRow,
   WebhookRow,
 } from './db';
-import { mapCompactionOperationRowToDomain, mapTopicOperationalEventRowToDomain } from './mappers/db';
 
 const ACCESS_TOKEN_TTL_DAYS = 7;
 const REFRESH_TOKEN_TTL_DAYS = 30;
@@ -651,8 +651,7 @@ export class ForumStore {
     `
       )
       .get(forumId) as
-      | { post_id: string; topic_id: string; topic_title: string; author_id: string; created_at: string }
-      | undefined;
+      { post_id: string; topic_id: string; topic_title: string; author_id: string; created_at: string } | undefined;
 
     if (!result) return null;
     return {
@@ -664,9 +663,7 @@ export class ForumStore {
     };
   }
 
-  getForumStatsForForums(
-    forumIds: string[]
-  ): Map<
+  getForumStatsForForums(forumIds: string[]): Map<
     string,
     {
       threadCount: number;
@@ -1125,6 +1122,14 @@ export class ForumStore {
         now,
         now
       );
+    if (input.autoCompactEnabled) {
+      const supportsAutoCompact = this.db
+        .prepare("select 1 from pragma_table_info('topics') where name = 'auto_compact_enabled'")
+        .get();
+      if (supportsAutoCompact) {
+        this.db.prepare('update topics set auto_compact_enabled = 1 where id = ?').run(topicId);
+      }
+    }
     this.db
       .prepare(
         'insert into posts (id, topic_id, tenant_id, parent_post_id, author_id, body, source_message_id, silent, created_at, edited_at, deleted_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
@@ -1166,7 +1171,9 @@ export class ForumStore {
         .run(input.toForumId, now, input.topicId);
       if (!silent) {
         this.db
-          .prepare('update sessions set personas_synced_at = ?, context_synced_forum_id = ?, updated_at = ? where topic_id = ?')
+          .prepare(
+            'update sessions set personas_synced_at = ?, context_synced_forum_id = ?, updated_at = ? where topic_id = ?'
+          )
           .run(null, null, now, input.topicId);
       }
       this.db
@@ -1179,14 +1186,36 @@ export class ForumStore {
           .prepare(
             'insert into posts (id, topic_id, tenant_id, parent_post_id, author_id, body, source_message_id, silent, created_at, edited_at, deleted_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
           )
-          .run(markerPostId, input.topicId, null, null, input.movedBy, input.markerBody ?? '', null, 0, now, null, null);
+          .run(
+            markerPostId,
+            input.topicId,
+            null,
+            null,
+            input.movedBy,
+            input.markerBody ?? '',
+            null,
+            0,
+            now,
+            null,
+            null
+          );
       }
 
       this.db
         .prepare(
           'insert into topic_moves (id, topic_id, from_forum_id, to_forum_id, moved_by, moved_at, marker_post_id, needs_reprompt, silent) values (?, ?, ?, ?, ?, ?, ?, ?, ?)'
         )
-        .run(moveId, input.topicId, topic.forum_id, input.toForumId, input.movedBy, now, markerPostId, silent ? 0 : 1, silent ? 1 : 0);
+        .run(
+          moveId,
+          input.topicId,
+          topic.forum_id,
+          input.toForumId,
+          input.movedBy,
+          now,
+          markerPostId,
+          silent ? 0 : 1,
+          silent ? 1 : 0
+        );
 
       this.invalidateTopicCache(input.topicId);
       updatedTopic = this.getTopic(input.topicId) as TopicRow;
@@ -1298,7 +1327,10 @@ export class ForumStore {
    * Used to build deterministic "catch-up context" for the robot when some posts were created
    * without dispatching a robot turn (silent posts).
    */
-  listPostsBetween(topicId: string, opts: { afterPostId?: string | null; beforePostId: string; excludePiSessionId?: string | null }): PostRow[] {
+  listPostsBetween(
+    topicId: string,
+    opts: { afterPostId?: string | null; beforePostId: string; excludePiSessionId?: string | null }
+  ): PostRow[] {
     const before = this.db
       .prepare('select rowid as rowid from posts where id = ? and topic_id = ?')
       .get(opts.beforePostId, topicId) as { rowid: number } | undefined;
@@ -1321,7 +1353,13 @@ export class ForumStore {
            ))
          order by p.rowid asc`
       )
-      .all(topicId, afterRowid, before.rowid, opts.excludePiSessionId ?? null, opts.excludePiSessionId ?? null) as PostRow[];
+      .all(
+        topicId,
+        afterRowid,
+        before.rowid,
+        opts.excludePiSessionId ?? null,
+        opts.excludePiSessionId ?? null
+      ) as PostRow[];
   }
 
   getTopicRead(identityId: string, topicId: string): TopicReadRow | null {
@@ -1580,28 +1618,51 @@ export class ForumStore {
   createPost(input: CreatePostInput): PostRow {
     const postId = randomUUID();
     const now = nowIso();
-    this.db
-      .prepare(
-        'insert into posts (id, topic_id, tenant_id, parent_post_id, author_id, body, source_message_id, silent, created_at, edited_at, deleted_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-      )
-      .run(
-        postId,
-        input.topicId,
-        null,
-        input.parentPostId ?? null,
-        input.authorId,
-        input.body,
-        input.sourceMessageId ?? null,
-        input.silent ? 1 : 0,
-        now,
-        null,
-        null
-      );
+    let autoCompactChanged = false;
+    this.db.transaction(() => {
+      if (input.autoCompactEnabled !== undefined || input.autoCompactRevision !== undefined) {
+        if (input.autoCompactEnabled === undefined || input.autoCompactRevision === undefined) {
+          throw new Error('auto-compaction setting and revision must be provided together');
+        }
+        const topic = this.getTopic(input.topicId);
+        if (!topic) throw new Error('topic not found');
+        if (topic.auto_compact_revision !== input.autoCompactRevision) {
+          throw new Error('auto-compaction setting changed in another request');
+        }
+        if (Boolean(topic.auto_compact_enabled) !== input.autoCompactEnabled) {
+          const result = this.db
+            .prepare(
+              `update topics
+             set auto_compact_enabled = ?, auto_compact_revision = auto_compact_revision + 1, updated_at = ?
+             where id = ? and auto_compact_revision = ?`
+            )
+            .run(input.autoCompactEnabled ? 1 : 0, now, input.topicId, input.autoCompactRevision);
+          if (result.changes !== 1) throw new Error('auto-compaction setting changed in another request');
+          autoCompactChanged = true;
+        }
+      }
+      this.db
+        .prepare(
+          'insert into posts (id, topic_id, tenant_id, parent_post_id, author_id, body, source_message_id, silent, created_at, edited_at, deleted_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        )
+        .run(
+          postId,
+          input.topicId,
+          null,
+          input.parentPostId ?? null,
+          input.authorId,
+          input.body,
+          input.sourceMessageId ?? null,
+          input.silent ? 1 : 0,
+          now,
+          null,
+          null
+        );
+    })();
+    if (autoCompactChanged) this.invalidateTopicCache(input.topicId);
     this.invalidateTopicStatsCache(input.topicId);
     const topic = this.getTopic(input.topicId);
-    if (topic) {
-      this.invalidateForumStatsCache(topic.forum_id);
-    }
+    if (topic) this.invalidateForumStatsCache(topic.forum_id);
     return this.getPost(postId) as PostRow;
   }
 
@@ -1705,8 +1766,7 @@ export class ForumStore {
 
   ensureSession(input: CreateSessionInput): SessionRow {
     const existing = this.db.prepare('select * from sessions where topic_id = ?').get(input.topicId) as
-      | SessionRow
-      | undefined;
+      SessionRow | undefined;
     if (existing) {
       return this.normalizeSessionAgentFields(existing) ?? existing;
     }
@@ -1733,8 +1793,7 @@ export class ForumStore {
 
   getSessionByAgentThreadId(threadId: string): SessionRow | null {
     const row = this.db.prepare('select * from sessions where agent_thread_id = ?').get(threadId) as
-      | SessionRow
-      | undefined;
+      SessionRow | undefined;
     return this.normalizeSessionAgentFields(row ?? null);
   }
 
@@ -1807,7 +1866,11 @@ export class ForumStore {
     return this.getSession(sessionId) as SessionRow;
   }
 
-  setSessionPersonasSyncedAt(sessionId: string, syncedAtIso: string | null, contextForumId?: string | null): SessionRow {
+  setSessionPersonasSyncedAt(
+    sessionId: string,
+    syncedAtIso: string | null,
+    contextForumId?: string | null
+  ): SessionRow {
     const now = nowIso();
     if (contextForumId !== undefined) {
       this.db
@@ -1921,8 +1984,7 @@ export class ForumStore {
 
   getTamperConfig(configId: string): TamperConfigRow | null {
     const row = this.db.prepare('select * from tamper_configs where id = ?').get(configId) as
-      | TamperConfigRow
-      | undefined;
+      TamperConfigRow | undefined;
     return row ?? null;
   }
 
@@ -2018,8 +2080,7 @@ export class ForumStore {
 
   getSessionMessage(messageId: string): SessionMessageRow | null {
     const row = this.db.prepare('select * from session_messages where id = ?').get(messageId) as
-      | SessionMessageRow
-      | undefined;
+      SessionMessageRow | undefined;
     return row ?? null;
   }
 
@@ -2044,12 +2105,19 @@ export class ForumStore {
     return this.getPlan(id) as PlanRow;
   }
 
-  updatePlan(planId: string, content: string, summary?: string | null, reasoningCheckpoints?: number[] | null): PlanRow {
+  updatePlan(
+    planId: string,
+    content: string,
+    summary?: string | null,
+    reasoningCheckpoints?: number[] | null
+  ): PlanRow {
     const now = nowIso();
     const checkpointsJson = reasoningCheckpoints ? JSON.stringify(reasoningCheckpoints) : undefined;
     if (checkpointsJson !== undefined) {
       this.db
-        .prepare('update plans set content = ?, summary = ?, reasoning_checkpoints_json = ?, updated_at = ? where id = ?')
+        .prepare(
+          'update plans set content = ?, summary = ?, reasoning_checkpoints_json = ?, updated_at = ? where id = ?'
+        )
         .run(content, summary ?? null, checkpointsJson, now, planId);
     } else {
       this.db
@@ -2144,52 +2212,116 @@ export class ForumStore {
       .get(input.sourceKind, input.sourceId) as TopicOperationalEventRow | undefined;
     if (existing) return mapTopicOperationalEventRowToDomain(existing);
     const id = randomUUID();
-    this.db.prepare(
-      `insert into topic_operational_events
+    this.db
+      .prepare(
+        `insert into topic_operational_events
        (id, topic_id, anchor_post_id, event_type, category, status, summary, detail_json, source_kind, source_id, created_at)
        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(id, input.topicId, input.anchorPostId ?? null, input.type, input.category, input.status,
-      input.summary, input.detail ? JSON.stringify(input.detail) : null, input.sourceKind, input.sourceId, nowIso());
+      )
+      .run(
+        id,
+        input.topicId,
+        input.anchorPostId ?? null,
+        input.type,
+        input.category,
+        input.status,
+        input.summary,
+        input.detail ? JSON.stringify(input.detail) : null,
+        input.sourceKind,
+        input.sourceId,
+        nowIso()
+      );
     return mapTopicOperationalEventRowToDomain(
       this.db.prepare('select * from topic_operational_events where id = ?').get(id) as TopicOperationalEventRow
     );
   }
 
   listTopicOperationalEvents(topicId: string): TopicOperationalEvent[] {
-    return (this.db.prepare(
-      'select * from topic_operational_events where topic_id = ? order by created_at asc, id asc'
-    ).all(topicId) as TopicOperationalEventRow[]).map(mapTopicOperationalEventRowToDomain);
+    return (
+      this.db
+        .prepare('select * from topic_operational_events where topic_id = ? order by created_at asc, id asc')
+        .all(topicId) as TopicOperationalEventRow[]
+    ).map(mapTopicOperationalEventRowToDomain);
   }
 
   createCompactionOperation(input: CreateCompactionOperationInput): CompactionOperation {
     const existing = this.getCompactionOperation(input.id);
     if (existing) return existing;
     const now = nowIso();
-    this.db.prepare(
-      `insert into compaction_operations
+    this.db
+      .prepare(
+        `insert into compaction_operations
        (id, topic_id, session_id, initiated_by, expected_leaf_id, custom_instructions, recovery_prompt,
         status, event_id, recovery_post_id, error_message, created_at, started_at, finished_at)
        values (?, ?, ?, ?, ?, ?, ?, 'pending', null, null, null, ?, null, null)`
-    ).run(input.id, input.topicId, input.sessionId, input.initiatedBy, input.expectedLeafId,
-      input.customInstructions ?? null, input.recoveryPrompt, now);
+      )
+      .run(
+        input.id,
+        input.topicId,
+        input.sessionId,
+        input.initiatedBy,
+        input.expectedLeafId,
+        input.customInstructions ?? null,
+        input.recoveryPrompt,
+        now
+      );
     return this.getCompactionOperation(input.id) as CompactionOperation;
   }
 
   getCompactionOperation(id: string): CompactionOperation | null {
-    const row = this.db.prepare('select * from compaction_operations where id = ?').get(id) as CompactionOperationRow | undefined;
+    const row = this.db.prepare('select * from compaction_operations where id = ?').get(id) as
+      CompactionOperationRow | undefined;
     return row ? mapCompactionOperationRowToDomain(row) : null;
+  }
+
+  hasRunningCompactionOperation(topicId: string): boolean {
+    const row = this.db
+      .prepare("select 1 from compaction_operations where topic_id = ? and status = 'running' limit 1")
+      .get(topicId) as unknown | undefined;
+    return Boolean(row);
+  }
+
+  startCompactionOperation(input: CreateCompactionOperationInput): CompactionOperation | null {
+    return this.db.transaction(() => {
+      const existing = this.getCompactionOperation(input.id);
+      if (existing) return null;
+      if (this.hasRunningCompactionOperation(input.topicId)) return null;
+      const now = nowIso();
+      this.db
+        .prepare(
+          `insert into compaction_operations
+         (id, topic_id, session_id, initiated_by, expected_leaf_id, custom_instructions, recovery_prompt,
+          status, event_id, recovery_post_id, error_message, created_at, started_at, finished_at)
+         values (?, ?, ?, ?, ?, ?, ?, 'running', null, null, null, ?, ?, null)`
+        )
+        .run(
+          input.id,
+          input.topicId,
+          input.sessionId,
+          input.initiatedBy,
+          input.expectedLeafId,
+          input.customInstructions ?? null,
+          input.recoveryPrompt,
+          now,
+          now
+        );
+      return this.getCompactionOperation(input.id) as CompactionOperation;
+    })();
   }
 
   claimCompactionOperation(id: string): CompactionOperation | null {
     const now = nowIso();
-    const result = this.db.prepare(
-      `update compaction_operations set status = 'running', started_at = ? where id = ? and status = 'pending'`
-    ).run(now, id);
+    const result = this.db
+      .prepare(
+        `update compaction_operations set status = 'running', started_at = ? where id = ? and status = 'pending'`
+      )
+      .run(now, id);
     return result.changes === 1 ? this.getCompactionOperation(id) : null;
   }
 
   getPiSessionHead(piSessionId: string): string | null {
-    const row = this.db.prepare('select leaf_entry_id from pi_session_heads where pi_session_id = ?')
+    const row = this.db
+      .prepare('select leaf_entry_id from pi_session_heads where pi_session_id = ?')
       .get(piSessionId) as { leaf_entry_id: string | null } | undefined;
     return row?.leaf_entry_id ?? null;
   }
@@ -2201,14 +2333,20 @@ export class ForumStore {
       const event = this.createTopicOperationalEvent({
         topicId: operation.topicId,
         anchorPostId: this.getLatestPostId(operation.topicId),
-        type: 'compaction', category: 'maintenance', status: 'failed',
-        summary: 'Conversation compaction failed.', detail: { error: message.slice(0, 4000) },
-        sourceKind: 'compaction_operation', sourceId: operation.id,
+        type: 'compaction',
+        category: 'maintenance',
+        status: 'failed',
+        summary: 'Conversation compaction failed.',
+        detail: { error: message.slice(0, 4000) },
+        sourceKind: 'compaction_operation',
+        sourceId: operation.id,
       });
       const now = nowIso();
-      this.db.prepare(
-        `update compaction_operations set status = 'failed', event_id = ?, error_message = ?, finished_at = ? where id = ? and status = 'running'`
-      ).run(event.id, message.slice(0, 1000), now, id);
+      this.db
+        .prepare(
+          `update compaction_operations set status = 'failed', event_id = ?, error_message = ?, finished_at = ? where id = ? and status = 'running'`
+        )
+        .run(event.id, message.slice(0, 1000), now, id);
       const completed = this.getCompactionOperation(id);
       if (!completed) throw new Error('compaction operation disappeared after failure');
       return completed;
@@ -2222,30 +2360,40 @@ export class ForumStore {
       const anchorPostId = this.getLatestPostId(operation.topicId);
       const postId = randomUUID();
       const now = nowIso();
-      this.db.prepare(
-        `insert into posts (id, topic_id, tenant_id, parent_post_id, author_id, body, source_message_id, silent, created_at, edited_at, deleted_at)
+      this.db
+        .prepare(
+          `insert into posts (id, topic_id, tenant_id, parent_post_id, author_id, body, source_message_id, silent, created_at, edited_at, deleted_at)
          values (?, ?, null, null, ?, ?, null, 0, ?, null, null)`
-      ).run(postId, operation.topicId, operation.initiatedBy, operation.recoveryPrompt, now);
+        )
+        .run(postId, operation.topicId, operation.initiatedBy, operation.recoveryPrompt, now);
       this.ensurePostDispatchGeneration(operation.topicId, now);
-      this.db.prepare(
-        `insert into post_dispatches
+      this.db
+        .prepare(
+          `insert into post_dispatches
          (id, topic_id, post_id, session_id, status, mode, generation, model, reasoning_effort, attempt_count,
           last_attempt_at, next_attempt_at, dispatched_at, error_message, created_at, updated_at)
          values (?, ?, ?, ?, 'pending', 'auto',
           (select generation from post_dispatch_generations where topic_id = ?),
           null, null, 0, null, ?, null, null, ?, ?)`
-      ).run(randomUUID(), operation.topicId, postId, operation.sessionId, operation.topicId, now, now, now);
+        )
+        .run(randomUUID(), operation.topicId, postId, operation.sessionId, operation.topicId, now, now, now);
       const event = this.createTopicOperationalEvent({
-        topicId: operation.topicId, anchorPostId,
-        type: 'compaction', category: 'maintenance', status: 'succeeded',
+        topicId: operation.topicId,
+        anchorPostId,
+        type: 'compaction',
+        category: 'maintenance',
+        status: 'succeeded',
         summary: 'Conversation context was compacted.',
         detail: { expectedLeafId: operation.expectedLeafId, recoveryPostId: postId },
-        sourceKind: 'compaction_operation', sourceId: operation.id,
+        sourceKind: 'compaction_operation',
+        sourceId: operation.id,
       });
-      this.db.prepare(
-        `update compaction_operations set status = 'succeeded', event_id = ?, recovery_post_id = ?, finished_at = ?
+      this.db
+        .prepare(
+          `update compaction_operations set status = 'succeeded', event_id = ?, recovery_post_id = ?, finished_at = ?
          where id = ? and status = 'running'`
-      ).run(event.id, postId, now, id);
+        )
+        .run(event.id, postId, now, id);
       this.invalidateTopicStatsCache(operation.topicId);
       const topic = this.getTopic(operation.topicId);
       if (topic) this.invalidateForumStatsCache(topic.forum_id);
@@ -2256,9 +2404,9 @@ export class ForumStore {
   }
 
   private ensurePostDispatchGeneration(topicId: string, now = nowIso()): void {
-    this.db.prepare(
-      `insert or ignore into post_dispatch_generations (topic_id, generation, updated_at) values (?, 0, ?)`
-    ).run(topicId, now);
+    this.db
+      .prepare(`insert or ignore into post_dispatch_generations (topic_id, generation, updated_at) values (?, 0, ?)`)
+      .run(topicId, now);
   }
 
   createPostDispatch(input: CreatePostDispatchInput): PostDispatchRow {
@@ -2299,7 +2447,8 @@ export class ForumStore {
   }
 
   getPostDispatchByPost(postId: string): PostDispatchRow | null {
-    const row = this.db.prepare('select * from post_dispatches where post_id = ?').get(postId) as PostDispatchRow | undefined;
+    const row = this.db.prepare('select * from post_dispatches where post_id = ?').get(postId) as
+      PostDispatchRow | undefined;
     return row ?? null;
   }
 
@@ -2319,15 +2468,19 @@ export class ForumStore {
 
   listPendingPostDispatchesForTopic(topicId: string): PostDispatchRow[] {
     return this.db
-      .prepare(`select d.* from post_dispatches d
+      .prepare(
+        `select d.* from post_dispatches d
         join post_dispatch_generations g on g.topic_id = d.topic_id and g.generation = d.generation
-        where d.topic_id = ? and d.status in ('pending', 'dispatching') order by d.created_at asc`)
+        where d.topic_id = ? and d.status in ('pending', 'dispatching') order by d.created_at asc`
+      )
       .all(topicId) as PostDispatchRow[];
   }
 
   countActionablePostDispatches(topicId: string): number {
     const row = this.db
-      .prepare(`select count(*) as count from post_dispatches where topic_id = ? and status in ('pending', 'dispatching', 'failed')`)
+      .prepare(
+        `select count(*) as count from post_dispatches where topic_id = ? and status in ('pending', 'dispatching', 'failed')`
+      )
       .get(topicId) as { count: number } | undefined;
     return row?.count ?? 0;
   }
@@ -2337,9 +2490,11 @@ export class ForumStore {
     const now = nowIso();
     const claimToken = randomUUID();
     const result = this.db
-      .prepare(`update post_dispatches set status = 'dispatching', claim_token = ?, attempt_count = attempt_count + 1, last_attempt_at = ?, next_attempt_at = null, error_message = null, updated_at = ?
+      .prepare(
+        `update post_dispatches set status = 'dispatching', claim_token = ?, attempt_count = attempt_count + 1, last_attempt_at = ?, next_attempt_at = null, error_message = null, updated_at = ?
         where id = ? and status = ? and last_attempt_at is ? and generation =
-          (select generation from post_dispatch_generations where topic_id = post_dispatches.topic_id)`)
+          (select generation from post_dispatch_generations where topic_id = post_dispatches.topic_id)`
+      )
       .run(claimToken, now, now, id, observed.status, observed.last_attempt_at);
     if (result.changes !== 1) return null;
     const claimed = this.getPostDispatch(id);
@@ -2347,31 +2502,43 @@ export class ForumStore {
   }
 
   isPostDispatchClaimCurrent(id: string, claimToken: string): boolean {
-    const row = this.db.prepare(`select 1 as current from post_dispatches d
+    const row = this.db
+      .prepare(
+        `select 1 as current from post_dispatches d
       join post_dispatch_generations g on g.topic_id = d.topic_id and g.generation = d.generation
-      where d.id = ? and d.status = 'dispatching' and d.claim_token = ?`).get(id, claimToken) as { current: number } | undefined;
+      where d.id = ? and d.status = 'dispatching' and d.claim_token = ?`
+      )
+      .get(id, claimToken) as { current: number } | undefined;
     return Boolean(row);
   }
 
   isTopicDispatchGenerationCurrent(topicId: string, generation: number): boolean {
-    const row = this.db.prepare('select generation from post_dispatch_generations where topic_id = ?').get(topicId) as { generation: number } | undefined;
+    const row = this.db.prepare('select generation from post_dispatch_generations where topic_id = ?').get(topicId) as
+      { generation: number } | undefined;
     return (row?.generation ?? 0) === generation;
   }
 
   markPostDispatchDispatched(id: string, claimToken: string): PostDispatchRow | null {
     const now = nowIso();
     this.db
-      .prepare(`update post_dispatches set status = 'dispatched', claim_token = null, dispatched_at = ?, next_attempt_at = null, error_message = null, updated_at = ?
+      .prepare(
+        `update post_dispatches set status = 'dispatched', claim_token = null, dispatched_at = ?, next_attempt_at = null, error_message = null, updated_at = ?
         where id = ? and status = 'dispatching' and claim_token = ? and generation =
-          (select generation from post_dispatch_generations where topic_id = post_dispatches.topic_id)`)
+          (select generation from post_dispatch_generations where topic_id = post_dispatches.topic_id)`
+      )
       .run(now, now, id, claimToken);
     return this.getPostDispatch(id);
   }
 
-  markPostDispatchSuperseded(id: string, reason = 'Included as catch-up context in a newer dispatch.'): PostDispatchRow | null {
+  markPostDispatchSuperseded(
+    id: string,
+    reason = 'Included as catch-up context in a newer dispatch.'
+  ): PostDispatchRow | null {
     const now = nowIso();
     this.db
-      .prepare(`update post_dispatches set status = 'superseded', next_attempt_at = null, error_message = ?, updated_at = ? where id = ? and status in ('pending', 'dispatching')`)
+      .prepare(
+        `update post_dispatches set status = 'superseded', next_attempt_at = null, error_message = ?, updated_at = ? where id = ? and status in ('pending', 'dispatching')`
+      )
       .run(reason, now, id);
     return this.getPostDispatch(id);
   }
@@ -2379,46 +2546,71 @@ export class ForumStore {
   markPostDispatchAbandoned(id: string, reason: string): PostDispatchRow | null {
     const now = nowIso();
     this.db
-      .prepare(`update post_dispatches set status = 'abandoned', next_attempt_at = null, error_message = ?, updated_at = ? where id = ?`)
+      .prepare(
+        `update post_dispatches set status = 'abandoned', next_attempt_at = null, error_message = ?, updated_at = ? where id = ?`
+      )
       .run(reason, now, id);
     return this.getPostDispatch(id);
   }
 
-  markPostDispatchFailed(id: string, claimToken: string, message: string, opts?: { retryAt?: string | null }): PostDispatchRow | null {
+  markPostDispatchFailed(
+    id: string,
+    claimToken: string,
+    message: string,
+    opts?: { retryAt?: string | null }
+  ): PostDispatchRow | null {
     const existing = this.getPostDispatch(id);
     if (!existing) return null;
     const now = nowIso();
     const status = opts?.retryAt ? 'pending' : 'failed';
     this.db
-      .prepare(`update post_dispatches set status = ?, claim_token = null, next_attempt_at = ?, error_message = ?, updated_at = ?
+      .prepare(
+        `update post_dispatches set status = ?, claim_token = null, next_attempt_at = ?, error_message = ?, updated_at = ?
         where id = ? and status = 'dispatching' and claim_token = ? and generation =
-          (select generation from post_dispatch_generations where topic_id = post_dispatches.topic_id)`)
+          (select generation from post_dispatch_generations where topic_id = post_dispatches.topic_id)`
+      )
       .run(status, opts?.retryAt ?? null, message.slice(0, 1000), now, id, claimToken);
     return this.getPostDispatch(id);
   }
 
   reconcilePostDispatchGenerations(): number {
     const now = nowIso();
-    const result = this.db.prepare(`update post_dispatches set status = 'superseded', next_attempt_at = null,
+    const result = this.db
+      .prepare(
+        `update post_dispatches set status = 'superseded', next_attempt_at = null,
       error_message = 'Cancelled by a newer topic dispatch generation.', updated_at = ?
       where status in ('pending', 'dispatching') and generation <> coalesce(
         (select generation from post_dispatch_generations where topic_id = post_dispatches.topic_id), 0
-      )`).run(now);
+      )`
+      )
+      .run(now);
     return result.changes;
   }
 
-  advanceTopicDispatchGeneration(topicId: string, reason = 'Cancelled by operator interrupt.'): { generation: number; cancelled: number } {
+  advanceTopicDispatchGeneration(
+    topicId: string,
+    reason = 'Cancelled by operator interrupt.'
+  ): { generation: number; cancelled: number } {
     const now = nowIso();
     return this.db.transaction(() => {
       this.ensurePostDispatchGeneration(topicId, now);
-      this.db.prepare(`update post_dispatch_generations set generation = generation + 1, updated_at = ? where topic_id = ?`)
+      this.db
+        .prepare(`update post_dispatch_generations set generation = generation + 1, updated_at = ? where topic_id = ?`)
         .run(now, topicId);
-      const cancelled = this.db.prepare(`update post_dispatches set status = 'superseded', next_attempt_at = null,
-        error_message = ?, updated_at = ? where topic_id = ? and status in ('pending', 'dispatching')`)
+      const cancelled = this.db
+        .prepare(
+          `update post_dispatches set status = 'superseded', next_attempt_at = null,
+        error_message = ?, updated_at = ? where topic_id = ? and status in ('pending', 'dispatching')`
+        )
         .run(reason.slice(0, 1000), now, topicId).changes;
-      this.db.prepare(`update robot_state set activity = 'idle', current_plan_id = null, last_updated_at = ? where topic_id = ?`)
+      this.db
+        .prepare(
+          `update robot_state set activity = 'idle', current_plan_id = null, last_updated_at = ? where topic_id = ?`
+        )
         .run(now, topicId);
-      const row = this.db.prepare('select generation from post_dispatch_generations where topic_id = ?').get(topicId) as { generation: number };
+      const row = this.db
+        .prepare('select generation from post_dispatch_generations where topic_id = ?')
+        .get(topicId) as { generation: number };
       return { generation: row.generation, cancelled };
     })();
   }
@@ -2428,25 +2620,31 @@ export class ForumStore {
     if (!existing) return null;
     const now = nowIso();
     this.db
-      .prepare(`update robot_state set last_error_message = null, last_error_at = null, last_error_post_id = null, last_error_turn_id = null, last_updated_at = ? where topic_id = ?`)
+      .prepare(
+        `update robot_state set last_error_message = null, last_error_at = null, last_error_post_id = null, last_error_turn_id = null, last_updated_at = ? where topic_id = ?`
+      )
       .run(now, topicId);
     return this.getRobotState(topicId);
   }
 
-  setRobotTurnError(topicId: string, input: { message: string; postId?: string | null; turnId?: string | null }): RobotStateRow | null {
+  setRobotTurnError(
+    topicId: string,
+    input: { message: string; postId?: string | null; turnId?: string | null }
+  ): RobotStateRow | null {
     const existing = this.getRobotState(topicId);
     if (!existing) return null;
     const now = nowIso();
     this.db
-      .prepare(`update robot_state set activity = 'idle', current_plan_id = null, last_error_message = ?, last_error_at = ?, last_error_post_id = ?, last_error_turn_id = ?, last_updated_at = ? where topic_id = ?`)
+      .prepare(
+        `update robot_state set activity = 'idle', current_plan_id = null, last_error_message = ?, last_error_at = ?, last_error_post_id = ?, last_error_turn_id = ?, last_updated_at = ? where topic_id = ?`
+      )
       .run(input.message.slice(0, 1000), now, input.postId ?? null, input.turnId ?? null, now, topicId);
     return this.getRobotState(topicId);
   }
 
   getRobotState(topicId: string): RobotStateRow | null {
     const row = this.db.prepare('select * from robot_state where topic_id = ?').get(topicId) as
-      | RobotStateRow
-      | undefined;
+      RobotStateRow | undefined;
     return row ?? null;
   }
 
@@ -2457,7 +2655,9 @@ export class ForumStore {
     }
     const currentPlanIdExpr = activity === 'idle' ? 'null' : 'current_plan_id';
     this.db
-      .prepare(`update robot_state set activity = ?, current_plan_id = ${currentPlanIdExpr}, last_updated_at = ? where topic_id = ?`)
+      .prepare(
+        `update robot_state set activity = ?, current_plan_id = ${currentPlanIdExpr}, last_updated_at = ? where topic_id = ?`
+      )
       .run(activity, nowIso(), topicId);
     return this.getRobotState(topicId) as RobotStateRow;
   }
@@ -2465,9 +2665,11 @@ export class ForumStore {
   resetRobotActivities(activity = 'idle'): number {
     const now = nowIso();
     const currentPlanIdExpr = activity === 'idle' ? 'null' : 'current_plan_id';
-    const whereClause = activity === 'idle' ? "activity != ? or current_plan_id is not null" : 'activity != ?';
+    const whereClause = activity === 'idle' ? 'activity != ? or current_plan_id is not null' : 'activity != ?';
     const result = this.db
-      .prepare(`update robot_state set activity = ?, current_plan_id = ${currentPlanIdExpr}, last_updated_at = ? where ${whereClause}`)
+      .prepare(
+        `update robot_state set activity = ?, current_plan_id = ${currentPlanIdExpr}, last_updated_at = ? where ${whereClause}`
+      )
       .run(activity, now, activity);
     return result.changes;
   }
@@ -2478,8 +2680,7 @@ export class ForumStore {
 
   getRobotAutomation(automationId: string): RobotAutomationRow | null {
     const row = this.db.prepare('select * from robot_automations where id = ?').get(automationId) as
-      | RobotAutomationRow
-      | undefined;
+      RobotAutomationRow | undefined;
     return row ?? null;
   }
 
@@ -2645,8 +2846,7 @@ export class ForumStore {
 
   getRobotAutomationRun(runId: string): RobotAutomationRunRow | null {
     const row = this.db.prepare('select * from robot_automation_runs where id = ?').get(runId) as
-      | RobotAutomationRunRow
-      | undefined;
+      RobotAutomationRunRow | undefined;
     return row ?? null;
   }
 
@@ -2681,8 +2881,7 @@ export class ForumStore {
 
   getTopicAutoRun(topicId: string): TopicAutoRunRow | null {
     const row = this.db.prepare('select * from topic_auto_runs where topic_id = ?').get(topicId) as
-      | TopicAutoRunRow
-      | undefined;
+      TopicAutoRunRow | undefined;
     return row ?? null;
   }
 
@@ -2860,7 +3059,7 @@ export class ForumStore {
 
   upsertRobotState(input: UpdateRobotStateInput): RobotStateRow {
     const now = nowIso();
-    const currentPlanId = input.activity === 'idle' ? null : input.currentPlanId ?? null;
+    const currentPlanId = input.activity === 'idle' ? null : (input.currentPlanId ?? null);
     const existing = this.getRobotState(input.topicId);
     if (existing) {
       this.db
@@ -2908,22 +3107,20 @@ export class ForumStore {
 
   getPiSessionLinkByTopic(topicId: string): PiSessionLinkRow | null {
     const row = this.db.prepare('select * from pi_session_links where topic_id = ? limit 1').get(topicId) as
-      | PiSessionLinkRow
-      | undefined;
+      PiSessionLinkRow | undefined;
     return row ?? null;
   }
 
   getPiSessionLinkByPiSessionId(piSessionId: string): PiSessionLinkRow | null {
     const row = this.db.prepare('select * from pi_session_links where pi_session_id = ? limit 1').get(piSessionId) as
-      | PiSessionLinkRow
-      | undefined;
+      PiSessionLinkRow | undefined;
     return row ?? null;
   }
 
   getPiSessionLinkByPiSessionPath(piSessionPath: string): PiSessionLinkRow | null {
-    const row = this.db.prepare('select * from pi_session_links where pi_session_path = ? limit 1').get(piSessionPath) as
-      | PiSessionLinkRow
-      | undefined;
+    const row = this.db
+      .prepare('select * from pi_session_links where pi_session_path = ? limit 1')
+      .get(piSessionPath) as PiSessionLinkRow | undefined;
     return row ?? null;
   }
 
@@ -3001,15 +3198,20 @@ export class ForumStore {
   }
 
   findPiMessageLinkBySubagentRun(piSessionId: string, runIds: string[]): PiMessageLinkRow | null {
-    const ids = [...new Set(runIds.filter((id) => typeof id === 'string' && id.trim()).map((id) => id.trim()))].slice(0, 100);
+    const ids = [...new Set(runIds.filter((id) => typeof id === 'string' && id.trim()).map((id) => id.trim()))].slice(
+      0,
+      100
+    );
     if (ids.length === 0) return null;
-    const row = this.db.prepare(
-      `select * from pi_message_links
+    const row = this.db
+      .prepare(
+        `select * from pi_message_links
        where pi_session_id = ? and post_id is not null
          and (json_extract(metadata_json, '$.runId') in (select value from json_each(?))
            or exists (select 1 from json_each(metadata_json, '$.runIds') where value in (select value from json_each(?))))
        order by imported_at asc limit 1`
-    ).get(piSessionId, JSON.stringify(ids), JSON.stringify(ids)) as PiMessageLinkRow | undefined;
+      )
+      .get(piSessionId, JSON.stringify(ids), JSON.stringify(ids)) as PiMessageLinkRow | undefined;
     return row ?? null;
   }
 
@@ -3031,8 +3233,14 @@ export class ForumStore {
                metadata_json = case when post_id is null and ? is not null then ? else metadata_json end
            where id = ?`
         )
-        .run(input.postId ?? null, input.sessionMessageId ?? null, input.role ?? null, input.postId ?? null,
-          JSON.stringify(input.metadata ?? null), existing.id);
+        .run(
+          input.postId ?? null,
+          input.sessionMessageId ?? null,
+          input.role ?? null,
+          input.postId ?? null,
+          JSON.stringify(input.metadata ?? null),
+          existing.id
+        );
       return this.db.prepare('select * from pi_message_links where id = ?').get(existing.id) as PiMessageLinkRow;
     }
     const id = randomUUID();
@@ -3293,8 +3501,7 @@ export class ForumStore {
 
   getIdentityByDisplayName(displayName: string): IdentityRow | null {
     const row = this.db.prepare('select * from identities where display_name = ? limit 1').get(displayName) as
-      | IdentityRow
-      | undefined;
+      IdentityRow | undefined;
     return row ?? null;
   }
 
@@ -3556,8 +3763,7 @@ export class ForumStore {
 
   getIdentityByUsername(username: string): IdentityRow | null {
     const row = this.db.prepare('select * from identities where username = ? collate nocase limit 1').get(username) as
-      | IdentityRow
-      | undefined;
+      IdentityRow | undefined;
     return row ?? null;
   }
 
@@ -3661,12 +3867,24 @@ export class ForumStore {
       .prepare(
         'insert into pending_attachments (id, topic_id, filename, mime_type, size_bytes, storage_path, sha256, created_by, created_at, expires_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
-      .run(id, input.topicId, input.filename, input.mimeType, input.sizeBytes, input.storagePath, input.sha256 ?? null, input.createdBy ?? null, now, input.expiresAt);
+      .run(
+        id,
+        input.topicId,
+        input.filename,
+        input.mimeType,
+        input.sizeBytes,
+        input.storagePath,
+        input.sha256 ?? null,
+        input.createdBy ?? null,
+        now,
+        input.expiresAt
+      );
     return this.getPendingAttachment(id) as PendingAttachmentRow;
   }
 
   getPendingAttachment(id: string): PendingAttachmentRow | null {
-    const row = this.db.prepare('select * from pending_attachments where id = ?').get(id) as PendingAttachmentRow | undefined;
+    const row = this.db.prepare('select * from pending_attachments where id = ?').get(id) as
+      PendingAttachmentRow | undefined;
     return row ?? null;
   }
 
@@ -3675,7 +3893,9 @@ export class ForumStore {
   }
 
   deleteExpiredPendingAttachments(now: string = nowIso()): PendingAttachmentRow[] {
-    const rows = this.db.prepare('select * from pending_attachments where expires_at <= ?').all(now) as PendingAttachmentRow[];
+    const rows = this.db
+      .prepare('select * from pending_attachments where expires_at <= ?')
+      .all(now) as PendingAttachmentRow[];
     this.db.prepare('delete from pending_attachments where expires_at <= ?').run(now);
     return rows;
   }
@@ -3687,14 +3907,22 @@ export class ForumStore {
       .prepare(
         'insert into attachments (id, post_id, filename, mime_type, size_bytes, storage_path, sha256, created_at) values (?, ?, ?, ?, ?, ?, ?, ?)'
       )
-      .run(id, input.postId, input.filename, input.mimeType, input.sizeBytes, input.storagePath, input.sha256 ?? null, now);
+      .run(
+        id,
+        input.postId,
+        input.filename,
+        input.mimeType,
+        input.sizeBytes,
+        input.storagePath,
+        input.sha256 ?? null,
+        now
+      );
     return this.getAttachment(id) as AttachmentRow;
   }
 
   getAttachment(attachmentId: string): AttachmentRow | null {
     const row = this.db.prepare('select * from attachments where id = ?').get(attachmentId) as
-      | AttachmentRow
-      | undefined;
+      AttachmentRow | undefined;
     return row ?? null;
   }
 
@@ -3730,8 +3958,7 @@ export class ForumStore {
 
   getAttachmentByStoragePath(storagePath: string): AttachmentRow | null {
     const row = this.db.prepare('select * from attachments where storage_path = ? limit 1').get(storagePath) as
-      | AttachmentRow
-      | undefined;
+      AttachmentRow | undefined;
     return row ?? null;
   }
 
@@ -4009,8 +4236,7 @@ export class ForumStore {
          and action = ?`
       )
       .get(input.scopeKind, input.scopeId, input.principalKind, principalId, principalId, input.action) as
-      | AccessRuleRow
-      | undefined;
+      AccessRuleRow | undefined;
     if (!row) {
       throw new Error('access rule not found');
     }
@@ -4042,8 +4268,7 @@ export class ForumStore {
 
   getChatCategory(categoryId: string): ChatCategoryRow | null {
     const row = this.db.prepare('select * from chat_categories where id = ?').get(categoryId) as
-      | ChatCategoryRow
-      | undefined;
+      ChatCategoryRow | undefined;
     return row ?? null;
   }
 
@@ -4557,8 +4782,7 @@ export class ForumStore {
 
   getImpersonationTokenByHash(tokenHash: string): ImpersonationTokenRow | null {
     const row = this.db.prepare('select * from impersonation_tokens where token_hash = ?').get(tokenHash) as
-      | ImpersonationTokenRow
-      | undefined;
+      ImpersonationTokenRow | undefined;
     return row ?? null;
   }
 
@@ -4580,8 +4804,7 @@ export class ForumStore {
 
   getSystemSetting(key: string): string | null {
     const row = this.db.prepare('select value from system_settings where key = ?').get(key) as
-      | { value: string }
-      | undefined;
+      { value: string } | undefined;
     return row?.value ?? null;
   }
 

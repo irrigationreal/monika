@@ -1,16 +1,17 @@
 import type {
   AccessRuleAction,
   AccessRuleEffect,
-  AnalyticsAudience,
-  AnalyticsBucket,
   AccessRulePrincipalKind,
   AccessRuleScopeKind,
+  AnalyticsAudience,
+  AnalyticsBucket,
   ForumVisibility,
   MessageTemplateContext,
   MessageTemplateForumScope,
   MessageTemplateScope,
-  RobotMode
+  RobotMode,
 } from '@irrigationreal/codex-forum-core';
+
 import type { ForumThemeKey } from './themes';
 
 export interface ForumLastPostDto {
@@ -174,6 +175,9 @@ export interface TopicDto {
    * - off: never respond
    */
   robotMode?: RobotMode;
+  /** Shared, default-off policy for Pi native parent-session auto-compaction. */
+  autoCompactEnabled: boolean;
+  autoCompactRevision: number;
   tags: string[];
   createdBy: string;
   createdByName?: string | null;

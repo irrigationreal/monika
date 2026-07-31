@@ -1,3 +1,5 @@
+import { BrowserTokenStorage, MemoryTokenStorage } from './storage';
+
 import type {
   AccessRuleDto,
   AdminAnalyticsDto,
@@ -11,10 +13,10 @@ import type {
   AdminSkillListResponseDto,
   AdminSkillRootDto,
   AdminUserDto,
-  AttachmentDto,
   ApiKeyCreateResponseDto,
   ApiKeyDto,
   ApiKeyListResponseDto,
+  AttachmentDto,
   AuthUserDto,
   ChatCategoryDto,
   ChatCategoryListDto,
@@ -26,51 +28,23 @@ import type {
   ChatRoomDto,
   ChatRoomListDto,
   ChatTypingDto,
+  CompactionOperationDto,
+  CreateCompactionRequestDto,
   DiscordBridgeStatusDto,
   DiscordChannelMappingDto,
-  UserFileDto,
+  ForumApi,
   ForumDto,
   ForumLastPostDto,
-  ListForumsRequest,
-  LoginResponseDto,
-  ImpersonationTokenCreateResponseDto,
-  RecentPostDto,
-  RegistrationModeDto,
   ForumThemeKey,
   IdentityDto,
   IdentityPermissionsDto,
+  ImpersonationTokenCreateResponseDto,
   ImpersonationTokenDto,
   ImpersonationTokenListResponseDto,
-  InviteInfoDto,
   InviteDto,
-  PageResponse,
-  PostDto,
-  RegisterResponseDto,
-  SearchResultsDto,
-  UserProfileDto,
-  UserPostHistoryItemDto,
-  UserPostHistoryResponseDto,
-  RobotAutomationDto,
-  RobotAutomationRunDto,
-  TopicAutoRunDto,
-  RobotDashboardDto,
-  RobotPersonaDto,
-  RobotQueueItemDto,
-  RobotJobDto,
-  RobotStateDto,
-  TamperConfigDto,
-  TamperPluginDto,
-  TamperTestResultDto,
-  SessionDto,
-  SessionInspectorDto,
-  ToolRunDto,
-  TopicAttachmentsDto,
-  TopicDto,
-  TopicMoveDto,
-  UpdatePrivateEmailResponseDto,
-  VerifyResponseDto,
-  OidcExternalIdentityListResponseDto,
-  OidcUnlinkResponseDto,
+  InviteInfoDto,
+  ListForumsRequest,
+  LoginResponseDto,
   MatrixBridgeStatusDto,
   MatrixRoomMappingDto,
   MessageTemplateDto,
@@ -81,18 +55,46 @@ import type {
   ModelCatalogDto,
   ModelInfoDto,
   NotificationDto,
+  OidcExternalIdentityListResponseDto,
+  OidcUnlinkResponseDto,
+  PageResponse,
   PiSyncBackfillResponseDto,
   PiSyncHealthDto,
   PiSyncRunResponseDto,
+  PostDto,
+  RecentPostDto,
+  RegisterResponseDto,
+  RegistrationModeDto,
+  RobotAutomationDto,
+  RobotAutomationRunDto,
+  RobotDashboardDto,
+  RobotJobDto,
+  RobotPersonaDto,
+  RobotQueueItemDto,
+  RobotStateDto,
+  SearchResultsDto,
+  SessionDto,
+  SessionInspectorDto,
+  TamperConfigDto,
+  TamperPluginDto,
+  TamperTestResultDto,
+  ToolRunDto,
+  TopicAttachmentsDto,
+  TopicAutoRunDto,
+  TopicDto,
+  TopicMoveDto,
+  TopicOperationalEventDto,
   TopicSubscriptionDto,
   TopicUnreadDto,
-  TopicOperationalEventDto,
-  CreateCompactionRequestDto,
-  CompactionOperationDto
+  UpdatePrivateEmailResponseDto,
+  UserFileDto,
+  UserPostHistoryItemDto,
+  UserPostHistoryResponseDto,
+  UserProfileDto,
+  VerifyResponseDto,
 } from '@irrigationreal/codex-forum-contracts';
 
-import type { ForumApi } from '@irrigationreal/codex-forum-contracts';
-import { BrowserTokenStorage, MemoryTokenStorage, type TokenStorage } from './storage';
+import type { TokenStorage } from './storage';
 
 export type {
   AccessRuleDto,
@@ -183,7 +185,7 @@ export type {
   TopicOperationalEventDto,
   CreateCompactionRequestDto,
   CompactionOperationDto,
-  ForumApi
+  ForumApi,
 };
 
 export { BrowserTokenStorage, MemoryTokenStorage };
@@ -215,7 +217,7 @@ function createApi({
   json,
   baseUrl,
   fetchImpl,
-  storage
+  storage,
 }: {
   json: JsonFn;
   baseUrl: string;
@@ -228,7 +230,7 @@ function createApi({
     logout: () =>
       json<{ ok: boolean }>('/auth/logout', {
         method: 'POST',
-        headers: storage.getRefreshToken() ? { 'x-refresh-token': storage.getRefreshToken() as string } : undefined
+        headers: storage.getRefreshToken() ? { 'x-refresh-token': storage.getRefreshToken() as string } : undefined,
       }),
     refresh: () =>
       json<{ token: string | null; refreshToken: string | null; message?: string }>(
@@ -236,20 +238,19 @@ function createApi({
         { method: 'POST' },
         { skipRefresh: true }
       ),
-    me: () =>
-      json<AuthUserDto>('/auth/me'),
+    me: () => json<AuthUserDto>('/auth/me'),
     updatePrivateEmail: (emailAddress: string | null) =>
-      json<UpdatePrivateEmailResponseDto>('/me/private-email', { method: 'PATCH', body: JSON.stringify({ emailAddress }) }),
+      json<UpdatePrivateEmailResponseDto>('/me/private-email', {
+        method: 'PATCH',
+        body: JSON.stringify({ emailAddress }),
+      }),
     changePassword: (input: { currentPassword: string; newPassword: string }) =>
       json<{ ok: boolean }>('/me/password', { method: 'POST', body: JSON.stringify(input) }),
-    listApiKeys: () =>
-      json<ApiKeyListResponseDto>('/api-keys'),
+    listApiKeys: () => json<ApiKeyListResponseDto>('/api-keys'),
     createApiKey: (input: { label: string; scopes?: string[]; expiresAt?: string | null }) =>
       json<ApiKeyCreateResponseDto>('/api-keys', { method: 'POST', body: JSON.stringify(input) }),
-    revokeApiKey: (id: string) =>
-      json<{ ok: boolean }>(`/api-keys/${id}`, { method: 'DELETE' }),
-    listImpersonationTokens: () =>
-      json<ImpersonationTokenListResponseDto>('/impersonation-tokens'),
+    revokeApiKey: (id: string) => json<{ ok: boolean }>(`/api-keys/${id}`, { method: 'DELETE' }),
+    listImpersonationTokens: () => json<ImpersonationTokenListResponseDto>('/impersonation-tokens'),
     createImpersonationToken: (input: {
       label: string;
       displayName: string;
@@ -257,70 +258,98 @@ function createApi({
       scopes?: string[];
       expiresAt?: string | null;
     }) =>
-      json<ImpersonationTokenCreateResponseDto>('/impersonation-tokens', { method: 'POST', body: JSON.stringify(input) }),
+      json<ImpersonationTokenCreateResponseDto>('/impersonation-tokens', {
+        method: 'POST',
+        body: JSON.stringify(input),
+      }),
     revokeImpersonationToken: (id: string) =>
       json<{ ok: boolean }>(`/impersonation-tokens/${id}`, { method: 'DELETE' }),
-    registrationMode: () =>
-      json<RegistrationModeDto>('/auth/registration'),
+    registrationMode: () => json<RegistrationModeDto>('/auth/registration'),
     register: (displayName: string, inviteCode?: string, username?: string, password?: string) =>
       json<RegisterResponseDto>('/auth/register', {
         method: 'POST',
-        body: JSON.stringify({ displayName, inviteCode, username, password })
+        body: JSON.stringify({ displayName, inviteCode, username, password }),
       }),
-    verify: (token: string) =>
-      json<VerifyResponseDto>(`/auth/verify/${token}`),
-    oidcEnabled: () =>
-      json<{ enabled: boolean; providerKey: string | null }>(`/auth/oidc/enabled`),
+    verify: (token: string) => json<VerifyResponseDto>(`/auth/verify/${token}`),
+    oidcEnabled: () => json<{ enabled: boolean; providerKey: string | null }>(`/auth/oidc/enabled`),
     oidcStartUrl: () => `${baseUrl}/auth/oidc/start`,
     oidcStartLinkUrl: () => `${baseUrl}/auth/oidc/start/link`,
     oidcLink: (input: { username: string; password: string; subject: string; issuer?: string; providerKey?: string }) =>
-      json<{ token: string; refreshToken?: string; linked?: boolean }>(`/auth/oidc/link`, { method: 'POST', body: JSON.stringify(input) }),
-    oidcListLinks: () =>
-      json<OidcExternalIdentityListResponseDto>(`/auth/oidc/links`),
+      json<{ token: string; refreshToken?: string; linked?: boolean }>(`/auth/oidc/link`, {
+        method: 'POST',
+        body: JSON.stringify(input),
+      }),
+    oidcListLinks: () => json<OidcExternalIdentityListResponseDto>(`/auth/oidc/links`),
     oidcUnlink: (input: { externalIdentityId: string }) =>
       json<OidcUnlinkResponseDto>(`/auth/oidc/unlink`, { method: 'POST', body: JSON.stringify(input) }),
-    listModels: () =>
-      json<ModelCatalogDto>('/models'),
-    getInviteInfo: (code: string) =>
-      json<InviteInfoDto>(`/auth/invite/${code}`),
+    listModels: () => json<ModelCatalogDto>('/models'),
+    getInviteInfo: (code: string) => json<InviteInfoDto>(`/auth/invite/${code}`),
     updateIdentity: (
       identityId: string,
-      updates: { displayName?: string; avatarUrl?: string; location?: string | null; signature?: string | null; theme?: ForumThemeKey | null }
+      updates: {
+        displayName?: string;
+        avatarUrl?: string;
+        location?: string | null;
+        signature?: string | null;
+        theme?: ForumThemeKey | null;
+      }
     ) =>
       json<IdentityDto>(`/identities/${identityId}`, {
         method: 'PATCH',
-        body: JSON.stringify(updates)
+        body: JSON.stringify(updates),
       }),
     listEffectiveMessageTemplates: (context: MessageTemplateDto['contexts'][number], forumId: string) =>
-      json<MessageTemplateListResponseDto>(`/message-templates/effective?context=${encodeURIComponent(context)}&forumId=${encodeURIComponent(forumId)}`),
+      json<MessageTemplateListResponseDto>(
+        `/message-templates/effective?context=${encodeURIComponent(context)}&forumId=${encodeURIComponent(forumId)}`
+      ),
     listMyMessageTemplates: () => json<MessageTemplateListResponseDto>('/message-templates/mine'),
     createMessageTemplate: (input: MessageTemplateWriteRequest) =>
       json<MessageTemplateDto>('/message-templates', { method: 'POST', body: JSON.stringify(input) }),
     updateMessageTemplate: (id: string, input: MessageTemplateUpdateRequest) =>
-      json<MessageTemplateDto>(`/message-templates/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(input) }),
+      json<MessageTemplateDto>(`/message-templates/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify(input),
+      }),
     deleteMessageTemplate: (id: string, revision: number) =>
-      json<{ ok: boolean }>(`/message-templates/${encodeURIComponent(id)}?revision=${String(revision)}`, { method: 'DELETE' }),
+      json<{ ok: boolean }>(`/message-templates/${encodeURIComponent(id)}?revision=${String(revision)}`, {
+        method: 'DELETE',
+      }),
     reorderMessageTemplates: (input: MessageTemplateReorderRequest) =>
-      json<MessageTemplateListResponseDto>('/message-templates/reorder', { method: 'POST', body: JSON.stringify(input) }),
+      json<MessageTemplateListResponseDto>('/message-templates/reorder', {
+        method: 'POST',
+        body: JSON.stringify(input),
+      }),
     listSystemMessageTemplates: () => json<MessageTemplateListResponseDto>('/admin/message-templates'),
     createSystemMessageTemplate: (input: MessageTemplateWriteRequest) =>
       json<MessageTemplateDto>('/admin/message-templates', { method: 'POST', body: JSON.stringify(input) }),
     updateSystemMessageTemplate: (id: string, input: MessageTemplateUpdateRequest) =>
-      json<MessageTemplateDto>(`/admin/message-templates/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(input) }),
+      json<MessageTemplateDto>(`/admin/message-templates/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify(input),
+      }),
     deleteSystemMessageTemplate: (id: string, revision: number) =>
-      json<{ ok: boolean }>(`/admin/message-templates/${encodeURIComponent(id)}?revision=${String(revision)}`, { method: 'DELETE' }),
+      json<{ ok: boolean }>(`/admin/message-templates/${encodeURIComponent(id)}?revision=${String(revision)}`, {
+        method: 'DELETE',
+      }),
     reorderSystemMessageTemplates: (input: MessageTemplateReorderRequest) =>
-      json<MessageTemplateListResponseDto>('/admin/message-templates/reorder', { method: 'POST', body: JSON.stringify(input) }),
+      json<MessageTemplateListResponseDto>('/admin/message-templates/reorder', {
+        method: 'POST',
+        body: JSON.stringify(input),
+      }),
     getIdentityPermissions: (identityId: string) =>
       json<IdentityPermissionsDto>(`/identities/${identityId}/permissions`),
-    getUserProfile: (identityId: string) =>
-      json<UserProfileDto>(`/profiles/${identityId}`),
+    getUserProfile: (identityId: string) => json<UserProfileDto>(`/profiles/${identityId}`),
     listUserPostHistory: (identityId: string, page = 1, pageSize = 25) => {
       const safePage = Math.max(1, Math.trunc(page));
       const safePageSize = Math.max(1, Math.min(50, Math.trunc(pageSize)));
-      return json<UserPostHistoryResponseDto>(`/profiles/${identityId}/posts?page=${safePage}&pageSize=${safePageSize}`);
+      return json<UserPostHistoryResponseDto>(
+        `/profiles/${identityId}/posts?page=${safePage}&pageSize=${safePageSize}`
+      );
     },
-    uploadAvatar: async (identityId: string, file: File): Promise<{ id: string; displayName: string; avatarUrl: string; message: string }> => {
+    uploadAvatar: async (
+      identityId: string,
+      file: File
+    ): Promise<{ id: string; displayName: string; avatarUrl: string; message: string }> => {
       const token = storage.getAuthToken();
       const formData = new FormData();
       formData.append('file', file);
@@ -333,13 +362,13 @@ function createApi({
       const res = await fetchImpl(`${baseUrl}/identities/${identityId}/avatar`, {
         method: 'POST',
         headers,
-        body: formData
+        body: formData,
       });
 
       if (!res.ok) {
         let errorMessage = `Upload failed: ${String(res.status)}`;
         try {
-          const errorBody = await res.json() as { message?: string };
+          const errorBody = (await res.json()) as { message?: string };
           if (errorBody.message) {
             errorMessage = errorBody.message;
           }
@@ -351,8 +380,7 @@ function createApi({
 
       return (await res.json()) as { id: string; displayName: string; avatarUrl: string; message: string };
     },
-    listUserFiles: () =>
-      json<UserFileDto[]>('/user-files'),
+    listUserFiles: () => json<UserFileDto[]>('/user-files'),
     uploadUserFile: async (file: File): Promise<UserFileDto> => {
       const token = storage.getAuthToken();
       const headers: Record<string, string> = {};
@@ -366,13 +394,13 @@ function createApi({
       const res = await fetchImpl(`${baseUrl}/user-files`, {
         method: 'POST',
         headers,
-        body: formData
+        body: formData,
       });
 
       if (!res.ok) {
         let errorMessage = `Upload failed: ${String(res.status)}`;
         try {
-          const errorBody = await res.json() as { message?: string };
+          const errorBody = (await res.json()) as { message?: string };
           if (errorBody.message) {
             errorMessage = errorBody.message;
           }
@@ -384,12 +412,9 @@ function createApi({
 
       return (await res.json()) as UserFileDto;
     },
-    deleteUserFile: (fileId: string) =>
-      json<{ ok: boolean }>(`/user-files/${fileId}`, { method: 'DELETE' }),
-    listTopicAttachments: (topicId: string) =>
-      json<TopicAttachmentsDto>(`/topics/${topicId}/attachments`),
-    listPostAttachments: (postId: string) =>
-      json<AttachmentDto[]>(`/posts/${postId}/attachments`),
+    deleteUserFile: (fileId: string) => json<{ ok: boolean }>(`/user-files/${fileId}`, { method: 'DELETE' }),
+    listTopicAttachments: (topicId: string) => json<TopicAttachmentsDto>(`/topics/${topicId}/attachments`),
+    listPostAttachments: (postId: string) => json<AttachmentDto[]>(`/posts/${postId}/attachments`),
     // NOTE: uploadPostAttachment implementation continues below in the original file.
   };
 }
@@ -431,8 +456,8 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
     const res = await fetchImpl(`${baseUrl}/auth/refresh`, {
       method: 'POST',
       headers: {
-        'x-refresh-token': refreshToken
-      }
+        'x-refresh-token': refreshToken,
+      },
     });
     if (!res.ok) {
       return null;
@@ -461,14 +486,14 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
         ? Object.fromEntries(initHeaders.entries())
         : Array.isArray(initHeaders)
           ? Object.fromEntries(initHeaders)
-          : initHeaders ?? {};
+          : (initHeaders ?? {});
     const { headers: _ignored, ...restInit } = init ?? {};
     const res = await fetchImpl(`${baseUrl}${path}`, {
       headers: {
         ...headers,
-        ...(normalizedInitHeaders as Record<string, string>)
+        ...(normalizedInitHeaders as Record<string, string>),
       },
-      ...restInit
+      ...restInit,
     });
     const refreshEligible =
       !options?.skipRefresh &&
@@ -504,7 +529,11 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
       if (res.status === 401) {
         errorMessage = 'Please log in to continue. ' + errorMessage;
       }
-      const error = new Error(errorMessage) as Error & { code?: string; status?: number; details?: Record<string, unknown> };
+      const error = new Error(errorMessage) as Error & {
+        code?: string;
+        status?: number;
+        details?: Record<string, unknown>;
+      };
       error.code = errorCode;
       error.status = res.status;
       error.details = errorDetails;
@@ -525,7 +554,7 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
       const parseError = async (res: Response): Promise<never> => {
         let errorMessage = `Upload failed: ${String(res.status)}`;
         try {
-          const errorBody = await res.json() as { message?: string };
+          const errorBody = (await res.json()) as { message?: string };
           if (errorBody.message) {
             errorMessage = errorBody.message;
           }
@@ -541,20 +570,20 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
           method: 'POST',
           headers: {
             ...headers,
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
           },
           body: JSON.stringify({
             filename: file.name,
             mimeType: file.type || 'application/octet-stream',
-            sizeBytes: file.size
-          })
+            sizeBytes: file.size,
+          }),
         });
 
         if (!startRes.ok) {
           return parseError(startRes);
         }
 
-        const startBody = await startRes.json() as { uploadId: string; chunkBytes: number; totalChunks: number };
+        const startBody = (await startRes.json()) as { uploadId: string; chunkBytes: number; totalChunks: number };
         const chunkBytes = Math.max(1, Number(startBody.chunkBytes));
         const totalChunks = Math.max(1, Number(startBody.totalChunks));
 
@@ -571,7 +600,7 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
               {
                 method: 'POST',
                 headers,
-                body: formData
+                body: formData,
               }
             );
 
@@ -584,7 +613,7 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
             `${baseUrl}/posts/${postId}/attachments/chunked/${startBody.uploadId}/complete`,
             {
               method: 'POST',
-              headers
+              headers,
             }
           );
 
@@ -595,10 +624,10 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
           return (await completeRes.json()) as AttachmentDto;
         } catch (err) {
           try {
-            await fetchImpl(
-              `${baseUrl}/posts/${postId}/attachments/chunked/${startBody.uploadId}/abort`,
-              { method: 'POST', headers }
-            );
+            await fetchImpl(`${baseUrl}/posts/${postId}/attachments/chunked/${startBody.uploadId}/abort`, {
+              method: 'POST',
+              headers,
+            });
           } catch {
             // ignore abort errors
           }
@@ -612,7 +641,7 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
       const res = await fetchImpl(`${baseUrl}/posts/${postId}/attachments`, {
         method: 'POST',
         headers,
-        body: formData
+        body: formData,
       });
 
       if (!res.ok) {
@@ -623,8 +652,7 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
     },
     deleteAttachment: (attachmentId: string) =>
       json<{ ok: boolean }>(`/attachments/${attachmentId}`, { method: 'DELETE' }),
-    generatePostTts: (postId: string) =>
-      json<AttachmentDto>(`/posts/${postId}/tts`, { method: 'POST' }),
+    generatePostTts: (postId: string) => json<AttachmentDto>(`/posts/${postId}/tts`, { method: 'POST' }),
     search: (q: string, scope: 'all' | 'topics' | 'posts' = 'all', options?: { forumId?: string; limit?: number }) => {
       const query = new URLSearchParams({ q, scope });
       if (options?.forumId) query.set('forumId', options.forumId);
@@ -655,10 +683,12 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
     },
 
     // Chat endpoints
-    listChatCategories: () =>
-      json<ChatCategoryListDto>('/chat/categories'),
-    createChatCategory: (input: { name: string; description?: string | null; visibility?: 'public' | 'members' | 'admin' }) =>
-      json<ChatCategoryDto>('/chat/categories', { method: 'POST', body: JSON.stringify(input) }),
+    listChatCategories: () => json<ChatCategoryListDto>('/chat/categories'),
+    createChatCategory: (input: {
+      name: string;
+      description?: string | null;
+      visibility?: 'public' | 'members' | 'admin';
+    }) => json<ChatCategoryDto>('/chat/categories', { method: 'POST', body: JSON.stringify(input) }),
     listChatRooms: (categoryId: string) => {
       const query = new URLSearchParams({ categoryId });
       return json<ChatRoomListDto>(`/chat/rooms?${query.toString()}`);
@@ -677,7 +707,9 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
         query.set('after', options.after);
       }
       const suffix = query.toString();
-      return json<ChatMessagePageDto>(suffix ? `/chat/rooms/${roomId}/messages?${suffix}` : `/chat/rooms/${roomId}/messages`);
+      return json<ChatMessagePageDto>(
+        suffix ? `/chat/rooms/${roomId}/messages?${suffix}` : `/chat/rooms/${roomId}/messages`
+      );
     },
     sendChatMessage: (roomId: string, body: string, options?: { expiresInSeconds?: number | null }) => {
       const payload: { body: string; expiresInSeconds?: number } = { body };
@@ -686,7 +718,7 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
       }
       return json<ChatMessageDto>(`/chat/rooms/${roomId}/messages`, {
         method: 'POST',
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
       });
     },
     sendChatTyping: (roomId: string, isTyping: boolean) =>
@@ -695,22 +727,33 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
     // Discord adapter methods
     getDiscordStatus: () => json<DiscordBridgeStatus>('/adapters/discord/status'),
     connectDiscord: (config: { token: string; guildId: string }) =>
-      json<{ ok: boolean; status?: DiscordBridgeStatus }>('/adapters/discord/connect', { method: 'POST', body: JSON.stringify(config) }),
+      json<{ ok: boolean; status?: DiscordBridgeStatus }>('/adapters/discord/connect', {
+        method: 'POST',
+        body: JSON.stringify(config),
+      }),
     disconnectDiscord: () =>
       json<{ ok: boolean; message?: string }>('/adapters/discord/disconnect', { method: 'POST' }),
     mapDiscordChannel: (channelId: string, forumId: string) =>
-      json<{ ok: boolean; mapping: { channelId: string; forumId: string } }>('/adapters/discord/map', { method: 'POST', body: JSON.stringify({ channelId, forumId }) }),
+      json<{ ok: boolean; mapping: { channelId: string; forumId: string } }>('/adapters/discord/map', {
+        method: 'POST',
+        body: JSON.stringify({ channelId, forumId }),
+      }),
     unmapDiscordChannel: (channelId: string) =>
       json<{ ok: boolean }>(`/adapters/discord/map/${encodeURIComponent(channelId)}`, { method: 'DELETE' }),
 
     // Matrix adapter methods
     getMatrixStatus: () => json<MatrixBridgeStatus>('/adapters/matrix/status'),
     connectMatrix: (config: { homeserverUrl: string; accessToken: string; userId: string }) =>
-      json<{ ok: boolean; status?: MatrixBridgeStatus }>('/adapters/matrix/connect', { method: 'POST', body: JSON.stringify(config) }),
-    disconnectMatrix: () =>
-      json<{ ok: boolean; message?: string }>('/adapters/matrix/disconnect', { method: 'POST' }),
+      json<{ ok: boolean; status?: MatrixBridgeStatus }>('/adapters/matrix/connect', {
+        method: 'POST',
+        body: JSON.stringify(config),
+      }),
+    disconnectMatrix: () => json<{ ok: boolean; message?: string }>('/adapters/matrix/disconnect', { method: 'POST' }),
     mapMatrixRoom: (roomId: string, forumId: string) =>
-      json<{ ok: boolean; mapping: { roomId: string; forumId: string } }>('/adapters/matrix/map', { method: 'POST', body: JSON.stringify({ roomId, forumId }) }),
+      json<{ ok: boolean; mapping: { roomId: string; forumId: string } }>('/adapters/matrix/map', {
+        method: 'POST',
+        body: JSON.stringify({ roomId, forumId }),
+      }),
     unmapMatrixRoom: (roomId: string) =>
       json<{ ok: boolean }>(`/adapters/matrix/map/${encodeURIComponent(roomId)}`, { method: 'DELETE' }),
     listTopics: (
@@ -737,10 +780,10 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
         reasoningEffort?: string | null;
         attachmentsPending?: boolean;
         robotMode?: 'auto' | 'mention' | 'off';
+        autoCompactEnabled?: boolean;
         silent?: boolean;
       }
-    ) =>
-      json<TopicDto>(`/forums/${forumId}/topics`, { method: 'POST', body: JSON.stringify(payload) }),
+    ) => json<TopicDto>(`/forums/${forumId}/topics`, { method: 'POST', body: JSON.stringify(payload) }),
     getTopic: (topicId: string) => json<TopicDto>(`/topics/${topicId}`),
     generateHandoffDraft: (
       topicId: string,
@@ -752,11 +795,18 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
       ),
     createHandoff: (
       topicId: string,
-      payload: { title: string; draft: string; forumId?: string; cwd?: string | null; model?: string | null; reasoningEffort?: string | null }
+      payload: {
+        title: string;
+        draft: string;
+        forumId?: string;
+        cwd?: string | null;
+        model?: string | null;
+        reasoningEffort?: string | null;
+      }
     ) =>
       json<{ topic: TopicDto; post: PostDto }>(`/topics/${topicId}/handoff`, {
         method: 'POST',
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
       }),
     updateTopicStatus: (topicId: string, status: 'open' | 'locked' | 'archived') =>
       json<TopicDto>(`/topics/${topicId}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
@@ -764,8 +814,7 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
       json<TopicDto>(`/topics/${topicId}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
     updateTopicSticky: (topicId: string, sticky: boolean) =>
       json<TopicDto>(`/topics/${topicId}/tags`, { method: 'PATCH', body: JSON.stringify({ sticky }) }),
-    deleteTopic: (topicId: string) =>
-      json<{ ok: boolean }>(`/topics/${topicId}`, { method: 'DELETE' }),
+    deleteTopic: (topicId: string) => json<{ ok: boolean }>(`/topics/${topicId}`, { method: 'DELETE' }),
     listOperationalEvents: (topicId: string) =>
       json<{ items: TopicOperationalEventDto[] }>(`/topics/${topicId}/operational-events`),
     compactTopic: (topicId: string, payload: CreateCompactionRequestDto) =>
@@ -790,17 +839,20 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
         parentPostId?: string | null;
         model?: string;
         reasoningEffort?: string;
+        autoCompactEnabled?: boolean;
+        autoCompactRevision?: number;
         attachmentsPending?: boolean;
         silent?: boolean;
       }
-    ) =>
-      json<PostDto>(`/topics/${topicId}/posts`, { method: 'POST', body: JSON.stringify(payload) }),
+    ) => json<PostDto>(`/topics/${topicId}/posts`, { method: 'POST', body: JSON.stringify(payload) }),
     dispatchPost: (postId: string, payload: { model?: string | null; reasoningEffort?: string | null } = {}) =>
-      json<{ ok: boolean; dispatched: boolean; post: PostDto }>(`/posts/${postId}/dispatch`, { method: 'POST', body: JSON.stringify(payload) }),
+      json<{ ok: boolean; dispatched: boolean; post: PostDto }>(`/posts/${postId}/dispatch`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
     updatePost: (postId: string, payload: { body: string }) =>
       json<PostDto>(`/posts/${postId}`, { method: 'PATCH', body: JSON.stringify(payload) }),
-    deletePost: (postId: string) =>
-      json<PostDto>(`/posts/${postId}`, { method: 'DELETE' }),
+    deletePost: (postId: string) => json<PostDto>(`/posts/${postId}`, { method: 'DELETE' }),
     listIdentities: (topicId: string, opts?: { page?: number; pageSize?: number }) => {
       const params = new URLSearchParams();
       if (opts?.page) params.set('page', String(opts.page));
@@ -834,9 +886,14 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
       }
     ) => json<TopicAutoRunDto>(`/topics/${topicId}/auto-run`, { method: 'PATCH', body: JSON.stringify(input) }),
     runTopicAutoRun: (topicId: string, input?: { steerMessage?: string | null }) =>
-      json<{ ok: boolean; message?: string }>(`/topics/${topicId}/auto-run/run`, { method: 'POST', body: JSON.stringify(input ?? {}) }),
-    interruptRobot: (topicId: string) => json<{ ok: boolean; message?: string }>(`/topics/${topicId}/robot/interrupt`, { method: 'POST' }),
-    continueRobot: (topicId: string) => json<{ ok: boolean; message?: string }>(`/topics/${topicId}/robot/continue`, { method: 'POST' }),
+      json<{ ok: boolean; message?: string }>(`/topics/${topicId}/auto-run/run`, {
+        method: 'POST',
+        body: JSON.stringify(input ?? {}),
+      }),
+    interruptRobot: (topicId: string) =>
+      json<{ ok: boolean; message?: string }>(`/topics/${topicId}/robot/interrupt`, { method: 'POST' }),
+    continueRobot: (topicId: string) =>
+      json<{ ok: boolean; message?: string }>(`/topics/${topicId}/robot/continue`, { method: 'POST' }),
     getSessionByTopic: (topicId: string) => json<SessionDto | null>(`/topics/${topicId}/session`),
     inspectSession: (sessionId: string) => json<SessionInspectorDto>(`/sessions/${sessionId}/inspector`),
 
@@ -853,16 +910,13 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
       json<NotificationDto>(`/notifications/${notificationId}`, { method: 'PATCH', body: JSON.stringify({ readAt }) }),
     markAllNotificationsRead: () =>
       json<{ ok: boolean; readCount: number }>(`/notifications/mark-all-read`, { method: 'POST' }),
-    getTopicUnread: (topicId: string) =>
-      json<TopicUnreadDto>(`/topics/${topicId}/unread`),
+    getTopicUnread: (topicId: string) => json<TopicUnreadDto>(`/topics/${topicId}/unread`),
     markTopicRead: (topicId: string, input: { lastReadPostId?: string; lastReadAt?: string }) =>
       json<TopicUnreadDto>(`/topics/${topicId}/read`, { method: 'PUT', body: JSON.stringify(input) }),
-    getTopicSubscription: (topicId: string) =>
-      json<TopicSubscriptionDto>(`/topics/${topicId}/subscription`),
+    getTopicSubscription: (topicId: string) => json<TopicSubscriptionDto>(`/topics/${topicId}/subscription`),
     setTopicSubscription: (topicId: string, mode: 'watching' | 'muted' | 'off') =>
       json<TopicSubscriptionDto>(`/topics/${topicId}/subscription`, { method: 'PUT', body: JSON.stringify({ mode }) }),
-    listSubscriptions: () =>
-      json<{ items: TopicSubscriptionDto[] }>(`/me/subscriptions`),
+    listSubscriptions: () => json<{ items: TopicSubscriptionDto[] }>(`/me/subscriptions`),
 
     // User Management (Admin)
     listUsers: (page = 1, pageSize = 50) =>
@@ -871,72 +925,122 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
       json<AdminUserDto>('/admin/users', { method: 'POST', body: JSON.stringify(input) }),
     updateUser: (userId: string, input: { displayName?: string; kind?: string; password?: string }) =>
       json<AdminUserDto>(`/admin/users/${userId}`, { method: 'PATCH', body: JSON.stringify(input) }),
-    deleteUser: (userId: string) =>
-      json<{ ok: boolean }>(`/admin/users/${userId}`, { method: 'DELETE' }),
+    deleteUser: (userId: string) => json<{ ok: boolean }>(`/admin/users/${userId}`, { method: 'DELETE' }),
 
     // Invite Management (Admin)
     listInvites: (page = 1, pageSize = 50) =>
       json<PageResponse<InviteDto>>(`/invites?page=${page}&pageSize=${pageSize}`),
     createInvite: (input: { maxUses?: number; expiresInDays?: number }) =>
       json<InviteDto>('/invites', { method: 'POST', body: JSON.stringify(input) }),
-    deleteInvite: (inviteId: string) =>
-      json<{ ok: boolean }>(`/invites/${inviteId}`, { method: 'DELETE' }),
+    deleteInvite: (inviteId: string) => json<{ ok: boolean }>(`/invites/${inviteId}`, { method: 'DELETE' }),
 
     // Forum Management (Admin)
-    listAdminForums: () =>
-      json<{ items: AdminForumDto[] }>('/admin/forums'),
-    createAdminForum: (input: { name: string; description?: string | null; cwd?: string | null; prePrompt?: string | null; parentForumId?: string | null; category?: string | null; status?: 'active' | 'archived'; visibility?: 'public' | 'members' | 'admin' }) =>
-      json<AdminForumDto>('/admin/forums', { method: 'POST', body: JSON.stringify(input) }),
-    updateAdminForum: (forumId: string, input: { name?: string; description?: string | null; cwd?: string | null; prePrompt?: string | null; parentForumId?: string | null; category?: string | null; status?: 'active' | 'archived'; visibility?: 'public' | 'members' | 'admin'; archivedAt?: string | null }) =>
-      json<AdminForumDto>(`/admin/forums/${forumId}`, { method: 'PATCH', body: JSON.stringify(input) }),
-    deleteAdminForum: (forumId: string) =>
-      json<{ ok: boolean }>(`/admin/forums/${forumId}`, { method: 'DELETE' }),
+    listAdminForums: () => json<{ items: AdminForumDto[] }>('/admin/forums'),
+    createAdminForum: (input: {
+      name: string;
+      description?: string | null;
+      cwd?: string | null;
+      prePrompt?: string | null;
+      parentForumId?: string | null;
+      category?: string | null;
+      status?: 'active' | 'archived';
+      visibility?: 'public' | 'members' | 'admin';
+    }) => json<AdminForumDto>('/admin/forums', { method: 'POST', body: JSON.stringify(input) }),
+    updateAdminForum: (
+      forumId: string,
+      input: {
+        name?: string;
+        description?: string | null;
+        cwd?: string | null;
+        prePrompt?: string | null;
+        parentForumId?: string | null;
+        category?: string | null;
+        status?: 'active' | 'archived';
+        visibility?: 'public' | 'members' | 'admin';
+        archivedAt?: string | null;
+      }
+    ) => json<AdminForumDto>(`/admin/forums/${forumId}`, { method: 'PATCH', body: JSON.stringify(input) }),
+    deleteAdminForum: (forumId: string) => json<{ ok: boolean }>(`/admin/forums/${forumId}`, { method: 'DELETE' }),
     listAdminForumPersonas: (forumId: string) =>
       json<{ items: AdminRobotPersonaDto[] }>(`/admin/forums/${forumId}/personas`),
-    createAdminForumPersona: (forumId: string, input: { key: string; displayName: string; description?: string | null; accentColor?: string | null; avatarUrl?: string | null; signature?: string | null; soul?: string | null }) =>
+    createAdminForumPersona: (
+      forumId: string,
+      input: {
+        key: string;
+        displayName: string;
+        description?: string | null;
+        accentColor?: string | null;
+        avatarUrl?: string | null;
+        signature?: string | null;
+        soul?: string | null;
+      }
+    ) =>
       json<AdminRobotPersonaDto>(`/admin/forums/${forumId}/personas`, { method: 'POST', body: JSON.stringify(input) }),
-    updateAdminForumPersona: (forumId: string, key: string, input: { displayName?: string; description?: string | null; accentColor?: string | null; avatarUrl?: string | null; signature?: string | null; soul?: string | null }) =>
-      json<AdminRobotPersonaDto>(`/admin/forums/${forumId}/personas/${encodeURIComponent(key)}`, { method: 'PATCH', body: JSON.stringify(input) }),
+    updateAdminForumPersona: (
+      forumId: string,
+      key: string,
+      input: {
+        displayName?: string;
+        description?: string | null;
+        accentColor?: string | null;
+        avatarUrl?: string | null;
+        signature?: string | null;
+        soul?: string | null;
+      }
+    ) =>
+      json<AdminRobotPersonaDto>(`/admin/forums/${forumId}/personas/${encodeURIComponent(key)}`, {
+        method: 'PATCH',
+        body: JSON.stringify(input),
+      }),
     deleteAdminForumPersona: (forumId: string, key: string) =>
       json<{ ok: boolean }>(`/admin/forums/${forumId}/personas/${encodeURIComponent(key)}`, { method: 'DELETE' }),
-    listForumAccessRules: (forumId: string) =>
-      json<{ items: AccessRuleDto[] }>(`/admin/forums/${forumId}/access`),
-    createForumAccessRule: (forumId: string, input: { principalKind: 'all' | 'logged_in' | 'identity' | 'role'; principalId?: string | null; action: 'view' | 'post' | 'topic.create' | 'moderate'; effect: 'allow' | 'deny' }) =>
-      json<AccessRuleDto>(`/admin/forums/${forumId}/access`, { method: 'POST', body: JSON.stringify(input) }),
-    listTopicAccessRules: (topicId: string) =>
-      json<{ items: AccessRuleDto[] }>(`/admin/topics/${topicId}/access`),
-    createTopicAccessRule: (topicId: string, input: { principalKind: 'all' | 'logged_in' | 'identity' | 'role'; principalId?: string | null; action: 'view' | 'post' | 'topic.create' | 'moderate'; effect: 'allow' | 'deny' }) =>
-      json<AccessRuleDto>(`/admin/topics/${topicId}/access`, { method: 'POST', body: JSON.stringify(input) }),
+    listForumAccessRules: (forumId: string) => json<{ items: AccessRuleDto[] }>(`/admin/forums/${forumId}/access`),
+    createForumAccessRule: (
+      forumId: string,
+      input: {
+        principalKind: 'all' | 'logged_in' | 'identity' | 'role';
+        principalId?: string | null;
+        action: 'view' | 'post' | 'topic.create' | 'moderate';
+        effect: 'allow' | 'deny';
+      }
+    ) => json<AccessRuleDto>(`/admin/forums/${forumId}/access`, { method: 'POST', body: JSON.stringify(input) }),
+    listTopicAccessRules: (topicId: string) => json<{ items: AccessRuleDto[] }>(`/admin/topics/${topicId}/access`),
+    createTopicAccessRule: (
+      topicId: string,
+      input: {
+        principalKind: 'all' | 'logged_in' | 'identity' | 'role';
+        principalId?: string | null;
+        action: 'view' | 'post' | 'topic.create' | 'moderate';
+        effect: 'allow' | 'deny';
+      }
+    ) => json<AccessRuleDto>(`/admin/topics/${topicId}/access`, { method: 'POST', body: JSON.stringify(input) }),
     moveTopic: (topicId: string, forumId: string, opts?: { silent?: boolean }) =>
-      json<{ topic: TopicDto; move: TopicMoveDto }>(`/admin/topics/${topicId}/move`, { method: 'POST', body: JSON.stringify({ forumId, ...(opts?.silent !== undefined ? { silent: opts.silent } : {}) }) }),
-    deleteAccessRule: (ruleId: string) =>
-      json<{ ok: boolean }>(`/admin/access/${ruleId}`, { method: 'DELETE' }),
+      json<{ topic: TopicDto; move: TopicMoveDto }>(`/admin/topics/${topicId}/move`, {
+        method: 'POST',
+        body: JSON.stringify({ forumId, ...(opts?.silent !== undefined ? { silent: opts.silent } : {}) }),
+      }),
+    deleteAccessRule: (ruleId: string) => json<{ ok: boolean }>(`/admin/access/${ruleId}`, { method: 'DELETE' }),
 
     // Pi session sync health (Admin)
-    getPiSyncHealth: () =>
-      json<PiSyncHealth>('/admin/pi-sync/health'),
-    runPiSync: () =>
-      json<PiSyncRunResponse>('/admin/pi-sync/run', { method: 'POST' }),
+    getPiSyncHealth: () => json<PiSyncHealth>('/admin/pi-sync/health'),
+    runPiSync: () => json<PiSyncRunResponse>('/admin/pi-sync/run', { method: 'POST' }),
     runPiSessionSync: (piSessionId: string) =>
       json<PiSyncRunResponse>(`/admin/pi-sync/sessions/${encodeURIComponent(piSessionId)}/run`, { method: 'POST' }),
     backfillPiSyncAnomaly: (anomalyId: string, opts?: { bumpTopic?: boolean }) =>
       json<PiSyncBackfillResponse>(`/admin/pi-sync/anomalies/${encodeURIComponent(anomalyId)}/backfill`, {
         method: 'POST',
-        body: JSON.stringify(opts ?? {})
+        body: JSON.stringify(opts ?? {}),
       }),
     ignorePiSyncAnomaly: (anomalyId: string, opts?: { note?: string | null }) =>
       json<PiSyncBackfillResponse>(`/admin/pi-sync/anomalies/${encodeURIComponent(anomalyId)}/ignore`, {
         method: 'POST',
-        body: JSON.stringify(opts ?? {})
+        body: JSON.stringify(opts ?? {}),
       }),
 
     // Deploy Management (Admin)
-    getDeployStatus: () =>
-      json<AdminDeployStatus>('/admin/deploy/status'),
-    triggerDeploy: () =>
-      json<AdminDeployResponse>('/admin/deploy', { method: 'POST' }),
-    triggerDeployOnFinish: () =>
-      json<AdminDeployOnFinishResponse>('/admin/deploy/on-finish', { method: 'POST' }),
+    getDeployStatus: () => json<AdminDeployStatus>('/admin/deploy/status'),
+    triggerDeploy: () => json<AdminDeployResponse>('/admin/deploy', { method: 'POST' }),
+    triggerDeployOnFinish: () => json<AdminDeployOnFinishResponse>('/admin/deploy/on-finish', { method: 'POST' }),
     cancelDeployOnFinish: () =>
       json<AdminCancelDeployOnFinishResponse>('/admin/deploy/on-finish/cancel', { method: 'POST' }),
 
@@ -948,10 +1052,8 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
     },
 
     // Robot automations (Admin)
-    listRobotAutomations: () =>
-      json<{ items: RobotAutomationDto[] }>('/admin/robot/automations'),
-    getRobotDashboard: () =>
-      json<RobotDashboardDto>('/admin/robot/dashboard'),
+    listRobotAutomations: () => json<{ items: RobotAutomationDto[] }>('/admin/robot/automations'),
+    getRobotDashboard: () => json<RobotDashboardDto>('/admin/robot/dashboard'),
     updateRobotSettings: (input: { maxConcurrentTurns?: number }) =>
       json<{ maxConcurrentTurns: number }>('/admin/robot/settings', { method: 'PATCH', body: JSON.stringify(input) }),
     createRobotAutomation: (input: {
@@ -964,8 +1066,7 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
       reasoningEffort?: string | null;
       runMode?: 'manual' | 'interval';
       intervalMinutes?: number | null;
-    }) =>
-      json<RobotAutomationDto>('/admin/robot/automations', { method: 'POST', body: JSON.stringify(input) }),
+    }) => json<RobotAutomationDto>('/admin/robot/automations', { method: 'POST', body: JSON.stringify(input) }),
     updateRobotAutomation: (
       automationId: string,
       input: {
@@ -980,7 +1081,10 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
         intervalMinutes?: number | null;
       }
     ) =>
-      json<RobotAutomationDto>(`/admin/robot/automations/${automationId}`, { method: 'PATCH', body: JSON.stringify(input) }),
+      json<RobotAutomationDto>(`/admin/robot/automations/${automationId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(input),
+      }),
     deleteRobotAutomation: (automationId: string) =>
       json<{ ok: boolean }>(`/admin/robot/automations/${automationId}`, { method: 'DELETE' }),
     runRobotAutomation: (automationId: string) =>
@@ -989,10 +1093,8 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
       json<{ items: RobotAutomationRunDto[] }>(`/admin/robot/automations/${automationId}/runs`),
 
     // Tamper Layer (Admin)
-    listAdminSkills: () =>
-      json<AdminSkillListResponseDto>('/admin/skills'),
-    listTamperPlugins: () =>
-      json<{ items: TamperPluginDto[] }>('/admin/tampers/plugins'),
+    listAdminSkills: () => json<AdminSkillListResponseDto>('/admin/skills'),
+    listTamperPlugins: () => json<{ items: TamperPluginDto[] }>('/admin/tampers/plugins'),
     listTamperConfigs: (forumId?: string | null) => {
       const query = forumId ? `?forumId=${encodeURIComponent(forumId)}` : '';
       return json<{ items: TamperConfigDto[] }>(`/admin/tampers${query}`);
@@ -1005,8 +1107,7 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
       direction?: 'inbound' | 'outbound' | 'both' | null;
       onlyFirstMessage?: boolean | null;
       config?: Record<string, unknown> | null;
-    }) =>
-      json<TamperConfigDto>('/admin/tampers', { method: 'POST', body: JSON.stringify(input) }),
+    }) => json<TamperConfigDto>('/admin/tampers', { method: 'POST', body: JSON.stringify(input) }),
     updateTamperConfig: (
       configId: string,
       input: {
@@ -1017,10 +1118,8 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
         onlyFirstMessage?: boolean | null;
         config?: Record<string, unknown> | null;
       }
-    ) =>
-      json<TamperConfigDto>(`/admin/tampers/${configId}`, { method: 'PATCH', body: JSON.stringify(input) }),
-    deleteTamperConfig: (configId: string) =>
-      json<{ ok: boolean }>(`/admin/tampers/${configId}`, { method: 'DELETE' }),
+    ) => json<TamperConfigDto>(`/admin/tampers/${configId}`, { method: 'PATCH', body: JSON.stringify(input) }),
+    deleteTamperConfig: (configId: string) => json<{ ok: boolean }>(`/admin/tampers/${configId}`, { method: 'DELETE' }),
     testTamper: (input: {
       text: string;
       forumId?: string | null;
@@ -1030,8 +1129,7 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
       pluginConfig?: Record<string, unknown> | null;
       onlyPlugin?: boolean;
       isFirstMessage?: boolean;
-    }) =>
-      json<TamperTestResultDto>('/admin/tampers/test', { method: 'POST', body: JSON.stringify(input) })
+    }) => json<TamperTestResultDto>('/admin/tampers/test', { method: 'POST', body: JSON.stringify(input) }),
   };
 
   const createStateStream = (topicId: string): EventSource => {

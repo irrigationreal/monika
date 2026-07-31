@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+
+import AutoCompactOption from '../components/AutoCompactOption.vue';
+import MessageTemplatePicker from '../components/MessageTemplatePicker.vue';
 import { useForumState } from '../composables/useForumState';
 import { useMarkdown } from '../composables/useMarkdown';
-import MessageTemplatePicker from '../components/MessageTemplatePicker.vue';
 import { applyTemplateToTextarea } from '../composables/useMessageTemplateInsertion';
+
 import type { MessageTemplateDto } from '../lib/apiClient';
 
 const router = useRouter();
@@ -24,11 +27,15 @@ const replyFiles = ref<File[]>([]);
 const selectedModel = ref(state.lastReplyModel.value ?? '');
 const selectedReasoning = ref(state.lastReplyReasoning.value ?? 'medium');
 const replyModels = computed(() => state.allModelOptions.value);
-const effectiveSelectedModel = computed(() => selectedModel.value || (state.robotState.value as any)?.model || state.defaultModel.value || '');
+const effectiveSelectedModel = computed(
+  () => selectedModel.value || (state.robotState.value as any)?.model || state.defaultModel.value || ''
+);
 const supportsReasoning = computed(() => state.modelSupportsReasoning(effectiveSelectedModel.value));
 const sessionContext = computed(() => state.sessionContext.value);
 const replyReasoningOptions = computed(() => state.modelReasoningOptions(effectiveSelectedModel.value));
 const silentPost = ref(false);
+const isAdmin = computed(() => state.currentUser.value?.kind === 'admin');
+const autoCompactEnabled = ref(false);
 const CHUNKED_THRESHOLD_BYTES = 90 * 1024 * 1024;
 
 const autoRun = computed(() => state.topicAutoRun.value);
@@ -41,10 +48,7 @@ const autoRunReasoning = ref('');
 const autoRunMaxReplies = ref(20);
 const autoRunSteerMessage = ref('');
 const autoRunModelOptions = computed(() => {
-  return [
-    { value: '', label: 'Default' },
-    ...replyModels.value.map((model) => ({ value: model, label: model }))
-  ];
+  return [{ value: '', label: 'Default' }, ...replyModels.value.map((model) => ({ value: model, label: model }))];
 });
 const showAutoRunReasoning = computed(() => state.modelSupportsReasoning(autoRunModel.value));
 const autoRunReasoningOptions = computed(() => state.modelReasoningOptions(autoRunModel.value));
@@ -181,7 +185,7 @@ async function saveAutoRun(): Promise<void> {
     worker: autoRunWorker.value,
     model: autoRunModel.value.trim() || null,
     reasoningEffort: showAutoRunReasoning.value ? autoRunReasoning.value.trim() || null : null,
-    maxReplies: autoRunMaxReplies.value
+    maxReplies: autoRunMaxReplies.value,
   });
 }
 
@@ -211,7 +215,13 @@ async function handleSubmit(): Promise<void> {
       silent: silentPost.value,
       model: effectiveSelectedModel.value,
       reasoningEffort: supportsReasoning.value ? selectedReasoning.value : null,
-      attachmentsPending
+      ...(isAdmin.value
+        ? {
+            autoCompactEnabled: autoCompactEnabled.value,
+            autoCompactRevision: state.selectedTopic.value?.autoCompactRevision,
+          }
+        : {}),
+      attachmentsPending,
     });
 
     if (replyFiles.value.length > 0) {
@@ -222,7 +232,7 @@ async function handleSubmit(): Promise<void> {
       if (attachmentsPending) {
         await state.dispatchPost(post.id, {
           model: effectiveSelectedModel.value,
-          reasoningEffort: supportsReasoning.value ? selectedReasoning.value : null
+          reasoningEffort: supportsReasoning.value ? selectedReasoning.value : null,
         });
       }
       replyFiles.value = [];
@@ -234,7 +244,7 @@ async function handleSubmit(): Promise<void> {
       name: 'topic.view',
       params: { topicId: post.topicId },
       query: { page: String(lastPage) },
-      hash: `#${lastIndex}`
+      hash: `#${lastIndex}`,
     });
   } catch (err) {
     errorMessage.value = err instanceof Error ? err.message : 'Failed to post reply.';
@@ -277,11 +287,21 @@ function syncSelectionFromQuery(): void {
   selectedReasoning.value = normalizeReasoning(effectiveSelectedModel.value, selectedReasoning.value);
 }
 
-watch(routeTopicId, async (topicId) => {
-  if (topicId) {
-    await loadTopic(topicId);
-  }
-}, { immediate: true });
+watch(
+  routeTopicId,
+  async (topicId) => {
+    if (topicId) await loadTopic(topicId);
+  },
+  { immediate: true }
+);
+
+watch(
+  () => state.selectedTopic.value?.autoCompactEnabled,
+  (enabled) => {
+    autoCompactEnabled.value = Boolean(enabled);
+  },
+  { immediate: true }
+);
 
 watch(
   autoRun,
@@ -342,9 +362,7 @@ onMounted(async () => {
 
 <template>
   <section class="vb-section vb-fade-in">
-    <div class="vb-table-header">
-      Post Reply
-    </div>
+    <div class="vb-table-header">Post Reply</div>
 
     <div class="vb-newthread-container">
       <div class="vb-forum-banner">
@@ -358,12 +376,9 @@ onMounted(async () => {
       <div v-if="!state.isLoggedIn.value" class="vb-login-notice">
         You must be logged in to reply.
         <template v-if="state.canShowRegisterLink.value">
-          <router-link to="/login">Log in</router-link> or
-          <router-link to="/register">register</router-link>.
+          <router-link to="/login">Log in</router-link> or <router-link to="/register">register</router-link>.
         </template>
-        <template v-else>
-          <router-link to="/login">Log in</router-link>.
-        </template>
+        <template v-else> <router-link to="/login">Log in</router-link>. </template>
       </div>
 
       <div v-if="errorMessage" class="vb-login-error">
@@ -379,15 +394,28 @@ onMounted(async () => {
               <input type="checkbox" v-model="autoRunEnabled" :disabled="!canEditAutoRun || autoRunBusy" />
               <span>Enabled</span>
             </label>
-            <button class="vb-small-btn" type="button" :disabled="!canEditAutoRun || autoRunBusy" @click="saveAutoRun">Save</button>
-            <button class="vb-small-btn" type="button" :disabled="!canEditAutoRun || autoRunBusy || !autoRunEnabled" @click="runAutoRunDirector">Run</button>
+            <button class="vb-small-btn" type="button" :disabled="!canEditAutoRun || autoRunBusy" @click="saveAutoRun">
+              Save
+            </button>
+            <button
+              class="vb-small-btn"
+              type="button"
+              :disabled="!canEditAutoRun || autoRunBusy || !autoRunEnabled"
+              @click="runAutoRunDirector"
+            >
+              Run
+            </button>
           </div>
         </div>
         <div class="vb-robot-body">
           <div class="vb-state-row">
-            <div><strong>Replies:</strong> {{ autoRun?.replyCount ?? 0 }} / {{ autoRun?.maxReplies ?? autoRunMaxReplies }}</div>
+            <div>
+              <strong>Replies:</strong> {{ autoRun?.replyCount ?? 0 }} / {{ autoRun?.maxReplies ?? autoRunMaxReplies }}
+            </div>
             <div><strong>Last Run:</strong> {{ autoRun?.lastRunAt ? state.formatDate(autoRun.lastRunAt) : 'n/a' }}</div>
-            <div><strong>Last Reply:</strong> {{ autoRun?.lastReplyAt ? state.formatDate(autoRun.lastReplyAt) : 'n/a' }}</div>
+            <div>
+              <strong>Last Reply:</strong> {{ autoRun?.lastReplyAt ? state.formatDate(autoRun.lastReplyAt) : 'n/a' }}
+            </div>
           </div>
           <div v-if="state.autoRunError.value" class="vb-error">{{ state.autoRunError.value }}</div>
           <div v-if="autoRun?.lastNotes" class="vb-note">
@@ -450,7 +478,12 @@ onMounted(async () => {
             :disabled="!canEditAutoRun || autoRunBusy"
             placeholder="Add a one-off steering note for the director."
           ></textarea>
-          <button class="vb-btn" type="button" :disabled="!canEditAutoRun || autoRunBusy || !autoRunEnabled" @click="runAutoRunDirector">
+          <button
+            class="vb-btn"
+            type="button"
+            :disabled="!canEditAutoRun || autoRunBusy || !autoRunEnabled"
+            @click="runAutoRunDirector"
+          >
             {{ autoRunBusy ? 'Running...' : 'Run Director' }}
           </button>
         </div>
@@ -465,16 +498,26 @@ onMounted(async () => {
           <div class="vb-form-section-header">Message</div>
           <div class="vb-form-section-body">
             <div class="vb-editor-toolbar">
-              <button type="button" class="vb-editor-btn" title="Bold" @click="insertBBCode('b')"><strong>B</strong></button>
+              <button type="button" class="vb-editor-btn" title="Bold" @click="insertBBCode('b')">
+                <strong>B</strong>
+              </button>
               <button type="button" class="vb-editor-btn" title="Italic" @click="insertBBCode('i')"><em>I</em></button>
               <button type="button" class="vb-editor-btn" title="Underline" @click="insertBBCode('u')"><u>U</u></button>
-              <button type="button" class="vb-editor-btn" title="Strikethrough" @click="insertBBCode('s')"><s>S</s></button>
+              <button type="button" class="vb-editor-btn" title="Strikethrough" @click="insertBBCode('s')">
+                <s>S</s>
+              </button>
               <span class="vb-toolbar-divider"></span>
-              <button type="button" class="vb-editor-btn" title="Insert Link" @click="insertBBCode('url')">&#128279;</button>
-              <button type="button" class="vb-editor-btn" title="Insert Image" @click="insertBBCode('img')">&#128247;</button>
+              <button type="button" class="vb-editor-btn" title="Insert Link" @click="insertBBCode('url')">
+                &#128279;
+              </button>
+              <button type="button" class="vb-editor-btn" title="Insert Image" @click="insertBBCode('img')">
+                &#128247;
+              </button>
               <span class="vb-toolbar-divider"></span>
               <button type="button" class="vb-editor-btn" title="Quote" @click="insertBBCode('quote')">&#10077;</button>
-              <button type="button" class="vb-editor-btn" title="Code" @click="insertBBCode('code')">&#60;/&#62;</button>
+              <button type="button" class="vb-editor-btn" title="Code" @click="insertBBCode('code')">
+                &#60;/&#62;
+              </button>
               <button type="button" class="vb-editor-btn" title="List" @click="insertBBCode('list')">&#9776;</button>
             </div>
 
@@ -504,7 +547,13 @@ onMounted(async () => {
 
             <div class="vb-reply-attachments">
               <label class="vb-attachment-label">Attachments:</label>
-              <input class="vb-attachment-input" type="file" multiple @change="handleReplyFiles" :disabled="state.isTopicLocked()" />
+              <input
+                class="vb-attachment-input"
+                type="file"
+                multiple
+                @change="handleReplyFiles"
+                :disabled="state.isTopicLocked()"
+              />
               <div v-if="replyFiles.length > 0" class="vb-attachment-selected">
                 <span>Selected:</span>
                 <ul>
@@ -567,15 +616,28 @@ onMounted(async () => {
                     </option>
                   </select>
                 </div>
-                <span v-if="robotMode === 'mention'" class="vb-reply-options-callout">Robot replies only when @robot is included.</span>
-                <span v-else-if="robotMode === 'off'" class="vb-reply-options-callout">Robot replies are disabled for this thread.</span>
+                <span v-if="robotMode === 'mention'" class="vb-reply-options-callout"
+                  >Robot replies only when @robot is included.</span
+                >
+                <span v-else-if="robotMode === 'off'" class="vb-reply-options-callout"
+                  >Robot replies are disabled for this thread.</span
+                >
               </div>
+              <AutoCompactOption v-model="autoCompactEnabled" :can-edit="isAdmin" :busy="isRobotBusy" />
               <div v-if="sessionContext" class="vb-reply-context-meter">
                 <strong>Context:</strong>
-                <span v-if="sessionContext.usedTokens !== null && sessionContext.contextWindowTokens" class="vb-context-value">
-                  {{ formatTokenCount(sessionContext.usedTokens) }} / {{ formatTokenCount(sessionContext.contextWindowTokens) }}
-                  <span v-if="typeof sessionContext.percent === 'number'">({{ sessionContext.percent.toFixed(1) }}%)</span>
-                  <span v-if="!sessionContext.exact" class="vb-context-warning">best Pi usage; not exact current context</span>
+                <span
+                  v-if="sessionContext.usedTokens !== null && sessionContext.contextWindowTokens"
+                  class="vb-context-value"
+                >
+                  {{ formatTokenCount(sessionContext.usedTokens) }} /
+                  {{ formatTokenCount(sessionContext.contextWindowTokens) }}
+                  <span v-if="typeof sessionContext.percent === 'number'"
+                    >({{ sessionContext.percent.toFixed(1) }}%)</span
+                  >
+                  <span v-if="!sessionContext.exact" class="vb-context-warning"
+                    >best Pi usage; not exact current context</span
+                  >
                 </span>
                 <span v-else>usage unavailable</span>
                 <span v-if="sessionContext.model" class="vb-context-model">· {{ sessionContext.model }}</span>
@@ -587,7 +649,15 @@ onMounted(async () => {
         <div class="vb-form-actions">
           <button class="vb-btn vb-btn-primary" :disabled="!canSubmit || state.isTopicLocked()" @click="handleSubmit">
             <span v-if="isSubmitting" class="vb-btn-spinner"></span>
-            {{ isUploading ? 'Uploading...' : (isSubmitting ? 'Posting...' : (willSteerRobot ? 'Steer Reply' : 'Submit Reply')) }}
+            {{
+              isUploading
+                ? 'Uploading...'
+                : isSubmitting
+                  ? 'Posting...'
+                  : willSteerRobot
+                    ? 'Steer Reply'
+                    : 'Submit Reply'
+            }}
           </button>
           <button class="vb-btn" @click="handlePreviewButton">Preview Reply</button>
           <button class="vb-btn vb-btn-secondary" @click="handleCancel">Cancel</button>
@@ -602,7 +672,8 @@ onMounted(async () => {
               <li>You <strong>may</strong> use BBCode formatting</li>
             </ul>
             <div class="vb-bbcode-legend">
-              <strong>BBCode:</strong> [B]bold[/B], [I]italic[/I], [U]underline[/U], [URL]link[/URL], [IMG]image[/IMG], [QUOTE]quote[/QUOTE], [CODE]code[/CODE]
+              <strong>BBCode:</strong> [B]bold[/B], [I]italic[/I], [U]underline[/U], [URL]link[/URL], [IMG]image[/IMG],
+              [QUOTE]quote[/QUOTE], [CODE]code[/CODE]
             </div>
           </div>
         </div>
@@ -619,8 +690,14 @@ onMounted(async () => {
 }
 
 @keyframes fade-in {
-  from { opacity: 0; transform: translateY(-10px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .vb-forum-banner {

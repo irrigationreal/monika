@@ -17,8 +17,8 @@ import type {
   ModelInfoDto,
   PostDto,
   RecentPostDto,
-  RegistrationModeDto,
   RegisterResponseDto,
+  RegistrationModeDto,
   RobotPersonaDto,
   RobotStateDto,
   SessionContextDto,
@@ -31,9 +31,7 @@ import type {
 import type { ReasoningStep } from '../lib/reasoning';
 
 export type TraceSegment =
-  | { kind: 'reasoning'; text: string }
-  | { kind: 'assistant_text'; text: string }
-  | { kind: 'tool'; toolRunId: string };
+  { kind: 'reasoning'; text: string } | { kind: 'assistant_text'; text: string } | { kind: 'tool'; toolRunId: string };
 
 const forums = ref<ForumDto[]>([]);
 const archivedForums = ref<ForumDto[]>([]);
@@ -106,7 +104,7 @@ const registrationSettings = ref<RegistrationModeDto>({
   mode: 'disabled',
   registrationEnabled: false,
   inviteRegistrationEnabled: false,
-  publicRegistrationEnabled: false
+  publicRegistrationEnabled: false,
 });
 const registrationSettingsLoading = ref(false);
 const registrationSettingsError = ref<string | null>(null);
@@ -199,11 +197,10 @@ function syncToolActivity(toolRuns: RobotStateDto['recentToolRuns']): void {
   for (const run of runsOldestFirst) {
     const id = `tool:${run.id}`;
     const existing = activityLog.value.find((event) => event.type === 'tool_run' && event.id === id) as
-      | Extract<RobotActivityEvent, { type: 'tool_run' }>
-      | undefined;
+      Extract<RobotActivityEvent, { type: 'tool_run' }> | undefined;
     if (existing) {
       // Immutable update so Vue re-triggers computed dependencies
-      activityLog.value = activityLog.value.map(e =>
+      activityLog.value = activityLog.value.map((e) =>
         e.type === 'tool_run' && e.id === id ? { ...e, toolRun: run } : e
       );
       continue;
@@ -296,7 +293,8 @@ export function useForumState() {
   };
 
   const defaultModel = computed(() => {
-    const catalogDefault = (modelCatalog.value as any)?.defaultModel ?? (modelCatalog.value as any)?.default_model ?? null;
+    const catalogDefault =
+      (modelCatalog.value as any)?.defaultModel ?? (modelCatalog.value as any)?.default_model ?? null;
     return catalogDefault || modelItems.value[0]?.id || null;
   });
 
@@ -928,7 +926,11 @@ export function useForumState() {
       syncToolActivity(payload.recentToolRuns);
       // If we have tool runs from the server but no committed segments yet
       // (reconnect/refresh mid-turn), reconstruct from server state.
-      if (committedSegments.value.length === 0 && payload.recentToolRuns.length > 0 && shouldReconstructTraceFromState(payload)) {
+      if (
+        committedSegments.value.length === 0 &&
+        payload.recentToolRuns.length > 0 &&
+        shouldReconstructTraceFromState(payload)
+      ) {
         reconstructSegmentsFromState(payload);
       }
       syncReasoningActivity();
@@ -986,6 +988,9 @@ export function useForumState() {
       }
     });
     stream.addEventListener('assistant_error', () => {
+      if (isActiveTopic(topicId)) void loadOperationalEvents(topicId);
+    });
+    stream.addEventListener('operational_event', () => {
       if (isActiveTopic(topicId)) void loadOperationalEvents(topicId);
     });
     stream.addEventListener('assistant_message', () => {
@@ -1155,6 +1160,7 @@ export function useForumState() {
       attachmentsPending?: boolean;
       silent?: boolean;
       robotMode?: 'auto' | 'mention' | 'off';
+      autoCompactEnabled?: boolean;
     }
   ): Promise<TopicDto> {
     if (!selectedForumId.value) {
@@ -1169,6 +1175,7 @@ export function useForumState() {
         model?: string | null;
         reasoningEffort?: string | null;
         robotMode?: 'auto' | 'mention' | 'off';
+        autoCompactEnabled?: boolean;
         attachmentsPending?: boolean;
         silent?: boolean;
       } = {
@@ -1178,6 +1185,7 @@ export function useForumState() {
       if (options?.robotMode) {
         payload.robotMode = options.robotMode;
       }
+      if (options?.autoCompactEnabled !== undefined) payload.autoCompactEnabled = options.autoCompactEnabled;
       if (options?.attachmentsPending) {
         payload.attachmentsPending = true;
       }
@@ -1200,7 +1208,14 @@ export function useForumState() {
 
   async function createPost(
     body: string,
-    options?: { model?: string; reasoningEffort?: string; attachmentsPending?: boolean; silent?: boolean }
+    options?: {
+      model?: string;
+      reasoningEffort?: string;
+      autoCompactEnabled?: boolean;
+      autoCompactRevision?: number;
+      attachmentsPending?: boolean;
+      silent?: boolean;
+    }
   ): Promise<PostDto> {
     if (!selectedTopic.value) {
       throw new Error('No topic selected');
@@ -1212,9 +1227,15 @@ export function useForumState() {
         body: string;
         model?: string;
         reasoningEffort?: string;
+        autoCompactEnabled?: boolean;
+        autoCompactRevision?: number;
         attachmentsPending?: boolean;
         silent?: boolean;
       } = { body };
+      if (options?.autoCompactEnabled !== undefined || options?.autoCompactRevision !== undefined) {
+        payload.autoCompactEnabled = options.autoCompactEnabled;
+        payload.autoCompactRevision = options.autoCompactRevision;
+      }
       if (options?.attachmentsPending) {
         payload.attachmentsPending = true;
       }
@@ -1224,7 +1245,25 @@ export function useForumState() {
         if (options?.model !== undefined) payload.model = options.model;
         if (options?.reasoningEffort !== undefined) payload.reasoningEffort = options.reasoningEffort;
       }
-      const post = await api.createPost(selectedTopic.value.id, payload);
+      const topicId = selectedTopic.value.id;
+      const priorAutoCompactEnabled = selectedTopic.value.autoCompactEnabled;
+      const post = await api.createPost(topicId, payload);
+      if (options?.autoCompactEnabled !== undefined && options.autoCompactEnabled !== priorAutoCompactEnabled) {
+        const currentTopic = selectedTopic.value;
+        if (currentTopic) {
+          selectedTopic.value = {
+            ...currentTopic,
+            autoCompactEnabled: options.autoCompactEnabled,
+            autoCompactRevision: currentTopic.autoCompactRevision + 1,
+          };
+        }
+        void api
+          .getTopic(topicId)
+          .then((topic) => {
+            if (selectedTopic.value?.id === topicId) selectedTopic.value = topic;
+          })
+          .catch(() => {});
+      }
       if (!options?.silent) {
         rememberReplyOptions(options);
       }

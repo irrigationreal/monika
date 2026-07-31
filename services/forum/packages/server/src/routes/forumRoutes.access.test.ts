@@ -1,16 +1,17 @@
-import Fastify from 'fastify';
 import sensible from '@fastify/sensible';
 import Database from 'better-sqlite3';
+import Fastify from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { migrate } from '../db';
-import { ForumStore } from '../store';
-import { createCoreServices } from '../core/services';
+
 import { ForumQueries } from '../core/queries';
 import { ForumStoreRuntime } from '../core/runtime';
+import { createCoreServices } from '../core/services';
+import { migrate } from '../db';
 import { SqliteStatsReadModel } from '../readModels/statsReadModel';
+import { ForumStore } from '../store';
+import { createStreamBus } from '../streamBus';
 import { createAccessHelpers } from '../utils/access';
 import { registerForumRoutes } from './forumRoutes';
-import { createStreamBus } from '../streamBus';
 
 describe('Forum routes access controls', () => {
   let db: Database.Database;
@@ -35,7 +36,7 @@ describe('Forum routes access controls', () => {
     const codex = {
       sendUserMessage: vi.fn(async () => {}),
       steerUserMessage: vi.fn(async () => {}),
-      isThreadLoaded: vi.fn(async () => false)
+      isThreadLoaded: vi.fn(async () => false),
     } as any;
     const core = createCoreServices(db);
     const queries = new ForumQueries(db);
@@ -54,7 +55,7 @@ describe('Forum routes access controls', () => {
       bus,
       compactionService,
       access,
-      webIdentityId: store.createIdentity('web', 'human').id
+      webIdentityId: store.createIdentity('web', 'human').id,
     });
     await app.ready();
     return app;
@@ -64,7 +65,12 @@ describe('Forum routes access controls', () => {
     const app = await buildApp();
     const forum = store.createForum('Forum', null, null, null, null, 'active', 'public');
     const robot = store.createIdentity('Monika', 'robot');
-    const { topic, post } = store.createTopic({ forumId: forum.id, title: 'Topic', body: 'starter', authorId: robot.id });
+    const { topic, post } = store.createTopic({
+      forumId: forum.id,
+      title: 'Topic',
+      body: 'starter',
+      authorId: robot.id,
+    });
     const session = store.ensureSession({ topicId: topic.id });
     store.createPlan({
       topicId: topic.id,
@@ -72,7 +78,7 @@ describe('Forum routes access controls', () => {
       content: 'secret plan content',
       summary: 'secret plan summary',
       parentPostId: post.id,
-      visibility: 'internal'
+      visibility: 'internal',
     });
     store.createToolRun({
       topicId: topic.id,
@@ -81,7 +87,7 @@ describe('Forum routes access controls', () => {
       parentPostId: post.id,
       command: 'cat /secret/path',
       outputSummary: 'secret output',
-      visibility: 'internal'
+      visibility: 'internal',
     });
 
     const res = await app.inject({ method: 'GET', url: `/topics/${topic.id}/posts` });
@@ -102,14 +108,30 @@ describe('Forum routes access controls', () => {
     const forum = store.createForum('Forum', null, null, null, null, 'active', 'public');
     const author = store.createIdentity('Author', 'human');
     store.createAuthSession('member-token', author.id);
-    const { topic, post } = store.createTopic({ forumId: forum.id, title: 'Topic', body: 'starter', authorId: author.id });
+    const { topic, post } = store.createTopic({
+      forumId: forum.id,
+      title: 'Topic',
+      body: 'starter',
+      authorId: author.id,
+    });
     store.createTopicOperationalEvent({
-      topicId: topic.id, anchorPostId: post.id, type: 'turn_error', category: 'assistant', status: 'failed',
-      summary: 'Assistant response failed.', detail: { error: 'private stack trace' }, sourceKind: 'echs_turn', sourceId: 'evt-1'
+      topicId: topic.id,
+      anchorPostId: post.id,
+      type: 'turn_error',
+      category: 'assistant',
+      status: 'failed',
+      summary: 'Assistant response failed.',
+      detail: { error: 'private stack trace' },
+      sourceKind: 'echs_turn',
+      sourceId: 'evt-1',
     });
 
     const guest = await app.inject({ method: 'GET', url: `/topics/${topic.id}/operational-events` });
-    const member = await app.inject({ method: 'GET', url: `/topics/${topic.id}/operational-events`, headers: { authorization: 'Bearer member-token' } });
+    const member = await app.inject({
+      method: 'GET',
+      url: `/topics/${topic.id}/operational-events`,
+      headers: { authorization: 'Bearer member-token' },
+    });
     expect(guest.json().items[0].detail).toBeNull();
     expect(JSON.stringify(guest.json())).not.toContain('private stack trace');
     expect(member.json().items[0].detail).toEqual({ error: 'private stack trace' });
@@ -124,7 +146,12 @@ describe('Forum routes access controls', () => {
     const { topic } = store.createTopic({ forumId: forum.id, title: 'Topic', body: 'starter', authorId: human.id });
     const payload = { operationId: 'op', confirmation: 'COMPACT', recoveryPrompt: 'recover' };
     const guest = await app.inject({ method: 'POST', url: `/topics/${topic.id}/compactions`, payload });
-    const member = await app.inject({ method: 'POST', url: `/topics/${topic.id}/compactions`, headers: { authorization: 'Bearer human-token' }, payload });
+    const member = await app.inject({
+      method: 'POST',
+      url: `/topics/${topic.id}/compactions`,
+      headers: { authorization: 'Bearer human-token' },
+      payload,
+    });
     expect(guest.statusCode).toBe(401);
     expect(member.statusCode).toBe(403);
     expect(compact).not.toHaveBeenCalled();
@@ -139,16 +166,92 @@ describe('Forum routes access controls', () => {
     const createTopicRes = await app.inject({
       method: 'POST',
       url: `/forums/${forum.id}/topics`,
-      payload: { title: 'New topic', body: 'hello' }
+      payload: { title: 'New topic', body: 'hello' },
     });
     expect(createTopicRes.statusCode).toBe(401);
 
     const createPostRes = await app.inject({
       method: 'POST',
       url: `/topics/${topic.id}/posts`,
-      payload: { body: 'reply' }
+      payload: { body: 'reply' },
     });
     expect(createPostRes.statusCode).toBe(401);
+  });
+
+  it('keeps auto-compaction admin-only, revisioned, and idle-only', async () => {
+    const app = await buildApp();
+    const forum = store.createForum('Forum', null, null, null, null, 'active', 'public');
+    const admin = store.createIdentity('Admin', 'admin');
+    const human = store.createIdentityWithPassword('Human', 'human', 'pw-hash', 'human');
+    store.createAuthSession('admin-token', admin.id);
+    store.createAuthSession('human-token', human.id);
+
+    const denied = await app.inject({
+      method: 'POST',
+      url: `/forums/${forum.id}/topics`,
+      headers: { authorization: 'Bearer human-token' },
+      payload: { title: 'Denied', body: 'starter', autoCompactEnabled: true },
+    });
+    expect(denied.statusCode).toBe(403);
+    const created = await app.inject({
+      method: 'POST',
+      url: `/forums/${forum.id}/topics`,
+      headers: { authorization: 'Bearer admin-token' },
+      payload: { title: 'Enabled', body: 'starter', autoCompactEnabled: true, silent: true },
+    });
+    expect(created.json()).toMatchObject({ autoCompactEnabled: true, autoCompactRevision: 0 });
+    const topicId = created.json().id as string;
+    const session = store.ensureSession({ topicId });
+    store.upsertRobotState({ topicId, sessionId: session.id, activity: 'idle' });
+
+    const staleNoop = await app.inject({
+      method: 'POST',
+      url: `/topics/${topicId}/posts`,
+      headers: { authorization: 'Bearer admin-token' },
+      payload: { body: 'stale noop', autoCompactEnabled: true, autoCompactRevision: 9, silent: true },
+    });
+    expect(staleNoop.statusCode).toBe(200);
+    const stale = await app.inject({
+      method: 'POST',
+      url: `/topics/${topicId}/posts`,
+      headers: { authorization: 'Bearer admin-token' },
+      payload: { body: 'stale', autoCompactEnabled: false, autoCompactRevision: 9, silent: true },
+    });
+    expect(stale.statusCode).toBe(409);
+    store.upsertRobotState({ topicId, sessionId: session.id, activity: 'thinking' });
+    const busy = await app.inject({
+      method: 'POST',
+      url: `/topics/${topicId}/posts`,
+      headers: { authorization: 'Bearer admin-token' },
+      payload: { body: 'busy', autoCompactEnabled: false, autoCompactRevision: 0, silent: true },
+    });
+    expect(busy.statusCode).toBe(409);
+    store.upsertRobotState({ topicId, sessionId: session.id, activity: 'idle' });
+    store.createCompactionOperation({
+      id: 'running-compact',
+      topicId,
+      sessionId: session.id,
+      initiatedBy: admin.id,
+      expectedLeafId: 'leaf-1',
+      recoveryPrompt: 'recover',
+    });
+    store.claimCompactionOperation('running-compact');
+    const compacting = await app.inject({
+      method: 'POST',
+      url: `/topics/${topicId}/posts`,
+      headers: { authorization: 'Bearer admin-token' },
+      payload: { body: 'compacting', autoCompactEnabled: false, autoCompactRevision: 0, silent: true },
+    });
+    expect(compacting.statusCode).toBe(409);
+    store.finishCompactionFailure('running-compact', 'cancelled for test');
+    const changed = await app.inject({
+      method: 'POST',
+      url: `/topics/${topicId}/posts`,
+      headers: { authorization: 'Bearer admin-token' },
+      payload: { body: 'disable', autoCompactEnabled: false, autoCompactRevision: 0, silent: true },
+    });
+    expect(changed.statusCode).toBe(200);
+    expect(store.getTopic(topicId)).toMatchObject({ auto_compact_enabled: 0, auto_compact_revision: 1 });
   });
 
   it('requires admin access to create forums', async () => {
@@ -161,7 +264,7 @@ describe('Forum routes access controls', () => {
     const guestRes = await app.inject({
       method: 'POST',
       url: '/forums',
-      payload: { name: 'Guest Forum' }
+      payload: { name: 'Guest Forum' },
     });
     expect(guestRes.statusCode).toBe(401);
 
@@ -169,7 +272,7 @@ describe('Forum routes access controls', () => {
       method: 'POST',
       url: '/forums',
       headers: { authorization: 'Bearer human-token' },
-      payload: { name: 'Human Forum' }
+      payload: { name: 'Human Forum' },
     });
     expect(humanRes.statusCode).toBe(403);
 
@@ -177,7 +280,7 @@ describe('Forum routes access controls', () => {
       method: 'POST',
       url: '/forums',
       headers: { authorization: 'Bearer admin-token' },
-      payload: { name: 'Admin Forum' }
+      payload: { name: 'Admin Forum' },
     });
     expect(adminRes.statusCode).toBe(200);
   });
@@ -193,12 +296,17 @@ describe('Forum routes access controls', () => {
     store.createAuthSession('other-token', other.id);
     store.createAuthSession('admin-token', admin.id);
 
-    const { topic, post } = store.createTopic({ forumId: forum.id, title: 'Topic', body: 'starter', authorId: author.id });
+    const { topic, post } = store.createTopic({
+      forumId: forum.id,
+      title: 'Topic',
+      body: 'starter',
+      authorId: author.id,
+    });
 
     const guestRes = await app.inject({
       method: 'PATCH',
       url: `/posts/${post.id}`,
-      payload: { body: 'edited' }
+      payload: { body: 'edited' },
     });
     expect(guestRes.statusCode).toBe(401);
 
@@ -206,7 +314,7 @@ describe('Forum routes access controls', () => {
       method: 'PATCH',
       url: `/posts/${post.id}`,
       headers: { authorization: 'Bearer other-token' },
-      payload: { body: 'edited by other' }
+      payload: { body: 'edited by other' },
     });
     expect(otherRes.statusCode).toBe(403);
 
@@ -214,7 +322,7 @@ describe('Forum routes access controls', () => {
       method: 'PATCH',
       url: `/posts/${post.id}`,
       headers: { authorization: 'Bearer admin-token' },
-      payload: { body: 'edited by admin' }
+      payload: { body: 'edited by admin' },
     });
     expect(adminRes.statusCode).toBe(403);
 
@@ -222,7 +330,7 @@ describe('Forum routes access controls', () => {
       method: 'PATCH',
       url: `/posts/${post.id}`,
       headers: { authorization: 'Bearer author-token' },
-      payload: { body: 'edited by author' }
+      payload: { body: 'edited by author' },
     });
     expect(authorRes.statusCode).toBe(200);
     expect((authorRes.json() as any).body).toBe('edited by author');
@@ -244,7 +352,12 @@ describe('Forum routes access controls', () => {
     store.createAuthSession('admin-token', admin.id);
 
     const { post } = store.createTopic({ forumId: forum.id, title: 'Topic', body: 'starter', authorId: author.id });
-    const reply = store.createPost({ topicId: post.topic_id, body: 'reply', parentPostId: post.id, authorId: author.id });
+    const reply = store.createPost({
+      topicId: post.topic_id,
+      body: 'reply',
+      parentPostId: post.id,
+      authorId: author.id,
+    });
 
     const guestRes = await app.inject({ method: 'DELETE', url: `/posts/${reply.id}` });
     expect(guestRes.statusCode).toBe(401);
@@ -252,14 +365,14 @@ describe('Forum routes access controls', () => {
     const otherRes = await app.inject({
       method: 'DELETE',
       url: `/posts/${reply.id}`,
-      headers: { authorization: 'Bearer other-token' }
+      headers: { authorization: 'Bearer other-token' },
     });
     expect(otherRes.statusCode).toBe(403);
 
     const adminRes = await app.inject({
       method: 'DELETE',
       url: `/posts/${reply.id}`,
-      headers: { authorization: 'Bearer admin-token' }
+      headers: { authorization: 'Bearer admin-token' },
     });
     expect(adminRes.statusCode).toBe(200);
     expect((adminRes.json() as any).deletedAt).toBeTruthy();
@@ -278,7 +391,7 @@ describe('Forum routes access controls', () => {
       method: 'POST',
       url: `/forums/${adminForum.id}/topics`,
       headers: { authorization: 'Bearer human-token' },
-      payload: { title: 'nope', body: 'nope' }
+      payload: { title: 'nope', body: 'nope' },
     });
     expect(resHumanCreateTopic.statusCode).toBe(403);
 
@@ -286,7 +399,7 @@ describe('Forum routes access controls', () => {
       method: 'POST',
       url: `/forums/${adminForum.id}/topics`,
       headers: { authorization: 'Bearer admin-token' },
-      payload: { title: 'ok', body: 'starter' }
+      payload: { title: 'ok', body: 'starter' },
     });
     expect(resAdminCreateTopic.statusCode).toBe(200);
     const createdTopic = resAdminCreateTopic.json() as { id: string };
@@ -295,7 +408,7 @@ describe('Forum routes access controls', () => {
       method: 'POST',
       url: `/topics/${createdTopic.id}/posts`,
       headers: { authorization: 'Bearer human-token' },
-      payload: { body: 'trying to post' }
+      payload: { body: 'trying to post' },
     });
     expect(resHumanCreatePost.statusCode).toBe(403);
   });
@@ -312,27 +425,27 @@ describe('Forum routes access controls', () => {
       forumId: adminForum.id,
       title: 'Secret',
       body: 'hidden',
-      authorId: admin.id
+      authorId: admin.id,
     });
 
     const memberTopicRes = await app.inject({
       method: 'GET',
       url: `/topics/${topic.id}`,
-      headers: { authorization: 'Bearer member-token' }
+      headers: { authorization: 'Bearer member-token' },
     });
     expect(memberTopicRes.statusCode).toBe(404);
 
     const memberPostsRes = await app.inject({
       method: 'GET',
       url: `/topics/${topic.id}/posts`,
-      headers: { authorization: 'Bearer member-token' }
+      headers: { authorization: 'Bearer member-token' },
     });
     expect(memberPostsRes.statusCode).toBe(404);
 
     const adminTopicRes = await app.inject({
       method: 'GET',
       url: `/topics/${topic.id}`,
-      headers: { authorization: 'Bearer admin-token' }
+      headers: { authorization: 'Bearer admin-token' },
     });
     expect(adminTopicRes.statusCode).toBe(200);
   });
@@ -354,7 +467,7 @@ describe('Forum routes access controls', () => {
     const guestStatus = await app.inject({
       method: 'PATCH',
       url: `/topics/${topic.id}/status`,
-      payload: { status: 'locked' }
+      payload: { status: 'locked' },
     });
     expect(guestStatus.statusCode).toBe(401);
 
@@ -362,7 +475,7 @@ describe('Forum routes access controls', () => {
       method: 'PATCH',
       url: `/topics/${topic.id}/status`,
       headers: { authorization: 'Bearer author-token' },
-      payload: { status: 'locked' }
+      payload: { status: 'locked' },
     });
     expect(authorStatus.statusCode).toBe(403);
 
@@ -370,7 +483,7 @@ describe('Forum routes access controls', () => {
       method: 'PATCH',
       url: `/topics/${topic.id}/status`,
       headers: { authorization: 'Bearer mod-token' },
-      payload: { status: 'locked' }
+      payload: { status: 'locked' },
     });
     expect(modStatus.statusCode).toBe(200);
 
@@ -378,7 +491,7 @@ describe('Forum routes access controls', () => {
       method: 'PATCH',
       url: `/topics/${topic.id}`,
       headers: { authorization: 'Bearer author-token' },
-      payload: { title: 'New title' }
+      payload: { title: 'New title' },
     });
     expect(authorTitle.statusCode).toBe(403);
 
@@ -386,21 +499,21 @@ describe('Forum routes access controls', () => {
       method: 'PATCH',
       url: `/topics/${topic.id}`,
       headers: { authorization: 'Bearer mod-token' },
-      payload: { title: 'New title' }
+      payload: { title: 'New title' },
     });
     expect(modTitle.statusCode).toBe(200);
 
     const authorDelete = await app.inject({
       method: 'DELETE',
       url: `/topics/${topic.id}`,
-      headers: { authorization: 'Bearer author-token' }
+      headers: { authorization: 'Bearer author-token' },
     });
     expect(authorDelete.statusCode).toBe(403);
 
     const modDelete = await app.inject({
       method: 'DELETE',
       url: `/topics/${topic.id}`,
-      headers: { authorization: 'Bearer mod-token' }
+      headers: { authorization: 'Bearer mod-token' },
     });
     expect(modDelete.statusCode).toBe(200);
   });

@@ -43,6 +43,7 @@ stripped, text extracted) and submitted to memstore via `proxy/submit_save`. Thi
 returns instantly (~1ms) — memstore queues the job and processes it in the background.
 
 The save flow:
+
 1. Read session JSONL → extract user/assistant text blocks
 2. Generate a slug title from keywords
 3. Detect project tags from content and active topics
@@ -63,6 +64,7 @@ FTS5-indexed table distinct from session transcripts. Each observation is associ
 an entity (person, project, decision, preference, environment, self).
 
 On session start, the entity context is rendered from two sources:
+
 - **Recent observations** — six current observations, capped at two per entity so one
   active project cannot consume the section, with bodies truncated to ~150 chars
 - **Entity awareness** — a compact listing of all known entities from `entity-index.json`,
@@ -185,8 +187,11 @@ two child-only prompt seams with no memory-mutation APIs, session saves, or slee
   or recent sessions ambiently; relevant continuity must be supplied or deliberately
   retrieved.
 
-Both seams restore bounded child-local auto-compaction because parent automatic
-compaction is disabled. This compaction preserves only task and validation state;
+Both seams restore bounded child-local auto-compaction because automatic compaction
+is globally disabled for parent sessions. A forum topic may opt its canonical parent
+runtime into Pi-native automatic compaction through an isolated agentd settings
+overlay; that topic policy never propagates to children. Child compaction preserves
+only task and validation state;
 it does not add persistence. Fresh and fork-context child sessions are written
 beneath `/app/.pi/agent/sessions/subagent/`, omitted from ongoing forum sync and
 the standalone historical importer, and never saved to memstore. Useful outputs

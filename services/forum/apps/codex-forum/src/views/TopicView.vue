@@ -2,11 +2,12 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
+import AutoCompactOption from '../components/AutoCompactOption.vue';
 import DecryptText from '../components/DecryptText.vue';
 import LiveAssistantTurn from '../components/LiveAssistantTurn.vue';
+import MessageTemplatePicker from '../components/MessageTemplatePicker.vue';
 import OperationalEventBar from '../components/OperationalEventBar.vue';
 import PostTracePanel from '../components/PostTracePanel.vue';
-import MessageTemplatePicker from '../components/MessageTemplatePicker.vue';
 import ToolMiniView from '../components/ToolMiniView.vue';
 import { useForumState } from '../composables/useForumState';
 import { useMarkdown } from '../composables/useMarkdown';
@@ -93,13 +94,16 @@ const threadSearchQuery = ref('');
 const selectedModel = ref(state.lastReplyModel.value ?? '');
 const selectedReasoning = ref(state.lastReplyReasoning.value ?? 'medium');
 const replyModels = computed(() => state.allModelOptions.value);
-const effectiveSelectedModel = computed(() => selectedModel.value || (state.robotState.value as any)?.model || state.defaultModel.value || '');
+const effectiveSelectedModel = computed(
+  () => selectedModel.value || (state.robotState.value as any)?.model || state.defaultModel.value || ''
+);
 const supportsReasoning = computed(() => state.modelSupportsReasoning(effectiveSelectedModel.value));
 const replyReasoningOptions = computed(() => state.modelReasoningOptions(effectiveSelectedModel.value));
 const canModerate = computed(() => state.canModerate.value);
 const isAdmin = computed(() => state.currentUser.value?.kind === 'admin');
 const isRobotBusy = computed(() => state.isRobotBusy.value);
 const topicRobotMode = computed(() => state.selectedTopic.value?.robotMode ?? null);
+const autoCompactEnabled = ref(false);
 const robotControlPending = computed(() => state.robotControlPending.value);
 const isSticky = computed(() => state.selectedTopic.value?.tags?.includes('sticky') ?? false);
 const copiedLinkPostId = ref<string | null>(null);
@@ -308,9 +312,13 @@ const canViewLiveTrace = computed(() => state.isLoggedIn.value);
 
 const liveTurnPostNumber = computed(() => state.sortedPosts.value.length + 1);
 const liveTurnPage = computed(() => pageForPostNumber(liveTurnPostNumber.value));
-const showRobotDraftOnCurrentPage = computed(() => showRobotDraft.value && state.currentPage.value === liveTurnPage.value);
+const showRobotDraftOnCurrentPage = computed(
+  () => showRobotDraft.value && state.currentPage.value === liveTurnPage.value
+);
 const showDetailedLiveTraceOnCurrentPage = computed(() => showRobotDraftOnCurrentPage.value && canViewLiveTrace.value);
-const showPublicRobotPlaceholderOnCurrentPage = computed(() => showRobotDraftOnCurrentPage.value && !canViewLiveTrace.value);
+const showPublicRobotPlaceholderOnCurrentPage = computed(
+  () => showRobotDraftOnCurrentPage.value && !canViewLiveTrace.value
+);
 
 const liveActivityEvents = computed<RobotActivityEvent[]>(() => state.activityLog.value);
 
@@ -336,20 +344,34 @@ const quickReplyWillDispatchRobot = computed(() => {
 
 const quickReplyWillSteerRobot = computed(() => showRobotBusyNotice.value && quickReplyWillDispatchRobot.value);
 const sessionContext = computed(() => state.sessionContext.value);
-const topicPiSession = computed(() => ((state.selectedTopic.value as any)?.piSession ?? null) as Record<string, any> | null);
+const topicPiSession = computed(
+  () => ((state.selectedTopic.value as any)?.piSession ?? null) as Record<string, any> | null
+);
 const topicLineageLabel = computed(() => {
   const session = topicPiSession.value;
   if (!session?.parentId && !session?.parentPath) return null;
-  const kind = String(session.lineageKind ?? '').trim().toLowerCase();
+  const kind = String(session.lineageKind ?? '')
+    .trim()
+    .toLowerCase();
   if (kind === 'handoff') return 'Handoff from parent session';
   if (kind === 'delegate') return 'Delegate fork from parent session';
   if (kind === 'sleep') return 'Sleep fork from parent session';
   return 'Parent session';
 });
-const handoffDestinationForum = computed(() => moveForumOptions.value.find((forum) => forum.id === handoffDestinationForumId.value) ?? null);
-const handoffEffectiveCwd = computed(() => handoffOverrideCwd.value ? handoffCwdOverride.value.trim() : (((handoffDestinationForum.value as any)?.cwd as string | undefined) ?? ''));
-const handoffDraftModelEffective = computed(() => handoffDraftModel.value || effectiveSelectedModel.value || state.defaultModel.value || '');
-const handoffLaunchModelEffective = computed(() => handoffLaunchModel.value || effectiveSelectedModel.value || state.defaultModel.value || '');
+const handoffDestinationForum = computed(
+  () => moveForumOptions.value.find((forum) => forum.id === handoffDestinationForumId.value) ?? null
+);
+const handoffEffectiveCwd = computed(() =>
+  handoffOverrideCwd.value
+    ? handoffCwdOverride.value.trim()
+    : (((handoffDestinationForum.value as any)?.cwd as string | undefined) ?? '')
+);
+const handoffDraftModelEffective = computed(
+  () => handoffDraftModel.value || effectiveSelectedModel.value || state.defaultModel.value || ''
+);
+const handoffLaunchModelEffective = computed(
+  () => handoffLaunchModel.value || effectiveSelectedModel.value || state.defaultModel.value || ''
+);
 const handoffDraftSupportsReasoning = computed(() => state.modelSupportsReasoning(handoffDraftModelEffective.value));
 const handoffLaunchSupportsReasoning = computed(() => state.modelSupportsReasoning(handoffLaunchModelEffective.value));
 const handoffDraftReasoningOptions = computed(() => state.modelReasoningOptions(handoffDraftModelEffective.value));
@@ -422,8 +444,20 @@ const liveTurnItems = computed<LiveTurnItem[]>(() => {
 
   // 1. Status item
   if (!isIdle) {
-    const statusTitle = activity === 'running_tools' ? 'Running tools' : activity === 'waiting' ? 'Waiting' : activity === 'error' ? 'Error' : 'Thinking';
-    items.push({ id: 'status:activity', type: 'status', title: statusTitle, status: activity === 'error' ? 'error' : 'running' });
+    const statusTitle =
+      activity === 'running_tools'
+        ? 'Running tools'
+        : activity === 'waiting'
+          ? 'Waiting'
+          : activity === 'error'
+            ? 'Error'
+            : 'Thinking';
+    items.push({
+      id: 'status:activity',
+      type: 'status',
+      title: statusTitle,
+      status: activity === 'error' ? 'error' : 'running',
+    });
   }
 
   // Helper to push parsed reasoning steps from a text segment
@@ -468,14 +502,20 @@ const liveTurnItems = computed<LiveTurnItem[]>(() => {
         const tool = toolEvent.toolRun;
         const status = !tool.finishedAt ? 'running' : (toolExitCodeValue(tool) ?? 0) === 0 ? 'success' : 'error';
         const mini = toolMini(tool);
-        const toolTimeoutMs = typeof mini.meta.timeoutMs === 'number' && Number.isFinite(mini.meta.timeoutMs) ? (mini.meta.timeoutMs as number) : null;
-        const finishedTimeoutLabel = (tool.finishedAt && toolTimeoutMs) ? `timeout ${formatDuration(toolTimeoutMs)}` : null;
+        const toolTimeoutMs =
+          typeof mini.meta.timeoutMs === 'number' && Number.isFinite(mini.meta.timeoutMs)
+            ? (mini.meta.timeoutMs as number)
+            : null;
+        const finishedTimeoutLabel =
+          tool.finishedAt && toolTimeoutMs ? `timeout ${formatDuration(toolTimeoutMs)}` : null;
         items.push({
           id: toolEvent.id,
           type: 'tool',
           title: liveToolTitle(tool),
           status,
-          meta: [tool.tool, toolStatusLabel(tool), liveToolDurationLabel(tool), finishedTimeoutLabel].filter(Boolean).join(' \u00b7 '),
+          meta: [tool.tool, toolStatusLabel(tool), liveToolDurationLabel(tool), finishedTimeoutLabel]
+            .filter(Boolean)
+            .join(' \u00b7 '),
           detail: liveToolDetail(tool),
           startedAt: tool.startedAt ?? null,
           timeoutMs: !tool.finishedAt ? toolTimeoutMs : null,
@@ -761,6 +801,14 @@ watch(canModerate, (value) => {
 });
 
 watch(
+  () => state.selectedTopic.value?.autoCompactEnabled,
+  (enabled) => {
+    autoCompactEnabled.value = Boolean(enabled);
+  },
+  { immediate: true }
+);
+
+watch(
   () => state.lastReplyModel.value,
   (value) => {
     if (value) {
@@ -804,11 +852,17 @@ watch(autoRunModel, (model) => {
 });
 
 watch(handoffDraftModel, (model) => {
-  handoffDraftReasoning.value = normalizeReasoning(model || state.defaultModel.value || '', handoffDraftReasoning.value);
+  handoffDraftReasoning.value = normalizeReasoning(
+    model || state.defaultModel.value || '',
+    handoffDraftReasoning.value
+  );
 });
 
 watch(handoffLaunchModel, (model) => {
-  handoffLaunchReasoning.value = normalizeReasoning(model || state.defaultModel.value || '', handoffLaunchReasoning.value);
+  handoffLaunchReasoning.value = normalizeReasoning(
+    model || state.defaultModel.value || '',
+    handoffLaunchReasoning.value
+  );
 });
 
 watch(handoffDestinationForumId, () => {
@@ -1292,7 +1346,12 @@ async function handleDelete(postId: string): Promise<void> {
 }
 
 async function applyQuickReplyTemplate(template: MessageTemplateDto, replace: boolean): Promise<void> {
-  await applyTemplateToTextarea({ body: replyBody, textarea: quickReplyTextareaRef, templateBody: template.body, replace });
+  await applyTemplateToTextarea({
+    body: replyBody,
+    textarea: quickReplyTextareaRef,
+    templateBody: template.body,
+    replace,
+  });
 }
 
 async function reply(): Promise<void> {
@@ -1304,6 +1363,12 @@ async function reply(): Promise<void> {
     const post = await state.createPost(replyBody.value.trim(), {
       model: effectiveSelectedModel.value,
       reasoningEffort: supportsReasoning.value ? selectedReasoning.value : null,
+      ...(isAdmin.value
+        ? {
+            autoCompactEnabled: autoCompactEnabled.value,
+            autoCompactRevision: state.selectedTopic.value?.autoCompactRevision,
+          }
+        : {}),
       attachmentsPending,
     });
     if (replyFiles.value.length > 0) {
@@ -1726,7 +1791,6 @@ onUnmounted(() => {
     </div>
   </div>
 
-
   <div v-if="showCompactionModal" class="vb-modal-overlay" @click.self="closeCompactionModal">
     <div class="vb-modal vb-compaction-modal">
       <div class="vb-modal-header">
@@ -1814,13 +1878,22 @@ onUnmounted(() => {
     <div v-if="topicLineageLabel" class="vb-reply-context-meter vb-lineage-banner">
       <div class="vb-lineage-summary">
         <strong>{{ topicLineageLabel }}</strong>
-        <router-link v-if="topicPiSession?.['parentTopicId']" class="vb-lineage-link" :to="`/topics/${topicPiSession['parentTopicId']}`">Open parent thread</router-link>
-        <span v-if="topicPiSession?.['lineageSource']" class="vb-context-model">· {{ topicPiSession['lineageSource'] }}</span>
+        <router-link
+          v-if="topicPiSession?.['parentTopicId']"
+          class="vb-lineage-link"
+          :to="`/topics/${topicPiSession['parentTopicId']}`"
+          >Open parent thread</router-link
+        >
+        <span v-if="topicPiSession?.['lineageSource']" class="vb-context-model"
+          >· {{ topicPiSession['lineageSource'] }}</span
+        >
       </div>
       <details>
         <summary>Details</summary>
         <div v-if="topicPiSession?.['parentId']"><strong>Parent session:</strong> {{ topicPiSession['parentId'] }}</div>
-        <div v-if="topicPiSession?.['parentPath']"><strong>Parent path:</strong> {{ topicPiSession['parentPath'] }}</div>
+        <div v-if="topicPiSession?.['parentPath']">
+          <strong>Parent path:</strong> {{ topicPiSession['parentPath'] }}
+        </div>
         <div v-if="topicPiSession?.['id']"><strong>Current session:</strong> {{ topicPiSession['id'] }}</div>
         <div v-if="topicPiSession?.['path']"><strong>Current path:</strong> {{ topicPiSession['path'] }}</div>
         <div v-if="topicPiSession?.['cwd']"><strong>CWD:</strong> {{ topicPiSession['cwd'] }}</div>
@@ -1832,7 +1905,9 @@ onUnmounted(() => {
         <button class="vb-btn" :disabled="state.loading.value || state.isTopicLocked()" @click="openReplyPage">
           Post Reply
         </button>
-        <button class="vb-btn" :disabled="state.loading.value || state.isTopicLocked()" @click="openHandoffModal">Handoff</button>
+        <button class="vb-btn" :disabled="state.loading.value || state.isTopicLocked()" @click="openHandoffModal">
+          Handoff
+        </button>
         <button v-if="isAdmin" class="vb-btn" :disabled="!canCompact" @click="openCompactionModal">Compact</button>
         <button class="vb-btn" @click="goHome">Back to Forum</button>
       </div>
@@ -2071,11 +2146,7 @@ onUnmounted(() => {
 
       <div v-if="threadSearchQuery && filteredPosts.length === 0" class="vb-empty">No posts match your search.</div>
 
-      <div
-        v-if="unanchoredOperationalEvents.length > 0"
-        v-show="!threadSearchQuery"
-        class="vb-operational-event-group"
-      >
+      <div v-if="unanchoredOperationalEvents.length > 0" v-show="!threadSearchQuery" class="vb-operational-event-group">
         <OperationalEventBar
           v-for="event in unanchoredOperationalEvents"
           :key="event.id"
@@ -2419,7 +2490,9 @@ onUnmounted(() => {
         <button class="vb-btn" :disabled="state.loading.value || state.isTopicLocked()" @click="openReplyPage">
           Post Reply
         </button>
-        <button class="vb-btn" :disabled="state.loading.value || state.isTopicLocked()" @click="openHandoffModal">Handoff</button>
+        <button class="vb-btn" :disabled="state.loading.value || state.isTopicLocked()" @click="openHandoffModal">
+          Handoff
+        </button>
         <button v-if="isAdmin" class="vb-btn" :disabled="!canCompact" @click="openCompactionModal">Compact</button>
         <button class="vb-btn" @click="goHome">Back to Forum</button>
       </div>
@@ -2590,9 +2663,7 @@ onUnmounted(() => {
           <router-link to="/login">Log in</router-link> or <router-link to="/register">register</router-link> to post a
           reply.
         </template>
-        <template v-else>
-          <router-link to="/login">Log in</router-link> to post a reply.
-        </template>
+        <template v-else> <router-link to="/login">Log in</router-link> to post a reply. </template>
       </div>
       <div v-else class="vb-new-body">
         <div v-if="quickReplyWillSteerRobot" class="vb-steer-notice">
@@ -2607,7 +2678,10 @@ onUnmounted(() => {
         </div>
         <div v-if="state.robotState.value?.lastTurnError" class="vb-robot-error-notice">
           <strong>Robot turn failed.</strong>
-          <span>The last turn stopped before producing a reply. The robot is idle; you can retry or send another message.</span>
+          <span
+            >The last turn stopped before producing a reply. The robot is idle; you can retry or send another
+            message.</span
+          >
           <span class="vb-robot-error-detail">{{ state.robotState.value.lastTurnError.message }}</span>
         </div>
         <label>Message:</label>
@@ -2617,7 +2691,12 @@ onUnmounted(() => {
           :has-draft="replyBody.length > 0"
           @apply="applyQuickReplyTemplate"
         />
-        <textarea ref="quickReplyTextareaRef" v-model="replyBody" rows="6" placeholder="Type your reply here..."></textarea>
+        <textarea
+          ref="quickReplyTextareaRef"
+          v-model="replyBody"
+          rows="6"
+          placeholder="Type your reply here..."
+        ></textarea>
         <div class="vb-reply-attachments">
           <label class="vb-attachment-label">Attachments:</label>
           <input ref="replyFileInputRef" class="vb-attachment-input" type="file" multiple @change="handleReplyFiles" />
@@ -2655,12 +2734,19 @@ onUnmounted(() => {
           </div>
           <span v-if="robotModeNotice" class="vb-reply-options-callout">{{ robotModeNotice }}</span>
         </div>
+        <AutoCompactOption v-model="autoCompactEnabled" :can-edit="isAdmin" :busy="isRobotBusy" />
         <div v-if="sessionContext" class="vb-reply-context-meter">
           <strong>Context:</strong>
-          <span v-if="sessionContext.usedTokens !== null && sessionContext.contextWindowTokens" class="vb-context-value">
-            {{ formatTokenCount(sessionContext.usedTokens) }} / {{ formatTokenCount(sessionContext.contextWindowTokens) }}
+          <span
+            v-if="sessionContext.usedTokens !== null && sessionContext.contextWindowTokens"
+            class="vb-context-value"
+          >
+            {{ formatTokenCount(sessionContext.usedTokens) }} /
+            {{ formatTokenCount(sessionContext.contextWindowTokens) }}
             <span v-if="typeof sessionContext.percent === 'number'">({{ sessionContext.percent.toFixed(1) }}%)</span>
-            <span v-if="!sessionContext.exact" class="vb-context-warning">best Pi usage; not exact current context</span>
+            <span v-if="!sessionContext.exact" class="vb-context-warning"
+              >best Pi usage; not exact current context</span
+            >
           </span>
           <span v-else>usage unavailable</span>
           <span v-if="sessionContext.model" class="vb-context-model">· {{ sessionContext.model }}</span>
@@ -2718,13 +2804,27 @@ onUnmounted(() => {
             {{ state.robotState.value?.lastUpdatedAt ? state.formatDate(state.robotState.value.lastUpdatedAt) : 'n/a' }}
           </div>
         </div>
-        <div><strong>Model:</strong> {{ (state.robotState.value as any)?.context?.model ?? state.robotState.value?.model ?? 'unknown' }}</div>
+        <div>
+          <strong>Model:</strong>
+          {{ (state.robotState.value as any)?.context?.model ?? state.robotState.value?.model ?? 'unknown' }}
+        </div>
         <div v-if="(state.robotState.value as any)?.context" class="vb-context-meter">
           <strong>Context:</strong>
-          <span v-if="(state.robotState.value as any).context.usedTokens !== null && (state.robotState.value as any).context.contextWindowTokens" class="vb-context-value">
-            {{ formatTokenCount((state.robotState.value as any).context.usedTokens) }} / {{ formatTokenCount((state.robotState.value as any).context.contextWindowTokens) }}
-            <span v-if="typeof (state.robotState.value as any).context.percent === 'number'">({{ (state.robotState.value as any).context.percent.toFixed(1) }}%)</span>
-            <span v-if="!(state.robotState.value as any).context.exact" class="vb-context-warning">best Pi usage; not exact current context</span>
+          <span
+            v-if="
+              (state.robotState.value as any).context.usedTokens !== null &&
+              (state.robotState.value as any).context.contextWindowTokens
+            "
+            class="vb-context-value"
+          >
+            {{ formatTokenCount((state.robotState.value as any).context.usedTokens) }} /
+            {{ formatTokenCount((state.robotState.value as any).context.contextWindowTokens) }}
+            <span v-if="typeof (state.robotState.value as any).context.percent === 'number'"
+              >({{ (state.robotState.value as any).context.percent.toFixed(1) }}%)</span
+            >
+            <span v-if="!(state.robotState.value as any).context.exact" class="vb-context-warning"
+              >best Pi usage; not exact current context</span
+            >
           </span>
           <span v-else>usage unavailable</span>
         </div>

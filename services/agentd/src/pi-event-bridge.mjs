@@ -1,25 +1,29 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID } from "node:crypto";
 
 function extractTextFromMessage(message) {
   const content = message?.content;
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content.filter((part) => part?.type === 'text').map((part) => part.text ?? '').join('');
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((part) => part?.type === "text")
+    .map((part) => part.text ?? "")
+    .join("");
 }
 
 function extractLastAssistantText(messages) {
-  if (!Array.isArray(messages)) return '';
+  if (!Array.isArray(messages)) return "";
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i]?.role === 'assistant') return extractTextFromMessage(messages[i]);
+    if (messages[i]?.role === "assistant")
+      return extractTextFromMessage(messages[i]);
   }
-  return '';
+  return "";
 }
 
 function extractUsage(messages) {
   if (!Array.isArray(messages)) return null;
   for (let i = messages.length - 1; i >= 0; i--) {
     const usage = messages[i]?.usage;
-    if (usage && typeof usage === 'object') {
+    if (usage && typeof usage === "object") {
       return {
         input_tokens: usage.input ?? usage.input_tokens,
         output_tokens: usage.output ?? usage.output_tokens,
@@ -31,18 +35,33 @@ function extractUsage(messages) {
 }
 
 export function classifyProviderError(error) {
-  const text = String(error ?? '').toLowerCase();
-  if (/context (?:length|window)|maximum context|context limit|too many tokens|prompt (?:is )?too long|token limit/.test(text)) {
-    return 'context_overflow';
+  const text = String(error ?? "").toLowerCase();
+  if (
+    /context (?:length|window)|maximum context|context limit|too many tokens|prompt (?:is )?too long|token limit/.test(
+      text,
+    )
+  ) {
+    return "context_overflow";
   }
-  if (/\brate[ -]?limit|\btoo many requests\b|\b429\b|quota exceeded/.test(text)) return 'rate_limit';
-  if (/\bauthentication\b|\bunauthorized\b|\bforbidden\b|invalid (?:api )?key|api key.*(?:invalid|missing)|\b40[13]\b/.test(text)) {
-    return 'authentication';
+  if (
+    /\brate[ -]?limit|\btoo many requests\b|\b429\b|quota exceeded/.test(text)
+  )
+    return "rate_limit";
+  if (
+    /\bauthentication\b|\bunauthorized\b|\bforbidden\b|invalid (?:api )?key|api key.*(?:invalid|missing)|\b40[13]\b/.test(
+      text,
+    )
+  ) {
+    return "authentication";
   }
-  if (/\bprovider\b|\bupstream\b|service unavailable|temporarily unavailable|overloaded|internal server error|\b50[0234]\b/.test(text)) {
-    return 'provider';
+  if (
+    /\bprovider\b|\bupstream\b|service unavailable|temporarily unavailable|overloaded|internal server error|\b50[0234]\b/.test(
+      text,
+    )
+  ) {
+    return "provider";
   }
-  return 'unknown';
+  return "unknown";
 }
 
 /**
@@ -53,73 +72,82 @@ export function classifyProviderError(error) {
  */
 export function handlePiEvent(conv, event, emit, createId = randomUUID) {
   switch (event.type) {
-    case 'agent_start': {
+    case "agent_start": {
       // Automatic retries and continuations can start another low-level agent run
       // for the same forum response. Keep its stable id and accumulated output.
       if (!conv.current) {
         const messageId = createId();
         conv.current = {
           messageId,
-          text: '',
+          text: "",
           toolCalls: new Map(),
           startedAt: Date.now(),
-          completionText: '',
+          completionText: "",
           usage: null,
           terminalError: null,
         };
-        emit(conv, 'turn_started', { message_id: messageId, thread_id: conv.id });
+        emit(conv, "turn_started", {
+          message_id: messageId,
+          thread_id: conv.id,
+        });
       }
       break;
     }
-    case 'message_update': {
+    case "message_update": {
       const assistantEvent = event.assistantMessageEvent ?? event;
-      if (assistantEvent.type === 'text_delta' && assistantEvent.delta) {
+      if (assistantEvent.type === "text_delta" && assistantEvent.delta) {
         if (conv.current) conv.current.text += assistantEvent.delta;
-        emit(conv, 'turn_delta', { content: assistantEvent.delta });
-      } else if (assistantEvent.type === 'thinking_delta' && assistantEvent.delta) {
-        emit(conv, 'reasoning_delta', { delta: assistantEvent.delta });
+        emit(conv, "turn_delta", { content: assistantEvent.delta });
+      } else if (
+        assistantEvent.type === "thinking_delta" &&
+        assistantEvent.delta
+      ) {
+        emit(conv, "reasoning_delta", { delta: assistantEvent.delta });
       }
       break;
     }
-    case 'tool_execution_start': {
+    case "tool_execution_start": {
       const callId = event.toolCallId ?? event.id ?? createId();
-      if (conv.current) conv.current.toolCalls.set(callId, event.toolName ?? 'tool');
-      emit(conv, 'item_started', {
+      if (conv.current)
+        conv.current.toolCalls.set(callId, event.toolName ?? "tool");
+      emit(conv, "item_started", {
         item: {
-          type: 'function_call',
+          type: "function_call",
           id: callId,
           call_id: callId,
-          name: event.toolName ?? 'tool',
+          name: event.toolName ?? "tool",
           arguments: event.args ?? event.input ?? event.arguments ?? null,
         },
       });
       break;
     }
-    case 'tool_execution_update': {
+    case "tool_execution_update": {
       const callId = event.toolCallId ?? event.id ?? createId();
-      emit(conv, 'tool_updated', {
+      emit(conv, "tool_updated", {
         call_id: callId,
-        tool_name: event.toolName ?? 'tool',
+        tool_name: event.toolName ?? "tool",
         args: event.args ?? null,
         partial_result: event.partialResult ?? null,
       });
       break;
     }
-    case 'tool_execution_end': {
+    case "tool_execution_end": {
       const callId = event.toolCallId ?? event.id ?? createId();
-      emit(conv, 'tool_completed', {
+      emit(conv, "tool_completed", {
         call_id: callId,
-        tool_name: event.toolName ?? 'tool',
+        tool_name: event.toolName ?? "tool",
         args: event.args ?? null,
         result: event.result ?? event.output ?? event.error ?? null,
         is_error: Boolean(event.isError),
       });
       break;
     }
-    case 'message_end': {
-      if (!conv.current || event.message?.role !== 'assistant') break;
-      if (event.message.stopReason === 'error') {
-        conv.current.terminalError = String(event.message.errorMessage ?? 'Provider request failed');
+    case "message_end": {
+      if (!conv.current || event.message?.role !== "assistant") break;
+      if (event.message.stopReason === "error") {
+        conv.current.terminalError = String(
+          event.message.errorMessage ?? "Provider request failed",
+        );
       } else {
         // A later successful assistant response means Pi recovered the prior
         // provider failure through retry/compaction. Only the terminal attempt
@@ -128,37 +156,62 @@ export function handlePiEvent(conv, event, emit, createId = randomUUID) {
       }
       break;
     }
-    case 'agent_end': {
+    case "agent_end": {
       if (conv.current) {
-        conv.current.completionText = conv.current.text || extractLastAssistantText(event.messages);
+        conv.current.completionText =
+          conv.current.text || extractLastAssistantText(event.messages);
         conv.current.usage = extractUsage(event.messages) ?? conv.current.usage;
       }
       break;
     }
-    case 'compaction_start':
-      emit(conv, 'compaction_start', { reason: event.reason, thread_id: conv.id });
+    case "compaction_start":
+      emit(conv, "compaction_start", {
+        reason: event.reason,
+        thread_id: conv.id,
+      });
       break;
-    case 'compaction_end':
-      emit(conv, 'compaction_end', {
+    case "compaction_end": {
+      const latestCompaction =
+        !event.aborted && !event.errorMessage
+          ? [...(conv.session?.sessionManager?.getBranch?.() ?? [])]
+              .reverse()
+              .find((entry) => entry.type === "compaction")
+          : null;
+      emit(conv, "compaction_end", {
         reason: event.reason,
         aborted: Boolean(event.aborted),
         will_retry: Boolean(event.willRetry),
         error: event.errorMessage ?? null,
+        compaction_entry_id: latestCompaction?.id ?? null,
         result: event.result ?? null,
         thread_id: conv.id,
       });
       break;
-    case 'agent_settled': {
+    }
+    case "agent_settled": {
       if (!conv.current) break;
       const {
-        completionText, text, usage, messageId, piMessageId, userMappings = [], terminalError,
-        sourceKind = null, subagentRunId = null, subagentRunIds = null, subagentOrigins = null, origin = null,
+        completionText,
+        text,
+        usage,
+        messageId,
+        piMessageId,
+        userMappings = [],
+        terminalError,
+        sourceKind = null,
+        subagentRunId = null,
+        subagentRunIds = null,
+        subagentOrigins = null,
+        origin = null,
       } = conv.current;
       if (terminalError) {
-        emit(conv, 'turn_error', {
+        emit(conv, "turn_error", {
           error: terminalError,
           category: classifyProviderError(terminalError),
-          turn_id: userMappings.length === 1 ? userMappings[0].turn_id : (messageId ?? null),
+          turn_id:
+            userMappings.length === 1
+              ? userMappings[0].turn_id
+              : (messageId ?? null),
           pi_message_id: piMessageId ?? null,
           thread_id: conv.id,
         });

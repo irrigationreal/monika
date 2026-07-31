@@ -6,6 +6,8 @@ export type TopicRow = {
   status: string;
   tags_json: string;
   robot_mode: string;
+  auto_compact_enabled: number;
+  auto_compact_revision: number;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -19,6 +21,8 @@ export interface SerializedTopic {
   status: string;
   tags: unknown;
   robotMode: string;
+  autoCompactEnabled: boolean;
+  autoCompactRevision: number;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
@@ -33,9 +37,11 @@ export function serializeTopic(row: TopicRow): SerializedTopic {
     status: row.status,
     tags: JSON.parse(row.tags_json),
     robotMode: row.robot_mode,
+    autoCompactEnabled: Boolean(row.auto_compact_enabled),
+    autoCompactRevision: row.auto_compact_revision,
     createdBy: row.created_by,
     createdAt: row.created_at,
-    updatedAt: row.updated_at
+    updatedAt: row.updated_at,
   };
 }
 
@@ -79,7 +85,7 @@ export function serializePost(row: PostRow): SerializedPost {
     silent: Boolean(row.silent),
     createdAt: row.created_at,
     editedAt: row.edited_at,
-    deletedAt: row.deleted_at
+    deletedAt: row.deleted_at,
   };
 }
 
@@ -108,7 +114,7 @@ export function serializeAttachment(row: AttachmentRow): SerializedAttachment {
     filename: row.filename,
     mimeType: row.mime_type,
     sizeBytes: row.size_bytes,
-    createdAt: row.created_at
+    createdAt: row.created_at,
   };
 }
 
@@ -137,6 +143,6 @@ export function serializeUserFile(row: UserFileRow): SerializedUserFile {
     filename: row.filename,
     mimeType: row.mime_type,
     sizeBytes: row.size_bytes,
-    createdAt: row.created_at
+    createdAt: row.created_at,
   };
 }

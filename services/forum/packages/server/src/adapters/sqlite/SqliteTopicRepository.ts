@@ -1,7 +1,8 @@
-import type Database from 'better-sqlite3';
-import type { TopicRepository, Topic } from '@irrigationreal/codex-forum-core';
 import { type TopicRow } from '../../db';
 import { mapTopicRow } from './mappers';
+
+import type { Topic, TopicRepository } from '@irrigationreal/codex-forum-core';
+import type Database from 'better-sqlite3';
 
 const DEFAULT_PAGE_SIZE = 50;
 const DEFAULT_ROBOT_MODE = 'auto';
@@ -25,7 +26,7 @@ export class SqliteTopicRepository implements TopicRepository {
   async create(topic: Topic): Promise<void> {
     this.db
       .prepare(
-        'insert into topics (id, forum_id, tenant_id, title, status, tags_json, robot_mode, created_by, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        'insert into topics (id, forum_id, tenant_id, title, status, tags_json, robot_mode, auto_compact_enabled, auto_compact_revision, created_by, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
       .run(
         topic.id,
@@ -35,6 +36,8 @@ export class SqliteTopicRepository implements TopicRepository {
         topic.status,
         JSON.stringify(topic.tags ?? []),
         topic.robotMode ?? DEFAULT_ROBOT_MODE,
+        topic.autoCompactEnabled ? 1 : 0,
+        topic.autoCompactRevision ?? 0,
         topic.createdBy,
         topic.createdAt,
         topic.updatedAt
@@ -44,7 +47,7 @@ export class SqliteTopicRepository implements TopicRepository {
   async update(topic: Topic): Promise<void> {
     this.db
       .prepare(
-        'update topics set forum_id = ?, tenant_id = ?, title = ?, status = ?, tags_json = ?, robot_mode = ?, created_by = ?, updated_at = ? where id = ?'
+        'update topics set forum_id = ?, tenant_id = ?, title = ?, status = ?, tags_json = ?, robot_mode = ?, auto_compact_enabled = ?, auto_compact_revision = ?, created_by = ?, updated_at = ? where id = ?'
       )
       .run(
         topic.forumId,
@@ -53,6 +56,8 @@ export class SqliteTopicRepository implements TopicRepository {
         topic.status,
         JSON.stringify(topic.tags ?? []),
         topic.robotMode ?? DEFAULT_ROBOT_MODE,
+        topic.autoCompactEnabled ? 1 : 0,
+        topic.autoCompactRevision ?? 0,
         topic.createdBy,
         topic.updatedAt,
         topic.id
