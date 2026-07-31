@@ -17,8 +17,9 @@ const rawError = computed(() => {
 });
 
 const isContextOverflow = computed(() => {
+  if (props.event.detail?.['category'] === 'context_overflow') return true;
   const text = `${props.event.summary} ${rawError.value ?? ''}`.toLowerCase();
-  return /context(?: window)?[^.\n]{0,60}(?:overflow|exceed|limit|length|large)|(?:token|prompt)[^.\n]{0,40}(?:limit|exceed|large)/i.test(
+  return /context(?: window)?[^.\n]{0,60}(?:overflow|exceed|limit|length|large)|(?:overflow|exceed|limit|length|large)[^.\n]{0,60}context(?: window)?|(?:token|prompt)[^.\n]{0,40}(?:limit|exceed|large)/i.test(
     text
   );
 });

@@ -236,15 +236,19 @@ provider errors follow the trace visibility boundary: authenticated viewers can
 expand the diagnostic text, while unauthenticated readers receive only the neutral
 event summary. Pi JSONL remains authoritative; sync conservatively reconstructs
 historical terminal errors from the active branch and ignores failed attempts that
-Pi later recovered through retry or compact-and-retry.
+Pi later recovered through retry or compact-and-retry. A terminal event classified as
+`context_overflow` offers **Compact and recover** to admins; text recognition is only
+a compatibility fallback for legacy events without structured classification.
 
 Admins can choose **Compact** beside **Handoff** while a topic is idle. The forum
-creates a durable compaction operation and calls agentd with the expected canonical
-Pi leaf. Agentd rejects busy or stale sessions and invokes Pi's public
-`AgentSession.compact()` API. Expected-leaf validation makes a lost HTTP response
-retry-safe: an existing compaction child proves that the operation already happened,
-so agentd does not compact twice. Automatic compaction remains disabled by runtime
-policy.
+creates a durable compaction operation with a client-owned idempotency key and calls
+agentd with the expected canonical Pi leaf. Client key generation supports both HTTPS
+and the standalone HTTP deployment; it does not require the secure-context-only
+`crypto.randomUUID()` browser API. Agentd rejects busy or stale sessions and invokes
+Pi's public `AgentSession.compact()` API. Expected-leaf validation makes a lost HTTP
+response retry-safe: an existing compaction child proves that the operation already
+happened, so agentd does not compact twice. Automatic compaction remains disabled by
+runtime policy.
 
 After successful compaction, the forum atomically creates a user-attributed automated
 recovery-checkpoint post and queues it through the normal durable post dispatcher.

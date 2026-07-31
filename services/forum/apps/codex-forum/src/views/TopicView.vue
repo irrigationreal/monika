@@ -10,6 +10,7 @@ import ToolMiniView from '../components/ToolMiniView.vue';
 import { useForumState } from '../composables/useForumState';
 import { useMarkdown } from '../composables/useMarkdown';
 import { api } from '../lib/apiClient';
+import { createClientOperationId } from '../lib/clientOperationId';
 import { parseReasoningSteps } from '../lib/reasoning';
 import { getToolMiniModel, toolKindIcon, traceToneForKind } from '../lib/toolMiniView';
 import { toolHumanTitle } from '../lib/toolTimeline';
@@ -227,25 +228,26 @@ async function submitCompaction(): Promise<void> {
   }
 
   compactionError.value = '';
-  compactionOperation.value = {
-    id: crypto.randomUUID(),
-    topicId,
-    sessionId: '',
-    initiatedBy: '',
-    expectedLeafId: '',
-    customInstructions: null,
-    recoveryPrompt: compactionRecoveryPrompt.value.trim(),
-    status: 'pending',
-    eventId: null,
-    recoveryPostId: null,
-    errorMessage: null,
-    createdAt: new Date().toISOString(),
-    startedAt: null,
-    finishedAt: null,
-  };
   try {
+    const operationId = createClientOperationId();
+    compactionOperation.value = {
+      id: operationId,
+      topicId,
+      sessionId: '',
+      initiatedBy: '',
+      expectedLeafId: '',
+      customInstructions: null,
+      recoveryPrompt: compactionRecoveryPrompt.value.trim(),
+      status: 'pending',
+      eventId: null,
+      recoveryPostId: null,
+      errorMessage: null,
+      createdAt: new Date().toISOString(),
+      startedAt: null,
+      finishedAt: null,
+    };
     const started = await compactionApi.compactTopic(topicId, {
-      operationId: compactionOperation.value.id,
+      operationId,
       confirmation: 'COMPACT',
       customInstructions: compactionInstructions.value.trim() ? compactionInstructions.value.trim() : null,
       recoveryPrompt: compactionRecoveryPrompt.value.trim(),
@@ -268,10 +270,10 @@ async function submitCompaction(): Promise<void> {
     showCompactionModal.value = false;
   } catch (err) {
     compactionError.value = err instanceof Error ? err.message : 'Compaction failed.';
-    const status = compactionOperation.value.status;
-    if (status === 'pending' || status === 'running') {
+    const operation = compactionOperation.value;
+    if (operation?.status === 'pending' || operation?.status === 'running') {
       compactionOperation.value = {
-        ...compactionOperation.value,
+        ...operation,
         status: 'failed',
         errorMessage: compactionError.value,
       };
