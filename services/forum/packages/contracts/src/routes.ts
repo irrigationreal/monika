@@ -1598,6 +1598,14 @@ export const apiRoutes: ApiRoute[] = [
   },
   {
     method: 'get',
+    path: '/admin/analytics',
+    summary: 'Forum and canonical Pi analytics',
+    tags: ['admin'],
+    request: { query: schemas.AdminAnalyticsQuerySchema },
+    response: { schema: schemas.AdminAnalyticsDtoSchema }
+  },
+  {
+    method: 'get',
     path: '/admin/robot/dashboard',
     summary: 'Robot dashboard',
     tags: ['admin'],

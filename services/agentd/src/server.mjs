@@ -5,6 +5,12 @@ import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
 import { existsSync, readFileSync, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { handlePiEvent } from './pi-event-bridge.mjs';
+import {
+  aggregateAnalytics,
+  AnalyticsQueryError,
+  AnalyticsTtlCache,
+  validateAnalyticsQuery,
+} from './analytics.mjs';
 import { compactConversation, ConversationConflictError } from './compaction-operation.mjs';
 import {
   appendSubagentCompletionProvenance,
@@ -83,6 +89,8 @@ const BUILD_INFO_PATH = '/opt/monika/build-info.json';
 const MODEL_AUTH_PATH = path.join(AGENT_DIR, 'auth.json');
 const MODEL_CONFIG_PATH = path.join(AGENT_DIR, 'models.json');
 const MODEL_REFRESH_MS = modelRefreshIntervalMs(process.env.MONIKA_AGENTD_MODEL_REFRESH_MS);
+const ANALYTICS_CACHE_TTL_MS = Number(process.env.MONIKA_AGENTD_ANALYTICS_CACHE_TTL_MS ?? 30_000);
+const analyticsCache = new AnalyticsTtlCache({ ttlMs: ANALYTICS_CACHE_TTL_MS });
 
 let cachedBuildInfo;
 function buildInfo() {
@@ -948,6 +956,74 @@ async function findSession(sessionRef) {
   return sessions.find((candidate) => candidate.id === decoded || candidate.path === decoded) ?? null;
 }
 
+async function readAllowlistedAnalyticsSessions(sessionIds) {
+  const allowlist = new Set(sessionIds);
+  const root = path.join(AGENT_DIR, 'sessions');
+  const sessions = [];
+
+  async function walk(dir) {
+    let children;
+    try { children = await fs.readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const child of children) {
+      const candidate = path.join(dir, child.name);
+      if (child.isSymbolicLink()) continue;
+      if (child.isDirectory()) {
+        if (isPathWithin(SUBAGENT_SESSION_ROOT, candidate) || child.name === 'forks') continue;
+        await walk(candidate);
+        continue;
+      }
+      if (!child.isFile() || !child.name.endsWith('.jsonl')) continue;
+      const filenameMatches = [...allowlist].some((id) => child.name === `${id}.jsonl` || child.name.endsWith(`_${id}.jsonl`));
+      if (!filenameMatches) continue;
+
+      let raw;
+      try { raw = await fs.readFile(candidate, 'utf8'); } catch { continue; }
+      const entries = [];
+      let parseErrors = 0;
+      for (const line of raw.split('\n')) {
+        if (!line.trim()) continue;
+        try { entries.push(JSON.parse(line)); } catch { parseErrors += 1; }
+      }
+      const header = entries.find((entry) => entry?.type === 'session');
+      if (!header || !allowlist.has(header.id)) continue;
+      sessions.push({ id: header.id, path: candidate, entries, parseErrors, lifecycleRecords: [] });
+      allowlist.delete(header.id);
+      if (allowlist.size === 0) return;
+    }
+  }
+
+  if (allowlist.size > 0) await walk(root);
+  return sessions;
+}
+
+function analyticsCacheKey(query) {
+  return JSON.stringify({
+    from: query.from,
+    to: query.to,
+    bucket: query.bucket,
+    minToolSamples: query.minToolSamples,
+    requestedSessionCount: query.requestedSessionCount,
+    piSessionIds: [...query.piSessionIds].sort(),
+  });
+}
+
+async function queryAnalytics(body) {
+  const query = validateAnalyticsQuery(body);
+  const key = analyticsCacheKey(query);
+  const cached = analyticsCache.get(key);
+  if (cached) return cached;
+  const sessions = await readAllowlistedAnalyticsSessions(query.piSessionIds);
+  const snapshot = await subagentSnapshot();
+  for (const session of sessions) {
+    session.activeBranch = activeBranchMetadata(session, session.entries);
+    session.lifecycleRecords = snapshot.runs.filter((run) =>
+      run.parent_session_id === session.id || run.parent_session_id === session.path
+        || run.parent_session_path === session.id || run.parent_session_path === session.path
+    );
+  }
+  return analyticsCache.set(key, aggregateAnalytics(sessions, query));
+}
+
 function visibleTextFromContent(content) {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
@@ -1361,6 +1437,14 @@ const server = http.createServer(async (req, res) => {
       });
     }
     if (method === 'GET' && url.pathname === '/v1/admin/quiescence') return json(res, 200, await deployState());
+    if (method === 'POST' && url.pathname === '/v1/admin/analytics/query') {
+      try {
+        return json(res, 200, await queryAnalytics(await readBody(req)));
+      } catch (error) {
+        if (error instanceof AnalyticsQueryError) return badRequest(res, error.message);
+        throw error;
+      }
+    }
     if (method === 'GET' && url.pathname === '/v1/admin/subagents') {
       try {
         const snapshot = await subagentSnapshot();

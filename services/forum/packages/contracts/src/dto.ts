@@ -1,6 +1,8 @@
 import type {
   AccessRuleAction,
   AccessRuleEffect,
+  AnalyticsAudience,
+  AnalyticsBucket,
   AccessRulePrincipalKind,
   AccessRuleScopeKind,
   ForumVisibility,
@@ -988,4 +990,108 @@ export interface TopicSubscriptionDto {
   mode: 'watching' | 'muted' | 'off';
   createdAt: string;
   updatedAt: string;
+}
+export type AnalyticsBucketDto = AnalyticsBucket;
+
+export interface AnalyticsForumOptionDto {
+  id: string;
+  name: string;
+}
+
+export interface AnalyticsVocabularyTermDto {
+  term: string;
+  score: number;
+  count: number;
+  documentCount: number;
+}
+
+export interface AnalyticsVocabularyGroupDto {
+  forumId: string;
+  forumName: string;
+  audience: AnalyticsAudience;
+  postCount: number;
+  terms: AnalyticsVocabularyTermDto[];
+}
+
+export interface AnalyticsUsageModelDto {
+  vendor: string;
+  model: string;
+  responses: number;
+  totalTokens: number;
+  medianTokens: number | null;
+}
+
+export interface AnalyticsToolDto {
+  operation: string;
+  calls: number;
+  failures: number;
+  failureRate: number;
+}
+
+export interface AnalyticsErrorClusterDto {
+  source: 'tool' | 'provider' | 'subagent';
+  category: string;
+  operation?: string | null;
+  affectedTurns: number;
+}
+
+export interface AnalyticsDelegationBreakdownDto {
+  profile: string;
+  mode: string;
+  successful: number;
+  unsuccessful: number;
+  unsuccessfulRate: number | null;
+}
+
+export interface AnalyticsModelUsagePointDto {
+  bucket: string;
+  vendor: string;
+  responses: number;
+  totalTokens: number;
+}
+
+export interface AnalyticsRuntimeMetricsDto {
+  coverage: Record<string, number>;
+  usage: {
+    successfulResponses: number;
+    medianTokens: number | null;
+    byModel: AnalyticsUsageModelDto[];
+  };
+  tools: {
+    worst: AnalyticsToolDto | null;
+    rows: AnalyticsToolDto[];
+  };
+  errors: {
+    top: AnalyticsErrorClusterDto | null;
+    rows: AnalyticsErrorClusterDto[];
+  };
+  waiting: {
+    count: number;
+    p95Ms: number | null;
+    excluded: number;
+  };
+  delegation: {
+    successful: number;
+    unsuccessful: number;
+    unsuccessfulRate: number | null;
+    unknown: number;
+    byProfileMode: AnalyticsDelegationBreakdownDto[];
+  };
+  modelUsageOverTime: AnalyticsModelUsagePointDto[];
+}
+
+export interface AdminAnalyticsDto {
+  generatedAt: string;
+  window: { from: string; to: string; bucket: AnalyticsBucketDto };
+  selectedForumId?: string | null;
+  forums: AnalyticsForumOptionDto[];
+  vocabulary: {
+    algorithmVersion: 1;
+    groups: AnalyticsVocabularyGroupDto[];
+  };
+  runtime: {
+    available: boolean;
+    warning?: string | null;
+    metrics?: AnalyticsRuntimeMetricsDto | null;
+  };
 }

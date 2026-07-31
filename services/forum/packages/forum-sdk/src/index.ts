@@ -1,5 +1,6 @@
 import type {
   AccessRuleDto,
+  AdminAnalyticsDto,
   AdminCancelDeployOnFinishResponseDto,
   AdminDeployOnFinishResponseDto,
   AdminDeployResponseDto,
@@ -95,6 +96,7 @@ import { BrowserTokenStorage, MemoryTokenStorage, type TokenStorage } from './st
 
 export type {
   AccessRuleDto,
+  AdminAnalyticsDto,
   AdminCancelDeployOnFinishResponseDto,
   AdminDeployOnFinishResponseDto,
   AdminDeployResponseDto,
@@ -937,6 +939,13 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
       json<AdminDeployOnFinishResponse>('/admin/deploy/on-finish', { method: 'POST' }),
     cancelDeployOnFinish: () =>
       json<AdminCancelDeployOnFinishResponse>('/admin/deploy/on-finish/cancel', { method: 'POST' }),
+
+    // Analytics (Admin)
+    getAdminAnalytics: (input: { from: string; to: string; bucket: 'day' | 'week'; forumId?: string | null }) => {
+      const params = new URLSearchParams({ from: input.from, to: input.to, bucket: input.bucket });
+      if (input.forumId) params.set('forumId', input.forumId);
+      return json<AdminAnalyticsDto>(`/admin/analytics?${params.toString()}`);
+    },
 
     // Robot automations (Admin)
     listRobotAutomations: () =>

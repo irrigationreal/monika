@@ -20,6 +20,8 @@
   "dependencies": {
     "@irrigationreal/codex-forum-contracts": "workspace:*",
     "@irrigationreal/codex-forum-sdk": "workspace:*",
+    "d3-scale": "^4.0.2",
+    "d3-shape": "^3.2.0",
     "highlight.js": "^11.11.1",
     "marked": "^17.0.1",
     "vue": "^3.5.26",
@@ -33,6 +35,8 @@
     "@tailwindcss/vite": "^4.1.18",
     "@testing-library/user-event": "^14.6.1",
     "@testing-library/vue": "^8.1.0",
+    "@types/d3-scale": "^4.0.9",
+    "@types/d3-shape": "^3.1.8",
     "@types/node": "^24.10.4",
     "@vitejs/plugin-vue": "^6.0.3",
     "@vitest/coverage-v8": "^4.1.0",

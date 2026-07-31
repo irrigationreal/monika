@@ -155,6 +155,16 @@ export class AgentBridge {
     return this.echs.getAgentdQuiescence();
   }
 
+  async getAnalytics(input: {
+    from: string;
+    to: string;
+    bucket: 'day' | 'week';
+    piSessionIds: string[];
+    minToolSamples?: number;
+  }): Promise<Record<string, unknown>> {
+    return this.echs.getAnalytics(input);
+  }
+
   async isThreadLoaded(threadId: string): Promise<boolean> {
     return this.echs.isThreadLoaded(threadId);
   }

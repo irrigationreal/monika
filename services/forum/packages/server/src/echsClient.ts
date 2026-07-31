@@ -122,6 +122,25 @@ export class EchsClient {
     return (await this.request('/v1/admin/quiescence')) as Record<string, unknown>;
   }
 
+  async getAnalytics(input: {
+    from: string;
+    to: string;
+    bucket: 'day' | 'week';
+    piSessionIds: string[];
+    minToolSamples?: number;
+  }): Promise<Record<string, unknown>> {
+    return (await this.request('/v1/admin/analytics/query', {
+      method: 'POST',
+      body: {
+        from: input.from,
+        to: input.to,
+        bucket: input.bucket,
+        pi_session_ids: input.piSessionIds,
+        min_tool_samples: input.minToolSamples ?? 5,
+      },
+    })) as Record<string, unknown>;
+  }
+
   async createThread(opts: {
     cwd?: string | null;
     workdir?: string | null;

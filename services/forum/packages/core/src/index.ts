@@ -5,6 +5,7 @@ export * from './domain/surfaces';
 export * from './domain/mentions';
 export * from './domain/access';
 export * from './domain/operationalEvents';
+export * from './domain/analytics';
 export * from './domain/messageTemplates';
 export * from './domain/dispatchPolicy';
 export * from './state/robot';

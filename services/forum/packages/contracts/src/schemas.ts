@@ -3,6 +3,8 @@ import {
   AccessRuleEffectValues,
   AccessRulePrincipalKindValues,
   AccessRuleScopeKindValues,
+  AnalyticsAudienceValues,
+  AnalyticsBucketValues,
   ForumVisibilityValues,
   MessageTemplateContextValues,
   MessageTemplateForumScopeValues,
@@ -21,6 +23,7 @@ import {
 } from './oidc';
 import type {
   AccessRuleDto,
+  AdminAnalyticsDto,
   AdminCancelDeployOnFinishResponseDto,
   AdminDeployOnFinishResponseDto,
   AdminDeployResponseDto,
@@ -729,6 +732,105 @@ export const RobotDashboardDtoSchema: z.ZodType<RobotDashboardDto> = z.object({
 
 export const RobotSettingsDtoSchema: z.ZodType<RobotSettingsDto> = z.object({
   maxConcurrentTurns: z.number()
+});
+
+const AnalyticsToolDtoSchema = z.object({
+  operation: z.string(),
+  calls: z.number(),
+  failures: z.number(),
+  failureRate: z.number(),
+});
+
+const AnalyticsErrorClusterDtoSchema = z.object({
+  source: z.enum(['tool', 'provider', 'subagent']),
+  category: z.string(),
+  operation: optionalNullableString,
+  affectedTurns: z.number(),
+});
+
+export const AdminAnalyticsDtoSchema: z.ZodType<AdminAnalyticsDto> = z.object({
+  generatedAt: z.string(),
+  window: z.object({ from: z.string(), to: z.string(), bucket: z.enum(AnalyticsBucketValues) }),
+  selectedForumId: optionalNullableString,
+  forums: z.array(z.object({ id: z.string(), name: z.string() })),
+  vocabulary: z.object({
+    algorithmVersion: z.literal(1),
+    groups: z.array(
+      z.object({
+        forumId: z.string(),
+        forumName: z.string(),
+        audience: z.enum(AnalyticsAudienceValues),
+        postCount: z.number(),
+        terms: z.array(
+          z.object({
+            term: z.string(),
+            score: z.number(),
+            count: z.number(),
+            documentCount: z.number(),
+          })
+        ),
+      })
+    ),
+  }),
+  runtime: z.object({
+    available: z.boolean(),
+    warning: optionalNullableString,
+    metrics: z
+      .object({
+        coverage: z.record(z.number()),
+        usage: z.object({
+          successfulResponses: z.number(),
+          medianTokens: z.number().nullable(),
+          byModel: z.array(
+            z.object({
+              vendor: z.string(),
+              model: z.string(),
+              responses: z.number(),
+              totalTokens: z.number(),
+              medianTokens: z.number().nullable(),
+            })
+          ),
+        }),
+        tools: z.object({ worst: AnalyticsToolDtoSchema.nullable(), rows: z.array(AnalyticsToolDtoSchema) }),
+        errors: z.object({
+          top: AnalyticsErrorClusterDtoSchema.nullable(),
+          rows: z.array(AnalyticsErrorClusterDtoSchema),
+        }),
+        waiting: z.object({ count: z.number(), p95Ms: z.number().nullable(), excluded: z.number() }),
+        delegation: z.object({
+          successful: z.number(),
+          unsuccessful: z.number(),
+          unsuccessfulRate: z.number().nullable(),
+          unknown: z.number(),
+          byProfileMode: z.array(
+            z.object({
+              profile: z.string(),
+              mode: z.string(),
+              successful: z.number(),
+              unsuccessful: z.number(),
+              unsuccessfulRate: z.number().nullable(),
+            })
+          ),
+        }),
+        modelUsageOverTime: z.array(
+          z.object({
+            bucket: z.string(),
+            vendor: z.string(),
+            responses: z.number(),
+            totalTokens: z.number(),
+          })
+        ),
+      })
+      .nullable()
+      .optional(),
+  }),
+});
+
+export const AdminAnalyticsQuerySchema = z.object({
+  from: z.string().datetime({ offset: true }),
+  to: z.string().datetime({ offset: true }),
+  bucket: z.enum(AnalyticsBucketValues).default('day'),
+  forumId: z.string().min(1).optional(),
 });
 
 export const TamperPluginDtoSchema: z.ZodType<TamperPluginDto> = z.object({

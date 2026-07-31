@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router';
 
 import { useForumState } from '../composables/useForumState';
 import AdminView from '../views/AdminView.vue';
+import AnalyticsView from '../views/AnalyticsView.vue';
 import ApiDocsView from '../views/ApiDocsView.vue';
 import ChatView from '../views/ChatView.vue';
 import DeveloperPortalView from '../views/DeveloperPortalView.vue';
@@ -45,12 +46,18 @@ const routes: RouteRecordRaw[] = [
   { path: '/chat/:roomId', name: 'chat.room', component: ChatView, meta: { title: 'Chat Room', requiresAuth: true } },
   { path: '/users/:identityId', name: 'user.view', component: UserProfileView, meta: { title: 'User Profile' } },
   { path: '/files', name: 'user.files', component: UserFilesView, meta: { title: 'File Storage' } },
-  { path: '/admin', name: 'admin', component: AdminView, meta: { title: 'Admin Panel' } },
+  { path: '/admin', name: 'admin', component: AdminView, meta: { title: 'Admin Panel', requiresAdmin: true } },
+  {
+    path: '/admin/analytics',
+    name: 'admin.analytics',
+    component: AnalyticsView,
+    meta: { title: 'Analytics', requiresAdmin: true },
+  },
   {
     path: '/admin/robot-dashboard',
     name: 'admin.robotDashboard',
     component: RobotDashboardView,
-    meta: { title: 'Robot Dashboard' },
+    meta: { title: 'Robot Dashboard', requiresAdmin: true },
   },
   {
     path: '/developers',
@@ -75,16 +82,18 @@ export const router = createRouter({
 });
 
 router.beforeEach(async (to) => {
-  if (!to.meta['requiresAuth']) return true;
+  const requiresAdmin = Boolean(to.meta['requiresAdmin']);
+  const requiresAuth = Boolean(to.meta['requiresAuth']) || requiresAdmin;
+  if (!requiresAuth) return true;
 
   const state = useForumState();
-  if (!state.authChecked.value) {
-    await state.checkAuth();
+  if (!state.authChecked.value) await state.checkAuth();
+  if (!state.isLoggedIn.value) {
+    state.openLoginModal();
+    return { name: 'forum.home' };
   }
-  if (state.isLoggedIn.value) return true;
-
-  state.openLoginModal();
-  return { name: 'forum.home' };
+  if (requiresAdmin && state.currentUser.value?.kind !== 'admin') return { name: 'forum.home' };
+  return true;
 });
 
 router.afterEach((to) => {
