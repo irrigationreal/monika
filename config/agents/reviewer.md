@@ -1,7 +1,7 @@
 ---
 name: reviewer
 description: Evidence-driven reviewer for diffs, plans, tests, and regressions
-model: codex/gpt-5.3-codex
+model: codex/gpt-5.6-sol
 thinking: high
 tools: read, grep, find, ls, bash
 extensions:

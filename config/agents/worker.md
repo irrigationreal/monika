@@ -1,7 +1,7 @@
 ---
 name: worker
 description: Narrow implementation specialist for an already-framed task
-model: codex/gpt-5.3-codex
+model: codex/gpt-5.6-sol
 thinking: high
 tools: read, grep, find, ls, bash, edit, write
 extensions:

@@ -1,7 +1,7 @@
 ---
 name: researcher
 description: Focused web and source researcher producing a concise evidence-backed brief
-model: codex/gpt-5.3-codex
+model: codex/gpt-5.6-terra
 thinking: medium
 tools: read, web_search
 extensions: /app/.pi/agent/extensions/web-search.ts

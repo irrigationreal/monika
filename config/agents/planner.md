@@ -1,7 +1,7 @@
 ---
 name: planner
 description: Read-only implementation planner grounded in repository evidence
-model: codex/gpt-5.3-codex
+model: codex/gpt-5.6-sol
 thinking: high
 tools: read, grep, find, ls
 extensions:

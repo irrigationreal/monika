@@ -173,21 +173,27 @@ restate the keywords.
 
 Pi-subagents is intentionally outside the normal stateful-memory lifecycle.
 `subagents.defaultExtensions` is `[]`, and Monika's agent profiles opt into one of
-two child-only prompt seams that register no memory tools, commands, session saves,
-or sleep hooks:
+two child-only prompt seams with no memory-mutation APIs, session saves, or sleep hooks:
 
 - `specialist-child-context.js` selects up to three topic addenda from the current
   delegated task. It does not load persona, WAKE.md, FACTS.md, observations, or
   memstore context.
 - `monika-child-context.js` is used only by the explicit `monika-delegate` profile.
   It loads the stable SOUL.md, STYLE.md, and REGISTER.md persona trio plus routed
-  topic addenda, but still excludes autobiographical/current memory and memstore.
+  topic addenda, then registers bounded read-only `recall` and `recall_session`
+  through `readonly-recall.js`. It does not inject WAKE.md, FACTS.md, observations,
+  or recent sessions ambiently; relevant continuity must be supplied or deliberately
+  retrieved.
 
 Both seams restore bounded child-local auto-compaction because parent automatic
 compaction is disabled. This compaction preserves only task and validation state;
 it does not add persistence. Child sessions are written beneath
 `/app/.pi/agent/sessions/subagent/`, omitted from forum sync, and never saved to
-memstore.
+memstore. Useful outputs return through the canonical parent transcript and enter
+normal memory processing there; the parent remains the only authority that can
+create or change durable observations through the memory API. This is not an OS
+sandbox: shell-capable profiles retain runtime permissions and are explicitly
+instructed not to bypass the boundary.
 
 ## Sleep Cycle
 
@@ -216,6 +222,7 @@ memstore.
   child-context.js      Shared routed-topic and stable-persona child prompt builders
   specialist-child-context.js  Topic-only pi-subagents child seam
   monika-child-context.js      Stable-persona pi-subagents child seam
+  readonly-recall.js           Bounded child memory reads; no mutation or ingestion
   session-utils.js      JSONL parsing and transcript normalization
   topic-router.js       Topic scoring, selection, persistence, and addendum loading
   index.js              Package exports

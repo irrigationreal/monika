@@ -1,7 +1,7 @@
 ---
 name: context-builder
 description: Builds high-signal repository and external context for a handoff
-model: codex/gpt-5.3-codex
+model: codex/gpt-5.6-terra
 thinking: medium
 tools: read, grep, find, ls, bash, write, web_search
 extensions: /app/.pi/agent/extensions/web-search.ts

@@ -1,9 +1,11 @@
 import { buildMonikaChildContext, registerChildAutoCompaction } from "./child-context.js";
+import { registerReadonlyRecallTools } from "./readonly-recall.js";
 
-// Explicit identity-bearing child seam. This intentionally loads only the
-// stable persona trio and routed topic addenda: no autobiography, memstore,
-// tools, sleep command, or shutdown save hooks.
+// Explicit identity-bearing child seam. This loads the stable persona trio,
+// routed topic addenda, and bounded read-only memory retrieval. It has no
+// memory mutation, session ingestion, sleep command, or shutdown save hooks.
 export default function monikaChildContext(pi) {
+  registerReadonlyRecallTools(pi);
   pi.on("before_agent_start", async (event, ctx) => {
     const addendum = await buildMonikaChildContext({
       query: event.prompt,
@@ -16,6 +18,6 @@ export default function monikaChildContext(pi) {
   // child-local compaction without adding persistence or autobiographical state.
   registerChildAutoCompaction(
     pi,
-    "Preserve the delegated task, project constraints, decisions, edits, validation state, and remaining work. Do not invent autobiographical context.",
+    "Preserve the delegated task, project constraints, supplied and deliberately recalled context, decisions, edits, validation state, and remaining work. Do not invent autobiographical context.",
   );
 }

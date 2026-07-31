@@ -68,8 +68,10 @@ nix-shell -p nodejs_22 --run \
 ```
 
 The child-context suite verifies topic-only specialist prompts, the
-`monika-delegate` stable persona trio, absence of WAKE/FACTS/observations and
-memory tools, explicit `extensions` allowlists, and child-local compaction.
+`monika-delegate` stable persona trio and first-person bounded-continuation framing,
+absence of ambient WAKE/FACTS/observations, read-only recall exclusively for the
+Monika delegate, the Terra/Sol profile policy, parent delegation guidance, explicit
+extension allowlists, and child-local compaction without persistence.
 
 Memstore's Go suite covers FTS search, save deduplication, and append-only observation
 supersession/retraction:

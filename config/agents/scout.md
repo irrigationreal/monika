@@ -1,7 +1,7 @@
 ---
 name: scout
 description: Fast read-only codebase reconnaissance with compressed evidence
-model: codex/gpt-5.3-codex
+model: codex/gpt-5.6-terra
 thinking: low
 tools: read, grep, find, ls, bash
 extensions:

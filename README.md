@@ -106,20 +106,32 @@ The parent receives the package's `subagent`, `subagent_wait`, and
 dynamic fanout, and persistent async work. Monika's configured agents live in
 `config/agents/`: disposable specialists have narrow direct tool lists and receive
 only turn-routed topic addenda, while `monika-delegate` is the explicit
-identity-bearing boundary and receives SOUL.md, STYLE.md, REGISTER.md, and routed
-topics. `subagents.defaultExtensions` is `[]`; each profile must opt into its
+identity-bearing boundary and receives SOUL.md, STYLE.md, REGISTER.md, routed
+topics, and bounded read-only `recall`/`recall_session`. `subagents.defaultExtensions`
+is `[]`; each profile must opt into its
 child-only context extension and any capability such as web search. Direct child
 capabilities are explicit: `scout`, `planner`, `reviewer`, and `oracle` are
 read-only roles (with non-mutating `bash` only where declared); `researcher` has
 `read` plus `web_search`; `worker` has repository read/search, `bash`, `edit`, and
 `write`; `context-builder` has repository inspection, `bash`, `write`, and
-`web_search`; and `monika-delegate` has the full worker surface plus `web_search`.
-Ordinary profiles do not receive `subagent`, so recursive delegation is
-limited to package-managed dynamic fanout. Children do not load ambient
-stateful-memory, memstore tools, session-save hooks, or `/sleep`.
+`web_search`; and `monika-delegate` has the full worker surface plus `web_search`
+and read-only memory retrieval. Scout, researcher, and context-builder use GPT-5.6
+Terra; judgment, planning, review, implementation, and identity-bearing profiles
+use GPT-5.6 Sol. Ordinary profiles do not receive `subagent`, so recursive
+delegation is limited to package-managed dynamic fanout. No child receives memory
+mutation tools, automatic session ingestion, observation-lifecycle APIs, or `/sleep`.
+These capability lists are not an OS sandbox: profiles with filesystem or shell tools
+retain the underlying runtime permissions and are instructed not to circumvent the
+memory boundary.
+
+A parent-only prompt extension defines role selection, execution modes, low-loss
+task packets, write isolation, validation, and the positive boundary for using
+`monika-delegate` when authored judgment materially improves the work.
 
 Child JSONL lives under `/app/.pi/agent/sessions/subagent/` and is deliberately
-omitted from forum session sync. Async lifecycle/results live under
+omitted from forum session sync and direct memstore ingestion. Useful child results
+return through the canonical parent transcript; the parent alone decides what to
+write as durable memory. Async lifecycle/results live under
 `/data/pi-subagents/`; agentd keeps the canonical parent conversation loaded while
 work is active, restores package results after restart, and projects completion as
 a provenance-bearing continuation of that parent session. Sleep remains a

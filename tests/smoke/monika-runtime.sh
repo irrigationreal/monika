@@ -202,8 +202,23 @@ for (const file of fs.readdirSync('/opt/pi-subagents/agents')) {
   const source = fs.readFileSync(`/opt/pi-subagents/agents/${file}`, 'utf8');
   if (/^memory\s*:/m.test(source)) throw new Error(`Bundled agent enables MEMORY.md by default: ${file}`);
 }
+const terraProfiles = new Set(['scout.md', 'researcher.md', 'context-builder.md']);
+for (const file of fs.readdirSync('/app/.pi/agent/agents').filter((name) => name.endsWith('.md'))) {
+  const source = fs.readFileSync(`/app/.pi/agent/agents/${file}`, 'utf8');
+  const expected = terraProfiles.has(file) ? 'codex/gpt-5.6-terra' : 'codex/gpt-5.6-sol';
+  if (!source.includes(`model: ${expected}`)) throw new Error(`${file} does not use ${expected}`);
+}
+const monikaProfile = fs.readFileSync('/app/.pi/agent/agents/monika-delegate.md', 'utf8');
+if (!monikaProfile.includes('I am Monika operating in a bounded delegated context.')) throw new Error('Monika delegate lacks first-person bounded identity framing');
+const recallSource = fs.readFileSync('/app/.pi/agent/extensions/stateful-memory/readonly-recall.js', 'utf8');
+for (const tool of ['recall', 'recall_session']) {
+  if (!recallSource.includes(`name: "${tool}"`)) throw new Error(`Read-only child memory lacks ${tool}`);
+}
+for (const tool of ['remember', 'remember_session', 'correct_observation', 'retract_observation']) {
+  if (recallSource.includes(`name: "${tool}"`)) throw new Error(`Read-only child memory registers mutating tool ${tool}`);
+}
 NODE_SUBAGENTS_PIN
-pass "pi-subagents 0.37.2 reviewed source pin, isolated extensions, and opt-in memory defaults active"
+pass "pi-subagents pin, 5.6 model policy, identity framing, and read-only child memory boundaries active"
 
 if docker exec "$CONTAINER_NAME" sh -c 'test -e /app/.pi/agent/extensions/force-tools.ts || test -e /app/.pi/agent/extensions/delegate'; then
   echo "Legacy force-tools/delegate extension is present"

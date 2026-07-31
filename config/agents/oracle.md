@@ -1,7 +1,7 @@
 ---
 name: oracle
 description: Read-only decision-consistency advisor for high-context work
-model: codex/gpt-5.3-codex
+model: codex/gpt-5.6-sol
 thinking: high
 tools: read, grep, find, ls, bash
 extensions:

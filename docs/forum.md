@@ -141,9 +141,13 @@ unless a profile explicitly opts in.
 Specialist children receive project instructions plus turn-routed topic addenda,
 but no Monika persona or autobiographical memory. `monika-delegate` is the explicit
 identity-bearing profile: it receives the stable SOUL.md, STYLE.md, and REGISTER.md
-persona trio plus routed topics, not WAKE.md, FACTS.md, observations, or memstore
-recall. Neither child path loads stateful-memory's tools, save/shutdown hooks, or
-sleep command. Sleep remains its own sequential full-persona fork workflow under
+persona trio plus routed topics and bounded read-only `recall`/`recall_session`.
+WAKE.md, FACTS.md, observations, and recent sessions are not injected ambiently.
+No child profile exposes memory mutation or observation-lifecycle tools, automatic
+transcript ingestion, save/shutdown memory hooks, or sleep. This is a capability and
+lifecycle boundary rather than an OS sandbox; shell-capable profiles retain normal
+runtime permissions and must not circumvent it. Sleep remains its own sequential
+full-persona fork workflow under
 `/app/.pi/agent/sessions/forks/`.
 
 Agentd sets the child session root to
