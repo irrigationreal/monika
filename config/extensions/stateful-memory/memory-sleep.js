@@ -7,13 +7,13 @@
  *
  * Imported by extension.js and called from the /sleep command handler.
  *
- * Implements its own lightweight fork runner rather than importing from the
- * delegate extension, avoiding cross-repo relative import issues under jiti's
- * real-path resolution for sub-module imports.
+ * Implements its own lightweight fork runner. Sleep is deliberately separate
+ * from pi-subagents: these full-persona maintenance forks retain stateful-memory,
+ * while disposable subagent children do not.
  *
  * Each fork fires session_shutdown on completion, writing its own session
- * summary to memory/sessions/ — so sleep work is durable and recallable
- * like any other session.
+ * summary to memstore — so sleep work is durable and recallable like any other
+ * stateful-memory session.
  */
 
 import { promises as fs } from "node:fs";

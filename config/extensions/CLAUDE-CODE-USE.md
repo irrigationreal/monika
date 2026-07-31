@@ -89,7 +89,7 @@ The hardest part of this extension is capturing the `execute` function from othe
 
 ### The constraint
 
-Pi's Anthropic OAuth proxy rejects API requests containing unknown flat tool names (anything not in Claude Code's built-in tool set). Extension tools like `remember`, `delegate`, `browser` all get rejected. The extension works around this by:
+Pi's Anthropic OAuth proxy rejects API requests containing unknown flat tool names (anything not in Claude Code's built-in tool set). Extension tools like `remember`, `subagent`, and `browser` all get rejected. The extension works around this by:
 
 1. Registering MCP-style aliases (`mcp__stateful-memory__remember`) for each flat tool
 2. Filtering flat names out of the API payload so only MCP aliases survive
@@ -169,18 +169,11 @@ Extension Loading (sorted alphabetically by path)
    ├── before_agent_start handler registered
    └── before_provider_request handler registered
 
-2. delegate/index.ts loads
-   ├── factory function runs
-   ├── pi.registerTool({ name: "delegate", execute: fn, ... })
-   │   └── extension.tools.set("delegate", { definition, sourceInfo })
-   │       └── Map.prototype.set fires → TOOL_EXECUTES.set("delegate", fn) ✓
-   └── (other registrations)
+2. pi-self.ts loads → pi_run captured ✓
 
-3. pi-self.ts loads → pi_run captured ✓
+3. ssh.ts loads → ssh tools captured ✓
 
-4. ssh.ts loads → ssh tools captured ✓
-
-5. stateful-memory/extension.js loads
+4. stateful-memory/extension.js loads
    ├── factory function runs
    ├── pi.registerTool({ name: "remember", execute: fn, ... })
    │   └── Map.prototype.set fires → TOOL_EXECUTES.set("remember", fn) ✓
@@ -189,33 +182,34 @@ Extension Loading (sorted alphabetically by path)
    ├── pi.registerTool({ name: "load_topic", ... }) → captured ✓
    └── pi.registerTool({ name: "remember_session", ... }) → captured ✓
 
-6. web-search.ts loads → web_search captured ✓
+5. web-search.ts loads → web_search captured ✓
 
 Session Initialization
 ═══════════════════════
 
-7. bindCore() runs
+6. bindCore() runs
    └── _refreshToolRegistry() builds _toolDefinitions and _toolRegistry
        from all extensions' tools Maps
 
-8. session_start event fires
+7. session_start event fires
    ├── claude-code-use's handler runs:
-   │   ├── restoreMapSet() — removes Map.prototype.set patch
+   │   ├── schedules restoreMapSet() for the next event-loop turn
    │   └── registerAliasesForAllTools():
    │       ├── scans getAllTools() for flat-named tools
    │       ├── for each: deriveMcpAlias() → "mcp__stateful-memory__remember"
    │       └── pi.registerTool({ name: "mcp__...", execute: shim })
    │           shim looks up TOOL_EXECUTES.get("remember") → original fn ✓
-   └── stateful-memory's handler runs (summarization setup, etc.)
+   ├── later handlers run; session-start tools such as subagent_supervisor are captured
+   └── restoreMapSet() removes the Map.prototype.set patch
 
 Agent Turn
 ══════════
 
-9. before_agent_start fires
+8. before_agent_start fires
    └── registerAliasesForAllTools() — ensures aliases exist
    └── syncAliasActivation() — activates MCP aliases when model.api === "anthropic-messages"
 
-10. before_provider_request fires
+9. before_provider_request fires
     └── transformPayload():
         ├── rewriteSystemField() — "pi itself" → "the cli itself"
         ├── rewriteAvailableToolsSection() — flat names → MCP aliases in tool list
@@ -223,10 +217,10 @@ Agent Turn
         ├── remapToolChoice() — updates tool_choice if it references a flat name
         └── remapMessageToolNames() — rewrites historical tool_use blocks
 
-11. Model receives payload with only MCP-style tool names
+10. Model receives payload with only MCP-style tool names
     └── Model responds with tool_use: { name: "mcp__stateful-memory__remember", ... }
 
-12. Pi looks up "mcp__stateful-memory__remember" in _toolRegistry
+11. Pi looks up "mcp__stateful-memory__remember" in _toolRegistry
     └── Finds our shim tool
     └── Shim's execute runs:
         ├── TOOL_EXECUTES.get("remember") → original execute function
@@ -257,7 +251,7 @@ pi.registerTool = function(tool) {
 
 **Failed because:** Each extension gets its own `ExtensionAPI` object, created by `createExtensionAPI()` in `loader.js`. The `registerTool` method is a closure over that extension's own `extension` object. Patching our API's `registerTool` method only intercepts calls made through our API object — other extensions call their own `registerTool` closures, which are untouched.
 
-This was confirmed by debug logs: the patched `registerTool` caught our own MCP alias registrations but never saw `remember`, `delegate`, etc.
+This was confirmed by debug logs: the patched `registerTool` caught our own MCP alias registrations but never saw tools registered through other extensions.
 
 #### Approach 3: Access `ExtensionRunner` via `pi` properties
 
@@ -366,7 +360,7 @@ function deriveMcpAlias(tool: ToolInfo, flatName: string): string | null {
 }
 ```
 
-**Adding a new tool? Add it to `KNOWN_TOOLS`** in the constants section. The key is the flat tool name, the value is the namespace used in the MCP alias (the directory name of the extension).
+New tools are discovered dynamically from Pi package/extension `sourceInfo`; do not maintain a hardcoded companion list. Add an entry to `KNOWN_TOOLS` only when a flat tool lacks usable `sourceInfo`. The key is the flat tool name and the value is the MCP namespace.
 
 Current entries:
 
@@ -377,8 +371,6 @@ Current entries:
 ["remember", "stateful-memory"]
 ["remember_session", "stateful-memory"]
 ["recall", "stateful-memory"]
-// delegate
-["delegate", "delegate"]
 // pi-self
 ["pi_run", "pi-self"]
 // web-search
@@ -393,7 +385,7 @@ The `browser` tool deserves special note: it's registered by the npm package `pi
 
 ## The Execute Delegation Shim
 
-When registering an MCP alias, the extension uses a shim that must delegate to the original flat-named tool's `execute`. The plan uses `TOOL_EXECUTES` (a `Map<flatName, executeFn>`):
+When registering an MCP alias, the extension uses a shim that delegates to the original flat-named tool's `execute` through `TOOL_EXECUTES` (a `Map<flatName, executeFn>`):
 
 ```typescript
 async execute(toolCallId, params, signal, onUpdate, ctx) {
@@ -438,11 +430,9 @@ Tools registered: `list_topics`, `load_topic`, `remember`, `remember_session`, `
 
 These are registered during extension loading (in the factory function body, not `session_start`). No `sourceInfo` is attached, so `KNOWN_TOOLS` fallback is required for alias derivation. Execute functions are captured by the `Map.prototype.set` monkey-patch.
 
-### delegate
+### pi-subagents
 
-Tool registered: `delegate`
-
-No `sourceInfo` (directory `~/.pi/agent/extensions/delegate/`). `KNOWN_TOOLS` entry provides namespace.
+Tools registered in the parent include `subagent`, `subagent_wait`, and `subagent_supervisor`. The reviewed package is loaded from `/opt/pi-subagents`, and Pi supplies package `sourceInfo`, so aliases are derived dynamically as `mcp__pi-subagents__<tool>`; no `KNOWN_TOOLS` fallback entries are needed. The runtime smoke test verifies the flat tools are registered, while Anthropic debug logs should verify the derived aliases after package or Pi upgrades.
 
 ### pi-self
 
@@ -464,7 +454,7 @@ Wraps core tools with SSH variants. Wrapped core tools (`read`, `write`, `edit`,
 
 Registers the `/tools` command, not a tool. Doesn't affect this extension.
 
-### handoff, commands, force-tools, interactive-shell, pi-self, web-search
+### handoff, commands, interactive-shell, pi-self, web-search
 
 Various commands and non-tool extensions. No interaction with this extension.
 
@@ -609,7 +599,7 @@ If Pi adds `execute` to `ToolInfo` (which would be the ideal upstream fix), the 
 
 ### Breaking: extension loading order changes
 
-**Current:** Extensions load alphabetically by path. `claude-code-use.ts` loads before `delegate/`, `pi-self.ts`, `ssh.ts`, `stateful-memory/`, and `web-search.ts`.
+**Current:** Top-level extensions load deterministically, with `claude-code-use.ts` active before the later tool registrations it captures, including package tools from pi-subagents.
 
 If Pi changes the loading order (e.g., deterministic but not alphabetical, or parallel loading), the `Map.prototype.set` patch might not be installed when other extensions register their tools.
 
@@ -625,8 +615,8 @@ If Pi changes to a class-based API or adds a reference to `runtime`/`extension` 
 
 When adding a new extension that registers flat-named tools:
 
-1. If the tool has `sourceInfo` with a usable `baseDir`, `deriveMcpAlias` will derive the alias automatically — no changes needed.
-2. If the tool has no `sourceInfo` or an unusable one, add it to `KNOWN_TOOLS` in the constants section.
+1. If the tool has `sourceInfo` with a usable `baseDir`, `deriveMcpAlias` derives the alias automatically—do not add a hardcoded entry.
+2. Add a `KNOWN_TOOLS` fallback only when runtime inspection shows missing or unusable `sourceInfo`.
 3. Run the smoke test to verify `hasExecute=true` for the new tool.
 
 ### Non-breaking but noteworthy: `CORE_TOOL_NAMES` changes
