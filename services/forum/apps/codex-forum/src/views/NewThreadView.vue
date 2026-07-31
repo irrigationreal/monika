@@ -1,11 +1,15 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue';
-import { useRouter, useRoute } from 'vue-router';
+import { computed, onMounted, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+
+import AutoCompactOption from '../components/AutoCompactOption.vue';
+import MessageTemplatePicker from '../components/MessageTemplatePicker.vue';
 import { useForumState } from '../composables/useForumState';
 import { useMarkdown } from '../composables/useMarkdown';
-import { api, type MessageTemplateDto } from '../lib/apiClient';
-import MessageTemplatePicker from '../components/MessageTemplatePicker.vue';
 import { applyTemplateToTextarea } from '../composables/useMessageTemplateInsertion';
+import { api } from '../lib/apiClient';
+
+import type { MessageTemplateDto } from '../lib/apiClient';
 
 const router = useRouter();
 const route = useRoute();
@@ -27,6 +31,8 @@ const selectedModel = ref(state.lastReplyModel.value ?? '');
 const selectedReasoning = ref(state.lastReplyReasoning.value ?? 'medium');
 const silentPost = ref(false);
 const robotMode = ref<'auto' | 'mention' | 'off'>('auto');
+const autoCompactEnabled = ref(false);
+const isAdmin = computed(() => state.currentUser.value?.kind === 'admin');
 
 const modelOptions = computed(() => state.allModelOptions.value);
 const allowedModels = computed(() => new Set(modelOptions.value));
@@ -40,10 +46,7 @@ const routeForumId = computed(() => (route.params['forumId'] as string | undefin
 const forumName = computed(() => state.selectedForum.value?.name ?? 'Forum');
 
 const canSubmit = computed(() => {
-  return title.value.trim().length >= 3
-    && body.value.trim().length >= 10
-    && !isSubmitting.value
-    && !isUploading.value;
+  return title.value.trim().length >= 3 && body.value.trim().length >= 10 && !isSubmitting.value && !isUploading.value;
 });
 
 const titleCharCount = computed(() => title.value.length);
@@ -108,7 +111,8 @@ async function applyMessageTemplate(template: MessageTemplateDto, replace: boole
   await applyTemplateToTextarea({ body, textarea: editorTextareaRef, templateBody: template.body, replace });
   if (!template.threadTitle) return;
   if (!title.value.trim()) title.value = template.threadTitle;
-  else if (replace && window.confirm('Replace the current thread title with the template title?')) title.value = template.threadTitle;
+  else if (replace && window.confirm('Replace the current thread title with the template title?'))
+    title.value = template.threadTitle;
 }
 
 function renderPreview(text: string): string {
@@ -152,9 +156,10 @@ async function handleSubmit(): Promise<void> {
     const topic = await state.createTopic(title.value.trim(), body.value.trim(), {
       silent: silentPost.value,
       robotMode: robotMode.value,
+      ...(isAdmin.value ? { autoCompactEnabled: autoCompactEnabled.value } : {}),
       model: effectiveSelectedModel.value,
       reasoningEffort: supportsReasoning.value ? selectedReasoning.value : null,
-      attachmentsPending
+      attachmentsPending,
     });
     if (threadFiles.value.length > 0) {
       isUploading.value = true;
@@ -169,7 +174,7 @@ async function handleSubmit(): Promise<void> {
       if (attachmentsPending) {
         await state.dispatchPost(initialPost.id, {
           model: effectiveSelectedModel.value,
-          reasoningEffort: supportsReasoning.value ? selectedReasoning.value : null
+          reasoningEffort: supportsReasoning.value ? selectedReasoning.value : null,
         });
       }
       clearThreadFiles();
@@ -251,9 +256,7 @@ onMounted(async () => {
 
 <template>
   <section class="vb-section vb-fade-in">
-    <div class="vb-table-header">
-      Post New Thread
-    </div>
+    <div class="vb-table-header">Post New Thread</div>
 
     <div class="vb-newthread-container">
       <!-- Forum Info Banner -->
@@ -269,12 +272,9 @@ onMounted(async () => {
       <div v-if="!state.isLoggedIn.value" class="vb-login-notice">
         You must be logged in to create a thread.
         <template v-if="state.canShowRegisterLink.value">
-          <router-link to="/login">Log in</router-link> or
-          <router-link to="/register">register</router-link>.
+          <router-link to="/login">Log in</router-link> or <router-link to="/register">register</router-link>.
         </template>
-        <template v-else>
-          <router-link to="/login">Log in</router-link>.
-        </template>
+        <template v-else> <router-link to="/login">Log in</router-link>. </template>
       </div>
 
       <!-- Error Message -->
@@ -314,16 +314,26 @@ onMounted(async () => {
           <div class="vb-form-section-body">
             <!-- Editor Toolbar -->
             <div class="vb-editor-toolbar">
-              <button type="button" class="vb-editor-btn" title="Bold" @click="insertBBCode('b')"><strong>B</strong></button>
+              <button type="button" class="vb-editor-btn" title="Bold" @click="insertBBCode('b')">
+                <strong>B</strong>
+              </button>
               <button type="button" class="vb-editor-btn" title="Italic" @click="insertBBCode('i')"><em>I</em></button>
               <button type="button" class="vb-editor-btn" title="Underline" @click="insertBBCode('u')"><u>U</u></button>
-              <button type="button" class="vb-editor-btn" title="Strikethrough" @click="insertBBCode('s')"><s>S</s></button>
+              <button type="button" class="vb-editor-btn" title="Strikethrough" @click="insertBBCode('s')">
+                <s>S</s>
+              </button>
               <span class="vb-toolbar-divider"></span>
-              <button type="button" class="vb-editor-btn" title="Insert Link" @click="insertBBCode('url')">&#128279;</button>
-              <button type="button" class="vb-editor-btn" title="Insert Image" @click="insertBBCode('img')">&#128247;</button>
+              <button type="button" class="vb-editor-btn" title="Insert Link" @click="insertBBCode('url')">
+                &#128279;
+              </button>
+              <button type="button" class="vb-editor-btn" title="Insert Image" @click="insertBBCode('img')">
+                &#128247;
+              </button>
               <span class="vb-toolbar-divider"></span>
               <button type="button" class="vb-editor-btn" title="Quote" @click="insertBBCode('quote')">&#10077;</button>
-              <button type="button" class="vb-editor-btn" title="Code" @click="insertBBCode('code')">&#60;/&#62;</button>
+              <button type="button" class="vb-editor-btn" title="Code" @click="insertBBCode('code')">
+                &#60;/&#62;
+              </button>
               <button type="button" class="vb-editor-btn" title="List" @click="insertBBCode('list')">&#9776;</button>
             </div>
 
@@ -352,7 +362,13 @@ onMounted(async () => {
 
             <div class="vb-reply-attachments">
               <label class="vb-attachment-label">Attachments:</label>
-              <input ref="threadFileInputRef" class="vb-attachment-input" type="file" multiple @change="handleThreadFiles" />
+              <input
+                ref="threadFileInputRef"
+                class="vb-attachment-input"
+                type="file"
+                multiple
+                @change="handleThreadFiles"
+              />
               <div v-if="threadFiles.length > 0" class="vb-attachment-selected">
                 <span>Selected:</span>
                 <ul>
@@ -392,6 +408,7 @@ onMounted(async () => {
                 <input v-model="silentPost" type="checkbox" />
                 <span>No robot response for this post (silent)</span>
               </label>
+              <AutoCompactOption v-if="isAdmin" v-model="autoCompactEnabled" :can-edit="isAdmin" />
               <div class="vb-reply-options">
                 <div class="vb-option-group">
                   <label for="thread-robot-mode-select">Robot Replies:</label>
@@ -400,17 +417,29 @@ onMounted(async () => {
                     <option value="mention">Mention-only (@robot)</option>
                     <option value="off">Off (never reply)</option>
                   </select>
-                  <span v-if="robotMode === 'mention'" class="vb-form-hint">Robot replies only when @robot is included.</span>
+                  <span v-if="robotMode === 'mention'" class="vb-form-hint"
+                    >Robot replies only when @robot is included.</span
+                  >
                 </div>
                 <div class="vb-option-group">
                   <label for="thread-model-select">Model:</label>
-                  <select id="thread-model-select" v-model="selectedModel" class="vb-option-select" :disabled="silentPost || robotMode === 'off'">
+                  <select
+                    id="thread-model-select"
+                    v-model="selectedModel"
+                    class="vb-option-select"
+                    :disabled="silentPost || robotMode === 'off'"
+                  >
                     <option v-for="model in modelOptions" :key="model" :value="model">{{ model }}</option>
                   </select>
                 </div>
                 <div class="vb-option-group" v-if="supportsReasoning">
                   <label for="thread-reasoning-select">Reasoning:</label>
-                  <select id="thread-reasoning-select" v-model="selectedReasoning" class="vb-option-select" :disabled="silentPost || robotMode === 'off'">
+                  <select
+                    id="thread-reasoning-select"
+                    v-model="selectedReasoning"
+                    class="vb-option-select"
+                    :disabled="silentPost || robotMode === 'off'"
+                  >
                     <option v-for="option in reasoningOptions" :key="option" :value="option">
                       {{ formatReasoningLabel(option) }}
                     </option>
@@ -423,20 +452,12 @@ onMounted(async () => {
 
         <!-- Submit Buttons -->
         <div class="vb-form-actions">
-          <button
-            class="vb-btn vb-btn-primary"
-            :disabled="!canSubmit"
-            @click="handleSubmit"
-          >
+          <button class="vb-btn vb-btn-primary" :disabled="!canSubmit" @click="handleSubmit">
             <span v-if="isSubmitting" class="vb-btn-spinner"></span>
-            {{ isUploading ? 'Uploading...' : (isSubmitting ? 'Posting...' : 'Submit New Thread') }}
+            {{ isUploading ? 'Uploading...' : isSubmitting ? 'Posting...' : 'Submit New Thread' }}
           </button>
-          <button class="vb-btn" @click="handlePreviewButton">
-            Preview Post
-          </button>
-          <button class="vb-btn vb-btn-secondary" @click="handleCancel">
-            Cancel
-          </button>
+          <button class="vb-btn" @click="handlePreviewButton">Preview Post</button>
+          <button class="vb-btn vb-btn-secondary" @click="handleCancel">Cancel</button>
         </div>
 
         <!-- Posting Rules -->
@@ -450,7 +471,8 @@ onMounted(async () => {
               <li>You <strong>may</strong> edit your posts</li>
             </ul>
             <div class="vb-bbcode-legend">
-              <strong>BBCode:</strong> [B]bold[/B], [I]italic[/I], [U]underline[/U], [URL]link[/URL], [IMG]image[/IMG], [QUOTE]quote[/QUOTE], [CODE]code[/CODE]
+              <strong>BBCode:</strong> [B]bold[/B], [I]italic[/I], [U]underline[/U], [URL]link[/URL], [IMG]image[/IMG],
+              [QUOTE]quote[/QUOTE], [CODE]code[/CODE]
             </div>
           </div>
         </div>
@@ -467,8 +489,14 @@ onMounted(async () => {
 }
 
 @keyframes fade-in {
-  from { opacity: 0; transform: translateY(-10px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .vb-forum-banner {
@@ -552,7 +580,9 @@ onMounted(async () => {
   font-size: 13px;
   background: var(--bg-input);
   color: var(--text-primary);
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .vb-form-input:focus {
@@ -691,7 +721,7 @@ onMounted(async () => {
   cursor: pointer;
 }
 
-.vb-checkbox-label input[type="checkbox"] {
+.vb-checkbox-label input[type='checkbox'] {
   width: 14px;
   height: 14px;
 }
@@ -735,8 +765,12 @@ onMounted(async () => {
 }
 
 @keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
 }
 
 /* Posting Rules */

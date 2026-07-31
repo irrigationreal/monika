@@ -1,4 +1,4 @@
-import type { ForumId, TopicId, PostId, IdentityId, TenantId } from './ids';
+import type { ForumId, IdentityId, PostId, TenantId, TopicId } from './ids';
 
 export type TopicStatus = 'open' | 'locked' | 'archived';
 export type ForumStatus = 'active' | 'archived';
@@ -33,6 +33,10 @@ export interface Topic {
   title: string;
   status: TopicStatus;
   robotMode?: RobotMode | null;
+  /** Whether Pi may automatically compact this canonical parent session. */
+  autoCompactEnabled?: boolean;
+  /** Optimistic revision for the shared thread setting. */
+  autoCompactRevision?: number;
   tags: string[];
   createdBy: IdentityId;
   createdAt: string;

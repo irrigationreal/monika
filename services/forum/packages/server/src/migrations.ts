@@ -35,8 +35,7 @@ const hasColumn = (db: Database.Database, tableName: string, columnName: string)
 
 const hasTable = (db: Database.Database, tableName: string): boolean => {
   const row = db.prepare("select name from sqlite_master where type = 'table' and name = ?").get(tableName) as
-    | { name: string }
-    | undefined;
+    { name: string } | undefined;
   return Boolean(row?.name);
 };
 
@@ -1051,7 +1050,9 @@ export const MIGRATIONS: Migration[] = [
         db.prepare('alter table pi_session_links add column lineage_source text').run();
       }
       db.exec('create index if not exists idx_pi_session_links_parent_id on pi_session_links(parent_pi_session_id)');
-      db.exec('create index if not exists idx_pi_session_links_parent_path on pi_session_links(parent_pi_session_path)');
+      db.exec(
+        'create index if not exists idx_pi_session_links_parent_path on pi_session_links(parent_pi_session_path)'
+      );
     },
   },
   {
@@ -1192,7 +1193,9 @@ export const MIGRATIONS: Migration[] = [
     version: 31,
     name: 'clear-idle-current-plans',
     up: (db) => {
-      db.prepare("update robot_state set current_plan_id = null where activity = 'idle' and current_plan_id is not null").run();
+      db.prepare(
+        "update robot_state set current_plan_id = null where activity = 'idle' and current_plan_id is not null"
+      ).run();
     },
   },
   {
@@ -1377,6 +1380,22 @@ export const MIGRATIONS: Migration[] = [
         create index if not exists idx_post_dispatches_generation
           on post_dispatches(topic_id, generation, status, created_at);
       `);
+    },
+  },
+  {
+    version: 37,
+    name: 'topic-auto-compaction-policy',
+    up: (db) => {
+      if (!hasColumn(db, 'topics', 'auto_compact_enabled')) {
+        db.prepare(
+          'alter table topics add column auto_compact_enabled integer not null default 0 check (auto_compact_enabled in (0, 1))'
+        ).run();
+      }
+      if (!hasColumn(db, 'topics', 'auto_compact_revision')) {
+        db.prepare(
+          'alter table topics add column auto_compact_revision integer not null default 0 check (auto_compact_revision >= 0)'
+        ).run();
+      }
     },
   },
 ];

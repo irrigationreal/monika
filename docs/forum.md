@@ -387,7 +387,7 @@ loaded branch and reports a branch conflict. Before reusing an idle cached
 conversation, agentd performs the same check and reloads it when disk advanced.
 This is a backstop for continuations that bypass the ownership extension.
 
-## Durable errors and manual compaction
+## Durable errors and compaction
 
 Execution failures and compactions are projected as forum operational events, not
 posts. `topic_operational_events` anchors each event after a real post while keeping
@@ -410,10 +410,34 @@ and the standalone HTTP deployment; it does not require the secure-context-only
 `crypto.randomUUID()` browser API. Agentd rejects busy or stale sessions and invokes
 Pi's public `AgentSession.compact()` API. Expected-leaf validation makes a lost HTTP
 response retry-safe: an existing compaction child proves that the operation already
-happened, so agentd does not compact twice. Automatic compaction remains disabled by
-runtime policy.
+happened, so agentd does not compact twice.
 
-After successful compaction, the forum atomically creates a user-attributed automated
+Automatic compaction is a separate default-off, topic-persistent policy exposed in
+new-thread, full-reply, and quick-reply options. Only administrators may change the
+shared setting, and an existing topic may change it only while idle with no pending
+dispatch. Replies carry the current optimistic setting revision so a stale tab cannot
+silently overwrite another change. Existing, imported, and handoff-created topics
+start disabled. Other participants receive read-only visibility because compaction
+affects their shared canonical context.
+
+The forum sends the desired policy whenever it creates, opens, recreates, or dispatches
+to an agentd conversation. Agentd applies it with a conversation-local,
+non-persistent `SettingsManager.applyOverrides()` overlay. It must not call Pi's
+`AgentSession.setAutoCompactionEnabled()`, whose settings-manager setter persists the
+shared global setting. Consequently unrelated parent sessions and direct Pi CLI use
+remain governed by the global default, which stays disabled.
+
+When enabled, Pi owns threshold detection and overflow recovery. Threshold compaction
+summarizes older context near the model limit. On the first context-overflow failure,
+Pi compacts and retries the original request inside the same forum response; agentd
+still commits only at `agent_settled`. Automatic compactions create idempotent
+maintenance operational events keyed by the canonical Pi compaction entry, refresh
+the context meter, and never create recovery-checkpoint posts. Summary text remains
+only in canonical Pi JSONL and is not copied into forum SQLite. Automatic failures are
+visible as failed maintenance events; terminal overflow still follows the ordinary
+turn-error path.
+
+After successful manual compaction, the forum atomically creates a user-attributed automated
 recovery-checkpoint post and queues it through the normal durable post dispatcher.
 The default prompt asks the assistant to restate goals, completed work, current work,
 remaining steps, blockers, and possibly lost details without doing further work. If

@@ -2207,6 +2207,13 @@
                               "off"
                             ]
                           },
+                          "autoCompactEnabled": {
+                            "type": "boolean"
+                          },
+                          "autoCompactRevision": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
                           "tags": {
                             "type": "array",
                             "items": {
@@ -2247,6 +2254,8 @@
                           "forumId",
                           "title",
                           "status",
+                          "autoCompactEnabled",
+                          "autoCompactRevision",
                           "tags",
                           "createdBy",
                           "createdAt",
@@ -2315,6 +2324,9 @@
                       "off"
                     ]
                   },
+                  "autoCompactEnabled": {
+                    "type": "boolean"
+                  },
                   "silent": {
                     "type": "boolean"
                   }
@@ -2364,6 +2376,13 @@
                         "off"
                       ]
                     },
+                    "autoCompactEnabled": {
+                      "type": "boolean"
+                    },
+                    "autoCompactRevision": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
                     "tags": {
                       "type": "array",
                       "items": {
@@ -2404,6 +2423,8 @@
                     "forumId",
                     "title",
                     "status",
+                    "autoCompactEnabled",
+                    "autoCompactRevision",
                     "tags",
                     "createdBy",
                     "createdAt",
@@ -2469,6 +2490,13 @@
                         "off"
                       ]
                     },
+                    "autoCompactEnabled": {
+                      "type": "boolean"
+                    },
+                    "autoCompactRevision": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
                     "tags": {
                       "type": "array",
                       "items": {
@@ -2509,6 +2537,8 @@
                     "forumId",
                     "title",
                     "status",
+                    "autoCompactEnabled",
+                    "autoCompactRevision",
                     "tags",
                     "createdBy",
                     "createdAt",
@@ -2590,6 +2620,13 @@
                         "off"
                       ]
                     },
+                    "autoCompactEnabled": {
+                      "type": "boolean"
+                    },
+                    "autoCompactRevision": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
                     "tags": {
                       "type": "array",
                       "items": {
@@ -2630,6 +2667,8 @@
                     "forumId",
                     "title",
                     "status",
+                    "autoCompactEnabled",
+                    "autoCompactRevision",
                     "tags",
                     "createdBy",
                     "createdAt",
@@ -2753,6 +2792,13 @@
                         "off"
                       ]
                     },
+                    "autoCompactEnabled": {
+                      "type": "boolean"
+                    },
+                    "autoCompactRevision": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
                     "tags": {
                       "type": "array",
                       "items": {
@@ -2793,6 +2839,8 @@
                     "forumId",
                     "title",
                     "status",
+                    "autoCompactEnabled",
+                    "autoCompactRevision",
                     "tags",
                     "createdBy",
                     "createdAt",
@@ -2878,6 +2926,13 @@
                         "off"
                       ]
                     },
+                    "autoCompactEnabled": {
+                      "type": "boolean"
+                    },
+                    "autoCompactRevision": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
                     "tags": {
                       "type": "array",
                       "items": {
@@ -2918,6 +2973,8 @@
                     "forumId",
                     "title",
                     "status",
+                    "autoCompactEnabled",
+                    "autoCompactRevision",
                     "tags",
                     "createdBy",
                     "createdAt",
@@ -3470,6 +3527,13 @@
                   },
                   "attachmentsPending": {
                     "type": "boolean"
+                  },
+                  "autoCompactEnabled": {
+                    "type": "boolean"
+                  },
+                  "autoCompactRevision": {
+                    "type": "integer",
+                    "minimum": 0
                   },
                   "silent": {
                     "type": "boolean"
@@ -4259,6 +4323,13 @@
                               "off"
                             ]
                           },
+                          "autoCompactEnabled": {
+                            "type": "boolean"
+                          },
+                          "autoCompactRevision": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
                           "tags": {
                             "type": "array",
                             "items": {
@@ -4299,6 +4370,8 @@
                           "forumId",
                           "title",
                           "status",
+                          "autoCompactEnabled",
+                          "autoCompactRevision",
                           "tags",
                           "createdBy",
                           "createdAt",
@@ -11221,6 +11294,13 @@
                             "off"
                           ]
                         },
+                        "autoCompactEnabled": {
+                          "type": "boolean"
+                        },
+                        "autoCompactRevision": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
                         "tags": {
                           "type": "array",
                           "items": {
@@ -11261,6 +11341,8 @@
                         "forumId",
                         "title",
                         "status",
+                        "autoCompactEnabled",
+                        "autoCompactRevision",
                         "tags",
                         "createdBy",
                         "createdAt",
@@ -12766,7 +12848,218 @@
                             ]
                           }
                         },
+                        "groups": {
+                          "type": "object",
+                          "properties": {
+                            "blockers": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "runId": {
+                                    "type": "string"
+                                  },
+                                  "state": {
+                                    "type": "string"
+                                  },
+                                  "executionState": {
+                                    "type": "string",
+                                    "enum": [
+                                      "active",
+                                      "terminal",
+                                      "interrupted",
+                                      "uncertain",
+                                      "quarantined"
+                                    ]
+                                  },
+                                  "deliveryState": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "blocking": {
+                                    "type": "boolean"
+                                  },
+                                  "reason": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "parentSessionId": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "topicId": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "topicTitle": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "postId": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "startedAt": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "updatedAt": {
+                                    "type": "string",
+                                    "nullable": true
+                                  }
+                                },
+                                "required": [
+                                  "runId",
+                                  "state",
+                                  "executionState",
+                                  "blocking"
+                                ]
+                              }
+                            },
+                            "pendingDelivery": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "runId": {
+                                    "type": "string"
+                                  },
+                                  "state": {
+                                    "type": "string"
+                                  },
+                                  "executionState": {
+                                    "type": "string",
+                                    "enum": [
+                                      "active",
+                                      "terminal",
+                                      "interrupted",
+                                      "uncertain",
+                                      "quarantined"
+                                    ]
+                                  },
+                                  "deliveryState": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "blocking": {
+                                    "type": "boolean"
+                                  },
+                                  "reason": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "parentSessionId": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "topicId": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "topicTitle": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "postId": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "startedAt": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "updatedAt": {
+                                    "type": "string",
+                                    "nullable": true
+                                  }
+                                },
+                                "required": [
+                                  "runId",
+                                  "state",
+                                  "executionState",
+                                  "blocking"
+                                ]
+                              }
+                            },
+                            "history": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "runId": {
+                                    "type": "string"
+                                  },
+                                  "state": {
+                                    "type": "string"
+                                  },
+                                  "executionState": {
+                                    "type": "string",
+                                    "enum": [
+                                      "active",
+                                      "terminal",
+                                      "interrupted",
+                                      "uncertain",
+                                      "quarantined"
+                                    ]
+                                  },
+                                  "deliveryState": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "blocking": {
+                                    "type": "boolean"
+                                  },
+                                  "reason": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "parentSessionId": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "topicId": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "topicTitle": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "postId": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "startedAt": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "updatedAt": {
+                                    "type": "string",
+                                    "nullable": true
+                                  }
+                                },
+                                "required": [
+                                  "runId",
+                                  "state",
+                                  "executionState",
+                                  "blocking"
+                                ]
+                              }
+                            }
+                          },
+                          "required": [
+                            "blockers",
+                            "pendingDelivery",
+                            "history"
+                          ]
+                        },
                         "omitted": {
+                          "type": "number"
+                        },
+                        "blockerCount": {
+                          "type": "number"
+                        },
+                        "omittedBlockerCount": {
                           "type": "number"
                         },
                         "available": {
@@ -12781,7 +13074,10 @@
                         "activeCount",
                         "uncertainCount",
                         "runs",
+                        "groups",
                         "omitted",
+                        "blockerCount",
+                        "omittedBlockerCount",
                         "available"
                       ]
                     },

@@ -1,11 +1,8 @@
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import { MIGRATIONS, SCHEMA_VERSION, runMigrations } from './migrations';
 import { ForumStore } from './store';
-import {
-  MIGRATIONS,
-  runMigrations,
-  SCHEMA_VERSION
-} from './migrations';
 
 describe('schema migrations', () => {
   let db: Database.Database;
@@ -18,11 +15,36 @@ describe('schema migrations', () => {
     db.close();
   });
 
+  it('backfills the default-off topic auto-compaction policy', () => {
+    runMigrations(db, { targetVersion: 36 });
+    db.prepare(
+      `insert into forums (id, tenant_id, parent_forum_id, category, name, description, cwd, pre_prompt, status, visibility, archived_at, created_at, updated_at)
+       values ('forum-1', null, null, null, 'Forum', null, null, null, 'active', 'public', null, 'now', 'now')`
+    ).run();
+    db.prepare(
+      `insert into identities (id, display_name, kind, created_at, updated_at)
+       values ('author-1', 'Author', 'human', 'now', 'now')`
+    ).run();
+    db.prepare(
+      `insert into topics (id, forum_id, tenant_id, title, status, tags_json, robot_mode, created_by, created_at, updated_at)
+       values ('topic-1', 'forum-1', null, 'Topic', 'open', '[]', 'auto', 'author-1', 'now', 'now')`
+    ).run();
+
+    runMigrations(db);
+
+    expect(
+      db.prepare('select auto_compact_enabled, auto_compact_revision from topics where id = ?').get('topic-1')
+    ).toEqual({
+      auto_compact_enabled: 0,
+      auto_compact_revision: 0,
+    });
+  });
+
   it('records applied schema versions', () => {
     runMigrations(db);
-    const rows = db
-      .prepare('select version from schema_migrations order by version asc')
-      .all() as Array<{ version: number }>;
+    const rows = db.prepare('select version from schema_migrations order by version asc').all() as Array<{
+      version: number;
+    }>;
     expect(rows).toHaveLength(MIGRATIONS.length);
     expect(rows.at(-1)?.version).toBe(SCHEMA_VERSION);
   });
@@ -62,7 +84,7 @@ describe('schema migrations', () => {
       content: 'idle stale plan',
       summary: 'idle stale plan',
       parentPostId: idleTopic.post.id,
-      visibility: 'internal'
+      visibility: 'internal',
     });
     const activeTopic = store.createTopic({ forumId: forum.id, title: 'Active', body: 'hello', authorId: author.id });
     const activeSession = store.ensureSession({ topicId: activeTopic.topic.id });
@@ -72,7 +94,7 @@ describe('schema migrations', () => {
       content: 'active plan',
       summary: 'active plan',
       parentPostId: activeTopic.post.id,
-      visibility: 'internal'
+      visibility: 'internal',
     });
     db.prepare(
       `insert into robot_state

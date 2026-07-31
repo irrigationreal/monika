@@ -101,25 +101,21 @@ Defaults:
 
 ## Message Templates
 
-Users can keep private, account-level Message Templates and insert them into quick
-reply, full reply, and new-thread drafts. Templates support optional categories,
-reply/new-thread applicability, optional new-thread titles, and all-forum or
-exact-forum scope. Administrators maintain a separate system template library.
-Selection inserts literal editable text; it never submits or changes robot options.
+Users can keep private, account-level Message Templates and insert them into quick reply, full reply, and new-thread
+drafts. Templates support optional categories, reply/new-thread applicability, optional new-thread titles, and all-forum
+or exact-forum scope. Administrators maintain a separate system template library. Selection inserts literal editable
+text; it never submits or changes robot options.
 
-Manage personal templates at `/profile/message-templates` and system templates in
-the Admin Panel. See `docs/CURL_EXAMPLES.md` and the OpenAPI document for APIs.
+Manage personal templates at `/profile/message-templates` and system templates in the Admin Panel. See
+`docs/CURL_EXAMPLES.md` and the OpenAPI document for APIs.
 
 ## Admin analytics
 
-Administrators can open `/admin/analytics` to inspect privacy-safe canonical Pi
-usage, tool reliability, normalized error clusters, parent-observed subagent wait
-time, delegation outcomes, model-vendor usage, and forum-native distinctive
-vocabulary. The forum authorizes and scopes the request, then asks agentd for
-aggregate runtime metrics over allowlisted linked Pi sessions. Forum SQLite is
-used only for vocabulary derived from visible post bodies; no analytics tables,
-memstore access, or model calls are added. See `../../docs/forum.md` for formulas
-and privacy boundaries.
+Administrators can open `/admin/analytics` to inspect privacy-safe canonical Pi usage, tool reliability, normalized
+error clusters, parent-observed subagent wait time, delegation outcomes, model-vendor usage, and forum-native
+distinctive vocabulary. The forum authorizes and scopes the request, then asks agentd for aggregate runtime metrics over
+allowlisted linked Pi sessions. Forum SQLite is used only for vocabulary derived from visible post bodies; no analytics
+tables, memstore access, or model calls are added. See `../../docs/forum.md` for formulas and privacy boundaries.
 
 ## API + integrations
 
@@ -183,11 +179,19 @@ Key env vars (see `packages/server/src/runtimeConfig.ts` for the full list):
 allow invite-code signup, or `public` to allow the legacy public/passwordless registration flow. Internet-facing
 deployments should keep the default `disabled` mode unless account creation is deliberately open.
 
-Search is visibility-aware when `CODEX_FORUM_ENABLE_SEARCH=1`: unauthenticated callers only search public-visible forums, authenticated members can also search members-only forums, and admin-only results require admin visibility. Forum pages search the current forum by default; the UI can opt into searching all visible forums. Public search should be paired with `CODEX_FORUM_ENABLE_RATE_LIMITING=1` so the route-specific search limiter is active.
+Search is visibility-aware when `CODEX_FORUM_ENABLE_SEARCH=1`: unauthenticated callers only search public-visible
+forums, authenticated members can also search members-only forums, and admin-only results require admin visibility.
+Forum pages search the current forum by default; the UI can opt into searching all visible forums. Public search should
+be paired with `CODEX_FORUM_ENABLE_RATE_LIMITING=1` so the route-specific search limiter is active.
 
-When `CODEX_FORUM_ENABLE_RATE_LIMITING=1`, limits are route-specific rather than global. Login/register, topic creation, replies, and search are limited; normal authenticated read routes are not globally throttled. Authenticated rate-limit buckets use the forum identity for browser sessions and the token id for API keys/impersonation tokens; anonymous buckets use `request.ip`. Set `CODEX_FORUM_TRUST_PROXY` only when the forum origin is private behind a trusted reverse proxy or Cloudflare Tunnel, so forwarded client IP headers cannot be spoofed by direct public traffic.
+When `CODEX_FORUM_ENABLE_RATE_LIMITING=1`, limits are route-specific rather than global. Login/register, topic creation,
+replies, and search are limited; normal authenticated read routes are not globally throttled. Authenticated rate-limit
+buckets use the forum identity for browser sessions and the token id for API keys/impersonation tokens; anonymous
+buckets use `request.ip`. Set `CODEX_FORUM_TRUST_PROXY` only when the forum origin is private behind a trusted reverse
+proxy or Cloudflare Tunnel, so forwarded client IP headers cannot be spoofed by direct public traffic.
 
-Public `/healthz` and `/api/healthz` responses are intentionally minimal. Operational deploy state is available through `/api/deploy/quiescence` only with `CODEX_FORUM_DEPLOY_TOKEN`, while `/api/models` requires an authenticated forum user.
+Public `/healthz` and `/api/healthz` responses are intentionally minimal. Operational deploy state is available through
+`/api/deploy/quiescence` only with `CODEX_FORUM_DEPLOY_TOKEN`, while `/api/models` requires an authenticated forum user.
 
 For full deployment guidance, see `docs/DEPLOYMENT.md`.
 
@@ -197,6 +201,10 @@ For full deployment guidance, see `docs/DEPLOYMENT.md`.
 - The Admin Panel is available under `/admin`; logged-in users can access the Developer Portal under `/developers`, API
   docs under `/docs/api`, and chat under `/chat`.
 - The UI assumes forum-native auth, but the API supports API keys and impersonation tokens.
+- Canonical parent-session automatic compaction is a default-off, admin-controlled topic setting. The forum persists the
+  policy and sends it to agentd; Pi performs native threshold and overflow-retry compaction. Automatic compaction
+  creates maintenance events but never the manual recovery-checkpoint post. Direct Pi CLI and disposable child policies
+  remain independent. See `../../docs/forum.md`.
 
 ## Testing
 

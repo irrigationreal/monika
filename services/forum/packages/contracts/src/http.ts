@@ -1,3 +1,5 @@
+import type { MessageTemplateContext, MessageTemplateForumScope } from '@irrigationreal/codex-forum-core';
+
 import type {
   AdminAnalyticsDto,
   ExternalRefDto,
@@ -9,11 +11,10 @@ import type {
   RobotStateDto,
   SessionDto,
   SessionInspectorDto,
-  TopicDto
+  TopicDto,
 } from './dto';
-import type { MessageTemplateContext, MessageTemplateForumScope } from '@irrigationreal/codex-forum-core';
-import type { ForumThemeKey } from './themes';
 import type { PageResponse } from './pagination';
+import type { ForumThemeKey } from './themes';
 
 export interface CreateForumRequest {
   name: string;
@@ -46,6 +47,8 @@ export interface CreateTopicRequest {
    * - off: never respond
    */
   robotMode?: 'auto' | 'mention' | 'off';
+  /** Admin-only, shared thread policy. New topics default to false. */
+  autoCompactEnabled?: boolean;
   /**
    * When true, the forum will store the post but will not dispatch a robot turn for it.
    * A subsequent non-silent post will include these silent posts as catch-up context once.
@@ -63,6 +66,9 @@ export interface CreatePostRequest {
    * Call the post dispatch endpoint once attachments finish uploading.
    */
   attachmentsPending?: boolean;
+  /** Admin-only desired shared thread policy; must be paired with its revision. */
+  autoCompactEnabled?: boolean;
+  autoCompactRevision?: number;
   /**
    * When true, the forum will store the post but will not dispatch a robot turn for it.
    * A subsequent non-silent post will include these silent posts as catch-up context once.
@@ -338,7 +344,10 @@ export interface ForumApi {
   getRobotState(topicId: string): Promise<RobotStateDto>;
   listIdentities(topicId: string, page?: number, pageSize?: number): Promise<PageResponse<IdentityDto>>;
   getIdentity(identityId: string): Promise<IdentityDto>;
-  listEffectiveMessageTemplates(context: MessageTemplateContext, forumId: string): Promise<MessageTemplateListResponseDto>;
+  listEffectiveMessageTemplates(
+    context: MessageTemplateContext,
+    forumId: string
+  ): Promise<MessageTemplateListResponseDto>;
   listMyMessageTemplates(): Promise<MessageTemplateListResponseDto>;
   createMessageTemplate(req: MessageTemplateWriteRequest): Promise<MessageTemplateDto>;
   updateMessageTemplate(id: string, req: MessageTemplateUpdateRequest): Promise<MessageTemplateDto>;

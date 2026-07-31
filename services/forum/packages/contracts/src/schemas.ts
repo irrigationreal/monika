@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import {
   AccessRuleActionValues,
   AccessRuleEffectValues,
@@ -9,18 +11,21 @@ import {
   MessageTemplateContextValues,
   MessageTemplateForumScopeValues,
   MessageTemplateScopeValues,
-  RobotModeValues
+  RobotModeValues,
 } from '@irrigationreal/codex-forum-core';
+
 import { RegistrationModeValues } from './dto';
-import { z } from 'zod';
 import {
   OidcEnabledResponseDtoSchema,
   OidcExternalIdentityListResponseDtoSchema,
   OidcLinkRequestSchema,
   OidcLinkResponseDtoSchema,
   OidcUnlinkRequestSchema,
-  OidcUnlinkResponseDtoSchema
+  OidcUnlinkResponseDtoSchema,
 } from './oidc';
+import { PageRequestSchema, PageResponseSchema } from './pagination';
+import { ForumThemeKeySchema } from './themes';
+
 import type {
   AccessRuleDto,
   AdminAnalyticsDto,
@@ -51,6 +56,8 @@ import type {
   ChatRoomDto,
   ChatRoomListDto,
   ChatTypingDto,
+  CompactionOperationDto,
+  CreateCompactionRequestDto,
   DiscordBridgeStatusDto,
   DiscordChannelMappingDto,
   ExternalRefDto,
@@ -70,25 +77,22 @@ import type {
   MessageTemplateListResponseDto,
   ModelCatalogDto,
   ModelInfoDto,
+  NotificationDto,
   PlanDto,
   PostDto,
   ReactionCountDto,
   RecentPostDto,
-  RegistrationModeDto,
   RegisterResponseDto,
+  RegistrationModeDto,
   RobotAutomationDto,
   RobotAutomationRunDto,
-  TopicAutoRunDto,
   RobotDashboardDto,
   RobotJobDto,
-  RobotSubagentRunDto,
   RobotPersonaDto,
   RobotQueueItemDto,
   RobotSettingsDto,
   RobotStateDto,
-  TopicOperationalEventDto,
-  CreateCompactionRequestDto,
-  CompactionOperationDto,
+  RobotSubagentRunDto,
   SearchResultsDto,
   SessionDto,
   SessionInspectorDto,
@@ -99,17 +103,18 @@ import type {
   TamperTrailEntryDto,
   ToolRunDto,
   TopicAttachmentsDto,
+  TopicAutoRunDto,
   TopicDto,
   TopicMoveDto,
+  TopicOperationalEventDto,
+  TopicSubscriptionDto,
+  TopicUnreadDto,
   UpdatePrivateEmailResponseDto,
   UserFileDto,
   UserPostHistoryItemDto,
   UserPostHistoryResponseDto,
   UserProfileDto,
-  NotificationDto,
-  TopicSubscriptionDto,
-  TopicUnreadDto,
-  VerifyResponseDto
+  VerifyResponseDto,
 } from './dto';
 import type {
   AdminAccessRuleRequest,
@@ -128,10 +133,10 @@ import type {
   AdminUpdateUserRequest,
   AttachmentChunkedStartRequest,
   ChatTypingRequest,
+  CreateApiKeyRequest,
   CreateChatCategoryRequest,
   CreateChatMessageRequest,
   CreateChatRoomRequest,
-  CreateApiKeyRequest,
   CreateForumRequest,
   CreateImpersonationTokenRequest,
   CreateInviteRequest,
@@ -152,11 +157,9 @@ import type {
   UpdatePrivateEmailRequest,
   UpdateTopicStatusRequest,
   UpdateTopicTagsRequest,
-  UpdateTopicTitleRequest
+  UpdateTopicTitleRequest,
 } from './http';
-import { PageRequestSchema, PageResponseSchema } from './pagination';
 import type { PageRequest, PageResponse } from './pagination';
-import { ForumThemeKeySchema } from './themes';
 
 const nullableString = z.string().nullable();
 const optionalNullableString = z.string().nullable().optional();
@@ -190,7 +193,7 @@ export const ForumLastPostDtoSchema: z.ZodType<ForumLastPostDto> = z.object({
   topicTitle: z.string(),
   authorId: z.string(),
   authorName: z.string(),
-  createdAt: z.string()
+  createdAt: z.string(),
 });
 
 export const RecentPostDtoSchema: z.ZodType<RecentPostDto> = z.object({
@@ -202,7 +205,7 @@ export const RecentPostDtoSchema: z.ZodType<RecentPostDto> = z.object({
   authorId: z.string(),
   authorName: z.string(),
   body: z.string(),
-  createdAt: z.string()
+  createdAt: z.string(),
 });
 
 export const ModelInfoDtoSchema: z.ZodType<ModelInfoDto> = z.object({
@@ -213,14 +216,13 @@ export const ModelInfoDtoSchema: z.ZodType<ModelInfoDto> = z.object({
   supportedThinkingLevels: z.array(z.string()).optional(),
   supportsTools: z.boolean().optional(),
   defaultReasoning: optionalNullableString,
-  contextWindowTokens: z.number().nullable().optional()
+  contextWindowTokens: z.number().nullable().optional(),
 });
 
 export const ModelCatalogDtoSchema: z.ZodType<ModelCatalogDto> = z.object({
   items: z.array(ModelInfoDtoSchema),
-  updatedAt: z.string()
+  updatedAt: z.string(),
 });
-
 
 export const ForumDtoSchema: z.ZodType<ForumDto> = z.object({
   id: z.string(),
@@ -236,7 +238,7 @@ export const ForumDtoSchema: z.ZodType<ForumDto> = z.object({
   postCount: z.number(),
   lastPost: ForumLastPostDtoSchema.nullable(),
   createdAt: z.string(),
-  updatedAt: z.string()
+  updatedAt: z.string(),
 });
 
 export const TopicDtoSchema: z.ZodType<TopicDto> = z.object({
@@ -246,6 +248,8 @@ export const TopicDtoSchema: z.ZodType<TopicDto> = z.object({
   title: z.string(),
   status: TopicStatusSchema,
   robotMode: RobotModeSchema.optional(),
+  autoCompactEnabled: z.boolean(),
+  autoCompactRevision: z.number().int().nonnegative(),
   tags: z.array(z.string()),
   createdBy: z.string(),
   createdByName: optionalNullableString,
@@ -254,7 +258,7 @@ export const TopicDtoSchema: z.ZodType<TopicDto> = z.object({
   postCount: z.number().optional(),
   lastPostAuthorId: optionalNullableString,
   lastPostAuthorName: optionalNullableString,
-  lastPostAt: optionalNullableString
+  lastPostAt: optionalNullableString,
 });
 
 export const TopicMoveDtoSchema: z.ZodType<TopicMoveDto> = z.object({
@@ -266,12 +270,12 @@ export const TopicMoveDtoSchema: z.ZodType<TopicMoveDto> = z.object({
   movedAt: z.string(),
   markerPostId: optionalNullableString,
   needsReprompt: z.boolean(),
-  silent: z.boolean()
+  silent: z.boolean(),
 });
 
 export const ReactionCountDtoSchema: z.ZodType<ReactionCountDto> = z.object({
   emoji: z.string(),
-  count: z.number()
+  count: z.number(),
 });
 
 export const PostDtoSchema: z.ZodType<PostDto> = z.object({
@@ -286,7 +290,7 @@ export const PostDtoSchema: z.ZodType<PostDto> = z.object({
   createdAt: z.string(),
   editedAt: optionalNullableString,
   deletedAt: optionalNullableString,
-  reactionCounts: z.array(ReactionCountDtoSchema).optional()
+  reactionCounts: z.array(ReactionCountDtoSchema).optional(),
 });
 
 export const AttachmentDtoSchema: z.ZodType<AttachmentDto> = z.object({
@@ -295,17 +299,17 @@ export const AttachmentDtoSchema: z.ZodType<AttachmentDto> = z.object({
   filename: z.string(),
   mimeType: z.string(),
   sizeBytes: z.number(),
-  createdAt: z.string()
+  createdAt: z.string(),
 });
 
 export const TopicAttachmentsDtoSchema: z.ZodType<TopicAttachmentsDto> = z.object({
-  itemsByPostId: z.record(z.string(), z.array(AttachmentDtoSchema))
+  itemsByPostId: z.record(z.string(), z.array(AttachmentDtoSchema)),
 });
 
 export const ChatAuthorDtoSchema: z.ZodType<ChatAuthorDto> = z.object({
   id: z.string(),
   displayName: z.string(),
-  avatarUrl: optionalNullableString
+  avatarUrl: optionalNullableString,
 });
 
 export const ChatCategoryDtoSchema: z.ZodType<ChatCategoryDto> = z.object({
@@ -315,7 +319,7 @@ export const ChatCategoryDtoSchema: z.ZodType<ChatCategoryDto> = z.object({
   visibility: ForumVisibilitySchema,
   roomCount: z.number(),
   createdAt: z.string(),
-  updatedAt: z.string()
+  updatedAt: z.string(),
 });
 
 export const ChatRoomDtoSchema: z.ZodType<ChatRoomDto> = z.object({
@@ -328,7 +332,7 @@ export const ChatRoomDtoSchema: z.ZodType<ChatRoomDto> = z.object({
   lastMessageAt: optionalNullableString,
   lastMessageAuthorName: optionalNullableString,
   createdAt: z.string(),
-  updatedAt: z.string()
+  updatedAt: z.string(),
 });
 
 export const ChatMessageDtoSchema: z.ZodType<ChatMessageDto> = z.object({
@@ -339,17 +343,17 @@ export const ChatMessageDtoSchema: z.ZodType<ChatMessageDto> = z.object({
   createdAt: z.string(),
   editedAt: optionalNullableString,
   expiresAt: optionalNullableString,
-  attachments: z.array(AttachmentDtoSchema)
+  attachments: z.array(AttachmentDtoSchema),
 });
 
 export const ChatCategoryListDtoSchema: z.ZodType<ChatCategoryListDto> = z.object({
   rootForumId: z.string(),
-  items: z.array(ChatCategoryDtoSchema)
+  items: z.array(ChatCategoryDtoSchema),
 });
 
 export const ChatRoomListDtoSchema: z.ZodType<ChatRoomListDto> = z.object({
   categoryId: z.string(),
-  items: z.array(ChatRoomDtoSchema)
+  items: z.array(ChatRoomDtoSchema),
 });
 
 export const ChatMessagePageDtoSchema = z.object({
@@ -357,31 +361,31 @@ export const ChatMessagePageDtoSchema = z.object({
   items: z.array(ChatMessageDtoSchema),
   hasMore: z.boolean(),
   nextBefore: optionalNullableStringNoUndefined,
-  nextAfter: optionalNullableString.optional()
+  nextAfter: optionalNullableString.optional(),
 });
 
 export const ChatPresenceDtoSchema: z.ZodType<ChatPresenceDto> = z.object({
   id: z.string(),
   displayName: z.string(),
   avatarUrl: optionalNullableString,
-  joinedAt: z.string()
+  joinedAt: z.string(),
 });
 
 export const ChatPresenceStateDtoSchema: z.ZodType<ChatPresenceStateDto> = z.object({
   roomId: z.string(),
-  members: z.array(ChatPresenceDtoSchema)
+  members: z.array(ChatPresenceDtoSchema),
 });
 
 export const ChatPresenceEventDtoSchema: z.ZodType<ChatPresenceEventDto> = z.object({
   roomId: z.string(),
-  member: ChatPresenceDtoSchema
+  member: ChatPresenceDtoSchema,
 });
 
 export const ChatTypingDtoSchema: z.ZodType<ChatTypingDto> = z.object({
   roomId: z.string(),
   identityId: z.string(),
   displayName: z.string(),
-  isTyping: z.boolean()
+  isTyping: z.boolean(),
 });
 
 export const UserFileDtoSchema: z.ZodType<UserFileDto> = z.object({
@@ -390,7 +394,7 @@ export const UserFileDtoSchema: z.ZodType<UserFileDto> = z.object({
   filename: z.string(),
   mimeType: z.string(),
   sizeBytes: z.number(),
-  createdAt: z.string()
+  createdAt: z.string(),
 });
 
 export const ApiKeyDtoSchema: z.ZodType<ApiKeyDto> = z.object({
@@ -401,7 +405,7 @@ export const ApiKeyDtoSchema: z.ZodType<ApiKeyDto> = z.object({
   lastUsedAt: nullableString,
   expiresAt: nullableString,
   createdAt: z.string(),
-  revokedAt: nullableString
+  revokedAt: nullableString,
 });
 
 export const ImpersonationTokenDtoSchema: z.ZodType<ImpersonationTokenDto> = z.object({
@@ -415,7 +419,7 @@ export const ImpersonationTokenDtoSchema: z.ZodType<ImpersonationTokenDto> = z.o
   lastUsedAt: nullableString,
   expiresAt: nullableString,
   createdAt: z.string(),
-  revokedAt: nullableString
+  revokedAt: nullableString,
 });
 
 export const IdentityDtoSchema: z.ZodType<IdentityDto> = z.object({
@@ -432,7 +436,7 @@ export const IdentityDtoSchema: z.ZodType<IdentityDto> = z.object({
   rank: z.string().optional(),
   joinDate: z.string().optional(),
   createdAt: z.string(),
-  updatedAt: z.string()
+  updatedAt: z.string(),
 });
 
 export const UserProfileDtoSchema: z.ZodType<UserProfileDto> = IdentityDtoSchema;
@@ -444,14 +448,14 @@ export const UserPostHistoryItemDtoSchema: z.ZodType<UserPostHistoryItemDto> = z
   forumId: z.string(),
   forumName: z.string(),
   createdAt: z.string(),
-  excerpt: z.string()
+  excerpt: z.string(),
 });
 
 export const UserPostHistoryResponseDtoSchema: z.ZodType<UserPostHistoryResponseDto> = z.object({
   page: z.number(),
   pageSize: z.number(),
   total: z.number(),
-  items: z.array(UserPostHistoryItemDtoSchema)
+  items: z.array(UserPostHistoryItemDtoSchema),
 });
 
 export const NotificationDtoSchema: z.ZodType<NotificationDto> = z.object({
@@ -463,7 +467,7 @@ export const NotificationDtoSchema: z.ZodType<NotificationDto> = z.object({
   postId: optionalNullableString,
   payload: z.record(z.unknown()).nullable().optional(),
   createdAt: z.string(),
-  readAt: optionalNullableString
+  readAt: optionalNullableString,
 });
 
 export const TopicUnreadDtoSchema: z.ZodType<TopicUnreadDto> = z.object({
@@ -473,7 +477,7 @@ export const TopicUnreadDtoSchema: z.ZodType<TopicUnreadDto> = z.object({
   lastReadAt: optionalNullableString,
   lastPostId: optionalNullableString,
   lastPostAt: optionalNullableString,
-  unreadCount: z.number()
+  unreadCount: z.number(),
 });
 
 export const TopicSubscriptionDtoSchema: z.ZodType<TopicSubscriptionDto> = z.object({
@@ -481,7 +485,7 @@ export const TopicSubscriptionDtoSchema: z.ZodType<TopicSubscriptionDto> = z.obj
   identityId: z.string(),
   mode: z.enum(['watching', 'muted', 'off']),
   createdAt: z.string(),
-  updatedAt: z.string()
+  updatedAt: z.string(),
 });
 
 export const RobotPersonaDtoSchema = z.object({
@@ -493,12 +497,12 @@ export const RobotPersonaDtoSchema = z.object({
   avatarUrl: nullableString,
   signature: nullableString,
   createdAt: z.string(),
-  updatedAt: z.string()
+  updatedAt: z.string(),
 }) satisfies z.ZodType<RobotPersonaDto>;
 
 export const AdminRobotPersonaDtoSchema = RobotPersonaDtoSchema.extend({
   identityId: z.string(),
-  soul: nullableString
+  soul: nullableString,
 }) satisfies z.ZodType<AdminRobotPersonaDto>;
 
 export const AdminForumDtoSchema: z.ZodType<AdminForumDto> = z.object({
@@ -514,7 +518,7 @@ export const AdminForumDtoSchema: z.ZodType<AdminForumDto> = z.object({
   archivedAt: optionalNullableString,
   topicCount: z.number(),
   createdAt: z.string(),
-  updatedAt: z.string()
+  updatedAt: z.string(),
 });
 
 export const AccessRuleDtoSchema: z.ZodType<AccessRuleDto> = z.object({
@@ -525,7 +529,7 @@ export const AccessRuleDtoSchema: z.ZodType<AccessRuleDto> = z.object({
   principalId: optionalNullableString,
   action: AccessRuleActionSchema,
   effect: AccessRuleEffectSchema,
-  createdAt: z.string()
+  createdAt: z.string(),
 });
 
 export const AdminUserDtoSchema: z.ZodType<AdminUserDto> = z.object({
@@ -534,7 +538,7 @@ export const AdminUserDtoSchema: z.ZodType<AdminUserDto> = z.object({
   username: nullableString,
   kind: IdentityKindSchema,
   avatarUrl: nullableString,
-  createdAt: z.string()
+  createdAt: z.string(),
 });
 
 export const InviteDtoSchema: z.ZodType<InviteDto> = z.object({
@@ -544,7 +548,7 @@ export const InviteDtoSchema: z.ZodType<InviteDto> = z.object({
   maxUses: z.number(),
   uses: z.number(),
   expiresAt: nullableString,
-  createdAt: z.string()
+  createdAt: z.string(),
 });
 
 export const ExternalRefDtoSchema: z.ZodType<ExternalRefDto> = z.object({
@@ -561,7 +565,7 @@ export const ExternalRefDtoSchema: z.ZodType<ExternalRefDto> = z.object({
   mappedForumId: optionalNullableString,
   mappedTopicId: optionalNullableString,
   mappedPostId: optionalNullableString,
-  mappedIdentityId: optionalNullableString
+  mappedIdentityId: optionalNullableString,
 });
 
 export const PlanDtoSchema: z.ZodType<PlanDto> = z.object({
@@ -572,7 +576,7 @@ export const PlanDtoSchema: z.ZodType<PlanDto> = z.object({
   reasoningCheckpoints: z.array(z.number()).nullable().optional(),
   visibility: PlanVisibilitySchema,
   createdAt: z.string(),
-  updatedAt: z.string()
+  updatedAt: z.string(),
 });
 
 export const ToolRunDtoSchema: z.ZodType<ToolRunDto> = z.object({
@@ -586,7 +590,7 @@ export const ToolRunDtoSchema: z.ZodType<ToolRunDto> = z.object({
   filesTouched: z.array(z.string()).nullable().optional(),
   outputSummary: optionalNullableString,
   redactionsApplied: z.boolean(),
-  visibility: ToolRunVisibilitySchema
+  visibility: ToolRunVisibilitySchema,
 });
 
 export const TopicOperationalEventDtoSchema: z.ZodType<TopicOperationalEventDto> = z.object({
@@ -600,14 +604,14 @@ export const TopicOperationalEventDtoSchema: z.ZodType<TopicOperationalEventDto>
   detail: z.record(z.string(), z.unknown()).nullable(),
   sourceKind: z.enum(['echs_turn', 'compaction_operation']),
   sourceId: z.string(),
-  createdAt: z.string()
+  createdAt: z.string(),
 });
 
 export const CreateCompactionRequestSchema: z.ZodType<CreateCompactionRequestDto> = z.object({
   operationId: z.string().min(1).max(200),
   confirmation: z.literal('COMPACT'),
   customInstructions: z.string().max(20_000).nullable(),
-  recoveryPrompt: z.string().trim().min(1).max(100_000)
+  recoveryPrompt: z.string().trim().min(1).max(100_000),
 });
 
 export const CompactionOperationDtoSchema: z.ZodType<CompactionOperationDto> = z.object({
@@ -624,7 +628,7 @@ export const CompactionOperationDtoSchema: z.ZodType<CompactionOperationDto> = z
   errorMessage: z.string().nullable(),
   createdAt: z.string(),
   startedAt: z.string().nullable(),
-  finishedAt: z.string().nullable()
+  finishedAt: z.string().nullable(),
 });
 
 export const SessionContextDtoSchema = z.object({
@@ -639,7 +643,7 @@ export const SessionContextDtoSchema = z.object({
   exact: z.boolean(),
   source: z.string(),
   asOfPiMessageId: z.string().nullable(),
-  leafEntryId: z.string().nullable().optional()
+  leafEntryId: z.string().nullable().optional(),
 });
 
 export const RobotStateDtoSchema: z.ZodType<RobotStateDto> = z.object({
@@ -675,7 +679,7 @@ export const RobotJobDtoSchema: z.ZodType<RobotJobDto> = z.object({
   reasoningEffort: optionalNullableString,
   lastUpdatedAt: z.string(),
   activeTurnId: optionalNullableString,
-  threadLoaded: z.boolean().nullable().optional()
+  threadLoaded: z.boolean().nullable().optional(),
 });
 
 export const RobotQueueItemDtoSchema: z.ZodType<RobotQueueItemDto> = z.object({
@@ -686,7 +690,7 @@ export const RobotQueueItemDtoSchema: z.ZodType<RobotQueueItemDto> = z.object({
   forumId: optionalNullableString,
   forumName: optionalNullableString,
   parentPostId: optionalNullableString,
-  sessionId: z.string()
+  sessionId: z.string(),
 });
 
 export const RobotSubagentRunDtoSchema: z.ZodType<RobotSubagentRunDto> = z.object({
@@ -847,7 +851,7 @@ export const TamperPluginDtoSchema: z.ZodType<TamperPluginDto> = z.object({
   stages: z.array(z.string()),
   defaultDirection: z.enum(['inbound', 'outbound', 'both']).optional(),
   defaultOnlyFirstMessage: z.boolean().optional(),
-  defaultConfig: z.record(z.unknown()).nullable().optional()
+  defaultConfig: z.record(z.unknown()).nullable().optional(),
 });
 
 export const TamperConfigDtoSchema: z.ZodType<TamperConfigDto> = z.object({
@@ -860,7 +864,7 @@ export const TamperConfigDtoSchema: z.ZodType<TamperConfigDto> = z.object({
   onlyFirstMessage: z.boolean().nullable().optional(),
   config: z.record(z.unknown()).nullable(),
   createdAt: z.string(),
-  updatedAt: z.string()
+  updatedAt: z.string(),
 });
 
 export const TamperTrailEntryDtoSchema: z.ZodType<TamperTrailEntryDto> = z.object({
@@ -873,14 +877,14 @@ export const TamperTrailEntryDtoSchema: z.ZodType<TamperTrailEntryDto> = z.objec
   outputText: z.string(),
   changed: z.boolean(),
   error: optionalNullableString,
-  notes: z.record(z.unknown()).optional()
+  notes: z.record(z.unknown()).optional(),
 });
 
 export const TamperTestResultDtoSchema: z.ZodType<TamperTestResultDto> = z.object({
   inputText: z.string(),
   outputText: z.string(),
   tampered: z.boolean(),
-  trail: z.array(TamperTrailEntryDtoSchema)
+  trail: z.array(TamperTrailEntryDtoSchema),
 });
 
 export const RobotAutomationDtoSchema: z.ZodType<RobotAutomationDto> = z.object({
@@ -896,7 +900,7 @@ export const RobotAutomationDtoSchema: z.ZodType<RobotAutomationDto> = z.object(
   intervalMinutes: z.number().nullable().optional(),
   lastRunAt: optionalNullableString,
   createdAt: z.string(),
-  updatedAt: z.string()
+  updatedAt: z.string(),
 });
 
 export const RobotAutomationRunDtoSchema: z.ZodType<RobotAutomationRunDto> = z.object({
@@ -911,7 +915,7 @@ export const RobotAutomationRunDtoSchema: z.ZodType<RobotAutomationRunDto> = z.o
   exitCode: z.number().nullable().optional(),
   outputSummary: optionalNullableString,
   lastMessage: optionalNullableString,
-  logPath: optionalNullableString
+  logPath: optionalNullableString,
 });
 
 export const TopicAutoRunDtoSchema: z.ZodType<TopicAutoRunDto> = z.object({
@@ -931,7 +935,7 @@ export const TopicAutoRunDtoSchema: z.ZodType<TopicAutoRunDto> = z.object({
   lastError: optionalNullableString,
   steerMessage: optionalNullableString,
   createdAt: optionalNullableString,
-  updatedAt: optionalNullableString
+  updatedAt: optionalNullableString,
 });
 
 export const SessionDtoSchema: z.ZodType<SessionDto> = z.object({
@@ -939,7 +943,7 @@ export const SessionDtoSchema: z.ZodType<SessionDto> = z.object({
   topicId: z.string(),
   createdAt: z.string(),
   updatedAt: z.string(),
-  status: z.enum(['active', 'paused', 'completed', 'error'])
+  status: z.enum(['active', 'paused', 'completed', 'error']),
 });
 
 export const SessionMessageDtoSchema: z.ZodType<SessionMessageDto> = z.object({
@@ -948,7 +952,7 @@ export const SessionMessageDtoSchema: z.ZodType<SessionMessageDto> = z.object({
   role: z.enum(['system', 'assistant', 'user', 'tool']),
   content: z.string(),
   createdAt: z.string(),
-  visibility: PlanVisibilitySchema
+  visibility: PlanVisibilitySchema,
 });
 
 export const SessionInspectorDtoSchema: z.ZodType<SessionInspectorDto> = z.object({
@@ -961,9 +965,9 @@ export const SessionInspectorDtoSchema: z.ZodType<SessionInspectorDto> = z.objec
       id: z.string(),
       kind: z.string(),
       label: z.string(),
-      visibility: PlanVisibilitySchema
+      visibility: PlanVisibilitySchema,
     })
-  )
+  ),
 });
 
 export const AdminDeployStatusDtoSchema: z.ZodType<AdminDeployStatusDto> = z.object({
@@ -978,22 +982,22 @@ export const AdminDeployStatusDtoSchema: z.ZodType<AdminDeployStatusDto> = z.obj
   commitSha: optionalNullableString,
   deployOnFinishRequestedAt: optionalNullableString,
   deployOnFinishLastCheckedAt: optionalNullableString,
-  deployOnFinishLastError: optionalNullableString
+  deployOnFinishLastError: optionalNullableString,
 });
 
 export const AdminDeployResponseDtoSchema: z.ZodType<AdminDeployResponseDto> = z.object({
   ok: z.boolean(),
   startedAt: optionalNullableString,
-  logPath: optionalNullableString
+  logPath: optionalNullableString,
 });
 
 export const AdminDeployOnFinishResponseDtoSchema: z.ZodType<AdminDeployOnFinishResponseDto> = z.object({
   ok: z.boolean(),
-  requestedAt: optionalNullableString
+  requestedAt: optionalNullableString,
 });
 
 export const AdminCancelDeployOnFinishResponseDtoSchema: z.ZodType<AdminCancelDeployOnFinishResponseDto> = z.object({
-  ok: z.boolean()
+  ok: z.boolean(),
 });
 
 export const AuthIdentityDtoSchema: z.ZodType<AuthIdentityDto> = z.object({
@@ -1005,29 +1009,29 @@ export const AuthIdentityDtoSchema: z.ZodType<AuthIdentityDto> = z.object({
   location: optionalNullableString,
   signature: optionalNullableString,
   theme: ForumThemeKeySchema.nullable().optional(),
-  hasPrivateEmail: z.boolean().optional()
+  hasPrivateEmail: z.boolean().optional(),
 });
 
 export const RegistrationModeDtoSchema: z.ZodType<RegistrationModeDto> = z.object({
   mode: RegistrationModeSchema,
   registrationEnabled: z.boolean(),
   inviteRegistrationEnabled: z.boolean(),
-  publicRegistrationEnabled: z.boolean()
+  publicRegistrationEnabled: z.boolean(),
 });
 
 export const AuthUserDtoSchema: z.ZodType<AuthUserDto> = z.object({
-  identity: AuthIdentityDtoSchema.nullable()
+  identity: AuthIdentityDtoSchema.nullable(),
 });
 
 export const IdentityPermissionsDtoSchema: z.ZodType<IdentityPermissionsDto> = z.object({
-  permissions: z.array(z.string())
+  permissions: z.array(z.string()),
 });
 
 export const LoginResponseDtoSchema: z.ZodType<LoginResponseDto> = z.object({
   token: z.string().nullable(),
   refreshToken: optionalNullableString,
   identity: AuthIdentityDtoSchema.optional(),
-  message: z.string().optional()
+  message: z.string().optional(),
 });
 
 export const RegisterResponseDtoSchema: z.ZodType<RegisterResponseDto> = z.object({
@@ -1036,13 +1040,13 @@ export const RegisterResponseDtoSchema: z.ZodType<RegisterResponseDto> = z.objec
   expiresAt: z.string().optional(),
   emailSent: z.boolean().optional(),
   token: z.string().optional(),
-  refreshToken: z.string().optional()
+  refreshToken: z.string().optional(),
 });
 
 export const VerifyResponseDtoSchema: z.ZodType<VerifyResponseDto> = z.object({
   token: z.string(),
   refreshToken: z.string().optional(),
-  identity: AuthIdentityDtoSchema
+  identity: AuthIdentityDtoSchema,
 });
 
 export const InviteInfoDtoSchema: z.ZodType<InviteInfoDto> = z.object({
@@ -1050,45 +1054,45 @@ export const InviteInfoDtoSchema: z.ZodType<InviteInfoDto> = z.object({
   valid: z.boolean(),
   message: z.string().optional(),
   remainingUses: z.number().optional(),
-  expiresAt: optionalNullableString
+  expiresAt: optionalNullableString,
 });
 
 export const UpdatePrivateEmailResponseDtoSchema: z.ZodType<UpdatePrivateEmailResponseDto> = z.object({
   ok: z.boolean(),
-  hasPrivateEmail: z.boolean()
+  hasPrivateEmail: z.boolean(),
 });
 
 export const ChangePasswordRequestSchema = z.object({
   currentPassword: z.string().min(1),
-  newPassword: z.string().min(1)
+  newPassword: z.string().min(1),
 });
 
 export const ChangePasswordResponseDtoSchema = z.object({
-  ok: z.boolean()
+  ok: z.boolean(),
 });
 
 export const ApiKeyListResponseDtoSchema: z.ZodType<ApiKeyListResponseDto> = z.object({
-  items: z.array(ApiKeyDtoSchema)
+  items: z.array(ApiKeyDtoSchema),
 });
 
 export const ApiKeyCreateResponseDtoSchema: z.ZodType<ApiKeyCreateResponseDto> = z.object({
   apiKey: ApiKeyDtoSchema,
-  token: z.string()
+  token: z.string(),
 });
 
 export const ImpersonationTokenListResponseDtoSchema: z.ZodType<ImpersonationTokenListResponseDto> = z.object({
-  items: z.array(ImpersonationTokenDtoSchema)
+  items: z.array(ImpersonationTokenDtoSchema),
 });
 
 export const ImpersonationTokenCreateResponseDtoSchema: z.ZodType<ImpersonationTokenCreateResponseDto> = z.object({
   impersonationToken: ImpersonationTokenDtoSchema,
-  token: z.string()
+  token: z.string(),
 });
 
 export const DiscordChannelMappingDtoSchema: z.ZodType<DiscordChannelMappingDto> = z.object({
   channelId: z.string(),
   forumId: z.string(),
-  channelName: optionalNullableString
+  channelName: optionalNullableString,
 });
 
 export const DiscordBridgeStatusDtoSchema: z.ZodType<DiscordBridgeStatusDto> = z.object({
@@ -1098,13 +1102,13 @@ export const DiscordBridgeStatusDtoSchema: z.ZodType<DiscordBridgeStatusDto> = z
   guildName: z.string().optional(),
   channelMappings: z.array(DiscordChannelMappingDtoSchema),
   error: z.string().optional(),
-  message: z.string().optional()
+  message: z.string().optional(),
 });
 
 export const MatrixRoomMappingDtoSchema: z.ZodType<MatrixRoomMappingDto> = z.object({
   roomId: z.string(),
   forumId: z.string(),
-  roomName: optionalNullableString
+  roomName: optionalNullableString,
 });
 
 export const MatrixBridgeStatusDtoSchema: z.ZodType<MatrixBridgeStatusDto> = z.object({
@@ -1114,12 +1118,12 @@ export const MatrixBridgeStatusDtoSchema: z.ZodType<MatrixBridgeStatusDto> = z.o
   userId: z.string().optional(),
   roomMappings: z.array(MatrixRoomMappingDtoSchema),
   error: z.string().optional(),
-  message: z.string().optional()
+  message: z.string().optional(),
 });
 
 export const SearchResultsDtoSchema: z.ZodType<SearchResultsDto> = z.object({
   topics: z.array(TopicDtoSchema),
-  posts: z.array(PostDtoSchema)
+  posts: z.array(PostDtoSchema),
 });
 
 export const AdminSkillAvailabilityDtoSchema: z.ZodType<AdminSkillAvailabilityDto> = z.object({
@@ -1127,7 +1131,7 @@ export const AdminSkillAvailabilityDtoSchema: z.ZodType<AdminSkillAvailabilityDt
   forumName: z.string(),
   configScope: z.enum(['forum', 'global']),
   promptEnhancerEnabled: z.boolean(),
-  personas: z.array(z.object({ key: z.string() }))
+  personas: z.array(z.object({ key: z.string() })),
 });
 
 export const AdminSkillDtoSchema: z.ZodType<AdminSkillDto> = z.object({
@@ -1140,14 +1144,14 @@ export const AdminSkillDtoSchema: z.ZodType<AdminSkillDto> = z.object({
   bytes: z.number(),
   updatedAt: nullableString,
   excerpt: nullableString,
-  availableIn: z.array(AdminSkillAvailabilityDtoSchema)
+  availableIn: z.array(AdminSkillAvailabilityDtoSchema),
 });
 
 export const AdminSkillRootDtoSchema: z.ZodType<AdminSkillRootDto> = z.object({
   root: z.string(),
   exists: z.boolean(),
   skillCount: z.number(),
-  usedByForumIds: z.array(z.string())
+  usedByForumIds: z.array(z.string()),
 });
 
 export const AdminSkillListResponseDtoSchema: z.ZodType<AdminSkillListResponseDto> = z.object({
@@ -1155,7 +1159,7 @@ export const AdminSkillListResponseDtoSchema: z.ZodType<AdminSkillListResponseDt
   promptEnhancerEnabledByDefault: z.boolean(),
   defaultSkillsRoot: z.string(),
   roots: z.array(AdminSkillRootDtoSchema),
-  items: z.array(AdminSkillDtoSchema)
+  items: z.array(AdminSkillDtoSchema),
 });
 
 export const CreateForumRequestSchema: z.ZodType<CreateForumRequest> = z.object({
@@ -1163,13 +1167,13 @@ export const CreateForumRequestSchema: z.ZodType<CreateForumRequest> = z.object(
   description: optionalNullableString,
   parentForumId: optionalNullableString,
   category: optionalNullableString,
-  visibility: ForumVisibilitySchema.optional()
+  visibility: ForumVisibilitySchema.optional(),
 });
 
 export const ListForumsRequestSchema: z.ZodType<ListForumsRequest> = z.object({
   parentForumId: optionalNullableString,
   status: ForumStatusSchema.optional(),
-  includeArchived: z.boolean().optional()
+  includeArchived: z.boolean().optional(),
 });
 
 export const CreateTopicRequestSchema: z.ZodType<CreateTopicRequest> = z.object({
@@ -1197,7 +1201,7 @@ export const LoginRequestSchema: z.ZodType<LoginRequest> = z.object({
     .min(1, 'username and password are required'),
   password: z
     .string({ required_error: 'username and password are required' })
-    .min(1, 'username and password are required')
+    .min(1, 'username and password are required'),
 });
 
 export const RegisterRequestSchema: z.ZodType<RegisterRequest> = z.object({
@@ -1205,7 +1209,7 @@ export const RegisterRequestSchema: z.ZodType<RegisterRequest> = z.object({
   username: z.string().min(1).optional(),
   password: z.string().min(1).optional(),
   email: z.string().min(1).optional(),
-  inviteCode: z.string().min(1).optional()
+  inviteCode: z.string().min(1).optional(),
 });
 
 export const MessageTemplateContextSchema = z.enum(MessageTemplateContextValues);
@@ -1226,22 +1230,29 @@ export const MessageTemplateDtoSchema: z.ZodType<MessageTemplateDto> = z.object(
   sortOrder: z.number().int(),
   revision: z.number().int().positive(),
   createdAt: z.string(),
-  updatedAt: z.string()
+  updatedAt: z.string(),
 });
 
 export const MessageTemplateListResponseDtoSchema: z.ZodType<MessageTemplateListResponseDto> = z.object({
-  templates: z.array(MessageTemplateDtoSchema)
+  templates: z.array(MessageTemplateDtoSchema),
 });
 
 const messageTemplateWriteRequestObjectSchema = z.object({
-  name: z.string().min(1).max(80).refine((value) => value.trim().length > 0, 'Name is required'),
+  name: z
+    .string()
+    .min(1)
+    .max(80)
+    .refine((value) => value.trim().length > 0, 'Name is required'),
   category: z.string().max(40).nullable().optional(),
-  body: z.string().min(1).refine((value) => value.trim().length > 0, 'Body is required'),
+  body: z
+    .string()
+    .min(1)
+    .refine((value) => value.trim().length > 0, 'Body is required'),
   threadTitle: z.string().max(255).nullable().optional(),
   forumScope: MessageTemplateForumScopeSchema,
   forumIds: z.array(z.string().min(1)),
   contexts: z.array(MessageTemplateContextSchema).min(1),
-  enabled: z.boolean()
+  enabled: z.boolean(),
 });
 function validateMessageTemplateForumScope(
   value: Pick<MessageTemplateWriteRequest, 'forumScope' | 'forumIds'>,
@@ -1254,7 +1265,7 @@ function validateMessageTemplateForumScope(
     context.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['forumIds'],
-      message: 'All-forum templates cannot include forum ids'
+      message: 'All-forum templates cannot include forum ids',
     });
   }
 }
@@ -1266,24 +1277,24 @@ export const MessageTemplateUpdateRequestSchema: z.ZodType<MessageTemplateUpdate
     .superRefine(validateMessageTemplateForumScope);
 
 export const MessageTemplateReorderRequestSchema: z.ZodType<MessageTemplateReorderRequest> = z.object({
-  items: z.array(z.object({ id: z.string(), revision: z.number().int().positive() })).min(1)
+  items: z.array(z.object({ id: z.string(), revision: z.number().int().positive() })).min(1),
 });
 export const MessageTemplateEffectiveQuerySchema = z.object({
   context: MessageTemplateContextSchema,
-  forumId: z.string().min(1)
+  forumId: z.string().min(1),
 });
 export const MessageTemplateRevisionQuerySchema = z.object({
-  revision: z.coerce.number().int().positive()
+  revision: z.coerce.number().int().positive(),
 });
 
 export const UpdatePrivateEmailRequestSchema: z.ZodType<UpdatePrivateEmailRequest> = z.object({
-  emailAddress: z.string({ required_error: 'emailAddress is required (string or null)' }).nullable()
+  emailAddress: z.string({ required_error: 'emailAddress is required (string or null)' }).nullable(),
 });
 
 export const CreateApiKeyRequestSchema: z.ZodType<CreateApiKeyRequest> = z.object({
   label: z.string({ required_error: 'label is required' }).trim().min(1, 'label is required'),
   scopes: z.array(z.string()).optional(),
-  expiresAt: optionalNullableString
+  expiresAt: optionalNullableString,
 });
 
 export const CreateImpersonationTokenRequestSchema: z.ZodType<CreateImpersonationTokenRequest> = z.object({
@@ -1292,7 +1303,7 @@ export const CreateImpersonationTokenRequestSchema: z.ZodType<CreateImpersonatio
   avatarUrl: optionalNullableString,
   scopes: z.array(z.string()).optional(),
   expiresAt: optionalNullableString,
-  impersonatedIdentityId: optionalNullableString
+  impersonatedIdentityId: optionalNullableString,
 });
 
 export const UpdateIdentityRequestSchema: z.ZodType<UpdateIdentityRequest> = z
@@ -1301,7 +1312,7 @@ export const UpdateIdentityRequestSchema: z.ZodType<UpdateIdentityRequest> = z
     avatarUrl: optionalNullableString,
     location: optionalNullableString,
     signature: optionalNullableString,
-    theme: ForumThemeKeySchema.nullable().optional()
+    theme: ForumThemeKeySchema.nullable().optional(),
   })
   .refine(
     (value) =>
@@ -1311,35 +1322,35 @@ export const UpdateIdentityRequestSchema: z.ZodType<UpdateIdentityRequest> = z
       value.signature !== undefined ||
       value.theme !== undefined,
     {
-      message: 'At least one field to update is required'
+      message: 'At least one field to update is required',
     }
   );
 
 export const UpdateTopicStatusRequestSchema: z.ZodType<UpdateTopicStatusRequest> = z.object({
-  status: TopicStatusSchema
+  status: TopicStatusSchema,
 });
 
 export const UpdateTopicTitleRequestSchema: z.ZodType<UpdateTopicTitleRequest> = z.object({
-  title: z.string().min(1)
+  title: z.string().min(1),
 });
 
 export const UpdateTopicTagsRequestSchema: z.ZodType<UpdateTopicTagsRequest> = z
   .object({
     sticky: z.boolean().optional(),
-    tags: z.array(z.string()).optional()
+    tags: z.array(z.string()).optional(),
   })
   .refine((value) => value.sticky !== undefined || value.tags !== undefined, {
-    message: 'sticky or tags is required'
+    message: 'sticky or tags is required',
   });
 
 export const MoveTopicRequestSchema: z.ZodType<MoveTopicRequest> = z.object({
   forumId: z.string(),
-  silent: z.boolean().optional()
+  silent: z.boolean().optional(),
 });
 
 export const CreateInviteRequestSchema: z.ZodType<CreateInviteRequest> = z.object({
   maxUses: z.coerce.number().int().positive().optional(),
-  expiresInDays: z.coerce.number().int().positive().optional()
+  expiresInDays: z.coerce.number().int().positive().optional(),
 });
 
 export const AttachmentChunkedStartRequestSchema: z.ZodType<AttachmentChunkedStartRequest> = z.object({
@@ -1347,54 +1358,57 @@ export const AttachmentChunkedStartRequestSchema: z.ZodType<AttachmentChunkedSta
     .string({ required_error: 'filename and sizeBytes are required' })
     .min(1, 'filename and sizeBytes are required'),
   mimeType: z.string().optional(),
-  sizeBytes: z
-    .coerce
+  sizeBytes: z.coerce
     .number({ required_error: 'filename and sizeBytes are required' })
-    .positive('sizeBytes must be a positive number')
+    .positive('sizeBytes must be a positive number'),
 });
 
 export const CreateChatCategoryRequestSchema: z.ZodType<CreateChatCategoryRequest> = z.object({
   name: z.string({ required_error: 'name is required' }).min(1, 'name is required'),
   description: optionalNullableString,
-  visibility: ForumVisibilitySchema.optional()
+  visibility: ForumVisibilitySchema.optional(),
 });
 
 export const CreateChatRoomRequestSchema: z.ZodType<CreateChatRoomRequest> = z.object({
   categoryId: z.string({ required_error: 'categoryId is required' }).min(1, 'categoryId is required'),
   name: z.string({ required_error: 'name is required' }).min(1, 'name is required'),
-  topic: optionalNullableString
+  topic: optionalNullableString,
 });
 
 export const CreateChatMessageRequestSchema: z.ZodType<CreateChatMessageRequest> = z.object({
   body: z.string({ required_error: 'body is required' }).min(1, 'body is required'),
-  expiresInSeconds: z.coerce.number().int().positive().optional()
+  expiresInSeconds: z.coerce.number().int().positive().optional(),
 });
 
 export const ChatTypingRequestSchema: z.ZodType<ChatTypingRequest> = z.object({
-  isTyping: z.boolean()
+  isTyping: z.boolean(),
 });
 
 export const DiscordMapChannelRequestSchema: z.ZodType<DiscordMapChannelRequest> = z.object({
   channelId: z.string({ required_error: 'channelId is required' }).min(1, 'channelId is required'),
-  forumId: z.string().optional()
+  forumId: z.string().optional(),
 });
 
 export const DiscordSendRequestSchema: z.ZodType<DiscordSendRequest> = z.object({
-  threadId: z.string({ required_error: 'threadId and content are required' }).min(1, 'threadId and content are required'),
-  content: z.string({ required_error: 'threadId and content are required' }).min(1, 'threadId and content are required'),
-  authorName: z.string().optional()
+  threadId: z
+    .string({ required_error: 'threadId and content are required' })
+    .min(1, 'threadId and content are required'),
+  content: z
+    .string({ required_error: 'threadId and content are required' })
+    .min(1, 'threadId and content are required'),
+  authorName: z.string().optional(),
 });
 
 export const MatrixMapRoomRequestSchema: z.ZodType<MatrixMapRoomRequest> = z.object({
   roomId: z.string({ required_error: 'roomId is required' }).min(1, 'roomId is required'),
-  forumId: z.string().optional()
+  forumId: z.string().optional(),
 });
 
 export const MatrixSendRequestSchema: z.ZodType<MatrixSendRequest> = z.object({
   roomId: z.string({ required_error: 'roomId and content are required' }).min(1, 'roomId and content are required'),
   threadId: z.string().optional(),
   content: z.string({ required_error: 'roomId and content are required' }).min(1, 'roomId and content are required'),
-  authorName: z.string().optional()
+  authorName: z.string().optional(),
 });
 
 export const AdminCreateUserRequestSchema: z.ZodType<AdminCreateUserRequest> = z.object({
@@ -1407,13 +1421,13 @@ export const AdminCreateUserRequestSchema: z.ZodType<AdminCreateUserRequest> = z
   password: z
     .string({ required_error: 'displayName, username, and password are required' })
     .min(1, 'displayName, username, and password are required'),
-  kind: z.string().optional()
+  kind: z.string().optional(),
 });
 
 export const AdminUpdateUserRequestSchema: z.ZodType<AdminUpdateUserRequest> = z.object({
   displayName: z.string().optional(),
   kind: z.string().optional(),
-  password: z.string().optional()
+  password: z.string().optional(),
 });
 
 export const AdminCreateForumRequestSchema: z.ZodType<AdminCreateForumRequest> = z.object({
@@ -1424,7 +1438,7 @@ export const AdminCreateForumRequestSchema: z.ZodType<AdminCreateForumRequest> =
   parentForumId: optionalNullableString,
   category: optionalNullableString,
   status: ForumStatusSchema.optional(),
-  visibility: ForumVisibilitySchema.optional()
+  visibility: ForumVisibilitySchema.optional(),
 });
 
 export const AdminUpdateForumRequestSchema: z.ZodType<AdminUpdateForumRequest> = z.object({
@@ -1436,19 +1450,19 @@ export const AdminUpdateForumRequestSchema: z.ZodType<AdminUpdateForumRequest> =
   category: optionalNullableString,
   status: ForumStatusSchema.optional(),
   visibility: ForumVisibilitySchema.optional(),
-  archivedAt: optionalNullableString
+  archivedAt: optionalNullableString,
 });
 
 export const AdminAccessRuleRequestSchema: z.ZodType<AdminAccessRuleRequest> = z.object({
   principalKind: AccessRulePrincipalKindSchema,
   principalId: optionalNullableString,
   action: AccessRuleActionSchema,
-  effect: AccessRuleEffectSchema
+  effect: AccessRuleEffectSchema,
 });
 
 export const AdminMoveTopicRequestSchema: z.ZodType<AdminMoveTopicRequest> = z.object({
   forumId: z.string({ required_error: 'forumId is required' }).min(1, 'forumId is required'),
-  silent: z.boolean().optional()
+  silent: z.boolean().optional(),
 });
 
 export const AdminCreatePersonaRequestSchema: z.ZodType<AdminCreatePersonaRequest> = z.object({
@@ -1464,7 +1478,7 @@ export const AdminCreatePersonaRequestSchema: z.ZodType<AdminCreatePersonaReques
   accentColor: optionalNullableString,
   avatarUrl: optionalNullableString,
   signature: optionalNullableString,
-  soul: optionalNullableString
+  soul: optionalNullableString,
 });
 
 export const AdminUpdatePersonaRequestSchema: z.ZodType<AdminUpdatePersonaRequest> = z.object({
@@ -1473,7 +1487,7 @@ export const AdminUpdatePersonaRequestSchema: z.ZodType<AdminUpdatePersonaReques
   accentColor: optionalNullableString,
   avatarUrl: optionalNullableString,
   signature: optionalNullableString,
-  soul: optionalNullableString
+  soul: optionalNullableString,
 });
 
 export const AdminCreateTamperRequestSchema: z.ZodType<AdminCreateTamperRequest> = z.object({
@@ -1483,7 +1497,7 @@ export const AdminCreateTamperRequestSchema: z.ZodType<AdminCreateTamperRequest>
   priority: z.coerce.number().optional(),
   direction: optionalNullableString,
   onlyFirstMessage: z.boolean().nullable().optional(),
-  config: z.record(z.unknown()).nullable().optional()
+  config: z.record(z.unknown()).nullable().optional(),
 });
 
 export const AdminUpdateTamperRequestSchema: z.ZodType<AdminUpdateTamperRequest> = z.object({
@@ -1492,7 +1506,7 @@ export const AdminUpdateTamperRequestSchema: z.ZodType<AdminUpdateTamperRequest>
   priority: z.coerce.number().optional(),
   direction: optionalNullableString,
   onlyFirstMessage: z.boolean().nullable().optional(),
-  config: z.record(z.unknown()).nullable().optional()
+  config: z.record(z.unknown()).nullable().optional(),
 });
 
 export const AdminTestTamperRequestSchema: z.ZodType<AdminTestTamperRequest> = z.object({
@@ -1503,7 +1517,7 @@ export const AdminTestTamperRequestSchema: z.ZodType<AdminTestTamperRequest> = z
   pluginKey: optionalNullableString,
   pluginConfig: z.record(z.unknown()).nullable().optional(),
   onlyPlugin: z.boolean().optional(),
-  isFirstMessage: z.boolean().optional()
+  isFirstMessage: z.boolean().optional(),
 });
 
 export const AdminCreateRobotAutomationRequestSchema: z.ZodType<AdminCreateRobotAutomationRequest> = z.object({
@@ -1515,9 +1529,7 @@ export const AdminCreateRobotAutomationRequestSchema: z.ZodType<AdminCreateRobot
   model: optionalNullableString,
   reasoningEffort: optionalNullableString,
   runMode: z.enum(['manual', 'interval']).optional(),
-  intervalMinutes: z
-    .union([z.coerce.number().int().min(1, 'intervalMinutes must be at least 1'), z.null()])
-    .optional()
+  intervalMinutes: z.union([z.coerce.number().int().min(1, 'intervalMinutes must be at least 1'), z.null()]).optional(),
 });
 
 export const AdminUpdateRobotAutomationRequestSchema: z.ZodType<AdminUpdateRobotAutomationRequest> = z.object({
@@ -1529,20 +1541,19 @@ export const AdminUpdateRobotAutomationRequestSchema: z.ZodType<AdminUpdateRobot
   model: optionalNullableString,
   reasoningEffort: optionalNullableString,
   runMode: z.enum(['manual', 'interval']).optional(),
-  intervalMinutes: z
-    .union([z.coerce.number().int().min(1, 'intervalMinutes must be at least 1'), z.null()])
-    .optional()
+  intervalMinutes: z.union([z.coerce.number().int().min(1, 'intervalMinutes must be at least 1'), z.null()]).optional(),
 });
 
 export const AdminUpdateRobotSettingsRequestSchema = z.object({
-  maxConcurrentTurns: z.coerce.number().int().optional()
+  maxConcurrentTurns: z.coerce.number().int().optional(),
 }) satisfies z.ZodType<AdminUpdateRobotSettingsRequest>;
 
 export const PageRequestDtoSchema: z.ZodType<PageRequest> = PageRequestSchema;
 export const PageResponseForumDtoSchema: z.ZodType<PageResponse<ForumDto>> = PageResponseSchema(ForumDtoSchema);
 export const PageResponseTopicDtoSchema: z.ZodType<PageResponse<TopicDto>> = PageResponseSchema(TopicDtoSchema);
 export const PageResponsePostDtoSchema: z.ZodType<PageResponse<PostDto>> = PageResponseSchema(PostDtoSchema);
-export const PageResponseIdentityDtoSchema: z.ZodType<PageResponse<IdentityDto>> = PageResponseSchema(IdentityDtoSchema);
+export const PageResponseIdentityDtoSchema: z.ZodType<PageResponse<IdentityDto>> =
+  PageResponseSchema(IdentityDtoSchema);
 
 // OIDC
 export {
@@ -1551,5 +1562,5 @@ export {
   OidcLinkRequestSchema,
   OidcLinkResponseDtoSchema,
   OidcUnlinkRequestSchema,
-  OidcUnlinkResponseDtoSchema
+  OidcUnlinkResponseDtoSchema,
 };

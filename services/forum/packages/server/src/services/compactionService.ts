@@ -45,8 +45,12 @@ export class CompactionService {
       throw new CompactionConflictError('Topic does not have a linked Pi conversation');
     }
     const state = this.store.getRobotState(input.topicId);
-    if (state?.activity !== 'idle' || this.store.countActionablePostDispatches(input.topicId) > 0) {
-      throw new CompactionConflictError('Topic must be idle with no pending dispatch before compaction');
+    if (
+      state?.activity !== 'idle' ||
+      this.store.countActionablePostDispatches(input.topicId) > 0 ||
+      this.store.hasRunningCompactionOperation(input.topicId)
+    ) {
+      throw new CompactionConflictError('Topic must be idle with no pending dispatch or compaction before compaction');
     }
     const expectedLeafId =
       (await this.agent.getTopicCompactionLeaf(input.topicId)) ?? this.store.getPiSessionHead(link.pi_session_id);
@@ -54,7 +58,7 @@ export class CompactionService {
       throw new CompactionConflictError('The linked Pi session head is unavailable; sync it before compaction');
     }
 
-    const operation = this.store.createCompactionOperation({
+    const claimed = this.store.startCompactionOperation({
       id: input.operationId,
       topicId: input.topicId,
       sessionId: session.id,
@@ -63,11 +67,8 @@ export class CompactionService {
       customInstructions,
       recoveryPrompt: input.recoveryPrompt.trim(),
     });
-    const claimed = this.store.claimCompactionOperation(operation.id);
     if (!claimed) {
-      const current = this.store.getCompactionOperation(operation.id);
-      if (!current) throw new CompactionNotFoundError('Compaction operation disappeared before execution');
-      return current;
+      throw new CompactionConflictError('Topic already has a running compaction');
     }
 
     const compact = () =>

@@ -45,6 +45,8 @@ export interface TopicRow {
   status: string;
   tags_json: string;
   robot_mode: string;
+  auto_compact_enabled: number;
+  auto_compact_revision: number;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -627,13 +629,11 @@ export function bootstrap(db: Database.Database, options: DbBootstrapOptions = {
   const bootstrapForumKey = 'bootstrapForumId';
   const chatRootForumKey = 'chatRootForumId';
   const storedBootstrap = db.prepare('select value from system_settings where key = ?').get(bootstrapForumKey) as
-    | { value: string }
-    | undefined;
+    { value: string } | undefined;
   let forumId: string | null = storedBootstrap?.value ?? null;
   if (forumId) {
     const existingForum = db.prepare('select id from forums where id = ? limit 1').get(forumId) as
-      | { id: string }
-      | undefined;
+      { id: string } | undefined;
     if (!existingForum) {
       forumId = null;
     }
@@ -648,8 +648,7 @@ export function bootstrap(db: Database.Database, options: DbBootstrapOptions = {
 
   if (!forumId) {
     const forumRow = db.prepare('select id from forums order by created_at asc limit 1').get() as
-      | { id: string }
-      | undefined;
+      { id: string } | undefined;
     forumId = forumRow?.id ?? null;
   }
 
@@ -669,13 +668,11 @@ export function bootstrap(db: Database.Database, options: DbBootstrapOptions = {
 
   let chatRootForumId: string | null = null;
   const storedChatRoot = db.prepare('select value from system_settings where key = ?').get(chatRootForumKey) as
-    | { value: string }
-    | undefined;
+    { value: string } | undefined;
   chatRootForumId = storedChatRoot?.value ?? null;
   if (chatRootForumId) {
     const existingChatRoot = db.prepare('select id from forums where id = ? limit 1').get(chatRootForumId) as
-      | { id: string }
-      | undefined;
+      { id: string } | undefined;
     if (!existingChatRoot) {
       chatRootForumId = null;
     }
@@ -714,8 +711,7 @@ export function bootstrap(db: Database.Database, options: DbBootstrapOptions = {
   }
 
   const chatCategoryCount = db.prepare('select count(*) as count from chat_categories').get() as
-    | { count: number }
-    | undefined;
+    { count: number } | undefined;
   let defaultChatCategoryId: string | null = null;
   if (!chatCategoryCount || chatCategoryCount.count === 0) {
     defaultChatCategoryId = randomUUID();
@@ -725,8 +721,7 @@ export function bootstrap(db: Database.Database, options: DbBootstrapOptions = {
     ).run(defaultChatCategoryId, 'General', 'IRC-style chat channels', 'members', now, now);
   } else {
     const firstCategory = db.prepare('select id from chat_categories order by created_at asc limit 1').get() as
-      | { id: string }
-      | undefined;
+      { id: string } | undefined;
     defaultChatCategoryId = firstCategory?.id ?? null;
   }
 
@@ -746,8 +741,7 @@ export function bootstrap(db: Database.Database, options: DbBootstrapOptions = {
   }
 
   const robotIdentity = db.prepare('select id from identities where kind = ? limit 1').get('robot') as
-    | { id: string }
-    | undefined;
+    { id: string } | undefined;
   let robotIdentityId = robotIdentity?.id;
 
   if (!robotIdentityId) {
@@ -788,13 +782,11 @@ export function bootstrap(db: Database.Database, options: DbBootstrapOptions = {
 
   const configuredWebIdentity = defaultWebIdentityId
     ? (db.prepare('select id from identities where id = ? limit 1').get(defaultWebIdentityId) as
-        | { id: string }
-        | undefined)
+        { id: string } | undefined)
     : undefined;
   const configuredWebIdentityByUsername = defaultWebIdentityUsername
     ? (db.prepare('select id from identities where username = ? limit 1').get(defaultWebIdentityUsername) as
-        | { id: string }
-        | undefined)
+        { id: string } | undefined)
     : undefined;
   const existingHumanIdentity = db
     .prepare('select id from identities where kind = ? order by created_at asc limit 1')
@@ -826,8 +818,7 @@ export function bootstrap(db: Database.Database, options: DbBootstrapOptions = {
   }
 
   const piCliIdentity = db.prepare("select id from identities where display_name = 'Pi CLI' limit 1").get() as
-    | { id: string }
-    | undefined;
+    { id: string } | undefined;
   if (!piCliIdentity) {
     const now = nowIso();
     db.prepare(

@@ -1,15 +1,19 @@
-import type { FastifyInstance } from 'fastify';
-import type { FeatureFlags } from '../config';
-import type { AgentBridge } from '../agentBridge';
-import type { ForumStore } from '../store';
-import type { WebhookService } from '../services/webhookService';
-import type { StreamBusInterface } from '../streamBus';
-import type { PostDispatchService } from '../services/postDispatchService';
-import { CompactionConflictError, CompactionNotFoundError, type CompactionService } from '../services/compactionService';
-import type { AccessHelpers } from '../utils/access';
 import { CreateCompactionRequestSchema } from '@irrigationreal/codex-forum-contracts';
+
 import { mapCompactionOperationToDto, mapTopicOperationalEventToDto } from '../mappers/dto';
+import { CompactionConflictError, CompactionNotFoundError } from '../services/compactionService';
 import { serializePost, serializeTopic } from '../utils/serializers';
+
+import type { FastifyInstance } from 'fastify';
+
+import type { AgentBridge } from '../agentBridge';
+import type { FeatureFlags } from '../config';
+import type { CompactionService } from '../services/compactionService';
+import type { PostDispatchService } from '../services/postDispatchService';
+import type { WebhookService } from '../services/webhookService';
+import type { ForumStore } from '../store';
+import type { StreamBusInterface } from '../streamBus';
+import type { AccessHelpers } from '../utils/access';
 
 export function registerForumRoutes({
   app,
@@ -21,7 +25,7 @@ export function registerForumRoutes({
   postDispatchService,
   compactionService,
   access,
-  webIdentityId
+  webIdentityId,
 }: {
   app: FastifyInstance;
   store: ForumStore;
@@ -46,7 +50,7 @@ export function registerForumRoutes({
     requireForumVisible,
     requireTopicVisible,
     requirePostVisible,
-    requireModerator
+    requireModerator,
   } = access;
 
   function resolveRobotMode(value?: string | null): 'auto' | 'mention' | 'off' {
@@ -56,7 +60,9 @@ export function registerForumRoutes({
     return 'auto';
   }
 
-  function serializeTopicWithPiLineage(topic: Parameters<typeof serializeTopic>[0]): ReturnType<typeof serializeTopic> & { piSession?: Record<string, unknown> } {
+  function serializeTopicWithPiLineage(
+    topic: Parameters<typeof serializeTopic>[0]
+  ): ReturnType<typeof serializeTopic> & { piSession?: Record<string, unknown> } {
     const dto = serializeTopic(topic) as ReturnType<typeof serializeTopic> & { piSession?: Record<string, unknown> };
     const link = store.getPiSessionLinkByTopic(topic.id);
     const parentLink = link?.parent_pi_session_id
@@ -123,15 +129,15 @@ export function registerForumRoutes({
       status?: 'active' | 'archived';
       includeArchived?: string;
     };
-    const includeArchived =
-      query?.includeArchived === 'true' || query?.includeArchived === '1';
+    const includeArchived = query?.includeArchived === 'true' || query?.includeArchived === '1';
     const parentForumId =
       query?.parentForumId !== undefined
         ? query.parentForumId === '' || query.parentForumId === 'null'
           ? null
           : query.parentForumId
         : undefined;
-    const listOptions: { parentForumId?: string | null; status?: 'active' | 'archived'; includeArchived?: boolean } = {};
+    const listOptions: { parentForumId?: string | null; status?: 'active' | 'archived'; includeArchived?: boolean } =
+      {};
     if (parentForumId !== undefined) listOptions.parentForumId = parentForumId;
     if (query?.status !== undefined) listOptions.status = query.status;
     listOptions.includeArchived = includeArchived;
@@ -142,7 +148,7 @@ export function registerForumRoutes({
       const stats = forumStatsById.get(row.id) ?? {
         threadCount: 0,
         postCount: 0,
-        lastPost: null
+        lastPost: null,
       };
       return {
         id: row.id,
@@ -158,7 +164,7 @@ export function registerForumRoutes({
         postCount: stats.postCount,
         lastPost: stats.lastPost,
         createdAt: row.created_at,
-        updatedAt: row.updated_at
+        updatedAt: row.updated_at,
       };
     });
   });
@@ -182,7 +188,7 @@ export function registerForumRoutes({
       authorId: row.author_id,
       authorName: row.author_name,
       body: row.body,
-      createdAt: row.created_at
+      createdAt: row.created_at,
     }));
   });
 
@@ -204,7 +210,7 @@ export function registerForumRoutes({
     const leaders = store.listForumLeaders({
       limit: safeLimit,
       includeMembersForums,
-      includeAdminForums
+      includeAdminForums,
     });
 
     return {
@@ -213,14 +219,20 @@ export function registerForumRoutes({
         displayName: identity.display_name,
         kind: identity.kind,
         avatarUrl: identity.avatar_url,
-        postCount
-      }))
+        postCount,
+      })),
     };
   });
 
   app.post('/forums', async (request) => {
     requireAdmin(request);
-    const body = request.body as { name?: string; description?: string | null; parentForumId?: string | null; category?: string | null; visibility?: 'public' | 'members' | 'admin' };
+    const body = request.body as {
+      name?: string;
+      description?: string | null;
+      parentForumId?: string | null;
+      category?: string | null;
+      visibility?: 'public' | 'members' | 'admin';
+    };
     if (!body?.name) {
       throw app.httpErrors.badRequest('name is required');
     }
@@ -248,7 +260,7 @@ export function registerForumRoutes({
       postCount: 0,
       lastPost: null,
       createdAt: forum.created_at,
-      updatedAt: forum.updated_at
+      updatedAt: forum.updated_at,
     };
   });
 
@@ -275,7 +287,7 @@ export function registerForumRoutes({
           postCount: 0,
           lastPostAuthorId: null,
           lastPostAuthorName: null,
-          lastPostAt: null
+          lastPostAt: null,
         };
         const author = authorsById.get(row.created_by);
         return {
@@ -286,6 +298,8 @@ export function registerForumRoutes({
           status: row.status,
           tags: JSON.parse(row.tags_json),
           robotMode: row.robot_mode,
+          autoCompactEnabled: Boolean(row.auto_compact_enabled),
+          autoCompactRevision: row.auto_compact_revision,
           createdBy: row.created_by,
           createdByName: author?.display_name ?? null,
           createdAt: row.created_at,
@@ -293,9 +307,9 @@ export function registerForumRoutes({
           postCount: stats.postCount,
           lastPostAuthorId: stats.lastPostAuthorId,
           lastPostAuthorName: stats.lastPostAuthorName,
-          lastPostAt: stats.lastPostAt
+          lastPostAt: stats.lastPostAt,
         };
-      })
+      }),
     };
   });
 
@@ -303,8 +317,8 @@ export function registerForumRoutes({
     '/forums/:forumId/topics',
     {
       config: {
-        rateLimit: featureFlags.enableRateLimiting ? { max: 4, timeWindow: '1 minute' } : false
-      }
+        rateLimit: featureFlags.enableRateLimiting ? { max: 4, timeWindow: '1 minute' } : false,
+      },
     },
     async (request) => {
       // Require authentication for creating topics
@@ -325,6 +339,7 @@ export function registerForumRoutes({
         model?: string | null;
         reasoningEffort?: string | null;
         robotMode?: string | null;
+        autoCompactEnabled?: boolean;
         attachmentsPending?: boolean;
         silent?: boolean;
       };
@@ -333,6 +348,7 @@ export function registerForumRoutes({
       }
 
       const robotMode = resolveRobotMode(body.robotMode ?? null);
+      if (body.autoCompactEnabled !== undefined) requireAdmin(request);
       const deferRobot = Boolean(body.attachmentsPending) && !body.silent;
       const { topic, post } = store.createTopic({
         forumId,
@@ -340,10 +356,16 @@ export function registerForumRoutes({
         body: body.body,
         authorId: user.identityId,
         silent: Boolean(body.silent) || deferRobot,
-        robotMode
+        robotMode,
+        autoCompactEnabled: body.autoCompactEnabled ?? false,
       });
       store.upsertTopicSubscription({ identityId: user.identityId, topicId: topic.id, mode: 'watching' });
-      store.upsertTopicRead({ identityId: user.identityId, topicId: topic.id, lastReadPostId: post.id, lastReadAt: post.created_at });
+      store.upsertTopicRead({
+        identityId: user.identityId,
+        topicId: topic.id,
+        lastReadPostId: post.id,
+        lastReadAt: post.created_at,
+      });
 
       const session = store.ensureSession({ topicId: topic.id });
       store.createSessionMessage(session.id, 'user', body.body, 'public');
@@ -371,15 +393,15 @@ export function registerForumRoutes({
           title: topic.title,
           status: topic.status,
           createdBy: topic.created_by,
-          createdAt: topic.created_at
+          createdAt: topic.created_at,
         },
         post: {
           id: post.id,
           topicId: post.topic_id,
           authorId: post.author_id,
           body: post.body,
-          createdAt: post.created_at
-        }
+          createdAt: post.created_at,
+        },
       });
 
       return serializeTopicWithPiLineage(topic);
@@ -407,7 +429,11 @@ export function registerForumRoutes({
     const { topicId } = request.params as { topicId: string };
     requireTopicVisible(topicId, request);
     const includeDetail = Boolean(getIdentityFromRequest(request));
-    return { items: store.listTopicOperationalEvents(topicId).map((event) => mapTopicOperationalEventToDto(event, includeDetail)) };
+    return {
+      items: store
+        .listTopicOperationalEvents(topicId)
+        .map((event) => mapTopicOperationalEventToDto(event, includeDetail)),
+    };
   });
 
   app.post('/topics/:topicId/compactions', async (request) => {
@@ -454,10 +480,16 @@ export function registerForumRoutes({
     const identity = store.getIdentity(user.identityId);
     if (!canViewTopic(topic, forum, identity)) throw app.httpErrors.notFound('topic not found');
 
-    const body = request.body as { goal?: string; model?: string | null; reasoningEffort?: string | null; systemPrompt?: string | null };
+    const body = request.body as {
+      goal?: string;
+      model?: string | null;
+      reasoningEffort?: string | null;
+      systemPrompt?: string | null;
+    };
     const goal = body.goal?.trim();
     if (!goal) throw app.httpErrors.badRequest('goal is required');
-    if (body.systemPrompt && body.systemPrompt.length > 20000) throw app.httpErrors.badRequest('system prompt is too long');
+    if (body.systemPrompt && body.systemPrompt.length > 20000)
+      throw app.httpErrors.badRequest('system prompt is too long');
 
     return codex.generateHandoffDraft(topicId, {
       goal,
@@ -493,10 +525,14 @@ export function registerForumRoutes({
     const destinationForumId = body.forumId?.trim() || sourceTopic.forum_id;
     const destinationForum = store.getForum(destinationForumId);
     if (!destinationForum) throw app.httpErrors.notFound('destination forum not found');
-    if (!canCreateTopic(destinationForum, identity)) throw app.httpErrors.forbidden('Posting not allowed in destination forum');
+    if (!canCreateTopic(destinationForum, identity))
+      throw app.httpErrors.forbidden('Posting not allowed in destination forum');
 
     const sourceLink = store.getPiSessionLinkByTopic(topicId);
-    if (!sourceLink) throw app.httpErrors.badRequest('Source topic is not linked to a canonical Pi session yet. Generate a draft first, then retry.');
+    if (!sourceLink)
+      throw app.httpErrors.badRequest(
+        'Source topic is not linked to a canonical Pi session yet. Generate a draft first, then retry.'
+      );
 
     const { topic, post } = store.createTopic({
       forumId: destinationForumId,
@@ -507,7 +543,12 @@ export function registerForumRoutes({
       robotMode: 'auto',
     });
     store.upsertTopicSubscription({ identityId: user.identityId, topicId: topic.id, mode: 'watching' });
-    store.upsertTopicRead({ identityId: user.identityId, topicId: topic.id, lastReadPostId: post.id, lastReadAt: post.created_at });
+    store.upsertTopicRead({
+      identityId: user.identityId,
+      topicId: topic.id,
+      lastReadPostId: post.id,
+      lastReadAt: post.created_at,
+    });
     const session = store.ensureSession({ topicId: topic.id });
     store.createSessionMessage(session.id, 'user', draft, 'public');
 
@@ -565,8 +606,21 @@ export function registerForumRoutes({
     }
 
     webhookService.dispatch('topic.created', {
-      topic: { id: topic.id, forumId: topic.forum_id, title: topic.title, status: topic.status, createdBy: topic.created_by, createdAt: topic.created_at },
-      post: { id: post.id, topicId: post.topic_id, authorId: post.author_id, body: post.body, createdAt: post.created_at }
+      topic: {
+        id: topic.id,
+        forumId: topic.forum_id,
+        title: topic.title,
+        status: topic.status,
+        createdBy: topic.created_by,
+        createdAt: topic.created_at,
+      },
+      post: {
+        id: post.id,
+        topicId: post.topic_id,
+        authorId: post.author_id,
+        body: post.body,
+        createdAt: post.created_at,
+      },
     });
 
     return { topic: serializeTopicWithPiLineage(topic), post: serializePost(post), launchError };
@@ -749,8 +803,8 @@ export function registerForumRoutes({
       total,
       items: posts.map((row) => ({
         ...serializePost(row),
-        reactionCounts: includeReactions ? reactionCountsMap.get(row.id) ?? [] : undefined
-      }))
+        reactionCounts: includeReactions ? (reactionCountsMap.get(row.id) ?? []) : undefined,
+      })),
     };
   });
 
@@ -758,8 +812,8 @@ export function registerForumRoutes({
     '/topics/:topicId/posts',
     {
       config: {
-        rateLimit: featureFlags.enableRateLimiting ? { max: 10, timeWindow: '1 minute' } : false
-      }
+        rateLimit: featureFlags.enableRateLimiting ? { max: 10, timeWindow: '1 minute' } : false,
+      },
     },
     async (request) => {
       // Require authentication for posting
@@ -771,6 +825,8 @@ export function registerForumRoutes({
         parentPostId?: string | null;
         model?: string | null;
         reasoningEffort?: string | null;
+        autoCompactEnabled?: boolean;
+        autoCompactRevision?: number;
         attachmentsPending?: boolean;
         silent?: boolean;
       };
@@ -793,22 +849,50 @@ export function registerForumRoutes({
       if (topic.status === 'locked' || topic.status === 'archived') {
         throw app.httpErrors.forbidden('topic is locked or archived');
       }
+      const changingAutoCompact =
+        body.autoCompactEnabled !== undefined && body.autoCompactEnabled !== Boolean(topic.auto_compact_enabled);
+      if (body.autoCompactEnabled !== undefined) {
+        requireAdmin(request);
+      }
+      if (changingAutoCompact) {
+        if (body.autoCompactRevision !== topic.auto_compact_revision) {
+          throw app.httpErrors.conflict('Auto-compaction setting changed in another request');
+        }
+        const state = store.getRobotState(topicId);
+        if (
+          (state && state.activity !== 'idle') ||
+          store.countActionablePostDispatches(topicId) > 0 ||
+          store.hasRunningCompactionOperation(topicId)
+        ) {
+          throw app.httpErrors.conflict('Auto-compaction can only be changed while the topic is idle');
+        }
+      }
       const robotMode = resolveRobotMode(topic.robot_mode);
       const deferRobot = Boolean(body.attachmentsPending) && !body.silent;
       const shouldDispatchRobot =
-        !body.silent && !deferRobot && robotMode !== 'off' && (robotMode !== 'mention' || hasRobotMention(body.body ?? ''));
+        !body.silent &&
+        !deferRobot &&
+        robotMode !== 'off' &&
+        (robotMode !== 'mention' || hasRobotMention(body.body ?? ''));
 
       const post = store.createPost({
         topicId,
         body: body.body,
         parentPostId: body.parentPostId ?? null,
         authorId: user.identityId,
-        silent: Boolean(body.silent) || deferRobot
+        autoCompactEnabled: changingAutoCompact ? body.autoCompactEnabled : undefined,
+        autoCompactRevision: changingAutoCompact ? body.autoCompactRevision : undefined,
+        silent: Boolean(body.silent) || deferRobot,
       });
       if (!store.getTopicSubscription(user.identityId, topicId)) {
         store.upsertTopicSubscription({ identityId: user.identityId, topicId, mode: 'watching' });
       }
-      store.upsertTopicRead({ identityId: user.identityId, topicId, lastReadPostId: post.id, lastReadAt: post.created_at });
+      store.upsertTopicRead({
+        identityId: user.identityId,
+        topicId,
+        lastReadPostId: post.id,
+        lastReadAt: post.created_at,
+      });
 
       const session = store.ensureSession({ topicId });
       store.createSessionMessage(session.id, 'user', body.body, 'public');
@@ -833,8 +917,8 @@ export function registerForumRoutes({
           parentPostId: post.parent_post_id,
           authorId: post.author_id,
           body: post.body,
-          createdAt: post.created_at
-        }
+          createdAt: post.created_at,
+        },
       });
 
       const subscriptions = store.listTopicSubscriptions(topicId, 'watching');
@@ -846,7 +930,7 @@ export function registerForumRoutes({
           actorId: user.identityId,
           topicId,
           postId: post.id,
-          payload: { topicId, postId: post.id }
+          payload: { topicId, postId: post.id },
         });
         emitNotification(subscription.identity_id, notification);
       }
@@ -890,8 +974,7 @@ export function registerForumRoutes({
     }
 
     const robotMode = resolveRobotMode(topic.robot_mode);
-    const shouldDispatchRobot =
-      robotMode !== 'off' && (robotMode !== 'mention' || hasRobotMention(post.body ?? ''));
+    const shouldDispatchRobot = robotMode !== 'off' && (robotMode !== 'mention' || hasRobotMention(post.body ?? ''));
 
     if (!shouldDispatchRobot) {
       if (post.silent) {
@@ -953,8 +1036,8 @@ export function registerForumRoutes({
           authorId: post.author_id,
           body: post.body,
           createdAt: post.created_at,
-          editedAt: post.edited_at
-        }
+          editedAt: post.edited_at,
+        },
       });
 
       return serializePost(post);
@@ -993,8 +1076,8 @@ export function registerForumRoutes({
           topicId: post.topic_id,
           parentPostId: post.parent_post_id,
           authorId: post.author_id,
-          deletedAt: post.deleted_at
-        }
+          deletedAt: post.deleted_at,
+        },
       });
 
       return serializePost(post);
@@ -1026,7 +1109,7 @@ export function registerForumRoutes({
       postId: reaction.post_id,
       identityId: reaction.identity_id,
       emoji: reaction.emoji,
-      createdAt: reaction.created_at
+      createdAt: reaction.created_at,
     };
   });
 
@@ -1054,7 +1137,7 @@ export function registerForumRoutes({
       postId: reaction.post_id,
       identityId: reaction.identity_id,
       emoji: reaction.emoji,
-      createdAt: reaction.created_at
+      createdAt: reaction.created_at,
     }));
   });
 
@@ -1066,4 +1149,3 @@ export function registerForumRoutes({
     return counts;
   });
 }
-

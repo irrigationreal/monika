@@ -1,20 +1,19 @@
-import type Database from 'better-sqlite3';
-import type {
-  ForumRepository,
-  TopicRepository,
-  PostRepository,
-  IdentityRepository,
-  ForumListOptions
-} from '@irrigationreal/codex-forum-core';
 import type {
   Forum,
-  Topic,
-  Post,
+  ForumListOptions,
+  ForumRepository,
+  IdentityKind,
   IdentityPrivate,
   IdentityPublic,
-  IdentityKind
+  IdentityRepository,
+  Post,
+  PostRepository,
+  Topic,
+  TopicRepository,
 } from '@irrigationreal/codex-forum-core';
-import type { ForumRow, TopicRow, PostRow, IdentityRow } from '../db';
+import type Database from 'better-sqlite3';
+
+import type { ForumRow, IdentityRow, PostRow, TopicRow } from '../db';
 
 export class SqliteForumRepository implements ForumRepository {
   constructor(private readonly db: Database.Database) {}
@@ -115,7 +114,7 @@ export class SqliteTopicRepository implements TopicRepository {
   async create(topic: Topic): Promise<void> {
     this.db
       .prepare(
-        'insert into topics (id, forum_id, tenant_id, title, status, tags_json, robot_mode, created_by, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        'insert into topics (id, forum_id, tenant_id, title, status, tags_json, robot_mode, auto_compact_enabled, auto_compact_revision, created_by, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
       .run(
         topic.id,
@@ -125,6 +124,8 @@ export class SqliteTopicRepository implements TopicRepository {
         topic.status,
         JSON.stringify(topic.tags ?? []),
         topic.robotMode ?? 'auto',
+        topic.autoCompactEnabled ? 1 : 0,
+        topic.autoCompactRevision ?? 0,
         topic.createdBy,
         topic.createdAt,
         topic.updatedAt
@@ -134,7 +135,7 @@ export class SqliteTopicRepository implements TopicRepository {
   async update(topic: Topic): Promise<void> {
     this.db
       .prepare(
-        'update topics set forum_id = ?, tenant_id = ?, title = ?, status = ?, tags_json = ?, robot_mode = ?, created_by = ?, created_at = ?, updated_at = ? where id = ?'
+        'update topics set forum_id = ?, tenant_id = ?, title = ?, status = ?, tags_json = ?, robot_mode = ?, auto_compact_enabled = ?, auto_compact_revision = ?, created_by = ?, created_at = ?, updated_at = ? where id = ?'
       )
       .run(
         topic.forumId,
@@ -143,6 +144,8 @@ export class SqliteTopicRepository implements TopicRepository {
         topic.status,
         JSON.stringify(topic.tags ?? []),
         topic.robotMode ?? 'auto',
+        topic.autoCompactEnabled ? 1 : 0,
+        topic.autoCompactRevision ?? 0,
         topic.createdBy,
         topic.createdAt,
         topic.updatedAt,
@@ -295,7 +298,7 @@ function mapForumRow(row: ForumRow): Forum {
     visibility: row.visibility as Forum['visibility'],
     archivedAt: row.archived_at,
     createdAt: row.created_at,
-    updatedAt: row.updated_at
+    updatedAt: row.updated_at,
   };
 }
 
@@ -306,11 +309,13 @@ function mapTopicRow(row: TopicRow): Topic {
     tenantId: row.tenant_id,
     title: row.title,
     status: row.status as Topic['status'],
-    robotMode: (row.robot_mode ?? null) as "auto" | "mention" | "off" | null,
+    robotMode: (row.robot_mode ?? null) as 'auto' | 'mention' | 'off' | null,
+    autoCompactEnabled: Boolean(row.auto_compact_enabled),
+    autoCompactRevision: row.auto_compact_revision,
     tags: safeParseTags(row.tags_json),
     createdBy: row.created_by,
     createdAt: row.created_at,
-    updatedAt: row.updated_at
+    updatedAt: row.updated_at,
   };
 }
 
@@ -326,7 +331,7 @@ function mapPostRow(row: PostRow): Post {
     silent: Boolean(row.silent),
     createdAt: row.created_at,
     editedAt: row.edited_at,
-    deletedAt: row.deleted_at
+    deletedAt: row.deleted_at,
   };
 }
 
@@ -342,7 +347,7 @@ function mapIdentityPublic(row: IdentityRow): IdentityPublic {
     signature: row.signature,
     theme: row.theme,
     createdAt: row.created_at,
-    updatedAt: row.updated_at
+    updatedAt: row.updated_at,
   };
 }
 
@@ -351,7 +356,7 @@ function mapIdentityPrivate(row: IdentityRow): IdentityPrivate {
     ...mapIdentityPublic(row),
     username: row.username,
     passwordHash: row.password_hash,
-    privateEmail: row.private_email
+    privateEmail: row.private_email,
   };
 }
 

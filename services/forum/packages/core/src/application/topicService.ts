@@ -1,15 +1,6 @@
-import type {
-  CreateTopicInput,
-  TopicCreationResult,
-  TopicService
-} from '../interfaces/services';
-import type {
-  ForumRepository,
-  TopicRepository,
-  PostRepository,
-  IdentityRepository
-} from '../interfaces/repositories';
-import type { Topic, Post } from '../domain/entities';
+import type { Post, Topic } from '../domain/entities';
+import type { ForumRepository, IdentityRepository, PostRepository, TopicRepository } from '../interfaces/repositories';
+import type { CreateTopicInput, TopicCreationResult, TopicService } from '../interfaces/services';
 import type { Clock, IdGenerator } from './types';
 
 export class TopicServiceImpl implements TopicService {
@@ -54,10 +45,12 @@ export class TopicServiceImpl implements TopicService {
       title: input.title,
       status: 'open',
       robotMode: input.robotMode ?? 'auto',
+      autoCompactEnabled: input.autoCompactEnabled ?? false,
+      autoCompactRevision: 0,
       tags: [],
       createdBy: input.authorId,
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
     };
 
     const silent = Boolean(input.silent) || Boolean(input.attachmentsPending);
@@ -72,7 +65,7 @@ export class TopicServiceImpl implements TopicService {
       silent,
       createdAt: now,
       editedAt: null,
-      deletedAt: null
+      deletedAt: null,
     };
 
     await this.deps.topics.create(topic);

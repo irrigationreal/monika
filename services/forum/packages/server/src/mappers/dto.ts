@@ -3,8 +3,10 @@ import type {
   ChatCategoryDto,
   ChatMessageDto,
   ChatRoomDto,
+  CompactionOperationDto,
   ExternalRefDto,
   ForumDto,
+  ForumThemeKey,
   IdentityDto,
   InviteDto,
   MessageTemplateDto,
@@ -12,20 +14,27 @@ import type {
   PostDto,
   RobotPersonaDto,
   RobotStateDto,
-  TopicOperationalEventDto,
-  CompactionOperationDto,
   SessionDto,
   SessionInspectorDto,
   SessionMessageDto,
   ToolRunDto,
   TopicAutoRunDto,
   TopicDto,
+  TopicOperationalEventDto,
   UserFileDto,
   UserPostHistoryItemDto,
   UserPostHistoryResponseDto,
-  ForumThemeKey
 } from '@irrigationreal/codex-forum-contracts';
-import type { CompactionOperation, ExternalRef, MessageTemplate, PlanArtifact, RobotState, ToolRunSummary, TopicOperationalEvent } from '@irrigationreal/codex-forum-core';
+import type {
+  CompactionOperation,
+  ExternalRef,
+  MessageTemplate,
+  PlanArtifact,
+  RobotState,
+  ToolRunSummary,
+  TopicOperationalEvent,
+} from '@irrigationreal/codex-forum-core';
+
 import type { ChatCategoryRow, ChatMessageRow, ChatRoomRow } from '../db';
 import type {
   Attachment,
@@ -42,7 +51,7 @@ import type {
   TopicAutoRun,
   TopicReadModel,
   UserFile,
-  UserPostHistoryItem
+  UserPostHistoryItem,
 } from './domain';
 
 type ChatCategorySummaryRow = ChatCategoryRow & { room_count: number };
@@ -62,7 +71,7 @@ export function mapMessageTemplateToDto(template: MessageTemplate): MessageTempl
     sortOrder: template.sortOrder,
     revision: template.revision,
     createdAt: template.createdAt,
-    updatedAt: template.updatedAt
+    updatedAt: template.updatedAt,
   };
 }
 
@@ -72,10 +81,12 @@ export function mapTopicToDto(topic: TopicReadModel): TopicDto {
     forumId: topic.forumId,
     title: topic.title,
     status: topic.status as TopicDto['status'],
+    autoCompactEnabled: topic.autoCompactEnabled ?? false,
+    autoCompactRevision: topic.autoCompactRevision ?? 0,
     tags: topic.tags,
     createdBy: topic.createdBy,
     createdAt: topic.createdAt,
-    updatedAt: topic.updatedAt
+    updatedAt: topic.updatedAt,
   };
   if (topic.tenantId !== undefined) dto.tenantId = topic.tenantId;
   if (topic.robotMode != null) dto.robotMode = topic.robotMode;
@@ -102,7 +113,7 @@ export function mapForumToDto(forum: ForumReadModel): ForumDto {
     postCount: forum.postCount ?? 0,
     lastPost: forum.lastPost ?? null,
     createdAt: forum.createdAt,
-    updatedAt: forum.updatedAt
+    updatedAt: forum.updatedAt,
   };
 }
 
@@ -119,7 +130,7 @@ export function mapPostToDto(post: PostReadModel): PostDto {
     createdAt: post.createdAt,
     ...(post.editedAt !== undefined && { editedAt: post.editedAt }),
     ...(post.deletedAt !== undefined && { deletedAt: post.deletedAt }),
-    ...(post.reactionCounts !== undefined && { reactionCounts: post.reactionCounts })
+    ...(post.reactionCounts !== undefined && { reactionCounts: post.reactionCounts }),
   };
 }
 
@@ -131,7 +142,7 @@ export function mapChatCategoryRowToDto(category: ChatCategorySummaryRow): ChatC
     visibility: category.visibility as ChatCategoryDto['visibility'],
     roomCount: category.room_count ?? 0,
     createdAt: category.created_at,
-    updatedAt: category.updated_at
+    updatedAt: category.updated_at,
   };
 }
 
@@ -146,7 +157,7 @@ export function mapChatRoomRowToDto(room: ChatRoomRow): ChatRoomDto {
     lastMessageAt: room.last_message_at ?? null,
     lastMessageAuthorName: room.last_message_author_name ?? null,
     createdAt: room.created_at,
-    updatedAt: room.updated_at
+    updatedAt: room.updated_at,
   };
 }
 
@@ -157,13 +168,13 @@ export function mapChatMessageRowToDto(message: ChatMessageRow): ChatMessageDto 
     author: {
       id: message.author_id,
       displayName: message.author_name,
-      avatarUrl: message.author_avatar_url ?? null
+      avatarUrl: message.author_avatar_url ?? null,
     },
     body: message.body,
     createdAt: message.created_at,
     editedAt: message.edited_at ?? null,
     expiresAt: message.expires_at ?? null,
-    attachments: []
+    attachments: [],
   };
 }
 
@@ -174,7 +185,7 @@ export function mapAttachmentToDto(attachment: Attachment): AttachmentDto {
     filename: attachment.filename,
     mimeType: attachment.mimeType,
     sizeBytes: attachment.sizeBytes,
-    createdAt: attachment.createdAt
+    createdAt: attachment.createdAt,
   };
 }
 
@@ -185,7 +196,7 @@ export function mapUserFileToDto(file: UserFile): UserFileDto {
     filename: file.filename,
     mimeType: file.mimeType,
     sizeBytes: file.sizeBytes,
-    createdAt: file.createdAt
+    createdAt: file.createdAt,
   };
 }
 
@@ -195,7 +206,7 @@ export function mapIdentityToDto(identity: IdentityReadModel): IdentityDto {
     displayName: identity.displayName,
     kind: identity.kind as IdentityDto['kind'],
     createdAt: identity.createdAt,
-    updatedAt: identity.updatedAt
+    updatedAt: identity.updatedAt,
   };
   if (identity.tenantId !== undefined) dto.tenantId = identity.tenantId;
   if (identity.parentIdentityId !== undefined) dto.parentIdentityId = identity.parentIdentityId;
@@ -217,13 +228,11 @@ export function mapUserPostHistoryItemToDto(item: UserPostHistoryItem): UserPost
     forumId: item.forumId,
     forumName: item.forumName,
     createdAt: item.createdAt,
-    excerpt: item.excerpt
+    excerpt: item.excerpt,
   };
 }
 
-export function mapUserPostHistoryResponseToDto(
-  response: UserPostHistoryResponseDto
-): UserPostHistoryResponseDto {
+export function mapUserPostHistoryResponseToDto(response: UserPostHistoryResponseDto): UserPostHistoryResponseDto {
   return response;
 }
 
@@ -237,7 +246,7 @@ export function mapRobotPersonaToDto(persona: RobotPersona): RobotPersonaDto {
     avatarUrl: persona.avatarUrl,
     signature: persona.signature,
     createdAt: persona.createdAt,
-    updatedAt: persona.updatedAt
+    updatedAt: persona.updatedAt,
   };
 }
 
@@ -247,7 +256,7 @@ export function mapExternalRefToDto(ref: ExternalRef): ExternalRefDto {
     surfaceId: ref.surfaceId,
     surfaceKind: ref.surfaceKind as ExternalRefDto['surfaceKind'],
     externalId: ref.externalId,
-    kind: ref.kind as ExternalRefDto['kind']
+    kind: ref.kind as ExternalRefDto['kind'],
   };
   if (ref.scope !== undefined) dto.scope = ref.scope;
   if (ref.scopeKind !== undefined) dto.scopeKind = ref.scopeKind as Exclude<ExternalRefDto['scopeKind'], undefined>;
@@ -266,7 +275,7 @@ export function mapPlanToDto(plan: Plan): PlanDto {
     parentPostId: plan.parentPostId ?? null,
     visibility: plan.visibility as PlanDto['visibility'],
     createdAt: plan.createdAt,
-    updatedAt: plan.updatedAt
+    updatedAt: plan.updatedAt,
   };
 }
 
@@ -282,7 +291,7 @@ export function mapToolRunToDto(run: ToolRun): ToolRunDto {
     filesTouched: run.filesTouched ?? null,
     outputSummary: run.outputSummary ?? null,
     redactionsApplied: run.redactionsApplied,
-    visibility: run.visibility as ToolRunDto['visibility']
+    visibility: run.visibility as ToolRunDto['visibility'],
   };
 }
 
@@ -293,7 +302,7 @@ function mapPlanArtifactToDto(plan: PlanArtifact): PlanDto {
     ...(plan.summary !== undefined && { summary: plan.summary }),
     visibility: plan.visibility as PlanDto['visibility'],
     createdAt: plan.createdAt,
-    updatedAt: plan.updatedAt
+    updatedAt: plan.updatedAt,
   };
 }
 
@@ -308,11 +317,14 @@ function mapToolRunSummaryToDto(run: ToolRunSummary): ToolRunDto {
     ...(run.filesTouched !== undefined && { filesTouched: run.filesTouched }),
     ...(run.outputSummary !== undefined && { outputSummary: run.outputSummary }),
     redactionsApplied: run.redactionsApplied,
-    visibility: run.visibility as ToolRunDto['visibility']
+    visibility: run.visibility as ToolRunDto['visibility'],
   };
 }
 
-export function mapTopicOperationalEventToDto(event: TopicOperationalEvent, includeDetail: boolean): TopicOperationalEventDto {
+export function mapTopicOperationalEventToDto(
+  event: TopicOperationalEvent,
+  includeDetail: boolean
+): TopicOperationalEventDto {
   return { ...event, detail: includeDetail ? event.detail : null };
 }
 
@@ -330,7 +342,7 @@ export function mapRobotStateToDto(state: RobotState): RobotStateDto {
     lastUpdatedAt: state.lastUpdatedAt,
     lastTurnError: state.lastTurnError ?? null,
     currentPlan: state.currentPlan ? mapPlanArtifactToDto(state.currentPlan) : null,
-    recentToolRuns: state.recentToolRuns.map(mapToolRunSummaryToDto)
+    recentToolRuns: state.recentToolRuns.map(mapToolRunSummaryToDto),
   };
 }
 
@@ -352,7 +364,7 @@ export function mapTopicAutoRunToDto(autoRun: TopicAutoRun): TopicAutoRunDto {
     lastError: autoRun.lastError ?? null,
     steerMessage: autoRun.steerMessage ?? null,
     createdAt: autoRun.createdAt ?? null,
-    updatedAt: autoRun.updatedAt ?? null
+    updatedAt: autoRun.updatedAt ?? null,
   };
 }
 
@@ -362,7 +374,7 @@ export function mapSessionToDto(session: Session): SessionDto {
     topicId: session.topicId,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
-    status: session.status as SessionDto['status']
+    status: session.status as SessionDto['status'],
   };
 }
 
@@ -373,7 +385,7 @@ export function mapSessionMessageToDto(message: SessionMessage): SessionMessageD
     role: message.role as SessionMessageDto['role'],
     content: message.content,
     createdAt: message.createdAt,
-    visibility: message.visibility as SessionMessageDto['visibility']
+    visibility: message.visibility as SessionMessageDto['visibility'],
   };
 }
 
@@ -387,8 +399,8 @@ export function mapSessionInspectorToDto(inspector: SessionInspector): SessionIn
       id: artifact.id,
       kind: artifact.kind,
       label: artifact.label,
-      visibility: artifact.visibility as SessionInspectorDto['artifacts'][number]['visibility']
-    }))
+      visibility: artifact.visibility as SessionInspectorDto['artifacts'][number]['visibility'],
+    })),
   };
 }
 
@@ -400,6 +412,6 @@ export function mapInviteToDto(invite: Invite): InviteDto {
     maxUses: invite.maxUses,
     uses: invite.uses,
     expiresAt: invite.expiresAt,
-    createdAt: invite.createdAt
+    createdAt: invite.createdAt,
   };
 }

@@ -1,22 +1,5 @@
 import type {
-  AttachmentRow,
-  ExternalRefRow,
-  IdentityRow,
-  InviteRow,
-  MessageTemplateRow,
-  PlanRow,
-  PostRow,
-  RobotStateRow,
-  SessionMessageRow,
-  SessionRow,
-  ToolRunRow,
-  TopicOperationalEventRow,
-  CompactionOperationRow,
-  TopicAutoRunRow,
-  TopicRow,
-  UserFileRow
-} from '../db';
-import type {
+  CompactionOperation,
   ExternalRef,
   ExternalRefKind,
   ExternalScopeKind,
@@ -28,20 +11,29 @@ import type {
   RobotState,
   SurfaceKind,
   Topic,
-  TopicStatus,
   TopicOperationalEvent,
-  CompactionOperation
+  TopicStatus,
 } from '@irrigationreal/codex-forum-core';
+
 import type {
-  Attachment,
-  Invite,
-  Plan,
-  Session,
-  SessionMessage,
-  ToolRun,
-  TopicAutoRun,
-  UserFile
-} from './domain';
+  AttachmentRow,
+  CompactionOperationRow,
+  ExternalRefRow,
+  IdentityRow,
+  InviteRow,
+  MessageTemplateRow,
+  PlanRow,
+  PostRow,
+  RobotStateRow,
+  SessionMessageRow,
+  SessionRow,
+  ToolRunRow,
+  TopicAutoRunRow,
+  TopicOperationalEventRow,
+  TopicRow,
+  UserFileRow,
+} from '../db';
+import type { Attachment, Invite, Plan, Session, SessionMessage, ToolRun, TopicAutoRun, UserFile } from './domain';
 
 export function mapTopicRowToDomain(row: TopicRow): Topic {
   const topic: Topic = {
@@ -49,10 +41,12 @@ export function mapTopicRowToDomain(row: TopicRow): Topic {
     forumId: row.forum_id,
     title: row.title,
     status: row.status as TopicStatus,
+    autoCompactEnabled: Boolean(row.auto_compact_enabled),
+    autoCompactRevision: row.auto_compact_revision,
     tags: JSON.parse(row.tags_json),
     createdBy: row.created_by,
     createdAt: row.created_at,
-    updatedAt: row.updated_at
+    updatedAt: row.updated_at,
   };
   if (row.tenant_id != null) topic.tenantId = row.tenant_id;
   if (row.robot_mode != null) topic.robotMode = row.robot_mode as Exclude<Topic['robotMode'], undefined>;
@@ -71,7 +65,7 @@ export function mapPostRowToDomain(row: PostRow): Post {
     silent: Boolean(row.silent),
     createdAt: row.created_at,
     editedAt: row.edited_at,
-    deletedAt: row.deleted_at
+    deletedAt: row.deleted_at,
   };
 }
 
@@ -83,7 +77,7 @@ export function mapAttachmentRowToDomain(row: AttachmentRow): Attachment {
     mimeType: row.mime_type,
     sizeBytes: row.size_bytes,
     sha256: row.sha256 ?? null,
-    createdAt: row.created_at
+    createdAt: row.created_at,
   };
 }
 
@@ -94,7 +88,7 @@ export function mapUserFileRowToDomain(row: UserFileRow): UserFile {
     filename: row.filename,
     mimeType: row.mime_type,
     sizeBytes: row.size_bytes,
-    createdAt: row.created_at
+    createdAt: row.created_at,
   };
 }
 
@@ -120,7 +114,7 @@ export function mapMessageTemplateRowToDomain(
     createdBy: row.created_by,
     updatedBy: row.updated_by,
     createdAt: row.created_at,
-    updatedAt: row.updated_at
+    updatedAt: row.updated_at,
   };
 }
 
@@ -136,7 +130,7 @@ export function mapIdentityRowToDomain(row: IdentityRow): Identity {
     signature: row.signature,
     theme: row.theme,
     createdAt: row.created_at,
-    updatedAt: row.updated_at
+    updatedAt: row.updated_at,
   };
 }
 
@@ -152,7 +146,7 @@ export function mapExternalRefRowToDomain(row: ExternalRefRow): ExternalRef {
     mappedForumId: row.mapped_forum_id,
     mappedTopicId: row.mapped_topic_id,
     mappedPostId: row.mapped_post_id,
-    mappedIdentityId: row.mapped_identity_id
+    mappedIdentityId: row.mapped_identity_id,
   };
 }
 
@@ -164,7 +158,7 @@ export function mapPlanRowToDomain(row: PlanRow): Plan {
     parentPostId: row.parent_post_id,
     visibility: row.visibility,
     createdAt: row.created_at,
-    updatedAt: row.updated_at
+    updatedAt: row.updated_at,
   };
 }
 
@@ -180,7 +174,7 @@ export function mapToolRunRowToDomain(row: ToolRunRow): ToolRun {
     filesTouched: row.files_touched_json ? (JSON.parse(row.files_touched_json) as string[]) : null,
     outputSummary: row.output_summary,
     redactionsApplied: Boolean(row.redactions_applied),
-    visibility: row.visibility
+    visibility: row.visibility,
   };
 }
 
@@ -213,10 +207,10 @@ export function mapTopicOperationalEventRowToDomain(row: TopicOperationalEventRo
     category: row.category as TopicOperationalEvent['category'],
     status: row.status as TopicOperationalEvent['status'],
     summary: row.summary,
-    detail: row.detail_json ? JSON.parse(row.detail_json) as Record<string, unknown> : null,
+    detail: row.detail_json ? (JSON.parse(row.detail_json) as Record<string, unknown>) : null,
     sourceKind: row.source_kind as TopicOperationalEvent['sourceKind'],
     sourceId: row.source_id,
-    createdAt: row.created_at
+    createdAt: row.created_at,
   };
 }
 
@@ -235,7 +229,7 @@ export function mapCompactionOperationRowToDomain(row: CompactionOperationRow): 
     errorMessage: row.error_message,
     createdAt: row.created_at,
     startedAt: row.started_at,
-    finishedAt: row.finished_at
+    finishedAt: row.finished_at,
   };
 }
 
@@ -258,7 +252,7 @@ export function mapTopicAutoRunRowToDomain(row: TopicAutoRunRow | null, topicId:
       lastError: null,
       steerMessage: null,
       createdAt: null,
-      updatedAt: null
+      updatedAt: null,
     };
   }
   return {
@@ -278,7 +272,7 @@ export function mapTopicAutoRunRowToDomain(row: TopicAutoRunRow | null, topicId:
     lastError: row.last_error,
     steerMessage: row.steer_message,
     createdAt: row.created_at,
-    updatedAt: row.updated_at
+    updatedAt: row.updated_at,
   };
 }
 
@@ -288,7 +282,7 @@ export function mapSessionRowToDomain(row: SessionRow): Session {
     topicId: row.topic_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    status: row.status
+    status: row.status,
   };
 }
 
@@ -299,7 +293,7 @@ export function mapSessionMessageRowToDomain(row: SessionMessageRow): SessionMes
     role: row.role,
     content: row.content,
     createdAt: row.created_at,
-    visibility: row.visibility
+    visibility: row.visibility,
   };
 }
 
@@ -311,7 +305,6 @@ export function mapInviteRowToDomain(row: InviteRow): Invite {
     maxUses: row.max_uses,
     uses: row.uses,
     expiresAt: row.expires_at,
-    createdAt: row.created_at
+    createdAt: row.created_at,
   };
 }
-

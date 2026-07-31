@@ -87,6 +87,51 @@ describe('CompactionService', () => {
     expect(store.listTopicOperationalEvents(topic.id)[0]).toMatchObject({ type: 'compaction', status: 'failed' });
   });
 
+  it('allows only one running compaction per topic after concurrent leaf checks', async () => {
+    const { topic, admin } = seed(store, db);
+    const leafResolvers: Array<() => void> = [];
+    let finishCompaction!: () => void;
+    const service = new CompactionService(
+      store,
+      {
+        getTopicCompactionLeaf: vi.fn(
+          () => new Promise<string>((resolve) => leafResolvers.push(() => resolve('leaf-1')))
+        ),
+        compactTopicConversation: vi.fn(
+          () =>
+            new Promise<Record<string, unknown>>((resolve) => {
+              finishCompaction = () => resolve({ ok: true });
+            })
+        ),
+      },
+      { wake: vi.fn() }
+    );
+
+    const first = service.compact({
+      operationId: 'op-a',
+      topicId: topic.id,
+      initiatedBy: admin.id,
+      recoveryPrompt: 'recover a',
+    });
+    const second = service.compact({
+      operationId: 'op-b',
+      topicId: topic.id,
+      initiatedBy: admin.id,
+      recoveryPrompt: 'recover b',
+    });
+    expect(leafResolvers).toHaveLength(2);
+    leafResolvers.forEach((resolve) => resolve());
+    await expect(second).rejects.toBeInstanceOf(CompactionConflictError);
+    finishCompaction();
+    await expect(first).resolves.toMatchObject({ status: 'succeeded' });
+    expect(
+      store
+        .listPosts(topic.id, 1, 100)
+        .map((post) => post.body)
+        .filter((body) => body.startsWith('recover'))
+    ).toEqual(['recover a']);
+  });
+
   it('rejects non-idle topics before creating an operation', async () => {
     const { topic, admin } = seed(store, db, 'thinking');
     const service = new CompactionService(

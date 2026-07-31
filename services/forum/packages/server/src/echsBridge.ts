@@ -93,7 +93,9 @@ function renderForumInstructions(label: string, forumPrePrompt: string | null): 
   return forumPrePrompt?.trim() ? `${label}:\n${forumPrePrompt.trim()}` : `${label}: (none)`;
 }
 
-function renderPersonaIndex(personas: Array<{ key: string; displayName: string; description: string | null; soul: string | null }>): string {
+function renderPersonaIndex(
+  personas: Array<{ key: string; displayName: string; description: string | null; soul: string | null }>
+): string {
   return renderPersonaIndexMarkdown(
     personas.map((p) => ({ key: p.key, displayName: p.displayName, description: p.description, soul: p.soul }))
   ).trimEnd();
@@ -258,17 +260,27 @@ function isPathWithin(parent: string, candidate: string): boolean {
 function guessMimeType(filename: string): string {
   const ext = extname(filename).toLowerCase();
   switch (ext) {
-    case '.png': return 'image/png';
+    case '.png':
+      return 'image/png';
     case '.jpg':
-    case '.jpeg': return 'image/jpeg';
-    case '.webp': return 'image/webp';
-    case '.gif': return 'image/gif';
-    case '.txt': return 'text/plain';
-    case '.md': return 'text/markdown';
-    case '.json': return 'application/json';
-    case '.pdf': return 'application/pdf';
-    case '.zip': return 'application/zip';
-    default: return 'application/octet-stream';
+    case '.jpeg':
+      return 'image/jpeg';
+    case '.webp':
+      return 'image/webp';
+    case '.gif':
+      return 'image/gif';
+    case '.txt':
+      return 'text/plain';
+    case '.md':
+      return 'text/markdown';
+    case '.json':
+      return 'application/json';
+    case '.pdf':
+      return 'application/pdf';
+    case '.zip':
+      return 'application/zip';
+    default:
+      return 'application/octet-stream';
   }
 }
 
@@ -300,7 +312,10 @@ function consumeStandaloneMarkers(text: string, consume: (line: string) => boole
     if (!inFence && consume(line.trim())) continue;
     out.push(line);
   }
-  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  return out
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 function extractArtifactMarkers(text: string): { cleanedText: string; artifacts: ArtifactRequest[] } {
@@ -367,7 +382,16 @@ function formatForumPostEnvelope(opts: {
   };
   body: string;
   maxPostChars: number;
-  attachments?: Array<{ id: string; filename: string; sizeBytes: number; url: string; mimeType?: string; storagePath?: string; sha256?: string | null; postId?: string }>;
+  attachments?: Array<{
+    id: string;
+    filename: string;
+    sizeBytes: number;
+    url: string;
+    mimeType?: string;
+    storagePath?: string;
+    sha256?: string | null;
+    postId?: string;
+  }>;
 }): string {
   const flags = opts.flags?.filter(Boolean) ?? [];
   const flagText = flags.length > 0 ? ` flags=${flags.join(',')}` : '';
@@ -504,7 +528,13 @@ interface QueuedTurn {
   sessionId: string;
   body: string;
   parentPostId: string | null;
-  options?: { model?: string | null; reasoningEffort?: string | null; mode?: 'queue' | 'steer'; dispatchId?: string; generation?: number };
+  options?: {
+    model?: string | null;
+    reasoningEffort?: string | null;
+    mode?: 'queue' | 'steer';
+    dispatchId?: string;
+    generation?: number;
+  };
   queuedAt: string;
 }
 
@@ -654,7 +684,6 @@ export class EchsBridge {
     }
   }
 
-
   listQueuedTurns(): Array<Pick<QueuedTurn, 'topicId' | 'sessionId' | 'parentPostId' | 'queuedAt'>> {
     return this.turnQueue.map((turn) => ({
       topicId: turn.topicId,
@@ -691,12 +720,16 @@ export class EchsBridge {
     return active;
   }
 
-  private async openTopicConversation(topicId: string, opts?: { model?: string | null; reasoningEffort?: string | null }): Promise<{ sessionId: string; conversationId: string; link: ReturnType<ForumStore['getPiSessionLinkByTopic']> }> {
+  private async openTopicConversation(
+    topicId: string,
+    opts?: { model?: string | null; reasoningEffort?: string | null }
+  ): Promise<{ sessionId: string; conversationId: string; link: ReturnType<ForumStore['getPiSessionLinkByTopic']> }> {
     const session = this.store.ensureSession({ topicId });
     const link = this.store.getPiSessionLinkByTopic(topicId);
     const topic = this.store.getTopic(topicId);
     const forum = topic ? this.store.getForum(topic.forum_id) : null;
     const cwd = forum?.cwd ?? this.config.workDir;
+    const autoCompact = Boolean(topic?.auto_compact_enabled);
     let conversationId = session.agent_thread_id ?? null;
     if (conversationId) {
       const existing = await this.client.getConversation(conversationId);
@@ -707,13 +740,21 @@ export class EchsBridge {
     }
     if (!conversationId) {
       if (link) {
-        const conversation = await this.client.openConversation({ piSessionId: link.pi_session_id, piSessionPath: link.pi_session_path, cwd });
+        const conversation = await this.client.openConversation({
+          piSessionId: link.pi_session_id,
+          piSessionPath: link.pi_session_path,
+          cwd,
+          autoCompact,
+        });
         conversationId = conversation.conversation_id;
       } else {
         const conversation = await this.client.createConversationRecord({
           cwd,
+          autoCompact,
           model: opts?.model ?? this.config.model,
-          ...(opts?.reasoningEffort ?? this.config.reasoningEffort ? { reasoning: opts?.reasoningEffort ?? this.config.reasoningEffort } : {}),
+          ...((opts?.reasoningEffort ?? this.config.reasoningEffort)
+            ? { reasoning: opts?.reasoningEffort ?? this.config.reasoningEffort }
+            : {}),
         });
         conversationId = conversation.conversation_id;
         if (conversation.session_id && conversation.session_path) {
@@ -733,8 +774,14 @@ export class EchsBridge {
     return { sessionId: session.id, conversationId, link };
   }
 
-  async generateHandoffDraft(topicId: string, opts: { goal: string; model?: string | null; reasoningEffort?: string | null; systemPrompt?: string | null }): Promise<{ source?: unknown; goal: string; draft: string; model?: string | null; reasoning?: string | null }> {
-    const opened = await this.openTopicConversation(topicId, { model: opts.model ?? null, reasoningEffort: opts.reasoningEffort ?? null });
+  async generateHandoffDraft(
+    topicId: string,
+    opts: { goal: string; model?: string | null; reasoningEffort?: string | null; systemPrompt?: string | null }
+  ): Promise<{ source?: unknown; goal: string; draft: string; model?: string | null; reasoning?: string | null }> {
+    const opened = await this.openTopicConversation(topicId, {
+      model: opts.model ?? null,
+      reasoningEffort: opts.reasoningEffort ?? null,
+    });
     return this.client.generateHandoffDraft(opened.conversationId, {
       goal: opts.goal,
       model: opts.model ?? null,
@@ -987,7 +1034,13 @@ export class EchsBridge {
   async dispatchPostToAgent(
     topicId: string,
     postId: string,
-    options?: { mode?: 'queue' | 'steer'; model?: string | null; reasoningEffort?: string | null; dispatchId?: string; generation?: number }
+    options?: {
+      mode?: 'queue' | 'steer';
+      model?: string | null;
+      reasoningEffort?: string | null;
+      dispatchId?: string;
+      generation?: number;
+    }
   ): Promise<void> {
     const post = this.store.getPost(postId);
     if (!post || post.topic_id !== topicId) {
@@ -1000,8 +1053,11 @@ export class EchsBridge {
       body: post.body,
       parentPostId: post.id,
       options: {
-        model: options?.model ?? null, reasoningEffort: options?.reasoningEffort ?? null, mode: options?.mode ?? 'queue',
-        dispatchId: options?.dispatchId, generation: options?.generation,
+        model: options?.model ?? null,
+        reasoningEffort: options?.reasoningEffort ?? null,
+        mode: options?.mode ?? 'queue',
+        dispatchId: options?.dispatchId,
+        generation: options?.generation,
       },
       queuedAt: new Date().toISOString(),
     };
@@ -1038,13 +1094,19 @@ export class EchsBridge {
     if (!threadId) {
       this.store.setRobotActivity(topicId, 'idle');
       this.emitState(topicId);
-      return { ok: true, message: `Cancelled ${localCancelled} local and ${fence.cancelled} durable queued dispatch(es).` };
+      return {
+        ok: true,
+        message: `Cancelled ${localCancelled} local and ${fence.cancelled} durable queued dispatch(es).`,
+      };
     }
     try {
       await this.client.interruptConversation(threadId, fence.generation);
       this.store.setRobotActivity(topicId, 'idle');
       this.emitState(topicId);
-      return { ok: true, message: `Interrupt requested; cancelled ${localCancelled} local and ${fence.cancelled} durable queued dispatch(es).` };
+      return {
+        ok: true,
+        message: `Interrupt requested; cancelled ${localCancelled} local and ${fence.cancelled} durable queued dispatch(es).`,
+      };
     } catch (err) {
       return { ok: false, message: err instanceof Error ? err.message : 'Interrupt failed.' };
     }
@@ -1295,7 +1357,10 @@ export class EchsBridge {
     model: string | null;
     reasoningEffort: string | null;
   }): boolean {
-    if (input.generation !== undefined && !this.store.isTopicDispatchGenerationCurrent(input.topicId, input.generation)) {
+    if (
+      input.generation !== undefined &&
+      !this.store.isTopicDispatchGenerationCurrent(input.topicId, input.generation)
+    ) {
       return false;
     }
     this.store.upsertRobotState({
@@ -1325,6 +1390,7 @@ export class EchsBridge {
       const forum = topic ? this.store.getForum(topic.forum_id) : null;
       const cwd = forum?.cwd ?? this.config.workDir;
       const forumId = topic?.forum_id ?? null;
+      const autoCompact = Boolean(topic?.auto_compact_enabled);
       const now = new Date().toISOString();
       const pendingMove = forumId ? this.store.getPendingTopicMove(topicId) : null;
       let pendingMoveToClear: string | null = null;
@@ -1425,6 +1491,7 @@ export class EchsBridge {
             piSessionId: piSessionLink.pi_session_id,
             piSessionPath: piSessionLink.pi_session_path,
             cwd,
+            autoCompact,
           });
           conversationId = conversation.conversation_id;
         } else {
@@ -1432,6 +1499,7 @@ export class EchsBridge {
             model,
             ...(reasoningEffort ? { reasoning: reasoningEffort } : {}),
             cwd,
+            autoCompact,
             ...(instructions != null ? { instructions } : {}),
           });
           const conversation = await this.client.getConversation(conversationId);
@@ -1673,6 +1741,7 @@ export class EchsBridge {
         workdir: cwd,
         model,
         reasoning: reasoningEffort,
+        auto_compact: autoCompact,
       };
       const requestedMode = options?.mode ?? 'queue';
       const resolveEnqueueMode = (targetThreadId: string, firstMessage: boolean): 'queue' | 'steer' => {
@@ -1695,7 +1764,10 @@ export class EchsBridge {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         if (message.includes('conversation not found') || message.includes('ECHS 404')) {
-          if (options?.generation !== undefined && !this.store.isTopicDispatchGenerationCurrent(topicId, options.generation)) {
+          if (
+            options?.generation !== undefined &&
+            !this.store.isTopicDispatchGenerationCurrent(topicId, options.generation)
+          ) {
             throw new Error('stale_dispatch_generation');
           }
           console.warn(`[ECHS] conversation missing for topic ${topicId}; recreating thread`);
@@ -1876,9 +1948,8 @@ export class EchsBridge {
         if (!continuation) break;
         ctx.currentContinuation = continuation;
         const originTopicMatches = !continuation.originTopicId || continuation.originTopicId === ctx.topicId;
-        const originPost = originTopicMatches && continuation.originPostId
-          ? this.store.getPost(continuation.originPostId)
-          : null;
+        const originPost =
+          originTopicMatches && continuation.originPostId ? this.store.getPost(continuation.originPostId) : null;
         ctx.turnParentPostId = originPost?.topic_id === ctx.topicId ? originPost.id : null;
         ctx.planId = null;
         ctx.reasoningSummary = '';
@@ -2104,7 +2175,39 @@ export class EchsBridge {
       }
       case 'compaction_end': {
         const data = event.data as any;
-        if (!data?.aborted && !data?.error) void this.emitContext(ctx.topicId);
+        const reason = data?.reason;
+        const automatic = reason === 'threshold' || reason === 'overflow';
+        const succeeded = !data?.aborted && !data?.error;
+        const compactionEntryId = typeof data?.compaction_entry_id === 'string' ? data.compaction_entry_id : null;
+        if (succeeded) void this.emitContext(ctx.topicId);
+        if (automatic) {
+          const sourceId = compactionEntryId ?? `${threadId}:auto-compaction:${reason}:${event.id ?? randomUUID()}`;
+          const result = data?.result && typeof data.result === 'object' ? data.result : {};
+          const operationalEvent = this.store.createTopicOperationalEvent({
+            topicId: ctx.topicId,
+            anchorPostId: ctx.turnParentPostId ?? ctx.lastUserPostId ?? this.store.getLatestPostId(ctx.topicId),
+            type: 'compaction',
+            category: 'maintenance',
+            status: succeeded ? 'succeeded' : 'failed',
+            summary: succeeded
+              ? reason === 'overflow' && data?.will_retry
+                ? 'Context was automatically compacted and the response continued.'
+                : 'Context was automatically compacted.'
+              : 'Automatic context compaction failed.',
+            detail: {
+              reason,
+              willRetry: Boolean(data?.will_retry),
+              compactionEntryId: data?.compaction_entry_id ?? null,
+              tokensBefore: typeof result.tokensBefore === 'number' ? result.tokensBefore : null,
+              estimatedTokensAfter:
+                typeof result.estimatedTokensAfter === 'number' ? result.estimatedTokensAfter : null,
+              error: typeof data?.error === 'string' ? data.error : null,
+            },
+            sourceKind: 'echs_turn',
+            sourceId,
+          });
+          this.bus.emit(ctx.topicId, { type: 'operational_event', data: { event_id: operationalEvent.id } });
+        }
         break;
       }
       case 'session_compacted': {
@@ -2215,7 +2318,12 @@ export class EchsBridge {
     };
   }
 
-  private upsertPlanForSummary(planContext: PlanContext, summary: string, preferredPlanId?: string | null, reasoningCheckpoints?: number[] | null): string {
+  private upsertPlanForSummary(
+    planContext: PlanContext,
+    summary: string,
+    preferredPlanId?: string | null,
+    reasoningCheckpoints?: number[] | null
+  ): string {
     const parentPostId = planContext.parentPostId ?? null;
     let plan = preferredPlanId ? this.store.getPlan(preferredPlanId) : null;
     if (plan && parentPostId && plan.parent_post_id !== parentPostId) {
@@ -2268,7 +2376,12 @@ export class EchsBridge {
       sessionId: ctx.sessionId,
       parentPostId: ctx.lastUserPostId ?? null,
     };
-    const planId = this.upsertPlanForSummary(planContext, summary, ctx.planId, ctx.reasoningCheckpoints.length > 0 ? ctx.reasoningCheckpoints : null);
+    const planId = this.upsertPlanForSummary(
+      planContext,
+      summary,
+      ctx.planId,
+      ctx.reasoningCheckpoints.length > 0 ? ctx.reasoningCheckpoints : null
+    );
     ctx.planId = planId;
     this.upsertRobotStateForPlan(planContext, planId, {
       activity: 'thinking',
@@ -2511,7 +2624,7 @@ export class EchsBridge {
     if (piSessionLink && opts?.piMessageId && opts.continuation) {
       const racedRunLink = this.store.findPiMessageLinkBySubagentRun(
         piSessionLink.pi_session_id,
-        opts.continuation.runIds,
+        opts.continuation.runIds
       );
       if (racedRunLink?.post_id) {
         this.store.createPiMessageLink({
@@ -2538,19 +2651,34 @@ export class EchsBridge {
         this.attachTtsToPost(duplicatePost.id, cleanedText).catch(() => undefined);
       }
       if (pendingAttachmentIds.length > 0) {
-        this.attachPendingAttachmentsToPost(duplicatePost.id, ctx.topicId, pendingAttachmentIds).catch((err: unknown) => {
-          console.warn('Pending attachment link failed for post ' + duplicatePost.id + ': ' + (err instanceof Error ? err.message : String(err)));
-        });
+        this.attachPendingAttachmentsToPost(duplicatePost.id, ctx.topicId, pendingAttachmentIds).catch(
+          (err: unknown) => {
+            console.warn(
+              'Pending attachment link failed for post ' +
+                duplicatePost.id +
+                ': ' +
+                (err instanceof Error ? err.message : String(err))
+            );
+          }
+        );
       }
       if (artifacts.length > 0) {
         this.attachArtifactsToPost(duplicatePost.id, artifacts).catch((err: unknown) => {
-          console.warn('Artifact attachment failed for post ' + duplicatePost.id + ': ' + (err instanceof Error ? err.message : String(err)));
+          console.warn(
+            'Artifact attachment failed for post ' +
+              duplicatePost.id +
+              ': ' +
+              (err instanceof Error ? err.message : String(err))
+          );
         });
       }
       if (opts?.piMessageId && piSessionLink) {
         this.store.createPiMessageLink({
-          piSessionId: piSessionLink.pi_session_id, piMessageId: opts.piMessageId, postId: duplicatePost.id,
-          role: 'assistant', metadata: {
+          piSessionId: piSessionLink.pi_session_id,
+          piMessageId: opts.piMessageId,
+          postId: duplicatePost.id,
+          role: 'assistant',
+          metadata: {
             forumOrigin: true,
             linkedBy: 'agentd-canonical-id',
             ...(opts.continuation ?? {}),
@@ -2571,8 +2699,11 @@ export class EchsBridge {
     });
     if (opts?.piMessageId && piSessionLink) {
       this.store.createPiMessageLink({
-        piSessionId: piSessionLink.pi_session_id, piMessageId: opts.piMessageId, postId: post.id,
-        sessionMessageId: sessionMessage.id, role: 'assistant',
+        piSessionId: piSessionLink.pi_session_id,
+        piMessageId: opts.piMessageId,
+        postId: post.id,
+        sessionMessageId: sessionMessage.id,
+        role: 'assistant',
         metadata: {
           forumOrigin: true,
           linkedBy: 'agentd-canonical-id',
@@ -2585,12 +2716,19 @@ export class EchsBridge {
     }
     if (pendingAttachmentIds.length > 0) {
       this.attachPendingAttachmentsToPost(post.id, ctx.topicId, pendingAttachmentIds).catch((err: unknown) => {
-        console.warn('Pending attachment link failed for post ' + post.id + ': ' + (err instanceof Error ? err.message : String(err)));
+        console.warn(
+          'Pending attachment link failed for post ' +
+            post.id +
+            ': ' +
+            (err instanceof Error ? err.message : String(err))
+        );
       });
     }
     if (artifacts.length > 0) {
       this.attachArtifactsToPost(post.id, artifacts).catch((err) => {
-        console.warn('Artifact attachment failed for post ' + post.id + ': ' + (err instanceof Error ? err.message : String(err)));
+        console.warn(
+          'Artifact attachment failed for post ' + post.id + ': ' + (err instanceof Error ? err.message : String(err))
+        );
       });
     }
 
@@ -2716,7 +2854,12 @@ export class EchsBridge {
     if (ctx) {
       ctx.reasoningSummary = summary;
     }
-    const planId = this.upsertPlanForSummary(planContext, summary, ctx?.planId ?? null, ctx?.reasoningCheckpoints?.length ? ctx.reasoningCheckpoints : null);
+    const planId = this.upsertPlanForSummary(
+      planContext,
+      summary,
+      ctx?.planId ?? null,
+      ctx?.reasoningCheckpoints?.length ? ctx.reasoningCheckpoints : null
+    );
     if (ctx) {
       ctx.planId = planId;
     }

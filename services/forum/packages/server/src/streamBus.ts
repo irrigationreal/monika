@@ -9,6 +9,7 @@ export type StreamEventType =
   | 'tool_started'
   | 'assistant_message'
   | 'assistant_error'
+  | 'operational_event'
   | 'assistant_reset'
   | 'notification'
   | 'chat_message'
@@ -94,7 +95,9 @@ export class RedisStreamBus implements StreamBusInterface {
 
     if (this.subscriberClient && !this.subscribedTopics.has(topicId)) {
       this.subscribedTopics.add(topicId);
-      void (this.subscriberClient as { subscribe: (channel: string, listener: (message: string) => void) => Promise<void> })
+      void (
+        this.subscriberClient as { subscribe: (channel: string, listener: (message: string) => void) => Promise<void> }
+      )
         .subscribe(channel, (message: string) => {
           try {
             const event = JSON.parse(message) as StreamEvent;
@@ -125,7 +128,7 @@ export function createStreamBus(useRedis: boolean, redisUrl?: string): StreamBus
   if (useRedis && redisUrl) {
     return new RedisStreamBus({
       publisherUrl: redisUrl,
-      subscriberUrl: redisUrl
+      subscriberUrl: redisUrl,
     });
   }
   return new StreamBus();

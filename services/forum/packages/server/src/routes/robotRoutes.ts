@@ -51,7 +51,10 @@ export interface PublicRobotState {
   recentToolRuns: [];
 }
 
-export function redactRobotStateForPublic(state: Record<string, unknown> | null | undefined, topicId?: string): PublicRobotState | null {
+export function redactRobotStateForPublic(
+  state: Record<string, unknown> | null | undefined,
+  topicId?: string
+): PublicRobotState | null {
   if (!state) return null;
   return {
     topicId: String(state['topicId'] ?? state['topic_id'] ?? topicId ?? ''),
@@ -71,6 +74,9 @@ export function redactStreamEventForPublic(event: StreamEvent): StreamEvent | nu
   }
   if (event.type === 'assistant_reset') {
     return { type: 'assistant_reset', data: {} };
+  }
+  if (event.type === 'operational_event') {
+    return { type: 'operational_event', data: {} };
   }
   return null;
 }
@@ -120,7 +126,8 @@ export function registerRobotRoutes({
   access: AccessHelpers;
   autoRunDirector: AutoRunDirector;
 }): void {
-  const { getCurrentUser, requireScope, canPostTopic, requireTopicVisible, requireAdmin, getIdentityFromRequest } = access;
+  const { getCurrentUser, requireScope, canPostTopic, requireTopicVisible, requireAdmin, getIdentityFromRequest } =
+    access;
 
   function canViewTraceDetails(request: Parameters<typeof getCurrentUser>[0]): boolean {
     return Boolean(getIdentityFromRequest(request));
@@ -148,15 +155,28 @@ export function registerRobotRoutes({
     const includeToolRuns =
       view === 'full' || view === 'detailed' || include.includes('toolRuns') || include.includes('recentToolRuns');
     const state = store.getRobotState(topicId);
-    const context = await codex.getTopicContext?.(topicId).catch(() => null) ?? null;
+    const context = (await codex.getTopicContext?.(topicId).catch(() => null)) ?? null;
     if (!state) {
-      if (context && canViewTrace) return { topicId, sessionId: null, activity: 'idle', model: (context as any).model ?? null, reasoningEffort: (context as any).thinkingLevel ?? null, lastUpdatedAt: null, stream: codex.getStreamLiveness(topicId), currentPlan: null, recentToolRuns: [], context };
+      if (context && canViewTrace)
+        return {
+          topicId,
+          sessionId: null,
+          activity: 'idle',
+          model: (context as any).model ?? null,
+          reasoningEffort: (context as any).thinkingLevel ?? null,
+          lastUpdatedAt: null,
+          stream: codex.getStreamLiveness(topicId),
+          currentPlan: null,
+          recentToolRuns: [],
+          context,
+        };
       return null;
     }
     if (!canViewTrace) {
       return redactRobotStateForPublic(state as unknown as Record<string, unknown>, topicId);
     }
-    const plan = includePlan && state.activity !== 'idle' && state.current_plan_id ? store.getPlan(state.current_plan_id) : null;
+    const plan =
+      includePlan && state.activity !== 'idle' && state.current_plan_id ? store.getPlan(state.current_plan_id) : null;
     const toolRuns = includeToolRuns ? store.listToolRuns(topicId, 20) : [];
     return {
       topicId: state.topic_id,
@@ -179,7 +199,9 @@ export function registerRobotRoutes({
             id: plan.id,
             content: plan.content,
             summary: plan.summary,
-            reasoningCheckpoints: plan.reasoning_checkpoints_json ? JSON.parse(plan.reasoning_checkpoints_json) as number[] : null,
+            reasoningCheckpoints: plan.reasoning_checkpoints_json
+              ? (JSON.parse(plan.reasoning_checkpoints_json) as number[])
+              : null,
             visibility: plan.visibility,
             createdAt: plan.created_at,
             updatedAt: plan.updated_at,
@@ -627,7 +649,9 @@ export function registerRobotRoutes({
         content: plan.content,
         summary: plan.summary,
         parentPostId: plan.parent_post_id,
-        reasoningCheckpoints: plan.reasoning_checkpoints_json ? JSON.parse(plan.reasoning_checkpoints_json) as number[] : null,
+        reasoningCheckpoints: plan.reasoning_checkpoints_json
+          ? (JSON.parse(plan.reasoning_checkpoints_json) as number[])
+          : null,
         visibility: plan.visibility,
         createdAt: plan.created_at,
         updatedAt: plan.updated_at,

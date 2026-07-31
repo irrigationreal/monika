@@ -1,4 +1,5 @@
 import type { Forum, Post, Topic } from '@irrigationreal/codex-forum-core';
+
 import type { ForumRow, PostRow, TopicRow } from '../../db';
 
 const parseTags = (value: string): string[] => {
@@ -24,7 +25,7 @@ export const mapForumRow = (row: ForumRow): Forum => ({
   prePrompt: row.pre_prompt,
   archivedAt: row.archived_at,
   createdAt: row.created_at,
-  updatedAt: row.updated_at
+  updatedAt: row.updated_at,
 });
 
 export const mapTopicRow = (row: TopicRow): Topic => {
@@ -33,10 +34,12 @@ export const mapTopicRow = (row: TopicRow): Topic => {
     forumId: row.forum_id,
     title: row.title,
     status: row.status as Topic['status'],
+    autoCompactEnabled: Boolean(row.auto_compact_enabled),
+    autoCompactRevision: row.auto_compact_revision,
     tags: parseTags(row.tags_json),
     createdBy: row.created_by,
     createdAt: row.created_at,
-    updatedAt: row.updated_at
+    updatedAt: row.updated_at,
   };
   if (row.tenant_id != null) topic.tenantId = row.tenant_id;
   if (row.robot_mode != null) topic.robotMode = row.robot_mode as Exclude<Topic['robotMode'], undefined>;
@@ -54,5 +57,5 @@ export const mapPostRow = (row: PostRow): Post => ({
   silent: Boolean(row.silent),
   createdAt: row.created_at,
   editedAt: row.edited_at,
-  deletedAt: row.deleted_at
+  deletedAt: row.deleted_at,
 });

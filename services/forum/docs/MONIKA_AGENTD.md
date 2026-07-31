@@ -28,8 +28,7 @@ docs/forum.md
 
 ## Internal analytics query
 
-The forum server calls `POST /v1/admin/analytics/query` with an aggregate-only,
-bounded request:
+The forum server calls `POST /v1/admin/analytics/query` with an aggregate-only, bounded request:
 
 ```json
 {

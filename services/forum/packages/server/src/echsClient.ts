@@ -20,6 +20,7 @@ export interface EchsConversationRecord {
   activity?: 'active' | 'idle';
   model?: string | null;
   reasoning?: string | null;
+  auto_compact?: boolean;
   cwd?: string | null;
   instructions?: string | null;
   tools_json?: string | null;
@@ -170,11 +171,13 @@ export class EchsClient {
     piSessionId?: string | null;
     piSessionPath?: string | null;
     cwd?: string | null;
+    autoCompact?: boolean;
   }): Promise<EchsConversationRecord> {
     const payload: Record<string, unknown> = {};
     if (opts.piSessionId) payload['pi_session_id'] = opts.piSessionId;
     if (opts.piSessionPath) payload['pi_session_path'] = opts.piSessionPath;
     if (opts.cwd) payload['cwd'] = opts.cwd;
+    if (opts.autoCompact !== undefined) payload['auto_compact'] = opts.autoCompact;
     const result = (await this.request('/v1/conversations/open', { method: 'POST', body: payload })) as {
       conversation?: EchsConversationRecord;
     };
@@ -208,6 +211,7 @@ export class EchsClient {
     instructions?: string | null;
     tools?: unknown[] | null;
     coordinationMode?: string | null;
+    autoCompact?: boolean;
     conversationId?: string | null;
     parentPiSessionId?: string | null;
     parentPiSessionPath?: string | null;
@@ -223,6 +227,7 @@ export class EchsClient {
     if (opts.instructions) payload['instructions'] = opts.instructions;
     if (opts.tools) payload['tools'] = opts.tools;
     if (opts.coordinationMode) payload['coordination_mode'] = opts.coordinationMode;
+    if (opts.autoCompact !== undefined) payload['auto_compact'] = opts.autoCompact;
     if (opts.conversationId) payload['conversation_id'] = opts.conversationId;
     if (opts.parentPiSessionId) payload['parent_pi_session_id'] = opts.parentPiSessionId;
     if (opts.parentPiSessionPath) payload['parent_pi_session_path'] = opts.parentPiSessionPath;
@@ -245,6 +250,7 @@ export class EchsClient {
     model?: string | null;
     reasoning?: string | null;
     instructions?: string | null;
+    autoCompact?: boolean;
     parentPiSessionId?: string | null;
     parentPiSessionPath?: string | null;
     lineageKind?: string | null;
@@ -274,7 +280,11 @@ export class EchsClient {
     })) as { source?: unknown; goal: string; draft: string; model?: string | null; reasoning?: string | null };
   }
 
-  async resolveArtifact(opts: { path: string; filename?: string | null; mimeType?: string | null }): Promise<{ filename: string; mimeType: string; sizeBytes: number; sha256: string; dataBase64: string }> {
+  async resolveArtifact(opts: {
+    path: string;
+    filename?: string | null;
+    mimeType?: string | null;
+  }): Promise<{ filename: string; mimeType: string; sizeBytes: number; sha256: string; dataBase64: string }> {
     return (await this.request('/v1/artifacts/resolve', {
       method: 'POST',
       body: opts as Record<string, unknown>,
@@ -353,7 +363,8 @@ export class EchsClient {
 
   async interruptConversation(conversationId: string, generation?: number): Promise<void> {
     await this.request(`/v1/conversations/${conversationId}/interrupt`, {
-      method: 'POST', body: generation === undefined ? {} : { generation },
+      method: 'POST',
+      body: generation === undefined ? {} : { generation },
     });
   }
 
@@ -472,7 +483,10 @@ export class EchsClient {
   }
   async getPiSessionContext(sessionId: string): Promise<Record<string, unknown> | null> {
     try {
-      return (await this.request(`/v1/pi/sessions/${encodeURIComponent(sessionId)}/context`)) as Record<string, unknown>;
+      return (await this.request(`/v1/pi/sessions/${encodeURIComponent(sessionId)}/context`)) as Record<
+        string,
+        unknown
+      >;
     } catch (err) {
       if (err instanceof Error && err.message.includes('404')) return null;
       return null;
