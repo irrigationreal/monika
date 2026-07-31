@@ -456,6 +456,22 @@ export interface CompactionOperationDto {
   finishedAt: string | null;
 }
 
+/** Best available Pi context-usage snapshot for one canonical session. */
+export interface SessionContextDto {
+  model: string | null;
+  provider: string | null;
+  modelId: string | null;
+  thinkingLevel: string | null;
+  contextWindowTokens: number | null;
+  usedTokens: number | null;
+  remainingTokens: number | null;
+  percent: number | null;
+  exact: boolean;
+  source: string;
+  asOfPiMessageId: string | null;
+  leafEntryId?: string | null;
+}
+
 export interface RobotStateDto {
   topicId: string;
   sessionId: string;
@@ -470,6 +486,8 @@ export interface RobotStateDto {
     turnId?: string | null;
   } | null;
   currentPlan?: PlanDto | null;
+  /** Initial context snapshot. Live updates arrive independently over SSE. */
+  context?: SessionContextDto | null;
   recentToolRuns: ToolRunDto[];
 }
 

@@ -2,6 +2,7 @@ import { computed, ref } from 'vue';
 
 import { api, createStateStream, getAuthToken, setAuthToken, setRefreshToken } from '../lib/apiClient';
 import { parseReasoningSteps } from '../lib/reasoning';
+import { retainSessionContext } from '../lib/sessionContext';
 import { useTheme } from './useTheme';
 
 import type {
@@ -20,6 +21,7 @@ import type {
   RegisterResponseDto,
   RobotPersonaDto,
   RobotStateDto,
+  SessionContextDto,
   SessionDto,
   SessionInspectorDto,
   TopicAutoRunDto,
@@ -47,6 +49,7 @@ const forumLeadersError = ref<string | null>(null);
 const identities = ref<Record<string, IdentityDto>>({});
 const robotPersonas = ref<Record<string, RobotPersonaDto>>({});
 const robotState = ref<RobotStateDto | null>(null);
+const sessionContext = ref<SessionContextDto | null>(null);
 const topicAutoRun = ref<TopicAutoRunDto | null>(null);
 const autoRunLoading = ref(false);
 const autoRunError = ref<string | null>(null);
@@ -645,6 +648,7 @@ export function useForumState() {
 
   function resetTopicState(): void {
     robotState.value = null;
+    sessionContext.value = null;
     topicAutoRun.value = null;
     autoRunError.value = null;
     autoRunLoading.value = false;
@@ -707,6 +711,7 @@ export function useForumState() {
     const nextState = await api.getRobotState(topicId, { include: ['plan', 'toolRuns'] });
     if (!isActiveTopic(topicId)) return;
     robotState.value = nextState;
+    sessionContext.value = retainSessionContext(sessionContext.value, nextState?.context);
     activePlanId = nextState?.currentPlan?.id ?? null;
     resetRobotActivity();
     if (nextState) {
@@ -880,6 +885,10 @@ export function useForumState() {
     stream = createStateStream(topicId);
     stream.addEventListener('open', () => {
       reconnectDelayMs = 2000;
+    });
+    stream.addEventListener('context_updated', (event: MessageEvent<string>) => {
+      const payload = JSON.parse(event.data) as SessionContextDto;
+      sessionContext.value = retainSessionContext(sessionContext.value, payload);
     });
     stream.addEventListener('state', (event: MessageEvent<string>) => {
       const payload = JSON.parse(event.data) as RobotStateDto;
@@ -1486,6 +1495,7 @@ export function useForumState() {
     identities,
     robotPersonas,
     robotState,
+    sessionContext,
     topicAutoRun,
     autoRunLoading,
     autoRunError,

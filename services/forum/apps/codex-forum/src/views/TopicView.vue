@@ -331,7 +331,7 @@ const quickReplyWillDispatchRobot = computed(() => {
 });
 
 const quickReplyWillSteerRobot = computed(() => showRobotBusyNotice.value && quickReplyWillDispatchRobot.value);
-const sessionContext = computed(() => (state.robotState.value as any)?.context ?? null);
+const sessionContext = computed(() => state.sessionContext.value);
 const topicPiSession = computed(() => ((state.selectedTopic.value as any)?.piSession ?? null) as Record<string, any> | null);
 const topicLineageLabel = computed(() => {
   const session = topicPiSession.value;

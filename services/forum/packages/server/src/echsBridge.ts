@@ -510,6 +510,18 @@ interface QueuedTurn {
 
 const ROBOT_HEARTBEAT_INTERVAL_MS = 60_000;
 
+export function selectTopicContext(
+  liveContext: Record<string, unknown> | null,
+  historicalContext: Record<string, unknown> | null
+): Record<string, unknown> | null {
+  if (liveContext?.['exact'] === true) return liveContext;
+  // A loaded Pi runtime can provide a newer estimate than the last durable
+  // assistant usage. Prefer it when it has an actual measurement; `exact`
+  // describes precision, not freshness.
+  if (typeof liveContext?.['usedTokens'] === 'number') return liveContext;
+  return historicalContext ?? liveContext;
+}
+
 export class EchsBridge {
   private readonly client: EchsClient;
   private threadMap = new Map<string, ThreadContext>();
@@ -604,15 +616,42 @@ export class EchsBridge {
     const session = this.store.getSessionByTopic(topicId);
     if (!session) return null;
     const threadId = session.agent_thread_id ?? null;
+    let liveContext: Record<string, unknown> | null = null;
     if (threadId) {
-      const live = await this.client.getConversationContext(threadId);
-      const liveContext = (live as any)?.context ? ((live as any).context as Record<string, unknown>) : (live as Record<string, unknown> | null);
-      if ((liveContext as any)?.exact) return liveContext;
+      try {
+        const live = await this.client.getConversationContext(threadId);
+        liveContext = (live as any)?.context
+          ? ((live as any).context as Record<string, unknown>)
+          : (live as Record<string, unknown> | null);
+        if (liveContext?.['exact'] === true || typeof liveContext?.['usedTokens'] === 'number') {
+          return liveContext;
+        }
+      } catch {
+        // A dead or temporarily unavailable loaded conversation must not hide
+        // durable usage from the canonical Pi session export.
+      }
     }
     const link = this.store.getPiSessionLinkByTopic(topicId);
-    if (!link?.pi_session_id) return null;
-    const historical = await this.client.getPiSessionContext(link.pi_session_id);
-    return (historical as any)?.context ? ((historical as any).context as Record<string, unknown>) : historical;
+    if (!link?.pi_session_id) return liveContext;
+    try {
+      const historical = await this.client.getPiSessionContext(link.pi_session_id);
+      const historicalContext = (historical as any)?.context
+        ? ((historical as any).context as Record<string, unknown>)
+        : (historical as Record<string, unknown> | null);
+      return selectTopicContext(liveContext, historicalContext);
+    } catch {
+      return liveContext;
+    }
+  }
+
+  private async emitContext(topicId: string): Promise<void> {
+    try {
+      const context = await this.getTopicContext(topicId);
+      if (context) this.bus.emit(topicId, { type: 'context_updated', data: context });
+    } catch {
+      // Context usage is advisory. Keep the last known snapshot on transient
+      // agentd failures instead of clearing or disrupting the live turn.
+    }
   }
 
 
@@ -717,7 +756,9 @@ export class EchsBridge {
     customInstructions?: string | null;
   }): Promise<Record<string, unknown>> {
     const opened = await this.openTopicConversation(topicId);
-    return this.client.compactConversation(opened.conversationId, opts);
+    const result = await this.client.compactConversation(opened.conversationId, opts);
+    void this.emitContext(topicId);
+    return result;
   }
 
   async createLinkedHandoffConversation(topicId: string, opts: {
@@ -1639,6 +1680,7 @@ export class EchsBridge {
         }
       }
       const messageId = enqueueResult.messageId;
+      void this.emitContext(topicId);
       this.schedulePlanSync(threadId);
       if (parentPostId) {
         this.store.setSessionLastDispatchedPostId(session.id, parentPostId);
@@ -1954,6 +1996,7 @@ export class EchsBridge {
           currentPlanId: ctx.planId,
         });
         this.emitState(ctx.topicId);
+        void this.emitContext(ctx.topicId);
         this.activeTurnThreads.delete(threadId);
         void this.processTurnQueue();
         setTimeout(() => {
@@ -1996,6 +2039,11 @@ export class EchsBridge {
           }
           this.emitState(ctx.topicId);
         }
+        break;
+      }
+      case 'compaction_end': {
+        const data = event.data as any;
+        if (!data?.aborted && !data?.error) void this.emitContext(ctx.topicId);
         break;
       }
       case 'session_compacted': {

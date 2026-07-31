@@ -22,7 +22,7 @@ const selectedReasoning = ref(state.lastReplyReasoning.value ?? 'medium');
 const replyModels = computed(() => state.allModelOptions.value);
 const effectiveSelectedModel = computed(() => selectedModel.value || (state.robotState.value as any)?.model || state.defaultModel.value || '');
 const supportsReasoning = computed(() => state.modelSupportsReasoning(effectiveSelectedModel.value));
-const sessionContext = computed(() => (state.robotState.value as any)?.context ?? null);
+const sessionContext = computed(() => state.sessionContext.value);
 const replyReasoningOptions = computed(() => state.modelReasoningOptions(effectiveSelectedModel.value));
 const silentPost = ref(false);
 const CHUNKED_THRESHOLD_BYTES = 90 * 1024 * 1024;
