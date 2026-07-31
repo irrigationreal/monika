@@ -33,6 +33,37 @@ describe('OperationalEventBar', () => {
     expect(view.emitted()['recover']).toHaveLength(1);
   });
 
+  it('uses the structured category for the provider wording seen in production', () => {
+    render(OperationalEventBar, {
+      props: {
+        event: event({
+          summary: 'Assistant response failed.',
+          detail: {
+            category: 'context_overflow',
+            error: 'Codex error: Your input exceeds the context window of this model. Please adjust your input and try again.',
+          },
+        }),
+        canRecover: true,
+      },
+    });
+
+    expect(screen.getByRole('button', { name: 'Compact and recover' })).toBeTruthy();
+  });
+
+  it('recognizes legacy overflow wording when structured detail is unavailable', () => {
+    render(OperationalEventBar, {
+      props: {
+        event: event({
+          summary: 'The input exceeds the context window.',
+          detail: null,
+        }),
+        canRecover: true,
+      },
+    });
+
+    expect(screen.getByRole('button', { name: 'Compact and recover' })).toBeTruthy();
+  });
+
   it('does not expose a recovery action for redacted public detail without an overflow summary', () => {
     render(OperationalEventBar, {
       props: { event: event({ summary: 'The response failed.', detail: null }), canRecover: true },

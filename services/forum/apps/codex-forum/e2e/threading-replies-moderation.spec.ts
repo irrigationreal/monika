@@ -1,12 +1,14 @@
 import { test, expect, type BrowserContext, type Page, type Route, type Request } from '@playwright/test';
 import type {
+  CompactionOperationDto,
   ForumDto,
   ForumLastPostDto,
   IdentityDto,
   PostDto,
   RecentPostDto,
   RobotStateDto,
-  TopicDto
+  TopicDto,
+  TopicOperationalEventDto
 } from '@irrigationreal/codex-forum-contracts';
 
 type ForumRecord = ForumDto;
@@ -45,6 +47,9 @@ type MockState = {
   tokens: Record<string, string>;
   fixture: FixtureResponse | null;
   lastMoveRequest: { topicId: string; forumId: string; silent: boolean } | null;
+  operationalEventsByTopic: Record<string, TopicOperationalEventDto[]>;
+  compactionOperations: Record<string, CompactionOperationDto>;
+  compactionRequests: Array<Record<string, unknown>>;
 };
 
 const REGULAR_TOKEN = 'token-regular';
@@ -109,7 +114,10 @@ function createMockState(): MockState {
       [MODERATOR_TOKEN]: MODERATOR_ID
     },
     fixture: null,
-    lastMoveRequest: null
+    lastMoveRequest: null,
+    operationalEventsByTopic: {},
+    compactionOperations: {},
+    compactionRequests: []
   };
 }
 
@@ -123,6 +131,9 @@ function seedFixtures(state: MockState, request: FixtureRequest = {}): FixtureRe
   state.forums = [];
   state.topics = {};
   state.postsByTopic = {};
+  state.operationalEventsByTopic = {};
+  state.compactionOperations = {};
+  state.compactionRequests = [];
   state.tick = 0;
   state.topicSeq = 0;
   state.postSeq = 0;
@@ -173,6 +184,24 @@ function seedFixtures(state: MockState, request: FixtureRequest = {}): FixtureRe
     createdBy: REGULAR_ID,
     postCount: request.postCount ?? 2
   });
+
+  const anchorPostId = state.postsByTopic[normalTopicId]?.[0]?.id ?? null;
+  state.operationalEventsByTopic[normalTopicId] = [{
+    id: 'overflow-event-1',
+    topicId: normalTopicId,
+    anchorPostId,
+    type: 'turn_error',
+    category: 'assistant',
+    status: 'failed',
+    summary: 'Assistant response failed.',
+    detail: {
+      category: 'context_overflow',
+      error: 'Codex error: Your input exceeds the context window of this model. Please adjust your input and try again.'
+    },
+    sourceKind: 'echs_turn',
+    sourceId: 'pi-message-1',
+    createdAt: nextTimestamp(state)
+  }];
 
   const lockedTopicId = request.includeLocked
     ? addTopic(state, {
@@ -475,6 +504,45 @@ async function attachMockApi(target: Page | BrowserContext, state: MockState): P
         await fulfillJson(route, 200, post);
         return;
       }
+    }
+
+    if (path.startsWith('/api/topics/') && path.endsWith('/operational-events') && method === 'GET') {
+      const topicId = path.split('/')[3];
+      await fulfillJson(route, 200, { items: state.operationalEventsByTopic[topicId] ?? [] });
+      return;
+    }
+
+    if (/^\/api\/topics\/[^/]+\/compactions$/.test(path) && method === 'POST') {
+      const topicId = path.split('/')[3];
+      const requestPayload = (payload ?? {}) as unknown as Record<string, unknown>;
+      state.compactionRequests.push(requestPayload);
+      const operationId = String(requestPayload['operationId'] ?? 'missing-operation-id');
+      const operation: CompactionOperationDto = {
+        id: operationId,
+        topicId,
+        sessionId: 'session-1',
+        initiatedBy: MODERATOR_ID,
+        expectedLeafId: 'leaf-1',
+        customInstructions: null,
+        recoveryPrompt: String(requestPayload['recoveryPrompt'] ?? ''),
+        status: 'succeeded',
+        eventId: 'compaction-event-1',
+        recoveryPostId: 'recovery-post-1',
+        errorMessage: null,
+        createdAt: nextTimestamp(state),
+        startedAt: nextTimestamp(state),
+        finishedAt: nextTimestamp(state)
+      };
+      state.compactionOperations[operationId] = operation;
+      await fulfillJson(route, 200, operation);
+      return;
+    }
+
+    if (/^\/api\/topics\/[^/]+\/compactions\/[^/]+$/.test(path) && method === 'GET') {
+      const operationId = path.split('/')[5];
+      const operation = state.compactionOperations[operationId];
+      await fulfillJson(route, operation ? 200 : 404, operation ?? { message: 'Compaction not found.' });
+      return;
     }
 
     if (path.startsWith('/api/topics/') && path.endsWith('/status') && method === 'PATCH') {
@@ -982,6 +1050,56 @@ test.describe('Threading and reply flows', () => {
     await expect(page.locator('.vb-login-error', { hasText: 'Cannot reply to a locked or archived topic.' })).toBeVisible();
 
     await expectAdminToolsHidden(page);
+  });
+
+  test('context overflow recovery submits with the HTTP-compatible operation id fallback', async ({ page, context }) => {
+    const state = createMockState();
+    await context.addInitScript(() => {
+      Object.defineProperty(globalThis.crypto, 'randomUUID', { value: undefined, configurable: true });
+    });
+    await attachMockApi(page, state);
+    await setAuthTokens(context, MODERATOR_TOKEN);
+
+    await page.goto('/');
+    const fixture = await createFixture(page, { postCount: 2 });
+    await page.goto(`/topics/${fixture.topicId}`);
+
+    expect(await page.evaluate(() => typeof crypto.randomUUID)).toBe('undefined');
+    const recoverAction = page.getByRole('button', { name: 'Compact and recover' });
+    await expect(recoverAction).toHaveCount(1);
+    await recoverAction.click();
+    await expect(page.getByText('Compact Session and Recover', { exact: true })).toBeVisible();
+
+    await page.getByLabel('I understand that compaction is destructive and may lose context.').check();
+    await page.locator('.vb-compaction-modal').getByRole('button', { name: 'Compact and recover' }).click();
+
+    await expect(page.getByText('Compact Session and Recover', { exact: true })).toHaveCount(0);
+    expect(state.compactionRequests).toHaveLength(1);
+    expect(state.compactionRequests[0]?.['operationId']).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+    );
+  });
+
+  test('compaction capability failures are surfaced in the modal', async ({ page, context }) => {
+    const state = createMockState();
+    await context.addInitScript(() => {
+      Object.defineProperties(globalThis.crypto, {
+        randomUUID: { value: undefined, configurable: true },
+        getRandomValues: { value: undefined, configurable: true }
+      });
+    });
+    await attachMockApi(page, state);
+    await setAuthTokens(context, MODERATOR_TOKEN);
+
+    await page.goto('/');
+    const fixture = await createFixture(page, { postCount: 2 });
+    await page.goto(`/topics/${fixture.topicId}`);
+    await page.getByRole('button', { name: 'Compact', exact: true }).first().click();
+    await page.getByLabel('I understand that compaction is destructive and may lose context.').check();
+    await page.locator('.vb-compaction-modal').getByRole('button', { name: 'Compact and recover' }).click();
+
+    await expect(page.getByRole('alert')).toContainText('Secure random number generation is unavailable in this browser.');
+    expect(state.compactionRequests).toHaveLength(0);
   });
 
   test('concurrent replies keep pagination and forum index last post in sync', async ({ browser }) => {
