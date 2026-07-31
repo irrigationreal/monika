@@ -37,7 +37,8 @@ Key event types for live trace rendering:
 
 | Event | Payload | When it fires |
 |---|---|---|
-| `state` | Full `RobotStateDto` including `recentToolRuns`, `currentPlan`, `activity` | Any robot state change |
+| `state` | Robot activity snapshot including `recentToolRuns`, `currentPlan`, and `activity` | Any robot state change |
+| `context_updated` | Typed Pi session-context snapshot | A measured turn usage arrives, the selected model is applied, or compaction succeeds |
 | `reasoning_delta` | `{ delta: string }` | Pi thinking/reasoning tokens arrive |
 | `assistant_delta` | `{ delta: string }` | Pi visible text tokens arrive |
 | `tool_started` | `{ toolRunId, tool, callId }` | Each tool run is created in the DB (before the corresponding `state` update) |
@@ -48,6 +49,14 @@ Key event types for live trace rendering:
 in real time, while `state.recentToolRuns` arrives batched with all tools already
 present. Client-side checkpoint recording must use `tool_started`, not
 `recentToolRuns` diffing.
+
+Session context has a separate lifecycle from high-frequency robot activity. The
+initial authenticated `GET /api/topics/:topicId/state` response carries the best
+available context snapshot, and `context_updated` refreshes it at semantic
+boundaries. Clients retain the last known snapshot when ordinary `state` events
+or transient agentd failures contain no context; they must not clear the meter.
+Live runtime measurements are preferred when available even though Pi marks them
+as estimates (`exact: false`), while durable historical usage remains the fallback.
 
 ## Errors and manual compaction
 

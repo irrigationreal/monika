@@ -615,6 +615,21 @@ export const CompactionOperationDtoSchema: z.ZodType<CompactionOperationDto> = z
   finishedAt: z.string().nullable()
 });
 
+export const SessionContextDtoSchema = z.object({
+  model: z.string().nullable(),
+  provider: z.string().nullable(),
+  modelId: z.string().nullable(),
+  thinkingLevel: z.string().nullable(),
+  contextWindowTokens: z.number().nullable(),
+  usedTokens: z.number().nullable(),
+  remainingTokens: z.number().nullable(),
+  percent: z.number().nullable(),
+  exact: z.boolean(),
+  source: z.string(),
+  asOfPiMessageId: z.string().nullable(),
+  leafEntryId: z.string().nullable().optional()
+});
+
 export const RobotStateDtoSchema: z.ZodType<RobotStateDto> = z.object({
   topicId: z.string(),
   sessionId: z.string(),
@@ -629,6 +644,7 @@ export const RobotStateDtoSchema: z.ZodType<RobotStateDto> = z.object({
     turnId: optionalNullableString
   }).nullable().optional(),
   currentPlan: PlanDtoSchema.nullable().optional(),
+  context: SessionContextDtoSchema.nullable().optional(),
   recentToolRuns: z.array(ToolRunDtoSchema)
 });
 

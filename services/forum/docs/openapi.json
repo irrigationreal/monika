@@ -5369,6 +5369,71 @@
                         "updatedAt"
                       ]
                     },
+                    "context": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "model": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "provider": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "modelId": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "thinkingLevel": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "contextWindowTokens": {
+                          "type": "number",
+                          "nullable": true
+                        },
+                        "usedTokens": {
+                          "type": "number",
+                          "nullable": true
+                        },
+                        "remainingTokens": {
+                          "type": "number",
+                          "nullable": true
+                        },
+                        "percent": {
+                          "type": "number",
+                          "nullable": true
+                        },
+                        "exact": {
+                          "type": "boolean"
+                        },
+                        "source": {
+                          "type": "string"
+                        },
+                        "asOfPiMessageId": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "leafEntryId": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "model",
+                        "provider",
+                        "modelId",
+                        "thinkingLevel",
+                        "contextWindowTokens",
+                        "usedTokens",
+                        "remainingTokens",
+                        "percent",
+                        "exact",
+                        "source",
+                        "asOfPiMessageId"
+                      ]
+                    },
                     "recentToolRuns": {
                       "type": "array",
                       "items": {

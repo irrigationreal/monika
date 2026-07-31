@@ -423,7 +423,12 @@ restarting the container terminates the session.
 - Forum model selection/thinking level is mapped onto Pi `setModel()` /
   `setThinkingLevel()` using Pi model IDs directly.
 - A context meter is available in the reply UI using the best Pi-provided usage
-  data; it warns when the value is not exact current context.
+  data. Context is a typed snapshot with an independent lifecycle: the initial
+  topic state provides it, `context_updated` refreshes it after model selection,
+  measured turn usage, and successful compaction, and unrelated live activity or
+  transient refresh failures retain the last known value. Loaded-runtime
+  estimates are preferred over older historical usage and are visibly marked as
+  not exact current context.
 
 ## Do not lose these design decisions
 
