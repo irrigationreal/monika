@@ -13,11 +13,14 @@ readonly lock_sha256='9c7df83850424712291ed90ca41f417eb2ad4b046fefad6d309ee96eb7
 readonly shared_types_sha256='00c42591eb78cac931dc0274f56ce7e2a4fb1db69760f7e65975a0b3f883f5b8'
 readonly notify_sha256='e772d3f871fc68dcca2b2a84f9c4076b5f7a74078d900c84ceb32cdaad17a27d'
 readonly result_watcher_sha256='8e4134ba18d25120f277fe5e0f3ca42a133363bf8c60dabdd35bcc69e63a32d7'
+readonly async_execution_sha256='a5b7226a51d06a8ee6e3481da531d69582982fc956a2629c54669e4e388bd5de'
+readonly subagent_runner_sha256='6606844cf510708675b0b5db760e308e2060d59ea043b1faf4fdcc3bb7b4b39d'
 readonly fork_context_sha256='ce98de6183f77cbc50c3cf9d4c169b7ae70d592f59f0310999fbff0430c95a62'
 readonly subagent_executor_sha256='00cc26cd6b9d5142bbbc3c0484434fc64d15e5cad1530cce97321fc78feaf5f6'
 readonly fork_context_test_sha256='bb4d9706e24f1d015a58d695c828a699fc54e83f832b4ab8359562e244a002d2'
 readonly fork_execution_test_sha256='51a0fd1faf3f179aade5cb83a13527b27ad58e803513eae009a8e1f5d830790d'
-readonly patch_sha256='1e984ec5a7dd976841eddc48d9d4ed1f48852abc97c48fca1eeeb2d7daf277d8'
+readonly notify_test_sha256='9aec8ddf82dd085ea5c7ecda3404f2c4e6b33007f7f208487a6773406e9b1d77'
+readonly patch_sha256='7e64b7890f2a68c853509ae5947cfd3e63a4690b96fed63387e99a60ffb6d49b'
 
 if [ "$#" -ne 2 ]; then
   echo "usage: $0 <destination> <patch>" >&2
@@ -41,10 +44,13 @@ printf '%s  %s\n' \
   "$shared_types_sha256" "$destination/src/shared/types.ts" \
   "$notify_sha256" "$destination/src/runs/background/notify.ts" \
   "$result_watcher_sha256" "$destination/src/runs/background/result-watcher.ts" \
+  "$async_execution_sha256" "$destination/src/runs/background/async-execution.ts" \
+  "$subagent_runner_sha256" "$destination/src/runs/background/subagent-runner.ts" \
   "$fork_context_sha256" "$destination/src/shared/fork-context.ts" \
   "$subagent_executor_sha256" "$destination/src/runs/foreground/subagent-executor.ts" \
   "$fork_context_test_sha256" "$destination/test/unit/fork-context.test.ts" \
   "$fork_execution_test_sha256" "$destination/test/integration/fork-context-execution.test.ts" \
+  "$notify_test_sha256" "$destination/test/unit/notify.test.ts" \
   | sha256sum --check --strict -
 
 node - "$destination/package.json" "$destination/package-lock.json" "$version" <<'NODE'

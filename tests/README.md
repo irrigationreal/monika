@@ -49,11 +49,13 @@ pnpm test
 
 The container build runs this suite after installing agentd's frozen production
 lockfile, so the tests exercise the same Pi packages shipped in the image. The
-subagent lifecycle tests cover durable origin capture, separation of logical and
-process-terminal completion, grouped completion attribution, restart artifact
-reconciliation, public v1 stop RPC use, global persisted-run scans,
-canonical completion provenance, and conservative 14-day terminal-session
-retention.
+subagent lifecycle tests use temporary files and injected process inspection—no
+Docker timing, sleeps, model calls, or live state. They cover durable origin and
+pre-spawn launch capture, event-independent convergence of stale loaded leases,
+strict process-terminal proof, container-epoch legacy migration, same-runtime
+PID/start-identity survival and death, fail-closed traversal, audited quarantine,
+grouped completion attribution, public v1 stop RPC use, canonical completion
+provenance, and conservative 14-day terminal-session retention.
 
 ## Stateful-memory tests
 
@@ -100,7 +102,7 @@ The script verifies:
 3. agentd answers `/healthz`;
 4. `pi --version` reports the repository's exact Pi pin;
 5. npm's 10-day dependency cooldown, pnpm 10.26.2, and the pinned agent-browser version are active;
-6. the reviewed pi-subagents 0.37.2 gitHead (`8063333661476ca48afbca826dc4aab8707c72d3`) is installed, the dedicated roots are global for agentd and interactive Pi, its fork-context regression test proves branched children use per-run directories beneath the child root, `defaultExtensions=[]` and isolated child profiles are configured, and legacy force-tools/delegate extensions are absent;
+6. the reviewed pi-subagents 0.37.2 gitHead (`8063333661476ca48afbca826dc4aab8707c72d3`) is installed, the dedicated roots are global, a container runtime identity exists, durable pre-spawn launch/drain and artifact-finalization patches are present, forked children use per-run directories, `defaultExtensions=[]` and isolated child profiles are configured, and legacy force-tools/delegate extensions are absent;
 7. interactive project-trust state is linked into persistent `/data`;
 8. agentd sends a complete Pi turn to a local OpenAI Responses fixture, which requires `pi_run`, `browser`, `subagent`, `subagent_wait`, and `subagent_supervisor` while rejecting the legacy `delegate` tool;
 9. every strict function schema in the serialized request satisfies OpenAI's

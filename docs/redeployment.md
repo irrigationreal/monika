@@ -14,9 +14,11 @@ For the generic operator runbook and autodeploy lifecycle, see [`docs/autodeploy
 - `POST /v1/admin/drain`
 - `POST /v1/admin/drain/cancel`
 
-`/v1/admin/quiescence` reports active turns, loaded conversations, interactive Pi ownership leases, memstore save queue state, and whether the container is immediately safe to stop. Active turns, interactive Pi sessions, and busy/unreachable memstore are hard blockers. Idle loaded conversations are not hard blockers, but they require a drain because closing them triggers Pi session shutdown and memory save. Interactive leases expire after a crashed terminal, but deploy automation must not override a live lease because recreating the container would terminate that administrator session.
+`/v1/admin/quiescence` reports active turns, reconciled async-subagent execution, loaded conversations, interactive Pi ownership leases, memstore save queue state, and whether the container is immediately safe to stop. Active turns, active or uncertain subagent runners, interactive Pi sessions, and busy/unreachable memstore are hard blockers. Idle loaded conversations are not hard blockers, but they require a drain because closing them triggers Pi session shutdown and memory save. Interactive leases expire after a crashed terminal, but deploy automation must not override a live lease because recreating the container would terminate that administrator session.
 
-`/v1/admin/drain` marks agentd as draining, rejects new conversation/message requests, closes idle loaded conversations, and reports the resulting quiescence state. Automation should defer if the response still contains blockers. If automation drains agentd but does not proceed to restart the runtime, it should call `/v1/admin/drain/cancel` before exiting. Drain also has a lease for defense in depth: by default agentd auto-cancels drain after 15 minutes without shutdown, unless the caller provides another `auto_cancel_ms` value or the process is handling SIGTERM.
+Subagent execution state comes from the durable run ledger below `/data/pi-subagents/async-subagent-runs`, not stale loaded-memory flags. `GET /v1/admin/subagents` exposes a capped operational summary. Exact observed terminal proof, same-container PID/start-identity reconciliation, and container runtime epochs distinguish active, terminal, interrupted, and uncertain work. Pending result projection is durable delivery work, not a live execution blocker. Lifecycle traversal errors fail closed as `subagent_lifecycle_unavailable`.
+
+`/v1/admin/drain` marks agentd as draining, rejects new conversation/message requests, installs a pi-subagents launch/completion barrier, closes idle loaded conversations, and reports the resulting quiescence state. Automation should defer if the response still contains blockers. If automation drains agentd but does not proceed to restart the runtime, it should call `/v1/admin/drain/cancel` before exiting. Drain also has a lease for defense in depth: by default agentd auto-cancels drain after 15 minutes without shutdown, unless the caller provides another `auto_cancel_ms` value or the process is handling SIGTERM.
 
 Host-side deploy automation reaches agentd through the loopback-only compose binding:
 
@@ -40,7 +42,7 @@ The forum reports deploy safety in:
 
 `GET /api/healthz` is intentionally minimal and public (`{ "ok": true }`) so Docker and reverse-proxy health checks do not expose operational state.
 
-Forum deploy blockers include active robot turns, queued turns, non-idle robot states, and a currently running Pi session sync. On SIGTERM/Fastify close, the server stops the Pi sync timer, waits for an in-flight sync to finish, stops robot/ECHS timers and SSE subscriptions, closes Redis if enabled, and closes the forum SQLite database.
+Forum deploy blockers include active robot turns, queued turns, non-idle robot states, and a currently running Pi session sync. Deploy on Finish also checks agentd, persists its intent across forum restart, and retains/retries that intent after the host script returns exit 75. The host script remains the final race-safe authority. On SIGTERM/Fastify close, the server stops the Pi sync timer, waits for an in-flight sync to finish, stops robot/ECHS timers and SSE subscriptions, closes Redis if enabled, and closes the forum SQLite database.
 
 ## Host script
 
@@ -63,6 +65,10 @@ Forum deploy blockers include active robot turns, queued turns, non-idle robot s
 Forum-only image updates do not drain agentd because Docker Compose is not expected to recreate the `monika` container. Backup-only mode still drains and cancels agentd because its purpose is to create a quiescence-gated runtime capsule.
 
 The script intentionally orchestrates only Docker and image tags. The knowledge of whether stopping is safe lives in agentd/forum APIs so the same contract can be reused by admin UI, timers, Watchtower hooks, or future tooling.
+
+### Uncertain-run repair
+
+Normal reconciliation never deletes or fabricates process proof. If a legacy or damaged run remains uncertain after runtime/PID reconciliation, inspect it with `GET /v1/admin/subagents`. The loopback-only `POST /v1/admin/subagents/<run-id>/quarantine` endpoint is an audited last resort: it requires the exact runner process-instance ID and a non-empty operator reason, refuses a matching live process, writes `operator-resolution.json`, and appends `operator-resolutions.jsonl`. Quarantine preserves all diagnostics. It is not part of normal autodeploy and must only follow independent process verification.
 
 Use `--backup-only` to create a quiescence-gated backup without applying images:
 

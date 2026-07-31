@@ -23,8 +23,10 @@ import {
   backgroundStatus,
   extractSubagentRuns,
   hasActiveBackgroundWork,
+  mergeMappedLifecycleRuns,
   pruneTerminalSubagentRuns,
-  scanActiveLifecycleRuns,
+  quarantineLifecycleRun,
+  scanLifecycleSnapshot,
 } from './subagent-lifecycle.mjs';
 import {
   createAgentSessionFromServices,
@@ -42,6 +44,11 @@ const HOST = process.env.MONIKA_AGENTD_HOST ?? '127.0.0.1';
 const AGENT_DIR = process.env.PI_CODING_AGENT_DIR ?? path.join(process.env.HOME ?? '/home/monika', '.pi/agent');
 const SUBAGENT_SESSION_ROOT = path.resolve(process.env.PI_SUBAGENT_SESSION_ROOT ?? path.join(AGENT_DIR, 'sessions/subagent'));
 const SUBAGENT_RUNTIME_ROOT = path.resolve(process.env.PI_SUBAGENT_RUNTIME_ROOT ?? '/data/pi-subagents');
+// Scan the complete supervisor root: top-level async runs and detached nested
+// runs live in separate subtrees but share one deployment-safety contract.
+const SUBAGENT_LIFECYCLE_ROOT = SUBAGENT_RUNTIME_ROOT;
+const SUBAGENT_RESULTS_ROOT = path.join(SUBAGENT_RUNTIME_ROOT, 'async-subagent-results');
+const RUNTIME_INSTANCE_FILE = process.env.MONIKA_RUNTIME_INSTANCE_FILE ?? '/run/monika-runtime-instance.json';
 // Agentd owns background lifetime. Pi's print-mode auto-drain must not await
 // subagents before returning a forum turn. Persist lifecycle/results so a
 // recreated agentd runtime can deliver completed work exactly once.
@@ -151,6 +158,8 @@ function setDraining(value, opts = {}) {
   const next = Boolean(value);
   const changed = draining !== next;
   draining = next;
+  if (next) process.env.PI_SUBAGENTS_HOST_DRAINING = '1';
+  else delete process.env.PI_SUBAGENTS_HOST_DRAINING;
   clearDrainAutoCancelTimer();
 
   if (!next) {
@@ -166,8 +175,7 @@ function setDraining(value, opts = {}) {
 
   drainAutoCancelTimer = setTimeout(() => {
     if (!draining) return;
-    draining = false;
-    drainAutoCancelTimer = null;
+    setDraining(false);
     console.warn(`[agentd] drain auto-cancelled after ${autoCancelMs}ms without shutdown`);
   }, autoCancelMs);
   drainAutoCancelTimer.unref?.();
@@ -250,24 +258,38 @@ function conversationIsActive(conv) {
   return Boolean(conv.current || conv.pendingMutations > 0 || hasActiveBackgroundWork(conv));
 }
 
+async function subagentSnapshot() {
+  return scanLifecycleSnapshot({
+    lifecycleRoot: SUBAGENT_LIFECYCLE_ROOT,
+    resultsRoot: SUBAGENT_RESULTS_ROOT,
+    runtimeInstanceFile: RUNTIME_INSTANCE_FILE,
+  });
+}
+
+async function reconcileLoadedSubagents(snapshot) {
+  mergeMappedLifecycleRuns(snapshot, [...conversations.values()]);
+  await Promise.all([...conversations.values()].map((conv) => conv.subagentLifecycle.reconcileArtifacts(snapshot)));
+}
+
 async function deployState() {
   const convs = [...conversations.values()];
   const activeTurns = convs.filter((conv) => conv.current || conv.pendingMutations > 0);
-  const idle = convs.filter((c) => !conversationIsActive(c));
   const externalLeases = sessionOwnership.list();
   const memstore = await memstoreDeployState();
   const blockers = [];
   const drainRequired = [];
   if (activeTurns.length > 0) blockers.push({ code: 'active_agent_turns', count: activeTurns.length });
-  const loadedRunIds = convs.flatMap((conv) => [...conv.subagents.runs.values()]
-    .filter((run) => run.active).map((run) => run.runId));
-  const persistedRuns = await scanActiveLifecycleRuns({
-    lifecycleRoot: path.join(SUBAGENT_RUNTIME_ROOT, 'async-subagent-runs'),
-  }).catch((err) => {
+  let snapshot;
+  try {
+    snapshot = await subagentSnapshot();
+    await reconcileLoadedSubagents(snapshot);
+  } catch (err) {
     console.warn('[agentd] subagent lifecycle scan failed:', err instanceof Error ? err.message : String(err));
-    return [{ runId: 'lifecycle-scan-failed' }];
-  });
-  const backgroundRuns = new Set([...loadedRunIds, ...persistedRuns.map((run) => run.runId)]).size;
+    blockers.push({ code: 'subagent_lifecycle_unavailable', count: 1 });
+    snapshot = { runs: [], active_count: 0, uncertain_count: 0 };
+  }
+  const idle = convs.filter((c) => !conversationIsActive(c));
+  const backgroundRuns = snapshot.active_count;
   if (backgroundRuns > 0) blockers.push({ code: 'active_subagent_runs', count: backgroundRuns });
   if (externalLeases.length > 0) blockers.push({ code: 'interactive_pi_sessions', count: externalLeases.length });
   if (!memstore.reachable) blockers.push({ code: 'memstore_unreachable' });
@@ -279,6 +301,7 @@ async function deployState() {
     draining,
     active_threads: activeTurns.length,
     active_subagent_runs: backgroundRuns,
+    uncertain_subagent_runs: snapshot.uncertain_count,
     loaded_conversations: convs.length,
     idle_loaded_conversations: idle.length,
     interactive_pi_sessions: externalLeases,
@@ -1315,20 +1338,44 @@ const server = http.createServer(async (req, res) => {
 
     if (method === 'GET' && url.pathname === '/healthz') {
       const convs = [...conversations.values()];
-      const persistedRuns = await scanActiveLifecycleRuns({
-        lifecycleRoot: path.join(SUBAGENT_RUNTIME_ROOT, 'async-subagent-runs'),
-      }).catch(() => []);
-      const loadedRunIds = convs.flatMap((conv) => [...conv.subagents.runs.values()]
-        .filter((run) => run.active).map((run) => run.runId));
+      const snapshot = await subagentSnapshot().catch(() => null);
+      if (snapshot) await reconcileLoadedSubagents(snapshot);
       return json(res, 200, {
         ok: true, status: draining ? 'draining' : 'healthy',
         active_threads: convs.filter((conv) => conv.current || conv.pendingMutations > 0).length,
-        active_subagent_runs: new Set([...loadedRunIds, ...persistedRuns.map((run) => run.runId)]).size,
+        active_subagent_runs: snapshot?.active_count ?? 1,
+        uncertain_subagent_runs: snapshot?.uncertain_count ?? 1,
         loaded_conversations: conversations.size, interactive_pi_sessions: sessionOwnership.list().length,
         idle_reap_enabled: IDLE_REAP_ENABLED, queue_depth: 0, build: buildInfo(),
       });
     }
     if (method === 'GET' && url.pathname === '/v1/admin/quiescence') return json(res, 200, await deployState());
+    if (method === 'GET' && url.pathname === '/v1/admin/subagents') {
+      try {
+        const snapshot = await subagentSnapshot();
+        await reconcileLoadedSubagents(snapshot);
+        const origins = new Map();
+        for (const conv of conversations.values()) for (const run of conv.subagents.runs.values()) origins.set(run.runId, run.origin ?? null);
+        const runs = snapshot.runs.slice(0, 64).map((run) => ({ ...run, origin: origins.get(run.run_id) ?? null }));
+        return json(res, 200, { ok: true, active_count: snapshot.active_count, uncertain_count: snapshot.uncertain_count, runs, omitted: Math.max(0, snapshot.runs.length - runs.length) });
+      } catch (error) {
+        return json(res, 503, { ok: false, error: 'subagent_lifecycle_unavailable', message: error instanceof Error ? error.message : String(error), active_count: 1, uncertain_count: 1, runs: [] });
+      }
+    }
+    const quarantineMatch = method === 'POST' && url.pathname.match(/^\/v1\/admin\/subagents\/([^/]+)\/quarantine$/);
+    if (quarantineMatch) {
+      const body = await readBody(req);
+      try {
+        const resolution = await quarantineLifecycleRun({
+          lifecycleRoot: SUBAGENT_LIFECYCLE_ROOT, runId: decodeURIComponent(quarantineMatch[1]),
+          runnerProcessInstanceId: body.runner_process_instance_id ?? body.runnerProcessInstanceId,
+          reason: body.reason, runtimeInstanceFile: RUNTIME_INSTANCE_FILE,
+        });
+        return json(res, 200, { ok: true, resolution });
+      } catch (error) {
+        return json(res, 409, { ok: false, error: 'subagent_quarantine_rejected', message: error instanceof Error ? error.message : String(error) });
+      }
+    }
     if (method === 'POST' && url.pathname === '/v1/admin/drain') {
       const body = await readBody(req);
       setDraining(true, {
@@ -1532,6 +1579,9 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, { ok: true, background });
       }
       if (method === 'POST' && tail === 'close') {
+        const snapshot = await subagentSnapshot().catch(() => null);
+        if (!snapshot) return json(res, 503, { error: 'subagent_lifecycle_unavailable' });
+        await conv.subagentLifecycle.reconcileArtifacts(snapshot);
         if (hasActiveBackgroundWork(conv)) return json(res, 409, { error: 'active_subagent_runs', background: backgroundStatus(conv) });
         await closeConversation(conv, 'api');
         return json(res, 200, { ok: true, memory_saved: true });
@@ -1580,29 +1630,37 @@ const server = http.createServer(async (req, res) => {
 function startIdleReaper() {
   if (!IDLE_REAP_ENABLED || !Number.isFinite(IDLE_REAP_MS) || IDLE_REAP_MS <= 0) return;
   const interval = setInterval(() => {
-    const now = Date.now();
-    for (const conv of [...conversations.values()]) {
-      if (conversationIsActive(conv) || sessionOwnership.get(conv.piSessionId)) continue;
-      if (now - conv.lastActivityAt < IDLE_REAP_MS) continue;
-      closeConversation(conv, 'idle-reap').catch((err) => console.warn('[agentd] idle reap failed:', err instanceof Error ? err.message : String(err)));
-    }
+    void (async () => {
+      const snapshot = await subagentSnapshot();
+      await reconcileLoadedSubagents(snapshot);
+      const now = Date.now();
+      for (const conv of [...conversations.values()]) {
+        if (conversationIsActive(conv) || sessionOwnership.get(conv.piSessionId)) continue;
+        if (now - conv.lastActivityAt < IDLE_REAP_MS) continue;
+        closeConversation(conv, 'idle-reap').catch((err) => console.warn('[agentd] idle reap failed:', err instanceof Error ? err.message : String(err)));
+      }
+    })().catch((err) => console.warn('[agentd] idle reap lifecycle reconciliation failed:', err instanceof Error ? err.message : String(err)));
   }, Math.max(5000, IDLE_REAP_INTERVAL_MS));
   interval.unref?.();
 }
 
 function startSubagentRetention() {
-  const prune = () => pruneTerminalSubagentRuns({
-    lifecycleRoot: path.join(SUBAGENT_RUNTIME_ROOT, 'async-subagent-runs'),
-    sessionRoot: SUBAGENT_SESSION_ROOT,
-    activeRunIds: new Set([...conversations.values()].flatMap((conv) =>
-      [...conv.subagents.runs.values()].filter((run) => run.active).map((run) => run.runId))),
-    hasSessionLease: (sessionRef) => {
-      const canonicalId = path.basename(sessionRef, '.jsonl').split('_').pop();
-      return Boolean(sessionOwnership.get(sessionRef) || (canonicalId && sessionOwnership.get(canonicalId)));
-    },
-  }).catch((err) => console.warn('[agentd] subagent retention failed:', err instanceof Error ? err.message : String(err)));
-  void prune();
-  const interval = setInterval(prune, 24 * 60 * 60 * 1000);
+  const prune = async () => {
+    const snapshot = await subagentSnapshot();
+    await reconcileLoadedSubagents(snapshot);
+    return pruneTerminalSubagentRuns({
+      lifecycleRoot: SUBAGENT_LIFECYCLE_ROOT,
+      sessionRoot: SUBAGENT_SESSION_ROOT,
+      activeRunIds: new Set(snapshot.runs.filter((run) => run.blocking).map((run) => run.run_id)),
+      hasSessionLease: (sessionRef) => {
+        const canonicalId = path.basename(sessionRef, '.jsonl').split('_').pop();
+        return Boolean(sessionOwnership.get(sessionRef) || (canonicalId && sessionOwnership.get(canonicalId)));
+      },
+    });
+  };
+  const runPrune = () => prune().catch((err) => console.warn('[agentd] subagent retention failed:', err instanceof Error ? err.message : String(err)));
+  void runPrune();
+  const interval = setInterval(runPrune, 24 * 60 * 60 * 1000);
   interval.unref?.();
 }
 

@@ -70,7 +70,7 @@ python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
 
 Forum-only image updates do not drain agentd because the `monika` container is not expected to restart. Backup-only mode still drains and cancels agentd so the runtime capsule is quiescence-gated.
 
-The script exits `75` (`EX_TEMPFAIL`) when deployment should be retried later. This includes an active interactive Pi ownership lease: deployment waits for the TUI to exit or its abandoned lease to expire rather than terminating the administrator's session. systemd treats this as a successful deferral, not as a failed unit.
+The script exits `75` (`EX_TEMPFAIL`) when deployment should be retried later. This includes active or uncertain async-subagent execution and an active interactive Pi ownership lease: deployment waits rather than terminating work. systemd treats this as a successful deferral, not as a failed unit. Forum Deploy on Finish persists its request and retries after exit 75 instead of losing the one-shot intent.
 
 ## Manual commands
 
@@ -97,7 +97,7 @@ MONIKA_FORUM_IMAGE=ghcr.io/irrigationreal/monika-forum:sha-OLD \
 ./scripts/deploy-if-safe
 ```
 
-If the command exits `75`, do not force a restart. Wait for active work to finish and retry.
+If the command exits `75`, do not force a restart. Inspect both forum deploy status and `curl -fsS http://127.0.0.1:7724/v1/admin/subagents`, wait for active work to finish, and retry. An `uncertain` run requires runtime/PID reconciliation or the audited quarantine procedure in `docs/redeployment.md`; never remove lifecycle files merely to make the counter disappear.
 
 Agentd drain has a lease as defense in depth. `MONIKA_AGENTD_DRAIN_AUTO_CANCEL_MS` controls the lease passed by `deploy-if-safe` and defaults to 15 minutes. Agentd also defaults to the same 15-minute auto-cancel window for any `/v1/admin/drain` call that does not override it. The deploy script still owns the normal lifecycle: drain, apply, cancel drain after Compose.
 

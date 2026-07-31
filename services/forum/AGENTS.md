@@ -104,6 +104,21 @@ Do not add new tests unless explicitly instructed, unless the change is large or
 - Exclude posts already present in canonical Pi from later catch-up envelopes or the forum will feed imported CLI messages back into the same session.
 - A `pi_message_links` row with `post_id = null` is unresolved state, not a terminal dedupe marker. Rescans must revisit it.
 
+## Robot dashboard and nested work
+
+The Robot Dashboard is an admin projection of parent forum jobs plus agentd-owned
+subagent workload. Disposable children must not become robot identities, topics,
+or forum sessions. Fetch execution state through agentd's internal API; never read
+`/data/pi-subagents` from the forum container. Treat `uncertain` and an unavailable
+workload endpoint as operationally visible/fail-closed states. Deploy on Finish
+must retain its durable request after exit 75.
+
+Key files:
+
+- `packages/server/src/routes/adminRoutes.ts` — dashboard and deploy scheduler
+- `packages/server/src/echsClient.ts` — typed agentd workload/quiescence client
+- `apps/codex-forum/src/views/RobotDashboardView.vue` — admin presentation
+
 ## Operational events and compaction
 
 Turn failures and manual compactions are durable topic operational events, not

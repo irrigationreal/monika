@@ -17,7 +17,7 @@ index 0da9904..83bab49 100644
  		const baseName = path.basename(parentSessionFile, ".jsonl");
  		const sessionsDir = path.dirname(parentSessionFile);
 diff --git a/src/extension/index.ts b/src/extension/index.ts
-index eff8c2d..d27fd1a 100644
+index eff8c2d..d8c9d99 100644
 --- a/src/extension/index.ts
 +++ b/src/extension/index.ts
 @@ -84,6 +84,13 @@ export { loadConfig } from "./config.ts";
@@ -34,7 +34,19 @@ index eff8c2d..d27fd1a 100644
  	if (parentSessionFile) {
  		const baseName = path.basename(parentSessionFile, ".jsonl");
  		const sessionsDir = path.dirname(parentSessionFile);
-@@ -459,7 +466,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
+@@ -320,7 +327,10 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
+ 
+ 	pi.registerMessageRenderer<SubagentNotifyDetails>("subagent-notify", (message, options, theme) => {
+ 		const content = typeof message.content === "string" ? message.content : "";
+-		const details = (message.details as SubagentNotifyDetails | undefined) ?? parseSubagentNotifyContent(content);
++		const rawDetails = message.details as (SubagentNotifyDetails & { runIds?: string[] }) | undefined;
++		const details = rawDetails && typeof rawDetails.resultPreview === "string"
++			? rawDetails
++			: parseSubagentNotifyContent(content);
+ 		if (!details) return new Text(content, 0, 0);
+ 		const icon = details.status === "completed"
+ 			? theme.fg("success", "✓")
+@@ -459,7 +469,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
  	registerWaitTool(pi, state, waitToolConfig.enabled);
  
  	pi.on("agent_end", async (_event, ctx) => {
@@ -43,7 +55,7 @@ index eff8c2d..d27fd1a 100644
  		await drainOutstandingWork({ state, events: pi.events });
  	});
  
-@@ -562,7 +569,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
+@@ -562,7 +572,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
  		scheduledRunManager.bindSession(ctx);
  		restoreSlashFinalSnapshots(ctx.sessionManager.getEntries());
  		startResultWatcher();
@@ -53,6 +65,176 @@ index eff8c2d..d27fd1a 100644
 +		});
  		fleetStatus?.setContext(ctx);
  	};
+ 
+diff --git a/src/runs/background/async-execution.ts b/src/runs/background/async-execution.ts
+index 34213ec..007fb8c 100644
+--- a/src/runs/background/async-execution.ts
++++ b/src/runs/background/async-execution.ts
+@@ -405,6 +405,41 @@ function terminateRunnerBeforeProceed(pid: number): void {
+ 	}
+ }
+ 
++function readRuntimeInstance(): { id: string; createdAt: number } | undefined {
++	const file = process.env.MONIKA_RUNTIME_INSTANCE_FILE?.trim() || "/run/monika-runtime-instance.json";
++	try {
++		const value = JSON.parse(fs.readFileSync(file, "utf-8")) as { id?: unknown; createdAt?: unknown };
++		if (typeof value.id === "string" && typeof value.createdAt === "number") return { id: value.id, createdAt: value.createdAt };
++	} catch { /* Non-container callers have no runtime epoch. */ }
++	return undefined;
++}
++
++function persistLaunchIntent(input: { id: string; asyncDir: string; sessionId?: string; mode: string }): string {
++	const runnerProcessInstanceId = randomUUID();
++	const runtime = readRuntimeInstance();
++	writePrivateAtomicJson(path.join(input.asyncDir, "launch.json"), {
++		lifecycleArtifactVersion: 1, runId: input.id, sessionId: input.sessionId,
++		asyncDir: input.asyncDir, mode: input.mode, state: "registered", runnerProcessInstanceId,
++		runtimeInstanceId: runtime?.id, runtimeCreatedAt: runtime?.createdAt, registeredAt: Date.now(),
++	});
++	return runnerProcessInstanceId;
++}
++
++function markRunnerNotStarted(asyncDir: string, runId: string, runnerProcessInstanceId: string): void {
++	writePrivateAtomicJson(path.join(asyncDir, "process-terminal.json"), {
++		version: 1, state: "not-started", runId, runnerProcessInstanceId,
++	});
++}
++
++function linuxProcessStartTicks(pid: number | undefined): string | undefined {
++	if (!pid || process.platform !== "linux") return undefined;
++	try {
++		const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf-8");
++		const close = stat.lastIndexOf(")");
++		return stat.slice(close + 2).split(/\s+/)[19];
++	} catch { return undefined; }
++}
++
+ function spawnRunner(cfg: object, suffix: string, cwd: string, onProcessTerminal?: (proof: unknown) => void): { pid?: number; error?: string } {
+ 	if (!jitiCliPath) {
+ 		return { error: "upstream jiti for TypeScript execution could not be found; ensure package dependencies are installed" };
+@@ -421,8 +456,19 @@ function spawnRunner(cfg: object, suffix: string, cwd: string, onProcessTerminal
+ 
+ 	fs.mkdirSync(TEMP_ROOT_DIR, { recursive: true });
+ 	const cfgPath = getAsyncConfigPath(suffix);
+-	const runnerProcessInstanceId = randomUUID();
++	const configuredInstanceId = (cfg as { runnerProcessInstanceId?: unknown }).runnerProcessInstanceId;
++	const runnerProcessInstanceId = typeof configuredInstanceId === "string" ? configuredInstanceId : randomUUID();
+ 	const launchConfig = { ...cfg, runnerProcessInstanceId };
++	const launchIdentity = launchConfig as { id?: unknown; asyncDir?: unknown; sessionId?: unknown; resultMode?: unknown };
++	const runtime = readRuntimeInstance();
++	if (typeof launchIdentity.id === "string" && typeof launchIdentity.asyncDir === "string") {
++		writePrivateAtomicJson(path.join(launchIdentity.asyncDir, "launch.json"), {
++			lifecycleArtifactVersion: 1, runId: launchIdentity.id, sessionId: launchIdentity.sessionId,
++			asyncDir: launchIdentity.asyncDir, mode: launchIdentity.resultMode, state: "registered",
++			runnerProcessInstanceId, runtimeInstanceId: runtime?.id, runtimeCreatedAt: runtime?.createdAt,
++			registeredAt: Date.now(),
++		});
++	}
+ 	fs.writeFileSync(cfgPath, JSON.stringify(launchConfig));
+ 	const runner = path.join(path.dirname(fileURLToPath(import.meta.url)), "subagent-runner.ts");
+ 	const nodeCommand = resolveAsyncRunnerNodeCommand();
+@@ -457,6 +503,20 @@ function spawnRunner(cfg: object, suffix: string, cwd: string, onProcessTerminal
+ 		});
+ 		closeFd(stdoutFd);
+ 		closeFd(stderrFd);
++		if (typeof launchIdentity.id === "string" && typeof launchIdentity.asyncDir === "string") {
++			try {
++				writePrivateAtomicJson(path.join(launchIdentity.asyncDir, "launch.json"), {
++					lifecycleArtifactVersion: 1, runId: launchIdentity.id, sessionId: launchIdentity.sessionId,
++					asyncDir: launchIdentity.asyncDir, mode: launchIdentity.resultMode, state: "spawned",
++					runnerProcessInstanceId, runtimeInstanceId: runtime?.id, runtimeCreatedAt: runtime?.createdAt,
++					pid: proc.pid, processStartTicks: linuxProcessStartTicks(proc.pid), registeredAt: Date.now(), updatedAt: Date.now(),
++				});
++			} catch (error) {
++				// The registered intent remains a fail-closed blocker and status.json
++				// will shortly supply the PID. Never orphan a successfully spawned runner.
++				console.error(`[pi-subagents] failed to update durable launch identity: ${error instanceof Error ? error.message : String(error)}`);
++			}
++		}
+ 		proc.on("error", (error) => {
+ 			console.error(`[pi-subagents] async spawn failed: ${error.message}`);
+ 		});
+@@ -873,6 +933,7 @@ export function executeAsyncChain(
+ 	id: string,
+ 	params: AsyncChainParams,
+ ): AsyncExecutionResult {
++	if (process.env.PI_SUBAGENTS_HOST_DRAINING === "1") return formatAsyncStartError("chain", "Agent host is draining; async launches are temporarily disabled.");
+ 	const {
+ 		chain,
+ 		agents,
+@@ -964,11 +1025,19 @@ export function executeAsyncChain(
+ 		return [childIntercomTarget(step.agent, childTargetIndex++)];
+ 	}) : undefined;
+ 
++	let runnerProcessInstanceId: string;
++	try {
++		runnerProcessInstanceId = persistLaunchIntent({ id, asyncDir, sessionId: ctx.currentSessionId, mode: resultMode });
++		ctx.pi.events.emit("subagent:async-registering", { id, sessionId: ctx.currentSessionId, mode: resultMode, asyncDir });
++	} catch (error) {
++		return formatAsyncStartError(resultMode, `Failed to persist async launch intent '${id}': ${error instanceof Error ? error.message : String(error)}`);
++	}
+ 	let spawnResult: { pid?: number; error?: string } = {};
+ 	try {
+ 		spawnResult = spawnRunner(
+ 			{
+ 				id,
++				runnerProcessInstanceId,
+ 				steps,
+ 				resultPath: inheritedNestedRoute ? nestedResultsPath(inheritedNestedRoute.rootRunId, id) : path.join(RESULTS_DIR, `${id}.json`),
+ 				cwd: runnerCwd,
+@@ -1011,10 +1080,12 @@ export function executeAsyncChain(
+ 		);
+ 	} catch (error) {
+ 		const message = error instanceof Error ? error.message : String(error);
++		try { markRunnerNotStarted(asyncDir, id, runnerProcessInstanceId); } catch {}
+ 		return formatAsyncStartError(resultMode, `Failed to start async ${resultMode} '${id}': ${message}`);
+ 	}
+ 
+ 	if (spawnResult.error) {
++		try { markRunnerNotStarted(asyncDir, id, runnerProcessInstanceId); } catch {}
+ 		return formatAsyncStartError(resultMode, `Failed to start async ${resultMode} '${id}': ${spawnResult.error}`);
+ 	}
+ 
+@@ -1130,6 +1201,7 @@ export function executeAsyncSingle(
+ 	id: string,
+ 	params: AsyncSingleParams,
+ ): AsyncExecutionResult {
++	if (process.env.PI_SUBAGENTS_HOST_DRAINING === "1") return formatAsyncStartError("single", "Agent host is draining; async launches are temporarily disabled.");
+ 	const {
+ 		agent,
+ 		agentConfig,
+@@ -1304,11 +1376,19 @@ export function executeAsyncSingle(
+ 	} catch (error) {
+ 		return formatAsyncStartError("single", `Failed to persist async recovery descriptor for '${id}': ${error instanceof Error ? error.message : String(error)}`);
+ 	}
++	let runnerProcessInstanceId: string;
++	try {
++		runnerProcessInstanceId = persistLaunchIntent({ id, asyncDir, sessionId: ctx.currentSessionId, mode: "single" });
++		ctx.pi.events.emit("subagent:async-registering", { id, sessionId: ctx.currentSessionId, mode: "single", asyncDir });
++	} catch (error) {
++		return formatAsyncStartError("single", `Failed to persist async launch intent '${id}': ${error instanceof Error ? error.message : String(error)}`);
++	}
+ 	let spawnResult: { pid?: number; error?: string } = {};
+ 	try {
+ 		spawnResult = spawnRunner(
+ 			{
+ 				id,
++				runnerProcessInstanceId,
+ 				steps: [
+ 					{
+ 						parentSessionId: ctx.parentSessionId ?? ctx.currentSessionId,
+@@ -1385,10 +1465,12 @@ export function executeAsyncSingle(
+ 		);
+ 	} catch (error) {
+ 		const message = error instanceof Error ? error.message : String(error);
++		try { markRunnerNotStarted(asyncDir, id, runnerProcessInstanceId); } catch {}
+ 		return formatAsyncStartError("single", `Failed to start async run '${id}': ${message}`);
+ 	}
+ 
+ 	if (spawnResult.error) {
++		try { markRunnerNotStarted(asyncDir, id, runnerProcessInstanceId); } catch {}
+ 		return formatAsyncStartError("single", `Failed to start async run '${id}': ${spawnResult.error}`);
+ 	}
  
 diff --git a/src/runs/background/notify.ts b/src/runs/background/notify.ts
 index 1582ccd..eac578c 100644
@@ -86,7 +268,7 @@ index 1582ccd..eac578c 100644
  			triggerTurn: result.triggerTurn !== false,
  			resolve,
 diff --git a/src/runs/background/result-watcher.ts b/src/runs/background/result-watcher.ts
-index 86e8350..089695e 100644
+index 86e8350..4244328 100644
 --- a/src/runs/background/result-watcher.ts
 +++ b/src/runs/background/result-watcher.ts
 @@ -160,6 +160,7 @@ export function createResultWatcher(
@@ -97,7 +279,22 @@ index 86e8350..089695e 100644
  				try {
  					fsApi.unlinkSync(resultPath);
  				} catch (error) {
-@@ -273,6 +274,7 @@ export function createResultWatcher(
+@@ -203,6 +204,14 @@ export function createResultWatcher(
+ 				};
+ 			}), nestedChildren);
+ 
++			// Agentd installs this barrier before evaluating drain quiescence. Keep
++			// the durable result untouched and retry after drain cancellation rather
++			// than starting an internal completion continuation during backup/deploy.
++			if (process.env.PI_SUBAGENTS_HOST_DRAINING === "1") {
++				scheduleResult(file, triggerTurn, RETRY_DELAY_MS);
++				return;
++			}
++
+ 			const intercomTarget = data.intercomTarget?.trim();
+ 			let intercomDelivered = false;
+ 			if (deliverIntercomResults && intercomTarget && triggerTurn) {
+@@ -273,6 +282,7 @@ export function createResultWatcher(
  				console.error(`Completion observer failed for '${resultPath}':`, error);
  			}
  			if (!ownsSession(data.sessionId, epoch) || !fsApi.existsSync(resultPath)) return;
@@ -105,6 +302,80 @@ index 86e8350..089695e 100644
  			try {
  				fsApi.unlinkSync(resultPath);
  			} catch (error) {
+diff --git a/src/runs/background/subagent-runner.ts b/src/runs/background/subagent-runner.ts
+index 6efb0bd..c04850b 100644
+--- a/src/runs/background/subagent-runner.ts
++++ b/src/runs/background/subagent-runner.ts
+@@ -1449,37 +1449,33 @@ async function runSingleStep(
+ 					? (finalResult?.error ? `${finalResult.error}\n${acceptanceFailure}` : acceptanceFailure)
+ 					: finalResult?.error;
+ 
++	let artifactWriteError: string | undefined;
+ 	if (artifactPaths && ctx.artifactConfig?.enabled !== false) {
+-		if (ctx.artifactConfig?.includeOutput !== false) {
+-			fs.writeFileSync(artifactPaths.outputPath, formatOutputArtifactContent({
+-				output,
+-				error: effectiveFinalError,
+-				transcriptPath: transcriptWriter ? artifactPaths.transcriptPath : undefined,
+-				metadataPath: ctx.artifactConfig?.includeMetadata === false ? undefined : artifactPaths.metadataPath,
+-			}), "utf-8");
+-		}
+-		if (ctx.artifactConfig?.includeMetadata !== false) {
+-			fs.writeFileSync(
+-				artifactPaths.metadataPath,
+-				JSON.stringify({
+-					runId: ctx.id,
+-					agent: step.agent,
+-					task,
+-					exitCode: effectiveFinalExitCode,
+-					model: finalResult?.model,
+-					attemptedModels: attemptedModels.length > 0 ? attemptedModels : undefined,
+-					modelAttempts,
+-					error: effectiveFinalError,
+-					acceptance: effectiveAcceptance,
++		try {
++			// Children can remove project-local artifact directories. Optional
++			// diagnostics must never abort mandatory lifecycle finalization.
++			fs.mkdirSync(path.dirname(artifactPaths.outputPath), { recursive: true });
++			if (ctx.artifactConfig?.includeOutput !== false) {
++				fs.writeFileSync(artifactPaths.outputPath, formatOutputArtifactContent({
++					output, error: effectiveFinalError,
++					transcriptPath: transcriptWriter ? artifactPaths.transcriptPath : undefined,
++					metadataPath: ctx.artifactConfig?.includeMetadata === false ? undefined : artifactPaths.metadataPath,
++				}), "utf-8");
++			}
++			if (ctx.artifactConfig?.includeMetadata !== false) {
++				fs.writeFileSync(artifactPaths.metadataPath, JSON.stringify({
++					runId: ctx.id, agent: step.agent, task, exitCode: effectiveFinalExitCode,
++					model: finalResult?.model, attemptedModels: attemptedModels.length > 0 ? attemptedModels : undefined,
++					modelAttempts, error: effectiveFinalError, acceptance: effectiveAcceptance,
+ 					...(capabilityAudit ? { capabilityCeiling: capabilityAudit.ceiling, capabilityAudit } : {}),
+ 					launchContractDigest: actualLaunchContractDigest,
+ 					...(transcriptWriter ? { transcriptPath: artifactPaths.transcriptPath } : {}),
+-					transcriptError: transcriptWriter?.getError(),
+-					skills: step.skills,
+-					timestamp: Date.now(),
+-				}, null, 2),
+-				"utf-8",
+-			);
++					transcriptError: transcriptWriter?.getError(), skills: step.skills, timestamp: Date.now(),
++				}, null, 2), "utf-8");
++			}
++		} catch (error) {
++			artifactWriteError = error instanceof Error ? error.message : String(error);
++			console.error(`Optional subagent artifact write failed for '${ctx.id}': ${artifactWriteError}`);
+ 		}
+ 	}
+ 
+@@ -1500,7 +1496,7 @@ async function runSingleStep(
+ 		totalCost: costSummaryFromAttempts(modelAttempts),
+ 		artifactPaths,
+ 		transcriptPath: transcriptWriter ? artifactPaths?.transcriptPath : undefined,
+-		transcriptError: transcriptWriter?.getError(),
++		transcriptError: [transcriptWriter?.getError(), artifactWriteError].filter(Boolean).join("; ") || undefined,
+ 		interrupted: timedOutAfterAcceptance || stoppedAfterAcceptance || turnBudgetExceeded ? false : finalResult?.interrupted,
+ 		timedOut: timedOutAfterAcceptance ? true : finalResult?.timedOut,
+ 		stopped: stoppedAfterAcceptance ? true : finalResult?.stopped,
 diff --git a/src/runs/foreground/subagent-executor.ts b/src/runs/foreground/subagent-executor.ts
 index b2bb70d..aeaecf8 100644
 --- a/src/runs/foreground/subagent-executor.ts
@@ -297,3 +568,71 @@ index 69b3685..bb54c64 100644
  		} finally {
  			fs.rmSync(tempDir, { recursive: true, force: true });
  		}
+diff --git a/test/unit/notify.test.ts b/test/unit/notify.test.ts
+index 916128b..75c2480 100644
+--- a/test/unit/notify.test.ts
++++ b/test/unit/notify.test.ts
+@@ -129,8 +129,9 @@ describe("registerSubagentNotify", () => {
+ 				customType: "subagent-notify",
+ 				content: "Background task completed: **worker**\n\n(no output)",
+ 				display: true,
++				details: { version: 1, runIds: ["notify-empty-1"] },
+ 			},
+-			options: { triggerTurn: true },
++			options: { triggerTurn: true, deliverAs: "followUp" },
+ 		});
+ 	});
+ 
+@@ -177,8 +178,9 @@ describe("registerSubagentNotify", () => {
+ 				customType: "subagent-notify",
+ 				content: "Detached foreground task completed: **reviewer**\n\nRecovered final review",
+ 				display: true,
++				details: { version: 1, runIds: ["foreground-run:0"] },
+ 			},
+-			options: { triggerTurn: true },
++			options: { triggerTurn: true, deliverAs: "followUp" },
+ 		});
+ 	});
+ 
+@@ -218,8 +220,9 @@ describe("registerSubagentNotify", () => {
+ 				customType: "subagent-notify",
+ 				content: `Background task completed: **worker** (2/3)\n\n${summary}`,
+ 				display: true,
++				details: { version: 1, runIds: ["notify-summary-1"] },
+ 			},
+-			options: { triggerTurn: true },
++			options: { triggerTurn: true, deliverAs: "followUp" },
+ 		});
+ 	});
+ 
+@@ -242,8 +245,9 @@ describe("registerSubagentNotify", () => {
+ 				customType: "subagent-notify",
+ 				content: "Background task completed: **worker**\n\nDone\n\nSession file: /tmp/session.jsonl",
+ 				display: true,
++				details: { version: 1, runIds: ["notify-path-1"] },
+ 			},
+-			options: { triggerTurn: true },
++			options: { triggerTurn: true, deliverAs: "followUp" },
+ 		}]);
+ 	});
+ 
+@@ -266,8 +270,9 @@ describe("registerSubagentNotify", () => {
+ 				customType: "subagent-notify",
+ 				content: "Background task paused: **worker**\n\nPaused after interrupt. Waiting for explicit next action.",
+ 				display: true,
++				details: { version: 1, runIds: ["notify-paused-1"] },
+ 			},
+-			options: { triggerTurn: true },
++			options: { triggerTurn: true, deliverAs: "followUp" },
+ 		});
+ 	});
+ 
+@@ -327,7 +332,7 @@ describe("registerSubagentNotify", () => {
+ 		assert.match(content, /^Background tasks completed \(3\): \*\*alpha\*\*, \*\*beta\*\*, \*\*gamma\*\*/);
+ 		assert.match(content, /1\. alpha\nalpha done/);
+ 		assert.match(content, /3\. gamma\ngamma done/);
+-		assert.deepEqual(sent[0]!.options, { triggerTurn: true });
++		assert.deepEqual(sent[0]!.options, { triggerTurn: true, deliverAs: "followUp" });
+ 	});
+ 
+ 	it("ignores successes from other sessions instead of grouping them", () => {

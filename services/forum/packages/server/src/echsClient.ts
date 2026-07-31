@@ -33,6 +33,29 @@ export interface EchsConversationState {
   conversation: EchsConversationRecord;
 }
 
+export interface EchsSubagentRun {
+  run_id: string;
+  state: string;
+  execution_state: 'active' | 'terminal' | 'interrupted' | 'uncertain' | 'quarantined';
+  delivery_state?: string | null;
+  blocking: boolean;
+  reason?: string | null;
+  parent_session_id?: string | null;
+  parent_session_path?: string | null;
+  async_dir?: string | null;
+  started_at?: number | string | null;
+  updated_at?: number | string | null;
+  origin?: { topicId?: string | null; postId?: string | null; turnId?: string | null } | null;
+}
+
+export interface EchsSubagentWorkload {
+  ok: boolean;
+  active_count: number;
+  uncertain_count: number;
+  runs: EchsSubagentRun[];
+  omitted: number;
+}
+
 export interface EchsThreadHistory {
   thread_id: string;
   items?: unknown[];
@@ -86,6 +109,14 @@ export class EchsClient {
   constructor(options: EchsClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, '');
     this.apiToken = options.apiToken ?? null;
+  }
+
+  async getSubagentWorkload(): Promise<EchsSubagentWorkload> {
+    return (await this.request('/v1/admin/subagents')) as EchsSubagentWorkload;
+  }
+
+  async getQuiescence(): Promise<Record<string, unknown>> {
+    return (await this.request('/v1/admin/quiescence')) as Record<string, unknown>;
   }
 
   async createThread(opts: {

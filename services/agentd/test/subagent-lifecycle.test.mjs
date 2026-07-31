@@ -10,8 +10,11 @@ import {
   SubagentLifecycle,
   backgroundStatus,
   hasActiveBackgroundWork,
+  mergeMappedLifecycleRuns,
   pruneTerminalSubagentRuns,
+  quarantineLifecycleRun,
   scanActiveLifecycleRuns,
+  scanLifecycleSnapshot,
   validateLifecycleArtifact,
 } from '../src/subagent-lifecycle.mjs';
 
@@ -176,6 +179,118 @@ test('global lifecycle scan keeps unloaded and unproven runs deployment-active',
   }
   const active = await scanActiveLifecycleRuns({ lifecycleRoot: root });
   assert.deepEqual(active.map((run) => run.runId).sort(), ['running', 'unknown-proof']);
+});
+
+test('durable reconciliation clears a stale loaded lease without a completion event', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agentd-subagent-converge-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const asyncDir = path.join(root, 'run-1'); await mkdir(asyncDir);
+  await writeFile(path.join(asyncDir, 'status.json'), JSON.stringify({
+    lifecycleArtifactVersion: 3, runId: 'run-1', sessionId: 'parent-session',
+    state: 'complete', processTerminal: observedProof(), lastUpdate: 2,
+  }));
+  const conv = conversation();
+  conv.session.sessionManager.appendCustomEntry(SUBAGENT_RUN_CUSTOM_TYPE, {
+    version: 1, runId: 'run-1', sessionId: 'parent-session', asyncDir, origin: {}, startedAt: 1,
+  });
+  const lifecycle = new SubagentLifecycle(); await lifecycle.attach(conv);
+  conv.subagents.runs.get('run-1').active = true; // model a missed terminal event after attach
+  const snapshot = await scanLifecycleSnapshot({ lifecycleRoot: root, runtimeInstanceFile: path.join(root, 'absent-runtime') });
+  await lifecycle.reconcileArtifacts(snapshot);
+  assert.equal(backgroundStatus(conv).active_count, 0);
+  assert.equal(conv.subagents.runs.get('run-1').executionState, 'terminal');
+});
+
+test('legacy unknown terminal proof predating a new runtime reconciles interrupted without deleting diagnostics', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agentd-subagent-runtime-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const asyncDir = path.join(root, 'run-old'); await mkdir(asyncDir);
+  await writeFile(path.join(asyncDir, 'status.json'), JSON.stringify({
+    lifecycleArtifactVersion: 3, runId: 'run-old', sessionId: 'parent-session', state: 'failed', pid: 999999,
+    processTerminal: { version: 1, state: 'unknown', runId: 'run-old', runnerProcessInstanceId: 'old', reason: 'runner-candidate-missing' },
+    lastUpdate: 50,
+  }));
+  const runtimeFile = path.join(root, 'runtime.json');
+  await writeFile(runtimeFile, JSON.stringify({ version: 1, id: 'new-container', createdAt: 100 }));
+  const snapshot = await scanLifecycleSnapshot({ lifecycleRoot: root, runtimeInstanceFile: runtimeFile });
+  assert.equal(snapshot.active_count, 0);
+  assert.equal(snapshot.runs[0].execution_state, 'interrupted');
+  assert.equal(snapshot.runs[0].reason, 'legacy-record-predates-runtime');
+  assert.ok(await readFile(path.join(asyncDir, 'status.json')));
+});
+
+test('nested lifecycle trees and mapped missing artifacts remain deployment-visible', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agentd-subagent-nested-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const nested = path.join(root, 'nested-subagent-runs', 'parent-run', 'nested-run'); await mkdir(nested, { recursive: true });
+  await writeFile(path.join(nested, 'status.json'), JSON.stringify({ lifecycleArtifactVersion: 3, runId: 'nested-run', sessionId: 'parent-session', state: 'running', pid: 42, lastUpdate: 3 }));
+  const snapshot = await scanLifecycleSnapshot({ lifecycleRoot: root, runtimeInstanceFile: path.join(root, 'none') });
+  assert.equal(snapshot.active_count, 1);
+  assert.equal(snapshot.runs[0].run_id, 'nested-run');
+
+  const conv = conversation(); const lifecycle = new SubagentLifecycle(); await lifecycle.attach(conv);
+  lifecycle.onStarted(start('mapped-missing', { asyncDir: path.join(root, 'deleted-run') }));
+  mergeMappedLifecycleRuns(snapshot, [conv]);
+  assert.equal(snapshot.active_count, 2);
+  assert.equal(snapshot.byId.get('mapped-missing').reason, 'mapped-lifecycle-artifact-missing');
+});
+
+test('same-runtime dead runner reconciles interrupted while a matching live identity blocks', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agentd-subagent-process-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const runtimeFile = path.join(root, 'runtime.json');
+  await writeFile(runtimeFile, JSON.stringify({ version: 1, id: 'runtime-1', createdAt: 1 }));
+  for (const id of ['dead', 'live']) {
+    const asyncDir = path.join(root, id); await mkdir(asyncDir);
+    await writeFile(path.join(asyncDir, 'launch.json'), JSON.stringify({ runId: id, sessionId: 'parent', asyncDir, state: 'spawned', runtimeInstanceId: 'runtime-1', pid: 42, processStartTicks: id, registeredAt: 2 }));
+    await writeFile(path.join(asyncDir, 'status.json'), JSON.stringify({ lifecycleArtifactVersion: 3, runId: id, sessionId: 'parent', state: 'running', pid: 42, lastUpdate: 3 }));
+  }
+  const launchOnly = path.join(root, 'launch-only-dead'); await mkdir(launchOnly);
+  await writeFile(path.join(launchOnly, 'launch.json'), JSON.stringify({ runId: 'launch-only-dead', sessionId: 'parent', asyncDir: launchOnly, state: 'spawned', runtimeInstanceId: 'runtime-1', pid: 42, processStartTicks: 'launch-only-dead', registeredAt: 2 }));
+  const snapshot = await scanLifecycleSnapshot({
+    lifecycleRoot: root, runtimeInstanceFile: runtimeFile,
+    processInspector: async (_pid, launch) => launch.processStartTicks === 'live',
+  });
+  assert.equal(snapshot.active_count, 1);
+  assert.equal(snapshot.runs.find((run) => run.run_id === 'dead').execution_state, 'interrupted');
+  assert.equal(snapshot.runs.find((run) => run.run_id === 'launch-only-dead').execution_state, 'interrupted');
+  assert.equal(snapshot.runs.find((run) => run.run_id === 'live').execution_state, 'active');
+});
+
+test('pre-spawn launch records block and lifecycle traversal errors fail closed', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agentd-subagent-launch-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const asyncDir = path.join(root, 'run-launch'); await mkdir(asyncDir);
+  await writeFile(path.join(asyncDir, 'launch.json'), JSON.stringify({ runId: 'run-launch', sessionId: 'parent', asyncDir, state: 'registered', registeredAt: 1 }));
+  const snapshot = await scanLifecycleSnapshot({ lifecycleRoot: root, runtimeInstanceFile: path.join(root, 'none') });
+  assert.equal(snapshot.active_count, 1);
+  assert.equal(snapshot.runs[0].reason, 'launch-not-yet-settled');
+
+  const notDirectory = path.join(root, 'not-a-directory'); await writeFile(notDirectory, 'x');
+  await assert.rejects(scanLifecycleSnapshot({ lifecycleRoot: notDirectory }), /ENOTDIR/);
+});
+
+test('operator quarantine is identity-bound, audited, and refuses a live runner', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agentd-subagent-quarantine-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const asyncDir = path.join(root, 'uncertain'); await mkdir(asyncDir);
+  await writeFile(path.join(asyncDir, 'status.json'), JSON.stringify({
+    lifecycleArtifactVersion: 3, runId: 'uncertain', sessionId: 'parent', state: 'failed',
+    processTerminal: { version: 1, state: 'unknown', runId: 'uncertain', runnerProcessInstanceId: 'runner-1', reason: 'observer-unavailable' }, lastUpdate: 3,
+  }));
+  await assert.rejects(quarantineLifecycleRun({ lifecycleRoot: root, runId: 'uncertain', runnerProcessInstanceId: 'wrong', reason: 'verified' }), /does not match/);
+  const blockedAuditPath = path.join(root, 'operator-resolutions.jsonl'); await mkdir(blockedAuditPath);
+  await assert.rejects(quarantineLifecycleRun({ lifecycleRoot: root, runId: 'uncertain', runnerProcessInstanceId: 'runner-1', reason: 'must remain blocked' }));
+  let failedSnapshot = await scanLifecycleSnapshot({ lifecycleRoot: root, runtimeInstanceFile: path.join(root, 'none') });
+  assert.equal(failedSnapshot.active_count, 1, 'failed audit persistence cannot publish an effective quarantine');
+  await rm(blockedAuditPath, { recursive: true });
+
+  const resolution = await quarantineLifecycleRun({ lifecycleRoot: root, runId: 'uncertain', runnerProcessInstanceId: 'runner-1', reason: 'operator verified no process' });
+  assert.equal(resolution.action, 'quarantine');
+  const snapshot = await scanLifecycleSnapshot({ lifecycleRoot: root, runtimeInstanceFile: path.join(root, 'none') });
+  assert.equal(snapshot.active_count, 0);
+  assert.equal(snapshot.runs[0].execution_state, 'quarantined');
+  assert.match(await readFile(path.join(root, 'operator-resolutions.jsonl'), 'utf8'), /operator verified no process/);
 });
 
 test('14-day retention removes only old proven-terminal unleased child sessions', async (t) => {

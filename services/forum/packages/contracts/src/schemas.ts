@@ -73,6 +73,7 @@ import type {
   TopicAutoRunDto,
   RobotDashboardDto,
   RobotJobDto,
+  RobotSubagentRunDto,
   RobotPersonaDto,
   RobotQueueItemDto,
   RobotSettingsDto,
@@ -677,9 +678,32 @@ export const RobotQueueItemDtoSchema: z.ZodType<RobotQueueItemDto> = z.object({
   sessionId: z.string()
 });
 
+export const RobotSubagentRunDtoSchema: z.ZodType<RobotSubagentRunDto> = z.object({
+  runId: z.string(),
+  state: z.string(),
+  executionState: z.enum(['active', 'terminal', 'interrupted', 'uncertain', 'quarantined']),
+  deliveryState: optionalNullableString,
+  blocking: z.boolean(),
+  reason: optionalNullableString,
+  parentSessionId: optionalNullableString,
+  topicId: optionalNullableString,
+  topicTitle: optionalNullableString,
+  postId: optionalNullableString,
+  startedAt: optionalNullableString,
+  updatedAt: optionalNullableString
+});
+
 export const RobotDashboardDtoSchema: z.ZodType<RobotDashboardDto> = z.object({
   jobs: z.array(RobotJobDtoSchema),
   queue: z.array(RobotQueueItemDtoSchema),
+  subagents: z.object({
+    activeCount: z.number(),
+    uncertainCount: z.number(),
+    runs: z.array(RobotSubagentRunDtoSchema),
+    omitted: z.number(),
+    available: z.boolean(),
+    error: optionalNullableString
+  }).optional(),
   settings: z
     .object({
       maxConcurrentTurns: z.number(),

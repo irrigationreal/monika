@@ -98,9 +98,10 @@ reviewed patch in `config/pi-subagents-0.37.2.patch`. The installer verifies the
 git tree, selected source files, lockfile, and patch hashes before installing
 lockfile-pinned production dependencies. The patch adds deployment-owned
 session/runtime roots—including per-run branch directories for fork-context
-children—machine-readable completion IDs and process-terminal proof, and agentd
-controls for auto-drain, recovered-result triggering, and host-acknowledged result
-cleanup.
+children—durable pre-spawn launch/process identity, machine-readable completion
+IDs and process-terminal proof, resilient optional artifact finalization, and
+agentd controls for auto-drain, recovered-result triggering, drain barriers, and
+host-acknowledged result cleanup.
 
 The parent receives the package's `subagent`, `subagent_wait`, and
 `subagent_supervisor` tools, supporting foreground runs, parallel groups, chains,
@@ -136,9 +137,11 @@ omitted from both ongoing forum sync and the standalone historical importer, as
 well as direct memstore ingestion. Useful child results
 return through the canonical parent transcript; the parent alone decides what to
 write as durable memory. Async lifecycle/results live under
-`/data/pi-subagents/`; agentd keeps the canonical parent conversation loaded while
-work is active, restores package results after restart, and projects completion as
-a provenance-bearing continuation of that parent session. Sleep remains a
+`/data/pi-subagents/`. Agentd reconciles that ledger independently of result
+projection before quiescence decisions, uses container epochs plus PID start
+identity across restarts, fails closed on uncertainty, exposes background work in
+the admin Robot Dashboard, restores package results after restart, and projects
+completion as a provenance-bearing continuation of the parent session. Sleep remains a
 separate stateful-memory workflow under `sessions/forks/`. See
 [`docs/forum.md`](docs/forum.md#subagents-and-background-completions) for the
 agentd/forum lifecycle.

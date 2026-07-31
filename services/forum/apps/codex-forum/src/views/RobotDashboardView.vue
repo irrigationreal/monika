@@ -16,6 +16,8 @@ let refreshTimer: ReturnType<typeof setInterval> | null = null;
 
 const jobs = computed(() => dashboard.value?.jobs ?? []);
 const queue = computed(() => dashboard.value?.queue ?? []);
+const subagents = computed(() => dashboard.value?.subagents);
+const subagentRuns = computed(() => subagents.value?.runs ?? []);
 
 const busyJobs = computed(() =>
   jobs.value.filter((job) => job.activity !== 'idle' && job.activity !== 'waiting')
@@ -45,6 +47,12 @@ function activityLabel(activity: RobotJobDto['activity']): string {
     case 'idle': return 'Idle';
     default: return activity;
   }
+}
+
+function subagentStateClass(state: string): string {
+  if (state === 'uncertain') return 'vb-status-pill--error';
+  if (state === 'active') return 'vb-status-pill--running';
+  return 'vb-status-pill--done';
 }
 
 function activityClass(activity: RobotJobDto['activity']): string {
@@ -275,6 +283,14 @@ onBeforeUnmount(() => {
             <div class="vb-v">{{ waitingJobs.length }}</div>
           </div>
           <div class="vb-kv">
+            <div class="vb-k">Background subagents</div>
+            <div class="vb-v">{{ subagents?.available ? subagents.activeCount : 'unavailable' }}</div>
+          </div>
+          <div class="vb-kv">
+            <div class="vb-k">Uncertain blockers</div>
+            <div class="vb-v">{{ subagents?.available ? subagents.uncertainCount : 'unknown' }}</div>
+          </div>
+          <div class="vb-kv">
             <div class="vb-k">Refreshed</div>
             <div class="vb-v">{{ lastRefreshedAt ? formatDateTime(lastRefreshedAt) : 'n/a' }}</div>
           </div>
@@ -347,6 +363,30 @@ onBeforeUnmount(() => {
               <button class="vb-btn vb-btn-compact" type="button" :disabled="loading" @click="continueTopic(job.topicId)">Continue</button>
             </div>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="vb-forum-list vb-forum-list--subagents">
+      <div class="vb-category-header">
+        <div class="vb-category-title">Background Subagents</div>
+      </div>
+      <div v-if="subagents && !subagents.available" class="vb-login-error" style="margin: 10px;">
+        Agentd workload unavailable: {{ subagents.error ?? 'unknown error' }}
+      </div>
+      <div v-else-if="subagentRuns.length === 0" class="vb-empty-state vb-empty-state--notice">
+        <div class="vb-empty-state-text">No retained background subagent runs.</div>
+      </div>
+      <div v-else class="vb-dashboard-table-scroll" aria-label="Background subagents">
+        <div v-for="run in subagentRuns" :key="run.runId" class="vb-subagent-row">
+          <div>
+            <strong>{{ run.topicTitle ?? run.topicId ?? 'Unmapped parent' }}</strong>
+            <div class="vb-job-meta"><code>{{ run.runId }}</code><span v-if="run.reason"> · {{ run.reason }}</span></div>
+          </div>
+          <span class="vb-status-pill" :class="subagentStateClass(run.executionState)">{{ run.executionState }}</span>
+          <span>{{ run.deliveryState ?? 'unknown delivery' }}</span>
+          <button v-if="run.topicId" class="vb-btn vb-btn-compact" type="button" @click="openTopic(run.topicId)">Open parent</button>
+          <span v-else>Needs attention</span>
         </div>
       </div>
     </div>
@@ -716,8 +756,20 @@ onBeforeUnmount(() => {
   color: var(--notice-text);
 }
 
-.vb-forum-list--queue {
+.vb-forum-list--queue,
+.vb-forum-list--subagents {
   margin-top: 18px;
+}
+
+.vb-subagent-row {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) 140px 180px 140px;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-default);
+  background: var(--bg-surface);
+  font-size: 12px;
 }
 
 @media (max-width: 1100px) {
