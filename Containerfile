@@ -60,6 +60,16 @@ ENV AGENT_BROWSER_EXECUTABLE_PATH=/opt/agent-browser/chrome
 # adopted explicitly; the exact version keeps the resulting image reproducible.
 RUN npm install -g --min-release-age=0 @earendil-works/pi-coding-agent@0.82.1
 
+# pi-subagents — install the exact reviewed git object because npm's dependency
+# cooldown currently excludes the equivalent 0.37.2 artifact. The installer
+# verifies the commit, tree, source/lock hashes, and patch before changing
+# anything, then installs only lockfile-pinned production dependencies.
+COPY scripts/install-pi-subagents /usr/local/bin/install-pi-subagents
+COPY config/pi-subagents-0.37.2.patch /tmp/pi-subagents-0.37.2.patch
+RUN chmod +x /usr/local/bin/install-pi-subagents && \
+    install-pi-subagents /opt/pi-subagents /tmp/pi-subagents-0.37.2.patch && \
+    rm -f /tmp/pi-subagents-0.37.2.patch
+
 # AgentLogs CLI — pinned version. Authentication/config is runtime-owned and
 # stored under /agentlogs-home by scripts/agentlogs-monika.
 RUN npm install -g agentlogs@0.1.7
@@ -152,6 +162,7 @@ RUN mkdir -p /app/.pi/agent/extensions /app/.pi/stateful-memory/persona_topics \
              /app/.pi/memstore /data
 
 COPY config/extensions/          /app/.pi/agent/extensions/
+COPY config/agents/              /app/.pi/agent/agents/
 COPY config/settings.json        /app/.pi/agent/settings.json
 COPY config/stateful-memory.json /app/.pi/agent/stateful-memory.json
 COPY config/persona/SOUL.md                /app/.pi/stateful-memory/SOUL.md

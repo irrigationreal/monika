@@ -49,6 +49,21 @@ export interface EchsConversationHistory {
   offset?: number;
 }
 
+export interface EchsContinuationMetadata {
+  source_kind?: string | null;
+  sourceKind?: string | null;
+  run_id?: string | null;
+  runId?: string | null;
+  origin_turn_id?: string | null;
+  originTurnId?: string | null;
+  origin_post_id?: string | null;
+  originPostId?: string | null;
+  origin_topic_id?: string | null;
+  originTopicId?: string | null;
+  pi_message_id?: string | null;
+  piMessageId?: string | null;
+}
+
 export interface EchsEvent<T = unknown> {
   event: string;
   data: T;

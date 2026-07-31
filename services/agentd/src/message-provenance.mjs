@@ -163,6 +163,30 @@ export function handleProvenanceEvent(conv, event) {
   };
 }
 
+export function appendSubagentCompletionProvenance(conv, piMessageId, continuation) {
+  if (!piMessageId || !continuation || continuation.sourceKind !== 'subagent-completion') return null;
+  const sessionManager = conv.session.sessionManager;
+  const existing = sessionManager.getBranch().find((entry) => entry.type === 'custom'
+    && entry.customType === MESSAGE_PROVENANCE_CUSTOM_TYPE
+    && entry.data?.piMessageId === piMessageId
+    && entry.data?.sourceKind === 'subagent-completion');
+  if (existing) return existing.id;
+  return sessionManager.appendCustomEntry(MESSAGE_PROVENANCE_CUSTOM_TYPE, {
+    version: MESSAGE_PROVENANCE_VERSION,
+    piMessageId,
+    origin: 'subagent-completion',
+    sourceKind: 'subagent-completion',
+    runId: continuation.subagentRunId ?? null,
+    runIds: continuation.subagentRunIds ?? [],
+    origins: continuation.subagentOrigins ?? [],
+    originTurnId: continuation.origin?.turnId ?? null,
+    originTopicId: continuation.origin?.topicId ?? null,
+    originPostId: continuation.origin?.postId ?? null,
+    messageKind: 'assistant_terminal',
+    createdAt: new Date().toISOString(),
+  });
+}
+
 export function extractMessageProvenance(entries) {
   return entries
     .filter((entry) => entry.type === 'custom'

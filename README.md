@@ -32,7 +32,7 @@ The Monika runtime is container-owned. The image owns:
 - **Pi coding agent** at a pinned version
 - **memstore** — SQLite FTS5 memory store
 - **agentd** — HTTP/SSE bridge used by alternate frontends
-- **Extensions** — stateful-memory, delegate, SSH/relocate, web-search, AgentLogs upload, etc.
+- **Extensions and packages** — stateful-memory, pi-subagents, SSH/relocate, web-search, AgentLogs upload, etc.
 - **AgentLogs CLI** — manual sharing of selected Pi sessions
 - **Persona defaults** — SOUL.md, STYLE.md, REGISTER.md, topic addenda
 
@@ -44,6 +44,7 @@ runtime/
     pi-agent-auth/     writable Pi OAuth auth state, seeded from runtime/secrets/auth.json
     pi-agent-models/   persisted cache for Pi's refreshed built-in model catalogs
     pi-agent-trust/    writable Pi project-trust decisions for interactive sessions
+    pi-subagents/      persistent async lifecycle, results, and recovery artifacts
   persona/             mounted to /app/.pi/stateful-memory
   pi-agent/sessions/   persistent Pi JSONL sessions for resume/reopen
   pi-agent/skills/     local skills, if any
@@ -88,6 +89,55 @@ refresh does not download or replace deployment-owned `models.json` configuratio
 Forum workspaces are administrator-configured server paths, so agentd explicitly
 trusts their cwd when loading project `AGENTS.md`, `.pi` resources, and
 `.agents/skills`; the forum never needs to answer a trust prompt.
+
+## Subagents
+
+The runtime installs `pi-subagents` 0.37.2 from reviewed git object
+`8063333661476ca48afbca826dc4aab8707c72d3` (`gitHead`), then applies the small
+reviewed patch in `config/pi-subagents-0.37.2.patch`. The installer verifies the
+git tree, selected source files, lockfile, and patch hashes before installing
+lockfile-pinned production dependencies. The patch adds deployment-owned
+session/runtime roots, machine-readable completion IDs and process-terminal
+proof, and agentd controls for auto-drain, recovered-result triggering, and
+host-acknowledged result cleanup.
+
+The parent receives the package's `subagent`, `subagent_wait`, and
+`subagent_supervisor` tools, supporting foreground runs, parallel groups, chains,
+dynamic fanout, and persistent async work. Monika's configured agents live in
+`config/agents/`: disposable specialists have narrow direct tool lists and receive
+only turn-routed topic addenda, while `monika-delegate` is the explicit
+identity-bearing boundary and receives SOUL.md, STYLE.md, REGISTER.md, routed
+topics, and bounded read-only `recall`/`recall_session`. `subagents.defaultExtensions`
+is `[]`; each profile must opt into its
+child-only context extension and any capability such as web search. Direct child
+capabilities are explicit: `scout`, `planner`, `reviewer`, and `oracle` are
+read-only roles (with non-mutating `bash` only where declared); `researcher` has
+`read` plus `web_search`; `worker` has repository read/search, `bash`, `edit`, and
+`write`; `context-builder` has repository inspection, `bash`, `write`, and
+`web_search`; and `monika-delegate` has the full worker surface plus `web_search`
+and read-only memory retrieval. Scout, researcher, and context-builder use GPT-5.6
+Terra; judgment, planning, review, implementation, and identity-bearing profiles
+use GPT-5.6 Sol. Ordinary profiles do not receive `subagent`, so recursive
+delegation is limited to package-managed dynamic fanout. No child receives memory
+mutation tools, automatic session ingestion, observation-lifecycle APIs, or `/sleep`.
+These capability lists are not an OS sandbox: profiles with filesystem or shell tools
+retain the underlying runtime permissions and are instructed not to circumvent the
+memory boundary.
+
+A parent-only prompt extension defines role selection, execution modes, low-loss
+task packets, write isolation, validation, and the positive boundary for using
+`monika-delegate` when authored judgment materially improves the work.
+
+Child JSONL lives under `/app/.pi/agent/sessions/subagent/` and is deliberately
+omitted from forum session sync and direct memstore ingestion. Useful child results
+return through the canonical parent transcript; the parent alone decides what to
+write as durable memory. Async lifecycle/results live under
+`/data/pi-subagents/`; agentd keeps the canonical parent conversation loaded while
+work is active, restores package results after restart, and projects completion as
+a provenance-bearing continuation of that parent session. Sleep remains a
+separate stateful-memory workflow under `sessions/forks/`. See
+[`docs/forum.md`](docs/forum.md#subagents-and-background-completions) for the
+agentd/forum lifecycle.
 
 ## Deployment compose
 
@@ -315,6 +365,7 @@ pnpm install --config.minimumReleaseAge=0 <package>@<exact-version>
 
 Runtime tools and Pi packages are also pinned explicitly:
 
+- reviewed `pi-subagents` 0.37.2 git object and patch in `scripts/install-pi-subagents`
 - `agent-browser` in `Containerfile`
 - `pi-agent-browser` in `config/settings.json`
 - `nutrient-skills` to a Git commit in `config/settings.json`

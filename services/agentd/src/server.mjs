@@ -7,6 +7,7 @@ import path from 'node:path';
 import { handlePiEvent } from './pi-event-bridge.mjs';
 import { compactConversation, ConversationConflictError } from './compaction-operation.mjs';
 import {
+  appendSubagentCompletionProvenance,
   createProvenanceState,
   discardDispatch,
   extractMessageProvenance,
@@ -17,6 +18,14 @@ import {
 import { deriveActiveBranchMetadata, reconcileActiveBranchMetadata } from './session-export.mjs';
 import { SessionOwnershipRegistry } from './session-ownership.mjs';
 import { modelRefreshIntervalMs, startModelCatalogRefresh } from './model-refresh.mjs';
+import {
+  SubagentLifecycle,
+  backgroundStatus,
+  extractSubagentRuns,
+  hasActiveBackgroundWork,
+  pruneTerminalSubagentRuns,
+  scanActiveLifecycleRuns,
+} from './subagent-lifecycle.mjs';
 import {
   createAgentSessionFromServices,
   createAgentSessionRuntime,
@@ -31,6 +40,16 @@ import {
 const PORT = Number(process.env.MONIKA_AGENTD_PORT ?? 7724);
 const HOST = process.env.MONIKA_AGENTD_HOST ?? '127.0.0.1';
 const AGENT_DIR = process.env.PI_CODING_AGENT_DIR ?? path.join(process.env.HOME ?? '/home/monika', '.pi/agent');
+const SUBAGENT_SESSION_ROOT = path.resolve(process.env.PI_SUBAGENT_SESSION_ROOT ?? path.join(AGENT_DIR, 'sessions/subagent'));
+const SUBAGENT_RUNTIME_ROOT = path.resolve(process.env.PI_SUBAGENT_RUNTIME_ROOT ?? '/data/pi-subagents');
+// Agentd owns background lifetime. Pi's print-mode auto-drain must not await
+// subagents before returning a forum turn. Persist lifecycle/results so a
+// recreated agentd runtime can deliver completed work exactly once.
+process.env.PI_SUBAGENTS_DISABLE_AUTO_DRAIN = '1';
+process.env.PI_SUBAGENTS_TRIGGER_RECOVERED_RESULTS = '1';
+process.env.PI_SUBAGENTS_HOST_ACK_RESULTS = '1';
+process.env.PI_SUBAGENT_SESSION_ROOT = SUBAGENT_SESSION_ROOT;
+process.env.PI_SUBAGENT_RUNTIME_ROOT = SUBAGENT_RUNTIME_ROOT;
 const DEFAULT_CWD = process.env.MONIKA_AGENTD_DEFAULT_CWD ?? process.env.HOME ?? '/home/monika';
 const MEMSTORE_SOCKET = process.env.MEMSTORE_SOCKET ?? '/tmp/memstore.sock';
 const IDLE_REAP_ENABLED = process.env.MONIKA_AGENTD_IDLE_REAP_ENABLED !== '0';
@@ -90,6 +109,7 @@ Files involved:
 
 const conversations = new Map();
 const sessionOperationTails = new Map();
+let runtimeCreationTail = Promise.resolve();
 const sessionOwnership = new SessionOwnershipRegistry({
   storagePath: process.env.MONIKA_AGENTD_OWNERSHIP_FILE ?? path.join(AGENT_DIR, '.session-ownership-leases.json'),
 });
@@ -226,15 +246,29 @@ async function memstoreDeployState() {
   };
 }
 
+function conversationIsActive(conv) {
+  return Boolean(conv.current || conv.pendingMutations > 0 || hasActiveBackgroundWork(conv));
+}
+
 async function deployState() {
   const convs = [...conversations.values()];
-  const active = convs.filter((c) => c.current || c.pendingMutations > 0);
-  const idle = convs.filter((c) => !c.current && c.pendingMutations === 0);
+  const activeTurns = convs.filter((conv) => conv.current || conv.pendingMutations > 0);
+  const idle = convs.filter((c) => !conversationIsActive(c));
   const externalLeases = sessionOwnership.list();
   const memstore = await memstoreDeployState();
   const blockers = [];
   const drainRequired = [];
-  if (active.length > 0) blockers.push({ code: 'active_agent_turns', count: active.length });
+  if (activeTurns.length > 0) blockers.push({ code: 'active_agent_turns', count: activeTurns.length });
+  const loadedRunIds = convs.flatMap((conv) => [...conv.subagents.runs.values()]
+    .filter((run) => run.active).map((run) => run.runId));
+  const persistedRuns = await scanActiveLifecycleRuns({
+    lifecycleRoot: path.join(SUBAGENT_RUNTIME_ROOT, 'async-subagent-runs'),
+  }).catch((err) => {
+    console.warn('[agentd] subagent lifecycle scan failed:', err instanceof Error ? err.message : String(err));
+    return [{ runId: 'lifecycle-scan-failed' }];
+  });
+  const backgroundRuns = new Set([...loadedRunIds, ...persistedRuns.map((run) => run.runId)]).size;
+  if (backgroundRuns > 0) blockers.push({ code: 'active_subagent_runs', count: backgroundRuns });
   if (externalLeases.length > 0) blockers.push({ code: 'interactive_pi_sessions', count: externalLeases.length });
   if (!memstore.reachable) blockers.push({ code: 'memstore_unreachable' });
   if ((memstore.queue_depth ?? 0) > 0 || memstore.processing) blockers.push({ code: 'memstore_busy', queue_depth: memstore.queue_depth, processing: memstore.processing });
@@ -243,7 +277,8 @@ async function deployState() {
     ok: blockers.length === 0 && drainRequired.length === 0,
     status: blockers.length === 0 && drainRequired.length === 0 ? 'safe_to_stop' : blockers.length === 0 ? 'drain_required' : 'blocked',
     draining,
-    active_threads: active.length,
+    active_threads: activeTurns.length,
+    active_subagent_runs: backgroundRuns,
     loaded_conversations: convs.length,
     idle_loaded_conversations: idle.length,
     interactive_pi_sessions: externalLeases,
@@ -254,7 +289,7 @@ async function deployState() {
 }
 
 async function closeIdleConversations(reason) {
-  const idle = [...conversations.values()].filter((conv) => !conv.current && conv.pendingMutations === 0 && !sessionOwnership.get(conv.piSessionId));
+  const idle = [...conversations.values()].filter((conv) => !conversationIsActive(conv) && !sessionOwnership.get(conv.piSessionId));
   await Promise.all(idle.map((conv) => closeConversation(conv, reason).catch((err) => {
     console.warn('[agentd] failed to close idle conversation during drain:', err instanceof Error ? err.message : String(err));
   })));
@@ -487,6 +522,7 @@ function conversationRecord(conv) {
     coordination_mode: 'pi',
     created_at_ms: conv.createdAt,
     last_activity_at_ms: conv.lastActivityAt,
+    background: backgroundStatus(conv),
   };
 }
 
@@ -565,6 +601,7 @@ function initialSessionOptions(services, opts = {}) {
 
 async function createRuntime(cwd, sessionManager, opts = {}) {
   const factory = async ({ cwd: runtimeCwd, sessionManager: runtimeSessionManager, sessionStartEvent }) => {
+    const subagentLifecycle = new SubagentLifecycle();
     // Forum workspaces are administrator-configured server paths. Trust them
     // explicitly so project AGENTS.md, .pi resources, and .agents/skills load
     // without applying the interactive CLI's trust-prompt policy.
@@ -575,7 +612,9 @@ async function createRuntime(cwd, sessionManager, opts = {}) {
       agentDir: AGENT_DIR,
       settingsManager,
       modelRuntime,
+      resourceLoaderOptions: { extensionFactories: [subagentLifecycle.extension()] },
     });
+    services.subagentLifecycle = subagentLifecycle;
     return {
       ...(await createAgentSessionFromServices({
         services,
@@ -585,6 +624,7 @@ async function createRuntime(cwd, sessionManager, opts = {}) {
       })),
       services,
       diagnostics: services.diagnostics,
+      subagentLifecycle,
     };
   };
   return createAgentSessionRuntime(factory, {
@@ -594,18 +634,69 @@ async function createRuntime(cwd, sessionManager, opts = {}) {
   });
 }
 
+function canonicalAssistantHasVisibleText(conv, piMessageId) {
+  if (!piMessageId) return false;
+  const entry = conv.session.sessionManager.getBranch().find((item) =>
+    item.type === 'message' && item.id === piMessageId && item.message?.role === 'assistant');
+  const content = entry?.message?.content;
+  if (typeof content === 'string') return Boolean(content.trim());
+  return Array.isArray(content) && content.some((part) => part?.type === 'text' && typeof part.text === 'string' && part.text.trim());
+}
+
+function acknowledgeSubagentResults(runIds) {
+  for (const runId of Array.isArray(runIds) ? runIds : []) {
+    if (typeof runId !== 'string' || !/^[A-Za-z0-9._-]+$/.test(runId)) continue;
+    void fs.rm(path.join(SUBAGENT_RUNTIME_ROOT, 'async-subagent-results', `${runId}.json`), { force: true })
+      .catch((err) => console.warn('[agentd] failed to acknowledge subagent result:', err instanceof Error ? err.message : String(err)));
+  }
+}
+
+function applySubagentContinuation(conv) {
+  if (!conv.current || conv.current.sourceKind === 'subagent-completion') return;
+  const continuation = conv.subagentLifecycle.continuation();
+  if (!continuation) return;
+  conv.current.sourceKind = 'subagent-completion';
+  conv.current.subagentRunId = continuation.runId;
+  conv.current.subagentRunIds = continuation.runIds;
+  conv.current.subagentOrigins = continuation.origins;
+  conv.current.origin = continuation.origin;
+  emit(conv, 'subagent_continuation', {
+    source_kind: 'subagent-completion',
+    subagent_run_id: continuation.runId,
+    subagent_run_ids: continuation.runIds,
+    subagent_origins: continuation.origins,
+    origin_turn_id: continuation.origin?.turnId ?? null,
+    origin_topic_id: continuation.origin?.topicId ?? null,
+    origin_post_id: continuation.origin?.postId ?? null,
+    thread_id: conv.id,
+  });
+}
+
 async function bindConversation(conv) {
   conv.unsubscribe?.();
   const session = conv.runtime.session;
   await session.bindExtensions({});
   conv.session = session;
+  conv.subagentLifecycle = conv.runtime.services.subagentLifecycle;
+  await conv.subagentLifecycle.attach(conv);
   conv.unsubscribe = session.subscribe((event) => {
+    conv.subagentLifecycle.handleSessionEvent(event);
+    // Pi emits agent_start before the custom subagent-notify message. Apply
+    // continuation identity as soon as message_start exposes its run IDs.
+    if (event.type === 'message_start') applySubagentContinuation(conv);
     const reconciliation = handleProvenanceEvent(conv, event);
     if (reconciliation && conv.current) {
       conv.current.piMessageId = reconciliation.assistantPiMessageId;
       conv.current.userMappings = reconciliation.userMappings;
+      // Keep the package result durable when the completion turn failed or
+      // produced no visible assistant text; restart recovery may then retry it.
+      if (canonicalAssistantHasVisibleText(conv, reconciliation.assistantPiMessageId)) {
+        const completionEntryId = appendSubagentCompletionProvenance(conv, reconciliation.assistantPiMessageId, conv.current);
+        if (completionEntryId) acknowledgeSubagentResults(conv.current.subagentRunIds);
+      }
     }
     handlePiEvent(conv, event, emit);
+    if (event.type === 'agent_start') applySubagentContinuation(conv);
   });
 }
 
@@ -627,6 +718,8 @@ async function conversationFromRuntime(runtime, cwd) {
     pendingMutations: 0,
     takeoverPending: false,
     provenanceState: createProvenanceState(),
+    subagents: { runs: new Map() },
+    subagentLifecycle: runtime.services.subagentLifecycle,
     unsubscribe: null,
   };
   await bindConversation(conv);
@@ -634,13 +727,23 @@ async function conversationFromRuntime(runtime, cwd) {
   return conv;
 }
 
+async function withRuntimeCreation(operation) {
+  const previous = runtimeCreationTail;
+  let release;
+  runtimeCreationTail = new Promise((resolve) => { release = resolve; });
+  await previous;
+  try { return await operation(); } finally { release(); }
+}
+
 async function createConversation(opts = {}) {
   const cwd = path.resolve(opts.cwd ?? opts.workdir ?? DEFAULT_CWD);
   const sessionManager = SessionManager.create(cwd);
   const parentSession = await resolveParentSessionPath(opts);
   if (parentSession) sessionManager.newSession({ parentSession });
-  const runtime = await createRuntime(cwd, sessionManager, opts);
-  const conv = await conversationFromRuntime(runtime, cwd);
+  const conv = await withRuntimeCreation(async () => {
+    const runtime = await createRuntime(cwd, sessionManager, opts);
+    return conversationFromRuntime(runtime, cwd);
+  });
   if (parentSession || opts.lineage_kind || opts.lineage_source) {
     appendLineage(conv, {
       kind: opts.lineage_kind ?? (parentSession ? 'parent' : 'unknown'),
@@ -685,7 +788,7 @@ async function openConversation(opts = {}) {
       });
       const branch = activeBranchMetadata(sessionInfo, entries);
       if (branch.branch_conflict) throw new SessionBranchConflict(sessionInfo.id, branch);
-      if (!conv.current && conv.pendingMutations === 0 && branch.external_advance) {
+      if (!conversationIsActive(conv) && branch.external_advance) {
         await closeConversation(conv, 'external-session-advance');
         break;
       }
@@ -693,8 +796,10 @@ async function openConversation(opts = {}) {
     }
 
     const cwd = path.resolve(opts.cwd ?? sessionInfo.cwd ?? DEFAULT_CWD);
-    const runtime = await createRuntime(cwd, SessionManager.open(sessionInfo.path, undefined, cwd), opts);
-    return conversationFromRuntime(runtime, cwd);
+    return withRuntimeCreation(async () => {
+      const runtime = await createRuntime(cwd, SessionManager.open(sessionInfo.path, undefined, cwd), opts);
+      return conversationFromRuntime(runtime, cwd);
+    });
   });
 }
 
@@ -773,7 +878,7 @@ async function sessionSummaryFromPath(p) {
     path: p,
     cwd: header.cwd,
     timestamp: header.timestamp,
-    kind: p.includes('/forks/') ? 'fork' : 'normal',
+    kind: isPathWithin(SUBAGENT_SESSION_ROOT, p) ? 'subagent' : p.includes('/forks/') ? 'fork' : 'normal',
     parent_session_path: header.parentSession ?? null,
     parent_session_id: header.parentSession ? path.basename(header.parentSession, '.jsonl').split('_').pop() : null,
     mtime_ms: stat.mtimeMs,
@@ -1060,6 +1165,7 @@ async function generateHandoffDraft(conv, opts = {}) {
 
 async function closeConversation(conv, reason = 'api', { emitCompletion = true } = {}) {
   conv.unsubscribe?.();
+  conv.subagentLifecycle?.dispose();
   await conv.runtime.dispose();
   conversations.delete(conv.id);
   if (emitCompletion) emit(conv, 'turn_completed', { thread_id: conv.id, closed: true, reason });
@@ -1082,9 +1188,10 @@ async function inspectLoadedConversationBranch(conv) {
 function ownershipConversationRecord(conv) {
   return conv ? {
     id: conv.id,
-    active: Boolean(conv.current || conv.pendingMutations > 0),
+    active: conversationIsActive(conv),
     started_at: conv.current?.startedAt ? new Date(conv.current.startedAt).toISOString() : null,
     last_activity_at: new Date(conv.lastActivityAt).toISOString(),
+    background: backgroundStatus(conv),
   } : null;
 }
 
@@ -1106,7 +1213,7 @@ async function claimExternalSession(sessionRef, body) {
     }
 
     const conv = loadedConversationForSession(session);
-    const takingOver = Boolean(conv && (conv.current || conv.pendingMutations > 0));
+    const takingOver = Boolean(conv && conversationIsActive(conv));
     if (takingOver && !body.takeover && !body.force) {
       return { status: 409, body: { ok: false, state: 'active', conversation: ownershipConversationRecord(conv) } };
     }
@@ -1117,11 +1224,12 @@ async function claimExternalSession(sessionRef, body) {
       if (conv && takingOver) {
         emit(conv, 'turn_interrupted', { thread_id: conv.id, reason: 'interactive-cli-takeover' });
         await conv.session.abort();
+        await conv.subagentLifecycle.requestStops();
         const deadline = Date.now() + timeoutMs;
-        while ((conv.current || conv.pendingMutations > 0) && Date.now() < deadline) {
+        while (conversationIsActive(conv) && Date.now() < deadline) {
           await new Promise((resolve) => setTimeout(resolve, 25));
         }
-        forcedBeforeSettlement = Boolean(conv.current || conv.pendingMutations > 0);
+        forcedBeforeSettlement = conversationIsActive(conv);
         if (forcedBeforeSettlement && !body.force) {
           conv.takeoverPending = false;
           return {
@@ -1195,6 +1303,7 @@ async function exportSession(sessionId) {
     active_branch: activeBranchMetadata(session, entries),
     lineage: extractLineage(entries),
     message_provenance: extractMessageProvenance(entries),
+    subagent_runs: extractSubagentRuns(entries),
     parse_errors: parseErrors,
   };
 }
@@ -1205,7 +1314,19 @@ const server = http.createServer(async (req, res) => {
     const method = req.method ?? 'GET';
 
     if (method === 'GET' && url.pathname === '/healthz') {
-      return json(res, 200, { ok: true, status: draining ? 'draining' : 'healthy', active_threads: [...conversations.values()].filter((c) => c.current || c.pendingMutations > 0).length, loaded_conversations: conversations.size, interactive_pi_sessions: sessionOwnership.list().length, idle_reap_enabled: IDLE_REAP_ENABLED, queue_depth: 0, build: buildInfo() });
+      const convs = [...conversations.values()];
+      const persistedRuns = await scanActiveLifecycleRuns({
+        lifecycleRoot: path.join(SUBAGENT_RUNTIME_ROOT, 'async-subagent-runs'),
+      }).catch(() => []);
+      const loadedRunIds = convs.flatMap((conv) => [...conv.subagents.runs.values()]
+        .filter((run) => run.active).map((run) => run.runId));
+      return json(res, 200, {
+        ok: true, status: draining ? 'draining' : 'healthy',
+        active_threads: convs.filter((conv) => conv.current || conv.pendingMutations > 0).length,
+        active_subagent_runs: new Set([...loadedRunIds, ...persistedRuns.map((run) => run.runId)]).size,
+        loaded_conversations: conversations.size, interactive_pi_sessions: sessionOwnership.list().length,
+        idle_reap_enabled: IDLE_REAP_ENABLED, queue_depth: 0, build: buildInfo(),
+      });
     }
     if (method === 'GET' && url.pathname === '/v1/admin/quiescence') return json(res, 200, await deployState());
     if (method === 'POST' && url.pathname === '/v1/admin/drain') {
@@ -1241,7 +1362,7 @@ const server = http.createServer(async (req, res) => {
         const lease = sessionOwnership.describe(session.id);
         return json(res, 200, {
           session_id: session.id,
-          state: lease ? 'leased' : (conv?.current || conv?.pendingMutations > 0) ? 'active' : conv ? 'idle' : 'unloaded',
+          state: lease ? 'leased' : conv && conversationIsActive(conv) ? 'active' : conv ? 'idle' : 'unloaded',
           conversation: ownershipConversationRecord(conv),
           lease,
         });
@@ -1406,10 +1527,12 @@ const server = http.createServer(async (req, res) => {
       }
       if (method === 'POST' && tail === 'interrupt') {
         await conv.session.abort();
-        emit(conv, 'turn_interrupted', { thread_id: conv.id });
-        return json(res, 200, { ok: true });
+        const background = await conv.subagentLifecycle.requestStops();
+        emit(conv, 'turn_interrupted', { thread_id: conv.id, background });
+        return json(res, 200, { ok: true, background });
       }
       if (method === 'POST' && tail === 'close') {
+        if (hasActiveBackgroundWork(conv)) return json(res, 409, { error: 'active_subagent_runs', background: backgroundStatus(conv) });
         await closeConversation(conv, 'api');
         return json(res, 200, { ok: true, memory_saved: true });
       }
@@ -1459,7 +1582,7 @@ function startIdleReaper() {
   const interval = setInterval(() => {
     const now = Date.now();
     for (const conv of [...conversations.values()]) {
-      if (conv.current || conv.pendingMutations > 0 || sessionOwnership.get(conv.piSessionId)) continue;
+      if (conversationIsActive(conv) || sessionOwnership.get(conv.piSessionId)) continue;
       if (now - conv.lastActivityAt < IDLE_REAP_MS) continue;
       closeConversation(conv, 'idle-reap').catch((err) => console.warn('[agentd] idle reap failed:', err instanceof Error ? err.message : String(err)));
     }
@@ -1467,7 +1590,24 @@ function startIdleReaper() {
   interval.unref?.();
 }
 
+function startSubagentRetention() {
+  const prune = () => pruneTerminalSubagentRuns({
+    lifecycleRoot: path.join(SUBAGENT_RUNTIME_ROOT, 'async-subagent-runs'),
+    sessionRoot: SUBAGENT_SESSION_ROOT,
+    activeRunIds: new Set([...conversations.values()].flatMap((conv) =>
+      [...conv.subagents.runs.values()].filter((run) => run.active).map((run) => run.runId))),
+    hasSessionLease: (sessionRef) => {
+      const canonicalId = path.basename(sessionRef, '.jsonl').split('_').pop();
+      return Boolean(sessionOwnership.get(sessionRef) || (canonicalId && sessionOwnership.get(canonicalId)));
+    },
+  }).catch((err) => console.warn('[agentd] subagent retention failed:', err instanceof Error ? err.message : String(err)));
+  void prune();
+  const interval = setInterval(prune, 24 * 60 * 60 * 1000);
+  interval.unref?.();
+}
+
 startIdleReaper();
+startSubagentRetention();
 
 server.listen(PORT, HOST, () => {
   console.log(`[agentd] listening on http://${HOST}:${PORT} (agentDir=${AGENT_DIR})`);

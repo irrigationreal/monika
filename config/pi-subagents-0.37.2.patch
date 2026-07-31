@@ -1,0 +1,122 @@
+diff --git a/src/extension/fanout-child.ts b/src/extension/fanout-child.ts
+index 0da9904..83bab49 100644
+--- a/src/extension/fanout-child.ts
++++ b/src/extension/fanout-child.ts
+@@ -15,6 +15,13 @@ import { loadConfig } from "./config.ts";
+ import { type Details, type SubagentState } from "../shared/types.ts";
+ 
+ function getSubagentSessionRoot(parentSessionFile: string | null): string {
++	const configuredRoot = process.env.PI_SUBAGENT_SESSION_ROOT?.trim();
++	if (configuredRoot) {
++		const expandedRoot = configuredRoot.startsWith("~/")
++			? path.join(os.homedir(), configuredRoot.slice(2))
++			: configuredRoot;
++		return path.resolve(expandedRoot);
++	}
+ 	if (parentSessionFile) {
+ 		const baseName = path.basename(parentSessionFile, ".jsonl");
+ 		const sessionsDir = path.dirname(parentSessionFile);
+diff --git a/src/extension/index.ts b/src/extension/index.ts
+index eff8c2d..d27fd1a 100644
+--- a/src/extension/index.ts
++++ b/src/extension/index.ts
+@@ -84,6 +84,13 @@ export { loadConfig } from "./config.ts";
+  * Falls back to a unique temp directory if no parent session.
+  */
+ function getSubagentSessionRoot(parentSessionFile: string | null): string {
++	const configuredRoot = process.env.PI_SUBAGENT_SESSION_ROOT?.trim();
++	if (configuredRoot) {
++		const expandedRoot = configuredRoot.startsWith("~/")
++			? path.join(os.homedir(), configuredRoot.slice(2))
++			: configuredRoot;
++		return path.resolve(expandedRoot);
++	}
+ 	if (parentSessionFile) {
+ 		const baseName = path.basename(parentSessionFile, ".jsonl");
+ 		const sessionsDir = path.dirname(parentSessionFile);
+@@ -459,7 +466,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
+ 	registerWaitTool(pi, state, waitToolConfig.enabled);
+ 
+ 	pi.on("agent_end", async (_event, ctx) => {
+-		if (ctx.hasUI) return;
++		if (ctx.hasUI || process.env.PI_SUBAGENTS_DISABLE_AUTO_DRAIN === "1") return;
+ 		await drainOutstandingWork({ state, events: pi.events });
+ 	});
+ 
+@@ -562,7 +569,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
+ 		scheduledRunManager.bindSession(ctx);
+ 		restoreSlashFinalSnapshots(ctx.sessionManager.getEntries());
+ 		startResultWatcher();
+-		primeExistingResults({ triggerTurn: !recovering });
++		primeExistingResults({
++			triggerTurn: !recovering || process.env.PI_SUBAGENTS_TRIGGER_RECOVERED_RESULTS === "1",
++		});
+ 		fleetStatus?.setContext(ctx);
+ 	};
+ 
+diff --git a/src/runs/background/notify.ts b/src/runs/background/notify.ts
+index 1582ccd..eac578c 100644
+--- a/src/runs/background/notify.ts
++++ b/src/runs/background/notify.ts
+@@ -145,6 +145,7 @@ export function formatGroupedCompletion(details: SubagentNotifyDetails[]): strin
+ 
+ interface PendingCompletion {
+ 	key: string;
++	runId: string;
+ 	details: SubagentNotifyDetails;
+ 	triggerTurn: boolean;
+ 	resolve(accepted: boolean): void;
+@@ -160,8 +161,9 @@ function sendCompletion(pi: Pick<ExtensionAPI, "sendMessage">, items: PendingCom
+ 				customType: "subagent-notify",
+ 				content,
+ 				display: true,
++				details: { version: 1, runIds: items.map((item) => item.runId) },
+ 			},
+-			{ triggerTurn: items.some((item) => item.triggerTurn) },
++			{ triggerTurn: items.some((item) => item.triggerTurn), deliverAs: "followUp" },
+ 		);
+ 		return true;
+ 	} catch {
+@@ -265,6 +267,7 @@ export default function registerSubagentNotify(
+ 		pending.set(key, completion);
+ 		const item: PendingCompletion = {
+ 			key,
++			runId: String(result.id ?? "unknown"),
+ 			details,
+ 			triggerTurn: result.triggerTurn !== false,
+ 			resolve,
+diff --git a/src/runs/background/result-watcher.ts b/src/runs/background/result-watcher.ts
+index 86e8350..089695e 100644
+--- a/src/runs/background/result-watcher.ts
++++ b/src/runs/background/result-watcher.ts
+@@ -160,6 +160,7 @@ export function createResultWatcher(
+ 				state.completionSeen.delete(completionKey);
+ 			} else if (lastSeenAt !== undefined) {
+ 				if (!ownsSession(data.sessionId, epoch) || !fsApi.existsSync(resultPath)) return;
++				if (process.env.PI_SUBAGENTS_HOST_ACK_RESULTS === "1") return;
+ 				try {
+ 					fsApi.unlinkSync(resultPath);
+ 				} catch (error) {
+@@ -273,6 +274,7 @@ export function createResultWatcher(
+ 				console.error(`Completion observer failed for '${resultPath}':`, error);
+ 			}
+ 			if (!ownsSession(data.sessionId, epoch) || !fsApi.existsSync(resultPath)) return;
++			if (process.env.PI_SUBAGENTS_HOST_ACK_RESULTS === "1") return;
+ 			try {
+ 				fsApi.unlinkSync(resultPath);
+ 			} catch (error) {
+diff --git a/src/shared/types.ts b/src/shared/types.ts
+index 30a3087..2fa619b 100644
+--- a/src/shared/types.ts
++++ b/src/shared/types.ts
+@@ -1578,7 +1578,9 @@ export function resolveTempScopeId(options?: {
+ 
+ const MAX_PARALLEL = 8;
+ export const MAX_CONCURRENCY = 4;
+-export const TEMP_ROOT_DIR = path.join(os.tmpdir(), `pi-subagents-${resolveTempScopeId()}`);
++export const TEMP_ROOT_DIR = process.env.PI_SUBAGENT_RUNTIME_ROOT?.trim()
++	? path.resolve(process.env.PI_SUBAGENT_RUNTIME_ROOT.trim())
++	: path.join(os.tmpdir(), `pi-subagents-${resolveTempScopeId()}`);
+ export const RESULTS_DIR = path.join(TEMP_ROOT_DIR, "async-subagent-results");
+ export const ASYNC_DIR = path.join(TEMP_ROOT_DIR, "async-subagent-runs");
+ export const CHAIN_RUNS_DIR = path.join(TEMP_ROOT_DIR, "chain-runs");

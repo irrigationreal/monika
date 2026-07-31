@@ -1,0 +1,75 @@
+#!/bin/sh
+set -eu
+
+readonly repository='https://github.com/nicobailon/pi-subagents.git'
+readonly commit='8063333661476ca48afbca826dc4aab8707c72d3'
+readonly tree='3b8583d2c2ccba99a8e800c8650f6f3214f02646'
+readonly version='0.37.2'
+readonly npm_integrity='sha512-pf7DxLBY9pFY3grOFgRfMqoS9QbElWP2ULOCOnmJNrCEvjlA81fiyp0wk1vSaJPJ/rjsP0lA1sAk7S/QD+Olpg=='
+readonly index_sha256='4319c40fc4012b5749ca7e96182488b19dc0b0b980b2d9fecd28078c17e6d073'
+readonly fanout_sha256='8cfba3086dbb460c59c18ebbe7bd04f3020f457d3e7ed5c91dc53dbfa9c5aa08'
+readonly package_sha256='c16ef2da0e9c009c30ab736ee65d190608ade81cc06b2bbf3716c28ffe01e5ff'
+readonly lock_sha256='9c7df83850424712291ed90ca41f417eb2ad4b046fefad6d309ee96eb77f7d03'
+readonly shared_types_sha256='00c42591eb78cac931dc0274f56ce7e2a4fb1db69760f7e65975a0b3f883f5b8'
+readonly notify_sha256='e772d3f871fc68dcca2b2a84f9c4076b5f7a74078d900c84ceb32cdaad17a27d'
+readonly result_watcher_sha256='8e4134ba18d25120f277fe5e0f3ca42a133363bf8c60dabdd35bcc69e63a32d7'
+readonly patch_sha256='87280660ff052e6d599869f445098b3b9af4104ced3bf03ecfc5457adc54db73'
+
+if [ "$#" -ne 2 ]; then
+  echo "usage: $0 <destination> <patch>" >&2
+  exit 2
+fi
+
+destination="$1"
+patch="$(realpath "$2")"
+test ! -e "$destination"
+printf '%s  %s\n' "$patch_sha256" "$patch" | sha256sum --check --strict -
+
+git clone --quiet --no-checkout "$repository" "$destination"
+git -C "$destination" checkout --quiet --detach "$commit"
+test "$(git -C "$destination" rev-parse HEAD)" = "$commit"
+test "$(git -C "$destination" rev-parse 'HEAD^{tree}')" = "$tree"
+printf '%s  %s\n' \
+  "$index_sha256" "$destination/src/extension/index.ts" \
+  "$fanout_sha256" "$destination/src/extension/fanout-child.ts" \
+  "$package_sha256" "$destination/package.json" \
+  "$lock_sha256" "$destination/package-lock.json" \
+  "$shared_types_sha256" "$destination/src/shared/types.ts" \
+  "$notify_sha256" "$destination/src/runs/background/notify.ts" \
+  "$result_watcher_sha256" "$destination/src/runs/background/result-watcher.ts" \
+  | sha256sum --check --strict -
+
+node - "$destination/package.json" "$destination/package-lock.json" "$version" <<'NODE'
+const fs = require('node:fs');
+const [packagePath, lockPath, expectedVersion] = process.argv.slice(2);
+const manifest = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+if (manifest.name !== 'pi-subagents' || manifest.version !== expectedVersion) {
+  throw new Error(`Unexpected package identity: ${manifest.name}@${manifest.version}`);
+}
+if (lock.lockfileVersion !== 3 || lock.packages?.['']?.version !== expectedVersion) {
+  throw new Error('Unexpected pi-subagents lockfile identity');
+}
+NODE
+
+git -C "$destination" apply --check "$patch"
+git -C "$destination" apply "$patch"
+git -C "$destination" diff --check
+
+# The reviewed lockfile pins dependency tarball integrities. Package lifecycle
+# scripts are unnecessary for this TypeScript Pi package and stay disabled.
+(cd "$destination" && npm ci --omit=dev --ignore-scripts)
+
+cat > "$destination/REVIEWED_SOURCE.json" <<EOF
+{
+  "name": "pi-subagents",
+  "version": "$version",
+  "repository": "$repository",
+  "gitHead": "$commit",
+  "gitTree": "$tree",
+  "npmArtifactIntegrity": "$npm_integrity",
+  "packageLockSha256": "$lock_sha256",
+  "patchSha256": "$patch_sha256"
+}
+EOF
+rm -rf "$destination/.git"

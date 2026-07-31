@@ -5,8 +5,16 @@
   "defaultThinkingLevel": "medium",
   "packages": [
     "npm:pi-agent-browser@0.1.0",
-    "git:github.com/PSPDFKit-labs/nutrient-skills@84e34361bf61fa2b67d646d1559870bded8aad77"
+    "git:github.com/PSPDFKit-labs/nutrient-skills@84e34361bf61fa2b67d646d1559870bded8aad77",
+    "/opt/pi-subagents"
   ],
+  "subagents": {
+    "defaultExtensions": [],
+    "agentOverrides": {
+      "advisor": { "disabled": true },
+      "delegate": { "disabled": true }
+    }
+  },
   "compaction": {
     "enabled": false
   },

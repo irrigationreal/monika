@@ -118,8 +118,6 @@ const KNOWN_TOOLS = new Map<string, string>([
 	["remember", "stateful-memory"],
 	["remember_session", "stateful-memory"],
 	["recall", "stateful-memory"],
-	// delegate
-	["delegate", "delegate"],
 	// pi-self
 	["pi_run", "pi-self"],
 	// web-search
@@ -707,9 +705,9 @@ export default async function claudeCodeUse(pi: ExtensionAPI): Promise<void> {
 		return origMapSet.call(this, key, value);
 	};
 
-	// Restore Map.prototype.set after session_start completes.
-	// By that point, all extensions' factory functions and session_start handlers
-	// have run, so all tool registrations are captured.
+	// Restore Map.prototype.set after the session_start dispatch reaches the next
+	// event-loop turn. This keeps capture active for tools registered by later
+	// session_start handlers, while still limiting the global patch window.
 	let mapSetRestored = false;
 	function restoreMapSet() {
 		if (mapSetRestored) return;
@@ -729,7 +727,8 @@ export default async function claudeCodeUse(pi: ExtensionAPI): Promise<void> {
 	// loaded but before the agent loop begins. This means aliases are registered
 	// before the first before_agent_start, giving them a chance to appear in turn 1's
 	// tool list.
-	// Also restore Map.prototype.set since all tool registrations are done by now.
+	// Defer Map.prototype.set restoration so later session_start handlers can
+	// register tools before capture closes.
 	pi.on("session_start", async () => {
 		if (process.env.PI_CLAUDE_CODE_USE_DEBUG_LOG) {
 			appendFileSync(
@@ -738,7 +737,11 @@ export default async function claudeCodeUse(pi: ExtensionAPI): Promise<void> {
 				"utf-8",
 			);
 		}
-		restoreMapSet();
+		// Keep capture active through later session_start handlers. pi-subagents
+		// registers subagent_supervisor during its handler rather than its factory.
+		// Deferring restoration one event-loop turn captures that tool without a
+		// hardcoded alias or execute fallback.
+		setImmediate(restoreMapSet);
 		await registerAliasesForAllTools(pi);
 		if (process.env.PI_CLAUDE_CODE_USE_DEBUG_LOG) {
 			appendFileSync(

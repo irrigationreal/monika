@@ -48,6 +48,31 @@ test('normal agent run completes only after agent_settled', () => {
   assert.equal(conv.current, null);
 });
 
+test('subagent completion continuation emits canonical attribution without a fake user mapping', () => {
+  const { conv, events, dispatch } = harness();
+  dispatch({ type: 'agent_start' });
+  Object.assign(conv.current, {
+    sourceKind: 'subagent-completion',
+    subagentRunId: 'run-1',
+    origin: { turnId: 'forum-turn-1', topicId: 'topic-1', postId: 'post-1' },
+    piMessageId: 'pi-assistant-1',
+  });
+  dispatch({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'Done' } });
+  dispatch({ type: 'agent_end', messages: [{ role: 'assistant', content: 'Done' }] });
+  dispatch({ type: 'agent_settled' });
+
+  const item = events.find(({ event }) => event === 'item_completed').data.item;
+  assert.equal(item.id, 'pi-assistant-1');
+  assert.equal(item.source_kind, 'subagent-completion');
+  assert.equal(item.subagent_run_id, 'run-1');
+  assert.equal(item.origin_post_id, 'post-1');
+  const completed = events.find(({ event }) => event === 'turn_completed').data;
+  assert.deepEqual(completed.user_mappings, []);
+  assert.equal(completed.user_pi_message_id, null);
+  assert.equal(completed.source_kind, 'subagent-completion');
+  assert.equal(completed.origin_turn_id, 'forum-turn-1');
+});
+
 test('terminal provider failure emits one standardized error at settlement without completion', () => {
   const { conv, events, dispatch } = harness();
 

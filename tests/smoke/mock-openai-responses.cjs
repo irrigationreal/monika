@@ -54,10 +54,21 @@ const server = http.createServer((req, res) => {
     const body = JSON.parse(raw);
     fs.writeFileSync(requestFile, JSON.stringify(body, null, 2));
     console.log(`mock model received ${body.tools?.length ?? 0} tools`);
-    const piRun = body.tools?.find((tool) => tool.type === 'function' && tool.name === 'pi_run');
-    if (!piRun) {
+    const functionToolNames = new Set(
+      (body.tools ?? [])
+        .filter((tool) => tool.type === 'function' && typeof tool.name === 'string')
+        .map((tool) => tool.name),
+    );
+    const requiredTools = ['pi_run', 'browser', 'subagent', 'subagent_wait', 'subagent_supervisor'];
+    const missingTools = requiredTools.filter((name) => !functionToolNames.has(name));
+    if (missingTools.length > 0) {
       res.writeHead(400, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: { message: "Expected the 'pi_run' extension tool in the model request." } }));
+      res.end(JSON.stringify({ error: { message: `Expected package tools in model request; missing: ${missingTools.join(', ')}` } }));
+      return;
+    }
+    if (functionToolNames.has('delegate')) {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: "Legacy 'delegate' tool must not be registered." } }));
       return;
     }
     for (const tool of body.tools ?? []) {

@@ -23,7 +23,8 @@ When the first user message arrives:
 1. Check memstore queue depth — if save jobs are pending, ask whether to wait.
 2. Search session transcripts and current observations with the user's prompt.
 3. Select up to five session snippets, preferring trunk sessions while retaining a
-   delegate/fork result when useful, plus up to three concise observations.
+   historical custom-delegate or sleep-fork result when useful, plus up to three
+   concise observations. Current pi-subagents child sessions never enter memstore.
 4. Enforce a 6000-byte aggregate budget and cache the result for the session.
 5. Rebuild the first turn's prompt addon after retrieval so enrichment is available
    immediately rather than one turn late.
@@ -32,6 +33,10 @@ Enrichment never hydrates complete session transcripts. Session search snippets 
 from FTS5's matching window; observation bodies are capped independently.
 
 ### Session Saves
+
+These hooks apply to normal stateful-memory sessions and the dedicated sleep forks.
+Pi-subagents children do not load this extension, so they never submit child
+transcripts to memstore and do not expose `remember_session` or other memory tools.
 
 On session close or switch, the full session transcript is normalized (tool calls
 stripped, text extracted) and submitted to memstore via `proxy/submit_save`. This
@@ -100,16 +105,18 @@ which keys get path-resolved.
 
 Searches memstore and returns progressive, bounded results:
 
-- Up to five ranked session snippets with entry IDs, dates, tags, and fork/delegate
-  labeling. If enough trunk matches exist, at most one fork result is shown; forks fill
-  remaining slots when they contain the only useful matches.
+- Up to five ranked session snippets with entry IDs, dates, tags, and legacy
+  fork/delegate labeling. If enough trunk matches exist, at most one such result is
+  shown; historical delegates and sleep forks fill remaining slots when they contain
+  the only useful matches.
 - Up to three current observations with observation IDs, entity metadata, and dates.
 - A 10000-byte aggregate ceiling across both result sections.
 
 Complete transcripts are never returned by `recall`. Pass a returned session ID to
 `recall_session`. Set `include_historical_observations` only when superseded or retracted
-facts are relevant. Set `include_all_delegate_sessions` for exhaustive fork-heavy research
-that should bypass the normal diversity rule.
+facts are relevant. The compatibility option `include_all_delegate_sessions` includes
+all historical custom-delegate and fork memories for exhaustive research, bypassing the
+normal diversity rule; it does not expose current pi-subagents child sessions.
 
 ### `recall_session` — Inspect one session
 
@@ -162,17 +169,45 @@ of 3; each turn where it's not re-selected, the counter decrements. When it hits
 topic drops. This prevents topics from vanishing after a single short reply that doesn't
 restate the keywords.
 
+## Child Context Boundaries
+
+Pi-subagents is intentionally outside the normal stateful-memory lifecycle.
+`subagents.defaultExtensions` is `[]`, and Monika's agent profiles opt into one of
+two child-only prompt seams with no memory-mutation APIs, session saves, or sleep hooks:
+
+- `specialist-child-context.js` selects up to three topic addenda from the current
+  delegated task. It does not load persona, WAKE.md, FACTS.md, observations, or
+  memstore context.
+- `monika-child-context.js` is used only by the explicit `monika-delegate` profile.
+  It loads the stable SOUL.md, STYLE.md, and REGISTER.md persona trio plus routed
+  topic addenda, then registers bounded read-only `recall` and `recall_session`
+  through `readonly-recall.js`. It does not inject WAKE.md, FACTS.md, observations,
+  or recent sessions ambiently; relevant continuity must be supplied or deliberately
+  retrieved.
+
+Both seams restore bounded child-local auto-compaction because parent automatic
+compaction is disabled. This compaction preserves only task and validation state;
+it does not add persistence. Child sessions are written beneath
+`/app/.pi/agent/sessions/subagent/`, omitted from forum sync, and never saved to
+memstore. Useful outputs return through the canonical parent transcript and enter
+normal memory processing there; the parent remains the only authority that can
+create or change durable observations through the memory API. This is not an OS
+sandbox: shell-capable profiles retain runtime permissions and are explicitly
+instructed not to bypass the boundary.
+
 ## Sleep Cycle
 
-`/sleep` runs three sequential fork sessions:
+`/sleep` remains separate from pi-subagents and runs three sequential fork sessions:
 
 1. **WAKE.md** — reads recent sessions and entity context via `recall`, writes orientation
 2. **FACTS.md** — reads entity context and current FACTS.md, curates pinned facts
 3. **Dreams** — reflective writing with proposed topic addenda changes
 
-Each fork is a full `createAgentSession()` with the same extensions and persona. Forks
-use a retry system with model fallback (default model → Sonnet → others). Fork sessions
-are written to `sessions/forks/` and their shutdown triggers a session save to memstore.
+Each sleep fork is a full `createAgentSession()` with stateful-memory and the complete
+persona. The sleep runner is local to `memory-sleep.js`; it does not call pi-subagents.
+Forks use a retry system with model fallback (default model → Sonnet → others). Fork
+sessions are written to `sessions/forks/`, and shutdown triggers a session save to
+memstore.
 
 ## File Layout
 
@@ -183,7 +218,11 @@ are written to `sessions/forks/` and their shutdown triggers a session save to m
   config.js             Config loading and path resolution
   memory-store.js       File operations (persona, facts, entity context, recency index)
   memory-prompt.js      System prompt section builders
-  memory-sleep.js       Sleep cycle orchestration and fork runner
+  memory-sleep.js       Sleep cycle orchestration and independent fork runner
+  child-context.js      Shared routed-topic and stable-persona child prompt builders
+  specialist-child-context.js  Topic-only pi-subagents child seam
+  monika-child-context.js      Stable-persona pi-subagents child seam
+  readonly-recall.js           Bounded child memory reads; no mutation or ingestion
   session-utils.js      JSONL parsing and transcript normalization
   topic-router.js       Topic scoring, selection, persistence, and addendum loading
   index.js              Package exports
