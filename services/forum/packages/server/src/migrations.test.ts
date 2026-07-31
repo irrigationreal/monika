@@ -27,6 +27,28 @@ describe('schema migrations', () => {
     expect(rows.at(-1)?.version).toBe(SCHEMA_VERSION);
   });
 
+  it('indexes undeleted posts for bounded recent-post lookups', () => {
+    runMigrations(db);
+
+    expect(
+      db.prepare("select sql from sqlite_master where type = 'index' and name = 'idx_posts_recent_created_at'").get()
+    ).toEqual({
+      sql: 'CREATE INDEX idx_posts_recent_created_at\n          on posts(created_at desc)\n          where deleted_at is null',
+    });
+
+    const plan = db
+      .prepare(
+        `explain query plan
+         select p.id
+         from posts p
+         where p.deleted_at is null
+         order by p.created_at desc
+         limit 15`
+      )
+      .all() as Array<{ detail: string }>;
+    expect(plan.some((step) => step.detail.includes('idx_posts_recent_created_at'))).toBe(true);
+  });
+
   it('clears stale current plans from idle robot states', () => {
     runMigrations(db, { targetVersion: 30 });
     const store = new ForumStore(db);
@@ -72,5 +94,4 @@ describe('schema migrations', () => {
       current_plan_id: activePlan.id,
     });
   });
-
 });

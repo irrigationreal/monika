@@ -1297,6 +1297,17 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 34,
+    name: 'recent-posts-created-at-index',
+    up: (db) => {
+      db.exec(`
+        create index if not exists idx_posts_recent_created_at
+          on posts(created_at desc)
+          where deleted_at is null;
+      `);
+    },
+  },
 ];
 
 export const SCHEMA_VERSION: number = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;

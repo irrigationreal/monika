@@ -121,17 +121,13 @@ onMounted(async () => {
   state.clearTopic();
   state.clearForum();
   try {
-    const tasks: Promise<unknown>[] = [];
-    if (state.forums.value.length === 0) {
-      tasks.push(state.loadForums({ includeArchived: false }));
-    }
-    if (state.archivedForums.value.length === 0) {
-      tasks.push(state.loadArchivedForums());
-    }
-    if (state.recentPosts.value.length === 0) {
-      tasks.push(state.loadRecentPosts(3));
-    }
-    await Promise.all(tasks);
+    // These module-scoped snapshots survive route changes. Refresh them on every
+    // home entry while leaving the previous values rendered until replacements arrive.
+    await Promise.all([
+      state.loadForums({ includeArchived: false }),
+      state.loadArchivedForums(),
+      state.loadRecentPosts(3),
+    ]);
   } catch (err) {
     state.setError(err instanceof Error ? err.message : 'Failed to load forums.');
   }
