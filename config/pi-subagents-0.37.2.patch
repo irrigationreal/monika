@@ -1,3 +1,20 @@
+diff --git a/package.json b/package.json
+index 665db5b..6b2b8fb 100644
+--- a/package.json
++++ b/package.json
+@@ -44,9 +44,9 @@
+   ],
+   "scripts": {
+     "test": "npm run test:unit",
+-    "test:unit": "node --experimental-strip-types --test test/unit/*.test.ts",
+-    "test:integration": "node --experimental-strip-types --import ./test/support/register-loader.mjs --test test/integration/*.test.ts",
+-    "test:e2e": "node --experimental-strip-types --import ./test/support/register-loader.mjs --test test/e2e/*.test.ts",
++    "test:unit": "node test/support/isolated-test-runner.mjs unit",
++    "test:integration": "node test/support/isolated-test-runner.mjs integration",
++    "test:e2e": "node test/support/isolated-test-runner.mjs e2e",
+     "test:all": "npm run test:unit && npm run test:integration && npm run test:e2e"
+   },
+   "pi": {
 diff --git a/src/extension/fanout-child.ts b/src/extension/fanout-child.ts
 index 0da9904..83bab49 100644
 --- a/src/extension/fanout-child.ts
@@ -17,7 +34,7 @@ index 0da9904..83bab49 100644
  		const baseName = path.basename(parentSessionFile, ".jsonl");
  		const sessionsDir = path.dirname(parentSessionFile);
 diff --git a/src/extension/index.ts b/src/extension/index.ts
-index eff8c2d..d8c9d99 100644
+index eff8c2d..b97d1d7 100644
 --- a/src/extension/index.ts
 +++ b/src/extension/index.ts
 @@ -84,6 +84,13 @@ export { loadConfig } from "./config.ts";
@@ -55,17 +72,124 @@ index eff8c2d..d8c9d99 100644
  		await drainOutstandingWork({ state, events: pi.events });
  	});
  
-@@ -562,7 +572,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
- 		scheduledRunManager.bindSession(ctx);
- 		restoreSlashFinalSnapshots(ctx.sessionManager.getEntries());
- 		startResultWatcher();
--		primeExistingResults({ triggerTurn: !recovering });
-+		primeExistingResults({
-+			triggerTurn: !recovering || process.env.PI_SUBAGENTS_TRIGGER_RECOVERED_RESULTS === "1",
-+		});
- 		fleetStatus?.setContext(ctx);
+@@ -568,9 +578,12 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
+ 
+ 	pi.on("session_start", (event, ctx) => {
+ 		const recovering = event.reason === "startup" || event.reason === "reload" || event.reason === "resume";
++		// Capture before recovery work begins so requests from children launched
++		// after this bind remain eligible to wake the parent.
++		const recoveryCutoff = recovering ? Date.now() : undefined;
+ 		resetSessionState(ctx, recovering);
+ 		rpcBridge.emitReady(ctx);
+-		supervisorChannel.start();
++		supervisorChannel.start({ recoveryCutoff });
+ 	});
+ 
+ 	pi.on("session_shutdown", () => {
+diff --git a/src/intercom/native-supervisor-channel.ts b/src/intercom/native-supervisor-channel.ts
+index 4757eeb..b61fd1f 100644
+--- a/src/intercom/native-supervisor-channel.ts
++++ b/src/intercom/native-supervisor-channel.ts
+@@ -47,6 +47,7 @@ interface SupervisorRequest {
+ interface PendingSupervisorRequest extends SupervisorRequest {
+ 	channelDir: string;
+ 	requestFile: string;
++	recoveryHeld?: boolean;
+ }
+ 
+ interface SupervisorReply {
+@@ -326,10 +327,12 @@ function parseRequestFile(file: string, channelDir: string): PendingSupervisorRe
+ 		const parsed = JSON.parse(fs.readFileSync(file, "utf-8")) as Partial<SupervisorRequest>;
+ 		if (parsed.type !== "subagent.supervisor.request") return undefined;
+ 		if (typeof parsed.id !== "string" || !parsed.id) return undefined;
++		const validCreatedAt = typeof parsed.createdAt === "number" && Number.isFinite(parsed.createdAt) && parsed.createdAt >= 0;
++		if (!validCreatedAt) parsed.createdAt = 0;
+ 		if (parsed.reason !== "need_decision" && parsed.reason !== "interview_request" && parsed.reason !== "progress_update") return undefined;
+ 		if (typeof parsed.message !== "string" || !parsed.message) return undefined;
+ 		if (typeof parsed.runId !== "string" || typeof parsed.agent !== "string" || typeof parsed.childIndex !== "number") return undefined;
+-		return { ...parsed as SupervisorRequest, channelDir, requestFile: file };
++		return { ...parsed as SupervisorRequest, channelDir, requestFile: file, recoveryHeld: !validCreatedAt };
+ 	} catch {
+ 		return undefined;
+ 	}
+@@ -516,6 +519,7 @@ function requestLifecycle(request: PendingSupervisorRequest, state: SubagentStat
+ 	if (ctx && !requestMatchesContext(request, state, ctx)) return "wrong-session";
+ 	if (!fs.existsSync(request.requestFile)) return "missing";
+ 	if (request.expectsReply && fs.existsSync(replyPath(request.channelDir, request.id))) return "resolved";
++	if (request.recoveryHeld) return "pending";
+ 	if (request.expectsReply && now > requestExpiresAt(request, now)) return "expired";
+ 	if (request.expectsReply && requestRunInactive(request, state)) return "inactive";
+ 	return "pending";
+@@ -590,6 +594,7 @@ function publicPendingRequests(pending: Map<string, PendingSupervisorRequest>):
+ 		childIndex: request.childIndex,
+ 		reason: request.reason,
+ 		expectsReply: request.expectsReply,
++		recovered: Boolean(request.recoveryHeld),
+ 	}));
+ }
+ 
+@@ -626,11 +631,15 @@ function buildParentIntercomTool(pending: Map<string, PendingSupervisorRequest>,
+ 	};
+ }
+ 
+-export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentState): { start: () => void; dispose: () => void; pending: Map<string, PendingSupervisorRequest> } {
++export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentState): { start: (options?: { recoveryCutoff?: number }) => void; dispose: () => void; pending: Map<string, PendingSupervisorRequest> } {
+ 	const pending = new Map<string, PendingSupervisorRequest>();
+ 	const seenFiles = new Set<string>();
+ 	let poller: ReturnType<typeof setInterval> | undefined;
+ 	let lastStaleCleanupAt = 0;
++	// Session-local cutoff: requests already present when a recovered session is
++	// bound stay visible/replyable but cannot wake a model turn. Do not use a
++	// process-global flag; multiple loaded sessions may bind concurrently.
++	let recoveryCutoff: number | undefined;
+ 
+ 	const registerParentTools = (): void => {
+ 		if (!hasTool(pi, NATIVE_SUPERVISOR_TOOL_NAME)) pi.registerTool(buildParentIntercomTool(pending, state, NATIVE_SUPERVISOR_TOOL_NAME));
+@@ -658,6 +667,10 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
+ 			if (seenFiles.has(file)) continue;
+ 			const request = parseRequestFile(file, channelDir);
+ 			if (!request || !requestMatchesContext(request, state, ctx)) continue;
++			const recoveredRequest = request.recoveryHeld === true
++				|| (recoveryCutoff !== undefined && request.createdAt <= recoveryCutoff)
++				|| request.createdAt > now;
++			request.recoveryHeld = recoveredRequest;
+ 			const lifecycle = requestLifecycle(request, state, undefined, now);
+ 			if (lifecycle !== "pending") {
+ 				seenFiles.add(file);
+@@ -665,13 +678,14 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
+ 				continue;
+ 			}
+ 			seenFiles.add(file);
+-			if (request.expectsReply) {
++			if (request.expectsReply || recoveredRequest) {
+ 				pending.set(request.id, request);
+-				markForegroundSupervisorAttention(request, state);
++				if (request.expectsReply) markForegroundSupervisorAttention(request, state);
+ 			}
+ 			else {
+ 				removeRequestFile(request.requestFile);
+ 			}
++			if (recoveredRequest) continue;
+ 			pi.sendMessage({
+ 				customType: "subagent_supervisor_request",
+ 				content: requestVisibleText(request),
+@@ -697,8 +711,14 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
  	};
  
+ 	return {
+-		start: () => {
+-			if (poller) return;
++		start: (options = {}) => {
++			recoveryCutoff = typeof options.recoveryCutoff === "number" && Number.isFinite(options.recoveryCutoff)
++				? options.recoveryCutoff
++				: undefined;
++			if (poller) {
++				poll();
++				return;
++			}
+ 			registerParentTools();
+ 			poll();
+ 			poller = setInterval(poll, CHANNEL_POLL_MS);
 diff --git a/src/runs/background/async-execution.ts b/src/runs/background/async-execution.ts
 index 34213ec..007fb8c 100644
 --- a/src/runs/background/async-execution.ts
@@ -268,10 +392,21 @@ index 1582ccd..eac578c 100644
  			triggerTurn: result.triggerTurn !== false,
  			resolve,
 diff --git a/src/runs/background/result-watcher.ts b/src/runs/background/result-watcher.ts
-index 86e8350..4244328 100644
+index 86e8350..9e6a690 100644
 --- a/src/runs/background/result-watcher.ts
 +++ b/src/runs/background/result-watcher.ts
-@@ -160,6 +160,7 @@ export function createResultWatcher(
+@@ -134,6 +134,10 @@ export function createResultWatcher(
+ 	const handleResult = async (file: string, triggerTurn: boolean) => {
+ 		const resultPath = path.join(resultsDir, file);
+ 		if (processing.has(file) || !fsApi.existsSync(resultPath)) return;
++		// A recovered result owned by agentd is operational evidence, not Pi input.
++		// Even triggerTurn:false can append a custom entry while idle or queue a
++		// follow-up while streaming, so do not invoke any message transport here.
++		if (!triggerTurn && process.env.PI_SUBAGENTS_HOST_ACK_RESULTS === "1") return;
+ 		processing.add(file);
+ 		try {
+ 			const data = JSON.parse(fsApi.readFileSync(resultPath, "utf-8")) as ResultFileData;
+@@ -160,6 +164,7 @@ export function createResultWatcher(
  				state.completionSeen.delete(completionKey);
  			} else if (lastSeenAt !== undefined) {
  				if (!ownsSession(data.sessionId, epoch) || !fsApi.existsSync(resultPath)) return;
@@ -279,7 +414,7 @@ index 86e8350..4244328 100644
  				try {
  					fsApi.unlinkSync(resultPath);
  				} catch (error) {
-@@ -203,6 +204,14 @@ export function createResultWatcher(
+@@ -203,6 +208,14 @@ export function createResultWatcher(
  				};
  			}), nestedChildren);
  
@@ -294,7 +429,7 @@ index 86e8350..4244328 100644
  			const intercomTarget = data.intercomTarget?.trim();
  			let intercomDelivered = false;
  			if (deliverIntercomResults && intercomTarget && triggerTurn) {
-@@ -273,6 +282,7 @@ export function createResultWatcher(
+@@ -273,6 +286,7 @@ export function createResultWatcher(
  				console.error(`Completion observer failed for '${resultPath}':`, error);
  			}
  			if (!ownsSession(data.sessionId, epoch) || !fsApi.existsSync(resultPath)) return;
@@ -302,6 +437,15 @@ index 86e8350..4244328 100644
  			try {
  				fsApi.unlinkSync(resultPath);
  			} catch (error) {
+@@ -292,7 +306,7 @@ export function createResultWatcher(
+ 		const triggerTurn = pendingTriggerTurn.get(file) !== false;
+ 		pendingTriggerTurn.delete(file);
+ 		void handleResult(file, triggerTurn);
+-	}, 50);
++	}, 50, { setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout });
+ 
+ 	const primeExistingResults = (options: { triggerTurn?: boolean } = {}) => {
+ 		try {
 diff --git a/src/runs/background/subagent-runner.ts b/src/runs/background/subagent-runner.ts
 index 6efb0bd..c04850b 100644
 --- a/src/runs/background/subagent-runner.ts
@@ -528,6 +672,97 @@ index ebd0f07..7d04310 100644
  		for (const childSessionFile of sessionArgs) {
  			assert.notEqual(childSessionFile, path.join(tempDir, "parent-parallel.jsonl"));
  			assert.equal(fs.existsSync(childSessionFile), true);
+diff --git a/test/integration/result-watcher.test.ts b/test/integration/result-watcher.test.ts
+index e91cf0a..74667f3 100644
+--- a/test/integration/result-watcher.test.ts
++++ b/test/integration/result-watcher.test.ts
+@@ -29,6 +29,49 @@ function createState(): SubagentState {
+ }
+ 
+ describe("result watcher", () => {
++	it("keeps recovered host-ack results entirely outside Pi for idle and streaming parents", async () => {
++		const previous = process.env.PI_SUBAGENTS_HOST_ACK_RESULTS;
++		process.env.PI_SUBAGENTS_HOST_ACK_RESULTS = "1";
++		try {
++			for (const streaming of [false, true]) {
++				const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-result-watcher-recovered-${streaming}-`));
++				try {
++					const transcript = [{ type: "message", role: "user", content: "unchanged" }];
++					const before = JSON.stringify(transcript);
++					let notifierCalls = 0; let sendMessageCalls = 0; const emitted: string[] = []; const queuedTimers: Array<() => void> = [];
++					const pi = {
++						sendMessage: () => { sendMessageCalls++; },
++						events: { on: () => () => {}, emit: (event: string) => emitted.push(event) },
++					};
++					const state = createState();
++					state.currentSessionId = `session-${streaming}`;
++					state.lastUiContext = { isStreaming: streaming, sessionManager: { appendCustomEntry: () => transcript.push({ type: "message", role: "custom", content: "mutated" }) } } as never;
++					const resultPath = path.join(resultsDir, "recovered.json");
++					fs.writeFileSync(resultPath, JSON.stringify({ id: "recovered", sessionId: state.currentSessionId, success: true, summary: "old" }));
++					const watcher = createResultWatcher(pi, state, resultsDir, 60_000, {
++						notifier: { deliver: async () => { notifierCalls++; return true; } },
++						timers: {
++							setTimeout: ((callback: () => void) => { queuedTimers.push(callback); return callback; }) as typeof setTimeout,
++							clearTimeout: (() => {}) as typeof clearTimeout,
++							setInterval: (() => 0) as unknown as typeof setInterval,
++							clearInterval: (() => {}) as typeof clearInterval,
++						},
++					});
++					try { watcher.primeExistingResults({ triggerTurn: false }); queuedTimers.splice(0).forEach((callback) => callback()); await Promise.resolve(); }
++					finally { watcher.stopResultWatcher(); }
++					assert.equal(sendMessageCalls, 0);
++					assert.equal(notifierCalls, 0);
++					assert.deepEqual(emitted, []);
++					assert.equal(JSON.stringify(transcript), before);
++					assert.equal(fs.existsSync(resultPath), true);
++				} finally { fs.rmSync(resultsDir, { recursive: true, force: true }); }
++			}
++		} finally {
++			if (previous === undefined) delete process.env.PI_SUBAGENTS_HOST_ACK_RESULTS;
++			else process.env.PI_SUBAGENTS_HOST_ACK_RESULTS = previous;
++		}
++	});
++
+ 	it("processes deferred session-scoped results after session identity is restored", async () => {
+ 		const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-session-"));
+ 		try {
+diff --git a/test/support/isolated-test-runner.mjs b/test/support/isolated-test-runner.mjs
+new file mode 100644
+index 0000000..a02e1be
+--- /dev/null
++++ b/test/support/isolated-test-runner.mjs
+@@ -0,0 +1,31 @@
++import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
++import os from "node:os";
++import path from "node:path";
++import { spawnSync } from "node:child_process";
++
++const suite = process.argv[2];
++if (!new Set(["unit", "integration", "e2e"]).has(suite)) throw new Error("expected unit, integration, or e2e suite");
++const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-test-"));
++const dir = path.join("test", suite);
++for (const child of ["home", "tmp", "runtime", "sessions", "operator"]) mkdirSync(path.join(root, child));
++const files = readdirSync(dir).filter((name) => name.endsWith(".test.ts")).sort().map((name) => path.join(dir, name));
++const loader = suite === "unit" ? [] : ["--import", "./test/support/register-loader.mjs"];
++try {
++	const result = spawnSync(process.execPath, ["--experimental-strip-types", ...loader, "--test", ...files], {
++		stdio: "inherit",
++		env: {
++			PATH: process.env.PATH,
++			HOME: path.join(root, "home"),
++			TMPDIR: path.join(root, "tmp"),
++			XDG_CONFIG_HOME: path.join(root, "home", ".config"),
++			PI_SUBAGENT_RUNTIME_ROOT: path.join(root, "runtime"),
++			PI_SUBAGENT_SESSION_ROOT: path.join(root, "sessions"),
++			PI_SUBAGENT_OPERATOR_ROOT: path.join(root, "operator"),
++			MONIKA_RUNTIME_INSTANCE_FILE: path.join(root, "runtime-instance.json"),
++		},
++	});
++	if (result.error) throw result.error;
++	process.exitCode = result.status ?? 1;
++} finally {
++	rmSync(root, { recursive: true, force: true });
++}
 diff --git a/test/unit/fork-context.test.ts b/test/unit/fork-context.test.ts
 index 69b3685..bb54c64 100644
 --- a/test/unit/fork-context.test.ts
@@ -568,6 +803,78 @@ index 69b3685..bb54c64 100644
  		} finally {
  			fs.rmSync(tempDir, { recursive: true, force: true });
  		}
+diff --git a/test/unit/native-supervisor-channel.test.ts b/test/unit/native-supervisor-channel.test.ts
+index 0805e2a..5121d4c 100644
+--- a/test/unit/native-supervisor-channel.test.ts
++++ b/test/unit/native-supervisor-channel.test.ts
+@@ -48,7 +48,7 @@ function makeState(sessionId: string | null, ctx: unknown): SubagentState {
+ 	};
+ }
+ 
+-function writeRequest(input: { sessionId: string; runId: string; agent?: string; index?: number; message?: string; createdAt?: number; expiresAt?: number }): string {
++function writeRequest(input: { sessionId: string; runId: string; agent?: string; index?: number; message?: string; createdAt?: number | null; expiresAt?: number }): string {
+ 	const agent = input.agent ?? "worker";
+ 	const index = input.index ?? 0;
+ 	const channelDir = resolveSupervisorChannelDir(input.runId, agent, index);
+@@ -58,7 +58,7 @@ function writeRequest(input: { sessionId: string; runId: string; agent?: string;
+ 	fs.writeFileSync(path.join(channelDir, "requests", `${requestId}.json`), JSON.stringify({
+ 		type: "subagent.supervisor.request",
+ 		id: requestId,
+-		createdAt: input.createdAt ?? Date.now(),
++		createdAt: input.createdAt === undefined ? Date.now() : input.createdAt,
+ 		...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
+ 		reason: "need_decision",
+ 		message: input.message ?? "Need a decision",
+@@ -149,6 +149,49 @@ describe("native supervisor channel", () => {
+ 		assert.equal(sent.some(({ message }) => message.details?.id === otherId), false);
+ 	});
+ 
++	it("keeps pre-bind recovered requests visible without waking a turn", () => {
++		const currentSessionId = `session-${randomUUID()}`;
++		const cutoff = Date.now() - 10;
++		const recoveredId = writeRequest({ sessionId: currentSessionId, runId: `run-${randomUUID()}`, createdAt: cutoff - 1 });
++		const liveId = writeRequest({ sessionId: currentSessionId, runId: `run-${randomUUID()}`, createdAt: Date.now() });
++		const sent: Array<{ message: { details?: { id?: string; recovered?: boolean } }; options?: { triggerTurn?: boolean } }> = [];
++		const ctx = {
++			cwd: process.cwd(), hasUI: false,
++			sessionManager: { getSessionId: () => currentSessionId, getSessionFile: () => null, getEntries: () => [] },
++		};
++		const pi = {
++			getAllTools: () => [], registerTool: () => {},
++			sendMessage: (message: { details?: { id?: string; recovered?: boolean } }, options?: { triggerTurn?: boolean }) => sent.push({ message, options }),
++			getSessionName: () => "shared-name",
++		};
++		const channel = createNativeSupervisorChannel(pi as never, makeState(currentSessionId, ctx));
++
++		channel.start({ recoveryCutoff: cutoff });
++
++		assert.deepEqual(sent.map((item) => item.message.details?.id), [liveId]);
++		assert.deepEqual(sent[0]?.options, { triggerTurn: true });
++		assert.equal(channel.pending.has(recoveredId), true);
++		channel.dispose();
++	});
++
++	it("holds malformed and future preexisting timestamps without sending Pi messages", () => {
++		const sessionId = `session-${randomUUID()}`;
++		const cutoff = Date.now();
++		const malformedId = writeRequest({ sessionId, runId: `run-${randomUUID()}`, createdAt: null });
++		const futureId = writeRequest({ sessionId, runId: `run-${randomUUID()}`, createdAt: cutoff + 60_000 });
++		const sent: unknown[] = [];
++		const ctx = { cwd: process.cwd(), hasUI: false, sessionManager: { getSessionId: () => sessionId, getSessionFile: () => null, getEntries: () => [] } };
++		const pi = { getAllTools: () => [], registerTool: () => {}, sendMessage: (...args: unknown[]) => sent.push(args), getSessionName: () => "shared-name" };
++		const channel = createNativeSupervisorChannel(pi as never, makeState(sessionId, ctx));
++
++		channel.start({ recoveryCutoff: cutoff });
++
++		assert.deepEqual(sent, []);
++		assert.equal(channel.pending.has(malformedId), true);
++		assert.equal(channel.pending.has(futureId), true);
++		channel.dispose();
++	});
++
+ 	it("prunes stale empty supervisor channel directories before polling", () => {
+ 		const currentSessionId = `session-${randomUUID()}`;
+ 		const staleEmptyChannel = makeEmptyChannel(`run-${randomUUID()}`);
 diff --git a/test/unit/notify.test.ts b/test/unit/notify.test.ts
 index 916128b..75c2480 100644
 --- a/test/unit/notify.test.ts
@@ -636,3 +943,18 @@ index 916128b..75c2480 100644
  	});
  
  	it("ignores successes from other sessions instead of grouping them", () => {
+diff --git a/test/unit/temp-paths.test.ts b/test/unit/temp-paths.test.ts
+index 113c46f..931fa88 100644
+--- a/test/unit/temp-paths.test.ts
++++ b/test/unit/temp-paths.test.ts
+@@ -58,7 +58,9 @@ describe("shared temp paths", () => {
+ 		assert.equal(path.dirname(ASYNC_DIR), TEMP_ROOT_DIR);
+ 		assert.equal(path.dirname(CHAIN_RUNS_DIR), TEMP_ROOT_DIR);
+ 		assert.equal(path.dirname(TEMP_ARTIFACTS_DIR), TEMP_ROOT_DIR);
+-		assert.match(path.basename(TEMP_ROOT_DIR), /^pi-subagents-/);
++		const configuredRoot = process.env.PI_SUBAGENT_RUNTIME_ROOT?.trim();
++		if (configuredRoot) assert.equal(TEMP_ROOT_DIR, path.resolve(configuredRoot));
++		else assert.match(path.basename(TEMP_ROOT_DIR), /^pi-subagents-/);
+ 		assert.equal(path.basename(RESULTS_DIR), "async-subagent-results");
+ 		assert.equal(path.basename(ASYNC_DIR), "async-subagent-runs");
+ 		assert.equal(path.basename(CHAIN_RUNS_DIR), "chain-runs");

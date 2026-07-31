@@ -83,8 +83,8 @@ export class AgentBridge {
     await this.echs.stop();
   }
 
-  async resumeAllThreads(opts?: { sinceMs?: number }): Promise<{ resumed: number; skipped: number }> {
-    return this.echs.resumeAllThreads(opts);
+  async reconcileLoadedThreads(opts?: { sinceMs?: number }): Promise<{ reattached: number; missing: number }> {
+    return this.echs.reconcileLoadedThreads(opts);
   }
 
   listQueuedTurns(): Array<
@@ -133,7 +133,7 @@ export class AgentBridge {
   async dispatchPostToAgent(
     topicId: string,
     postId: string,
-    options?: { mode?: 'queue' | 'steer'; model?: string | null; reasoningEffort?: string | null }
+    options?: { mode?: 'queue' | 'steer'; model?: string | null; reasoningEffort?: string | null; dispatchId?: string; generation?: number }
   ): Promise<void> {
     this.store.setSessionAgentBackend(this.store.ensureSession({ topicId }).id, 'echs');
     return this.echs.dispatchPostToAgent(topicId, postId, options);

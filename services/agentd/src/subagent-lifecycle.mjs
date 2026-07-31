@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { promises as fs } from 'node:fs';
+import { constants as fsConstants, promises as fs } from 'node:fs';
 import path from 'node:path';
 
 export const SUBAGENT_RUN_CUSTOM_TYPE = 'monika.subagent.run';
@@ -234,6 +234,25 @@ export async function scanLifecycleSnapshot({ lifecycleRoot, runtimeInstanceFile
 }
 export async function scanActiveLifecycleRuns(opts = {}) { const snapshot = await scanLifecycleSnapshot(opts); return snapshot.runs.filter((run) => run.blocking).map((run) => ({ ...run, runId: run.run_id, asyncDir: run.async_dir })); }
 
+export function prioritizeLifecycleRuns(runs, limit = 64) {
+  const rank = (run) => run.blocking || run.execution_state === 'uncertain' ? 0 : run.delivery_state === 'pending' ? 1 : 2;
+  return [...runs].sort((left, right) => rank(left) - rank(right)
+    || ((timestampMs(right.updated_at ?? right.started_at) ?? 0) - (timestampMs(left.updated_at ?? left.started_at) ?? 0)))
+    .slice(0, Math.max(0, limit));
+}
+
+export function capLifecycleRuns(runs, limit = 64) {
+  const selected = prioritizeLifecycleRuns(runs, limit);
+  const blocker = (run) => run.blocking || run.execution_state === 'uncertain';
+  const blockerCount = runs.filter(blocker).length;
+  return {
+    selected,
+    omitted: Math.max(0, runs.length - selected.length),
+    blockerCount,
+    omittedBlockerCount: Math.max(0, blockerCount - selected.filter(blocker).length),
+  };
+}
+
 export function mergeMappedLifecycleRuns(snapshot, conversations = []) {
   for (const conv of conversations) {
     conv.subagentLifecycle?.adoptSnapshotRuns(snapshot);
@@ -249,6 +268,86 @@ export function mergeMappedLifecycleRuns(snapshot, conversations = []) {
   snapshot.active_count = snapshot.runs.filter((run) => run.blocking).length;
   snapshot.uncertain_count = snapshot.runs.filter((run) => run.execution_state === 'uncertain').length;
   return snapshot;
+}
+
+export async function resolvePendingSubagentDelivery({ lifecycleRoot, resultsRoot, operatorRoot, runId: requestedRunId, action, reason, beforeStep = async () => {} } = {}) {
+  const id = string(requestedRunId); const operatorReason = string(reason);
+  if (!id || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id) || !['dismiss', 'supersede'].includes(action) || !operatorReason) {
+    throw new Error('runId, action (dismiss|supersede), and reason are required');
+  }
+  const lifecycle = path.resolve(lifecycleRoot ?? ''); const resultRoot = path.resolve(resultsRoot ?? '');
+  const auditRoot = path.resolve(operatorRoot ?? '');
+  if (!isWithin(lifecycle, resultRoot) || auditRoot === path.parse(auditRoot).root) throw new Error('dedicated lifecycle, results, and operator roots are required');
+  await fs.mkdir(auditRoot, { recursive: true, mode: 0o700 });
+  const auditStat = await fs.lstat(auditRoot); const auditReal = await fs.realpath(auditRoot);
+  if (!auditStat.isDirectory() || auditStat.isSymbolicLink() || auditReal !== auditRoot) throw new Error('unsafe operator root');
+  const retainedDir = path.join(auditRoot, 'retained-results');
+  await fs.mkdir(retainedDir, { recursive: true, mode: 0o700 });
+  const retainedStat = await fs.lstat(retainedDir); const retainedReal = await fs.realpath(retainedDir);
+  if (!retainedStat.isDirectory() || retainedStat.isSymbolicLink() || !isWithin(auditReal, retainedReal)) throw new Error('unsafe retained result directory');
+  const source = path.join(resultRoot, `${id}.json`);
+  const sourceHandle = await fs.open(source, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  let bytes; let sourceIdentity;
+  try {
+    const stat = await sourceHandle.stat(); if (!stat.isFile()) throw new Error('pending result file not found');
+    sourceIdentity = { dev: stat.dev, ino: stat.ino, size: stat.size }; bytes = await sourceHandle.readFile();
+  } finally { await sourceHandle.close(); }
+  const resolution = { version: 1, kind: 'completion-delivery', action, runId: id, reason: operatorReason, resolvedAt: Date.now() };
+  const destination = path.join(retainedReal, `${id}.${action}.json`);
+  const sidecar = `${destination}.resolution.json`;
+  const auditFile = path.join(auditReal, 'operator-resolutions.jsonl');
+  const syncDirectory = async (dir) => {
+    const handle = await fs.open(dir, fsConstants.O_RDONLY | (fsConstants.O_DIRECTORY ?? 0));
+    try { await handle.sync(); } finally { await handle.close(); }
+  };
+  const appendAudit = async (record) => {
+    const handle = await fs.open(auditFile, fsConstants.O_APPEND | fsConstants.O_CREAT | fsConstants.O_WRONLY | fsConstants.O_NOFOLLOW, 0o600);
+    try { await handle.writeFile(`${JSON.stringify(record)}\n`); await handle.sync(); } finally { await handle.close(); }
+    await syncDirectory(auditReal);
+  };
+  await appendAudit({ ...resolution, phase: 'requested' });
+  await beforeStep('intent');
+  try {
+    const retained = await fs.open(destination, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY | fsConstants.O_NOFOLLOW, 0o600);
+    try { await retained.writeFile(bytes); await retained.sync(); } finally { await retained.close(); }
+  } catch (error) {
+    if (error?.code !== 'EEXIST') throw error;
+    const existingStat = await fs.lstat(destination);
+    if (existingStat.isSymbolicLink() || !existingStat.isFile()) throw new Error('unsafe retained result destination');
+    const existingHandle = await fs.open(destination, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    try { if (!Buffer.from(await existingHandle.readFile()).equals(bytes)) throw new Error('conflicting retained result bytes'); }
+    finally { await existingHandle.close(); }
+  }
+  await syncDirectory(retainedReal);
+  await beforeStep('retained');
+  let completed = { ...resolution, phase: 'completed', retainedResult: destination };
+  let sidecarBytes = `${JSON.stringify(completed, null, 2)}\n`;
+  try {
+    const sidecarHandle = await fs.open(sidecar, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY | fsConstants.O_NOFOLLOW, 0o600);
+    try { await sidecarHandle.writeFile(sidecarBytes); await sidecarHandle.sync(); } finally { await sidecarHandle.close(); }
+  } catch (error) {
+    if (error?.code !== 'EEXIST') throw error;
+    const existingHandle = await fs.open(sidecar, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    try {
+      const existingText = await existingHandle.readFile('utf8');
+      const existing = JSON.parse(existingText);
+      if (existing?.version !== 1 || existing.runId !== id || existing.action !== action || existing.reason !== operatorReason
+        || existing.phase !== 'completed' || existing.retainedResult !== destination) throw new Error('conflicting operator resolution sidecar');
+      completed = existing;
+      sidecarBytes = existingText;
+    } finally { await existingHandle.close(); }
+  }
+  await syncDirectory(retainedReal);
+  await beforeStep('sidecar');
+  await appendAudit(completed);
+  await beforeStep('completed-audit');
+  const currentSource = await fs.lstat(source);
+  if (currentSource.isSymbolicLink() || !currentSource.isFile() || currentSource.dev !== sourceIdentity.dev
+    || currentSource.ino !== sourceIdentity.ino || currentSource.size !== sourceIdentity.size) {
+    throw new Error('pending result changed during operator resolution; source retained');
+  }
+  await fs.unlink(source);
+  return completed;
 }
 
 export async function quarantineLifecycleRun({ lifecycleRoot, runId: requestedRunId, runnerProcessInstanceId, reason, runtimeInstanceFile = '/run/monika-runtime-instance.json', processInspector } = {}) {

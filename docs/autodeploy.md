@@ -68,7 +68,7 @@ python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
 13. Prune old redeploy backups by retention bucket.
 14. Prune old dangling Docker images conservatively.
 
-Forum-only image updates do not drain agentd because the `monika` container is not expected to restart. Backup-only mode still drains and cancels agentd so the runtime capsule is quiescence-gated.
+Forum-only image updates do not drain agentd because the `monika` container is not expected to restart. The recreated forum passively reattaches only conversations agentd still reports loaded; it does not reopen missing Pi sessions. A coordinated runtime restart leaves historical sessions unloaded and recovered completion/request evidence non-waking until explicit new work. Backup-only mode still drains and cancels agentd so the runtime capsule is quiescence-gated.
 
 The script exits `75` (`EX_TEMPFAIL`) when deployment should be retried later. This includes active or uncertain async-subagent execution and an active interactive Pi ownership lease: deployment waits rather than terminating work. systemd treats this as a successful deferral, not as a failed unit. Forum Deploy on Finish persists its request and retries after exit 75 instead of losing the one-shot intent.
 

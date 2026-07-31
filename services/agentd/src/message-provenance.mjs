@@ -1,3 +1,6 @@
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+
 export const MESSAGE_PROVENANCE_CUSTOM_TYPE = 'monika.message.provenance';
 export const MESSAGE_PROVENANCE_VERSION = 1;
 
@@ -193,4 +196,43 @@ export function extractMessageProvenance(entries) {
       && entry.customType === MESSAGE_PROVENANCE_CUSTOM_TYPE
       && entry.data && typeof entry.data === 'object')
     .map((entry) => ({ entryId: entry.id, parentId: entry.parentId ?? null, timestamp: entry.timestamp ?? null, ...entry.data }));
+}
+
+/** Canonical proof that recovered completion results were already applied. */
+export function extractCompletedSubagentRunIds(entries) {
+  const ids = new Set();
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    const data = entry?.type === 'custom' && entry.customType === MESSAGE_PROVENANCE_CUSTOM_TYPE ? entry.data : null;
+    if (!data || data.version !== MESSAGE_PROVENANCE_VERSION
+      || data.sourceKind !== 'subagent-completion' || data.messageKind !== 'assistant_terminal'
+      || typeof data.piMessageId !== 'string') continue;
+    const assistant = entries.slice(0, index).find((candidate) => candidate?.type === 'message'
+      && candidate.id === data.piMessageId && candidate.message?.role === 'assistant');
+    const content = assistant?.message?.content;
+    const visible = typeof content === 'string' ? Boolean(content.trim())
+      : Array.isArray(content) && content.some((part) => part?.type === 'text' && typeof part.text === 'string' && part.text.trim());
+    const stopReason = assistant?.message?.stopReason;
+    if (!visible || typeof stopReason !== 'string' || ['error', 'aborted', 'cancelled'].includes(stopReason)) continue;
+    const candidates = Array.isArray(data.runIds) ? data.runIds : [data.runId];
+    for (const id of candidates) {
+      if (typeof id === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id)) ids.add(id);
+    }
+  }
+  return ids;
+}
+
+export async function settleCompletedSubagentResults(entries, { resultsRoot, remove = fs.rm } = {}) {
+  if (!path.isAbsolute(resultsRoot ?? '')) throw new Error('absolute resultsRoot is required');
+  const outcomes = [];
+  for (const runId of extractCompletedSubagentRunIds(entries)) {
+    const file = path.join(resultsRoot, `${runId}.json`);
+    try {
+      await remove(file, { force: true });
+      outcomes.push({ runId, settled: true, error: null });
+    } catch (error) {
+      outcomes.push({ runId, settled: false, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  return outcomes;
 }

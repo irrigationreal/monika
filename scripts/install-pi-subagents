@@ -20,7 +20,11 @@ readonly subagent_executor_sha256='00cc26cd6b9d5142bbbc3c0484434fc64d15e5cad1530
 readonly fork_context_test_sha256='bb4d9706e24f1d015a58d695c828a699fc54e83f832b4ab8359562e244a002d2'
 readonly fork_execution_test_sha256='51a0fd1faf3f179aade5cb83a13527b27ad58e803513eae009a8e1f5d830790d'
 readonly notify_test_sha256='9aec8ddf82dd085ea5c7ecda3404f2c4e6b33007f7f208487a6773406e9b1d77'
-readonly patch_sha256='7e64b7890f2a68c853509ae5947cfd3e63a4690b96fed63387e99a60ffb6d49b'
+readonly native_supervisor_sha256='325db18a42abfe0465a70ad6c0bbb01179d05090f40071da1c819fc2f51fd8a8'
+readonly native_supervisor_test_sha256='3c9f7a93219c08edff6460aadb1d15c8f45cd929377421e72d9f43dcc5ec5bc4'
+readonly temp_paths_test_sha256='dd986167d727162322995ad11a1a7082df7fb6ff80f5a315f8d29469e6396ecb'
+readonly result_watcher_test_sha256='597b1353e00b09e7c3b4981cdc75896c6fc0d0fcaac97365f7202923a8ddeb57'
+readonly patch_sha256='89a1c668c698be0bf8b9b6d5add93a698142ae174968efb1e56a67b6c866cadf'
 
 if [ "$#" -ne 2 ]; then
   echo "usage: $0 <destination> <patch>" >&2
@@ -51,6 +55,10 @@ printf '%s  %s\n' \
   "$fork_context_test_sha256" "$destination/test/unit/fork-context.test.ts" \
   "$fork_execution_test_sha256" "$destination/test/integration/fork-context-execution.test.ts" \
   "$notify_test_sha256" "$destination/test/unit/notify.test.ts" \
+  "$native_supervisor_sha256" "$destination/src/intercom/native-supervisor-channel.ts" \
+  "$native_supervisor_test_sha256" "$destination/test/unit/native-supervisor-channel.test.ts" \
+  "$temp_paths_test_sha256" "$destination/test/unit/temp-paths.test.ts" \
+  "$result_watcher_test_sha256" "$destination/test/integration/result-watcher.test.ts" \
   | sha256sum --check --strict -
 
 node - "$destination/package.json" "$destination/package-lock.json" "$version" <<'NODE'

@@ -288,6 +288,8 @@ export interface PostDispatchRow {
   session_id: string;
   status: string;
   mode: string;
+  generation: number;
+  claim_token: string | null;
   model: string | null;
   reasoning_effort: string | null;
   attempt_count: number;

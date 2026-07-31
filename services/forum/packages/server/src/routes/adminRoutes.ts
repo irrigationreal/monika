@@ -14,6 +14,7 @@ import { createAutomationRunner, mapRobotAutomation, mapRobotAutomationRun } fro
 import { isSafeAvatarUrl, isSafeHexColor, isValidPersonaKey, RESERVED_PERSONA_NAMES } from '../utils/persona';
 import { getTamperPluginDirections, normalizeTamperDirection, serializeTamperConfig } from '../utils/tamper';
 import { InMemoryMessageTamperLayer } from '../messageTamper';
+import type { RobotSubagentRunDto } from '@irrigationreal/codex-forum-contracts';
 import {
   AdminAccessRuleRequestSchema,
   AdminCreateForumRequestSchema,
@@ -57,6 +58,19 @@ import {
 } from '../runtimeConfig';
 import { readDeployState, writeDeployState } from '../utils/deployState';
 import { parseBody } from '../utils/validation';
+
+export function groupSubagentRuns(runs: RobotSubagentRunDto[]): {
+  blockers: RobotSubagentRunDto[];
+  pendingDelivery: RobotSubagentRunDto[];
+  history: RobotSubagentRunDto[];
+} {
+  const blockers = runs.filter((run) => run.blocking === true || run.executionState === 'uncertain');
+  const blockerIds = new Set(blockers.map((run) => run.runId));
+  const pendingDelivery = runs.filter((run) => !blockerIds.has(run.runId) && run.deliveryState === 'pending');
+  const pendingIds = new Set(pendingDelivery.map((run) => run.runId));
+  const history = runs.filter((run) => !blockerIds.has(run.runId) && !pendingIds.has(run.runId));
+  return { blockers, pendingDelivery, history };
+}
 
 export function registerAdminRoutes({
   app,
@@ -1513,8 +1527,9 @@ export function registerAdminRoutes({
     });
 
     let subagents: {
-      activeCount: number; uncertainCount: number; runs: Array<Record<string, unknown>>;
-      omitted: number; available: boolean; error?: string | null;
+      activeCount: number; uncertainCount: number; runs: RobotSubagentRunDto[];
+      groups: { blockers: RobotSubagentRunDto[]; pendingDelivery: RobotSubagentRunDto[]; history: RobotSubagentRunDto[] };
+      omitted: number; blockerCount: number; omittedBlockerCount: number; available: boolean; error?: string | null;
     };
     try {
       const workload = await codex.getSubagentWorkload();
@@ -1537,9 +1552,15 @@ export function registerAdminRoutes({
           postId: run.origin?.postId ?? null, startedAt: iso(run.started_at), updatedAt: iso(run.updated_at)
         };
       });
-      subagents = { activeCount: workload.active_count, uncertainCount: workload.uncertain_count, runs, omitted: workload.omitted, available: true, error: null };
+      subagents = {
+        activeCount: workload.active_count, uncertainCount: workload.uncertain_count, runs,
+        groups: groupSubagentRuns(runs), omitted: workload.omitted,
+        blockerCount: workload.blocker_count ?? Math.max(workload.active_count, workload.uncertain_count),
+        omittedBlockerCount: workload.omitted_blocker_count ?? 0,
+        available: true, error: null,
+      };
     } catch (err) {
-      subagents = { activeCount: 0, uncertainCount: 0, runs: [], omitted: 0, available: false, error: err instanceof Error ? err.message : 'Agentd subagent workload unavailable' };
+      subagents = { activeCount: 0, uncertainCount: 0, runs: [], groups: { blockers: [], pendingDelivery: [], history: [] }, omitted: 0, blockerCount: 0, omittedBlockerCount: 0, available: false, error: err instanceof Error ? err.message : 'Agentd subagent workload unavailable' };
     }
 
     return {

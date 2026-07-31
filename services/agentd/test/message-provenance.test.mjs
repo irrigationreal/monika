@@ -1,14 +1,19 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 
 import { SessionManager } from '@earendil-works/pi-coding-agent';
 import {
   MESSAGE_PROVENANCE_CUSTOM_TYPE,
   appendSubagentCompletionProvenance,
+  extractCompletedSubagentRunIds,
   extractMessageProvenance,
   handleProvenanceEvent,
   normalizeForumProvenance,
   registerDispatch,
+  settleCompletedSubagentResults,
 } from '../src/message-provenance.mjs';
 
 function conversation() {
@@ -50,6 +55,73 @@ test('persists idempotent subagent completion provenance without a fake user dis
     piMessageId: 'assistant-1', origin: 'subagent-completion', sourceKind: 'subagent-completion',
     runId: 'run-1', originPostId: 'post-1',
   }]);
+});
+
+test('canonical completion acknowledgement requires an earlier visible terminal assistant', () => {
+  const conv = conversation();
+  const assistantId = conv.session.sessionManager.appendMessage(assistantMessage('Applied result'));
+  appendSubagentCompletionProvenance(conv, assistantId, {
+    sourceKind: 'subagent-completion', subagentRunId: 'run-1', subagentRunIds: ['run-1', 'run-2'],
+    subagentOrigins: [], origin: null,
+  });
+  conv.session.sessionManager.appendCustomEntry(MESSAGE_PROVENANCE_CUSTOM_TYPE, {
+    version: 1, sourceKind: 'legacy-result', runIds: ['uncertain-run'], messageKind: 'assistant_terminal',
+  });
+
+  assert.deepEqual([...extractCompletedSubagentRunIds(conv.session.sessionManager.getBranch())], ['run-1', 'run-2']);
+});
+
+test('fabricated, stale, nonterminal, empty, and forward provenance cannot authorize deletion', () => {
+  for (const [label, message, mutate] of [
+    ['error', assistantMessage('failed'), (entry) => { entry.message.stopReason = 'error'; }],
+    ['empty', assistantMessage(''), () => {}],
+  ]) {
+    const conv = conversation();
+    const id = conv.session.sessionManager.appendMessage(message);
+    mutate(conv.session.sessionManager.getBranch().find((entry) => entry.id === id));
+    conv.session.sessionManager.appendCustomEntry(MESSAGE_PROVENANCE_CUSTOM_TYPE, {
+      version: 1, piMessageId: id, sourceKind: 'subagent-completion', messageKind: 'assistant_terminal', runIds: [`run-${label}`],
+    });
+    assert.deepEqual([...extractCompletedSubagentRunIds(conv.session.sessionManager.getBranch())], []);
+  }
+  const fabricated = [{ id: 'custom', type: 'custom', customType: MESSAGE_PROVENANCE_CUSTOM_TYPE, data: {
+    version: 1, piMessageId: 'missing', sourceKind: 'subagent-completion', messageKind: 'assistant_terminal', runIds: ['run-fake'],
+  }}];
+  const stale = [{ id: 'assistant', type: 'message', message: assistantMessage('done') }, { id: 'custom', type: 'custom', customType: MESSAGE_PROVENANCE_CUSTOM_TYPE, data: {
+    version: 0, piMessageId: 'assistant', sourceKind: 'subagent-completion', messageKind: 'assistant_terminal', runIds: ['run-stale'],
+  }}];
+  assert.deepEqual([...extractCompletedSubagentRunIds(fabricated)], []);
+  assert.deepEqual([...extractCompletedSubagentRunIds(stale)], []);
+});
+
+test('proven results settle before bind while deletion failures remain pending', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'completion-settle-'));
+  try {
+    const conv = conversation();
+    const assistantId = conv.session.sessionManager.appendMessage(assistantMessage('Applied'));
+    appendSubagentCompletionProvenance(conv, assistantId, {
+      sourceKind: 'subagent-completion', subagentRunId: 'run-ok', subagentRunIds: ['run-ok', 'run-fail'], subagentOrigins: [], origin: null,
+    });
+    await writeFile(path.join(root, 'run-ok.json'), '{}');
+    await writeFile(path.join(root, 'run-fail.json'), '{}');
+    const order = [];
+    const outcomes = await settleCompletedSubagentResults(conv.session.sessionManager.getBranch(), {
+      resultsRoot: root,
+      remove: async (file, options) => {
+        order.push(`remove:${path.basename(file)}`);
+        if (file.endsWith('run-fail.json')) throw new Error('injected cleanup failure');
+        await rm(file, options);
+      },
+    });
+    order.push('bind');
+    assert.deepEqual(order, ['remove:run-ok.json', 'remove:run-fail.json', 'bind']);
+    assert.deepEqual(outcomes, [
+      { runId: 'run-ok', settled: true, error: null },
+      { runId: 'run-fail', settled: false, error: 'injected cleanup failure' },
+    ]);
+    await assert.rejects(() => import('node:fs/promises').then((mod) => mod.access(path.join(root, 'run-ok.json'))));
+    await import('node:fs/promises').then((mod) => mod.access(path.join(root, 'run-fail.json')));
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test('normalizes forum provenance and rejects malformed origins', () => {

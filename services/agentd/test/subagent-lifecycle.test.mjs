@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -9,10 +9,13 @@ import {
   SUBAGENT_RUN_CUSTOM_TYPE,
   SubagentLifecycle,
   backgroundStatus,
+  capLifecycleRuns,
   hasActiveBackgroundWork,
   mergeMappedLifecycleRuns,
   pruneTerminalSubagentRuns,
+  prioritizeLifecycleRuns,
   quarantineLifecycleRun,
+  resolvePendingSubagentDelivery,
   scanActiveLifecycleRuns,
   scanLifecycleSnapshot,
   validateLifecycleArtifact,
@@ -49,6 +52,76 @@ function observedProof(runId = 'run-1') {
     instances: [{ kind: 'runner', processInstanceId: `runner-${runId}`, closeObservedAt: 2000, exitCode: 0, signal: null }],
   };
 }
+
+test('workload capping prioritizes blockers and reports omitted blocker details', () => {
+  const history = Array.from({ length: 70 }, (_, index) => ({ run_id: `history-${index}`, blocking: false, execution_state: 'terminal', delivery_state: 'settled-or-unavailable', updated_at: index }));
+  const pending = { run_id: 'pending', blocking: false, execution_state: 'terminal', delivery_state: 'pending', updated_at: 1 };
+  const blockers = Array.from({ length: 70 }, (_, index) => ({ run_id: `blocker-${index}`, blocking: true, execution_state: index === 0 ? 'uncertain' : 'active', delivery_state: 'pending', updated_at: index }));
+  const capped = capLifecycleRuns([...history, pending, ...blockers], 64);
+  assert.equal(capped.selected.every((run) => run.blocking), true);
+  assert.equal(capped.selected.length, 64);
+  assert.equal(capped.blockerCount, 70);
+  assert.equal(capped.omittedBlockerCount, 6);
+  assert.equal(capped.omitted, 77);
+  const mixed = prioritizeLifecycleRuns([...history, pending, blockers[0]], 64);
+  assert.equal(mixed[0].run_id, 'blocker-0');
+  assert.equal(mixed[1].run_id, 'pending');
+});
+
+test('operator delivery resolution is audited and retains uncertain result bytes', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'subagent-delivery-resolution-'));
+  const resultsRoot = path.join(root, 'async-subagent-results');
+  const operatorRoot = path.join(root, 'operator-state');
+  await mkdir(resultsRoot);
+  await writeFile(path.join(resultsRoot, 'run-legacy.json'), '{"legacy":true}\n');
+  try {
+    const resolution = await resolvePendingSubagentDelivery({
+      lifecycleRoot: root, resultsRoot, operatorRoot, runId: 'run-legacy', action: 'supersede', reason: 'operator verified newer work',
+    });
+    assert.equal(JSON.parse(await readFile(resolution.retainedResult, 'utf8')).legacy, true);
+    assert.match(await readFile(path.join(operatorRoot, 'operator-resolutions.jsonl'), 'utf8'), /operator verified newer work/);
+    await assert.rejects(() => access(path.join(resultsRoot, 'run-legacy.json')));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('delivery resolution rejects retained-directory symlink escape and preserves source on partial failure', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'subagent-delivery-safety-'));
+  const resultsRoot = path.join(root, 'async-subagent-results'); const operatorRoot = path.join(root, 'operator'); const escape = path.join(root, 'escape');
+  await mkdir(resultsRoot); await mkdir(operatorRoot); await mkdir(escape);
+  await writeFile(path.join(resultsRoot, 'run-safe.json'), '{"safe":true}\n');
+  await symlink(escape, path.join(operatorRoot, 'retained-results'));
+  const input = { lifecycleRoot: root, resultsRoot, operatorRoot, runId: 'run-safe', action: 'dismiss', reason: 'verified' };
+  try {
+    await assert.rejects(() => resolvePendingSubagentDelivery(input), /unsafe retained/);
+    await access(path.join(resultsRoot, 'run-safe.json'));
+    await rm(path.join(operatorRoot, 'retained-results'));
+    await assert.rejects(() => resolvePendingSubagentDelivery({ ...input, beforeStep: async (step) => { if (step === 'completed-audit') throw new Error('injected crash'); } }), /injected crash/);
+    await access(path.join(resultsRoot, 'run-safe.json'));
+    const retried = await resolvePendingSubagentDelivery(input);
+    assert.equal(JSON.parse(await readFile(retried.retainedResult, 'utf8')).safe, true);
+    await assert.rejects(() => access(path.join(resultsRoot, 'run-safe.json')));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('delivery resolution rejects a destination symlink to the pending source without completing audit', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'subagent-delivery-destination-link-'));
+  const resultsRoot = path.join(root, 'async-subagent-results'); const operatorRoot = path.join(root, 'operator');
+  const retained = path.join(operatorRoot, 'retained-results');
+  await mkdir(resultsRoot); await mkdir(operatorRoot); await mkdir(retained);
+  const source = path.join(resultsRoot, 'run-link.json');
+  await writeFile(source, '{"pending":true}\n');
+  await symlink(source, path.join(retained, 'run-link.dismiss.json'));
+  try {
+    await assert.rejects(() => resolvePendingSubagentDelivery({
+      lifecycleRoot: root, resultsRoot, operatorRoot, runId: 'run-link', action: 'dismiss', reason: 'verified',
+    }), /unsafe retained result destination/);
+    assert.equal(JSON.parse(await readFile(source, 'utf8')).pending, true);
+    const audit = (await readFile(path.join(operatorRoot, 'operator-resolutions.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+    assert.deepEqual(audit.map((entry) => entry.phase), ['requested']);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
 
 test('async start captures current forum origin durably and active work blocks idle/deploy classification', async () => {
   const conv = conversation();
@@ -177,7 +250,7 @@ test('global lifecycle scan keeps unloaded and unproven runs deployment-active',
       processTerminal: proof, lastUpdate: 1,
     }));
   }
-  const active = await scanActiveLifecycleRuns({ lifecycleRoot: root });
+  const active = await scanActiveLifecycleRuns({ lifecycleRoot: root, runtimeInstanceFile: path.join(root, 'runtime-instance.json') });
   assert.deepEqual(active.map((run) => run.runId).sort(), ['running', 'unknown-proof']);
 });
 

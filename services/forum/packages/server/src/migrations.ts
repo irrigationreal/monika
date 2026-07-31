@@ -1353,6 +1353,32 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 36,
+    name: 'post-dispatch-generation-fence',
+    up: (db) => {
+      db.exec(`
+        create table if not exists post_dispatch_generations (
+          topic_id text primary key,
+          generation integer not null default 0,
+          updated_at text not null,
+          foreign key (topic_id) references topics(id) on delete cascade
+        );
+      `);
+      if (!hasColumn(db, 'post_dispatches', 'generation')) {
+        db.prepare('alter table post_dispatches add column generation integer not null default 0').run();
+      }
+      if (!hasColumn(db, 'post_dispatches', 'claim_token')) {
+        db.prepare('alter table post_dispatches add column claim_token text').run();
+      }
+      db.exec(`
+        insert or ignore into post_dispatch_generations (topic_id, generation, updated_at)
+          select distinct topic_id, 0, updated_at from post_dispatches;
+        create index if not exists idx_post_dispatches_generation
+          on post_dispatches(topic_id, generation, status, created_at);
+      `);
+    },
+  },
 ];
 
 export const SCHEMA_VERSION: number = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;

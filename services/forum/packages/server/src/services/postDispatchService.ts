@@ -75,6 +75,7 @@ export class PostDispatchService {
 
   private async dispatch(row: PostDispatchRow): Promise<void> {
     this.activeTopics.add(row.topic_id);
+    let claimToken: string | null = null;
     try {
       const post = this.store.getPost(row.post_id);
       const topic = this.store.getTopic(row.topic_id);
@@ -94,25 +95,31 @@ export class PostDispatchService {
         }
       }
 
-      const claimed = this.store.markPostDispatchDispatching(row.id);
-      if (!claimed) return;
+      const claimed = this.store.claimPostDispatch(row.id, row);
+      claimToken = claimed?.claim_token ?? null;
+      if (!claimed || !claimToken || !this.store.isPostDispatchClaimCurrent(row.id, claimToken)) return;
       const robotState = this.store.getRobotState(row.topic_id);
       const mode = row.mode === 'steer' || (row.mode === 'auto' && robotState && robotState.activity !== 'idle' && robotState.activity !== 'error')
         ? 'steer'
         : 'queue';
 
+      // Re-check immediately before crossing the agentd boundary. An interrupt
+      // advances the durable topic generation, making this claim ineligible.
+      if (!this.store.isPostDispatchClaimCurrent(row.id, claimToken)) return;
       await this.agent.dispatchPostToAgent(row.topic_id, row.post_id, {
         mode,
         model: row.model,
         reasoningEffort: row.reasoning_effort,
+        dispatchId: row.id,
+        generation: row.generation,
       });
-      this.store.markPostDispatchDispatched(row.id);
+      this.store.markPostDispatchDispatched(row.id, claimToken);
       this.store.clearRobotTurnError(row.topic_id);
     } catch (err) {
       const latest = this.store.getPostDispatch(row.id) ?? row;
       const message = err instanceof Error ? err.message : String(err);
       const retryAt = retryAtForAttempt(latest.attempt_count);
-      this.store.markPostDispatchFailed(row.id, message, { retryAt });
+      if (claimToken) this.store.markPostDispatchFailed(row.id, claimToken, message, { retryAt });
     } finally {
       this.activeTopics.delete(row.topic_id);
     }

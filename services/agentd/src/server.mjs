@@ -11,21 +11,25 @@ import {
   createProvenanceState,
   discardDispatch,
   extractMessageProvenance,
+  settleCompletedSubagentResults,
   handleProvenanceEvent,
   normalizeForumProvenance,
   registerDispatch,
 } from './message-provenance.mjs';
 import { deriveActiveBranchMetadata, reconcileActiveBranchMetadata } from './session-export.mjs';
+import { advanceDispatchFence, dispatchPreflightHandler, inspectDispatch, prepareDispatch, readDispatchFence, resolveDispatchGeneration } from './dispatch-fence.mjs';
 import { SessionOwnershipRegistry } from './session-ownership.mjs';
 import { modelRefreshIntervalMs, startModelCatalogRefresh } from './model-refresh.mjs';
 import {
   SubagentLifecycle,
   backgroundStatus,
+  capLifecycleRuns,
   extractSubagentRuns,
   hasActiveBackgroundWork,
   mergeMappedLifecycleRuns,
   pruneTerminalSubagentRuns,
   quarantineLifecycleRun,
+  resolvePendingSubagentDelivery,
   scanLifecycleSnapshot,
 } from './subagent-lifecycle.mjs';
 import {
@@ -48,12 +52,13 @@ const SUBAGENT_RUNTIME_ROOT = path.resolve(process.env.PI_SUBAGENT_RUNTIME_ROOT 
 // runs live in separate subtrees but share one deployment-safety contract.
 const SUBAGENT_LIFECYCLE_ROOT = SUBAGENT_RUNTIME_ROOT;
 const SUBAGENT_RESULTS_ROOT = path.join(SUBAGENT_RUNTIME_ROOT, 'async-subagent-results');
+const SUBAGENT_OPERATOR_ROOT = path.resolve(process.env.PI_SUBAGENT_OPERATOR_ROOT ?? '/data/pi-subagent-operator-state');
 const RUNTIME_INSTANCE_FILE = process.env.MONIKA_RUNTIME_INSTANCE_FILE ?? '/run/monika-runtime-instance.json';
 // Agentd owns background lifetime. Pi's print-mode auto-drain must not await
 // subagents before returning a forum turn. Persist lifecycle/results so a
 // recreated agentd runtime can deliver completed work exactly once.
 process.env.PI_SUBAGENTS_DISABLE_AUTO_DRAIN = '1';
-process.env.PI_SUBAGENTS_TRIGGER_RECOVERED_RESULTS = '1';
+delete process.env.PI_SUBAGENTS_TRIGGER_RECOVERED_RESULTS;
 process.env.PI_SUBAGENTS_HOST_ACK_RESULTS = '1';
 process.env.PI_SUBAGENT_SESSION_ROOT = SUBAGENT_SESSION_ROOT;
 process.env.PI_SUBAGENT_RUNTIME_ROOT = SUBAGENT_RUNTIME_ROOT;
@@ -536,6 +541,7 @@ function conversationRecord(conv) {
   return {
     conversation_id: conv.id,
     active_thread_id: conv.id,
+    activity: conversationIsActive(conv) ? 'active' : 'idle',
     model: conv.session.model ? `${conv.session.model.provider}/${conv.session.model.id}` : null,
     reasoning: conv.session.thinkingLevel ?? null,
     cwd: conv.cwd,
@@ -666,12 +672,12 @@ function canonicalAssistantHasVisibleText(conv, piMessageId) {
   return Array.isArray(content) && content.some((part) => part?.type === 'text' && typeof part.text === 'string' && part.text.trim());
 }
 
-function acknowledgeSubagentResults(runIds) {
-  for (const runId of Array.isArray(runIds) ? runIds : []) {
-    if (typeof runId !== 'string' || !/^[A-Za-z0-9._-]+$/.test(runId)) continue;
-    void fs.rm(path.join(SUBAGENT_RUNTIME_ROOT, 'async-subagent-results', `${runId}.json`), { force: true })
-      .catch((err) => console.warn('[agentd] failed to acknowledge subagent result:', err instanceof Error ? err.message : String(err)));
+async function settleCanonicallyAppliedSubagentResults(conv) {
+  const outcomes = await settleCompletedSubagentResults(conv.session.sessionManager.getBranch(), { resultsRoot: SUBAGENT_RESULTS_ROOT });
+  for (const outcome of outcomes) {
+    if (!outcome.settled) console.warn(`[agentd] canonical subagent result ${outcome.runId} remains pending: ${outcome.error}`);
   }
+  return outcomes;
 }
 
 function applySubagentContinuation(conv) {
@@ -715,7 +721,7 @@ async function bindConversation(conv) {
       // produced no visible assistant text; restart recovery may then retry it.
       if (canonicalAssistantHasVisibleText(conv, reconciliation.assistantPiMessageId)) {
         const completionEntryId = appendSubagentCompletionProvenance(conv, reconciliation.assistantPiMessageId, conv.current);
-        if (completionEntryId) acknowledgeSubagentResults(conv.current.subagentRunIds);
+        if (completionEntryId) void settleCanonicallyAppliedSubagentResults(conv);
       }
     }
     handlePiEvent(conv, event, emit);
@@ -745,6 +751,11 @@ async function conversationFromRuntime(runtime, cwd) {
     subagentLifecycle: runtime.services.subagentLifecycle,
     unsubscribe: null,
   };
+  // A prior process may have persisted both the assistant response and its
+  // canonical completion provenance before crashing ahead of result-file ack.
+  // Settle only those proven run IDs before extensions inspect recovered files;
+  // legacy/unproven files remain pending for explicit operator review.
+  await settleCanonicallyAppliedSubagentResults(conv);
   await bindConversation(conv);
   conversations.set(conv.id, conv);
   return conv;
@@ -1356,10 +1367,31 @@ const server = http.createServer(async (req, res) => {
         await reconcileLoadedSubagents(snapshot);
         const origins = new Map();
         for (const conv of conversations.values()) for (const run of conv.subagents.runs.values()) origins.set(run.runId, run.origin ?? null);
-        const runs = snapshot.runs.slice(0, 64).map((run) => ({ ...run, origin: origins.get(run.run_id) ?? null }));
-        return json(res, 200, { ok: true, active_count: snapshot.active_count, uncertain_count: snapshot.uncertain_count, runs, omitted: Math.max(0, snapshot.runs.length - runs.length) });
+        const capped = capLifecycleRuns(snapshot.runs, 64);
+        const runs = capped.selected.map((run) => ({ ...run, origin: origins.get(run.run_id) ?? null }));
+        return json(res, 200, {
+          ok: true, active_count: snapshot.active_count, uncertain_count: snapshot.uncertain_count, runs,
+          omitted: capped.omitted, blocker_count: capped.blockerCount, omitted_blocker_count: capped.omittedBlockerCount,
+        });
       } catch (error) {
         return json(res, 503, { ok: false, error: 'subagent_lifecycle_unavailable', message: error instanceof Error ? error.message : String(error), active_count: 1, uncertain_count: 1, runs: [] });
+      }
+    }
+    const deliveryResolutionMatch = method === 'POST' && url.pathname.match(/^\/v1\/admin\/subagents\/([^/]+)\/resolve-delivery$/);
+    if (deliveryResolutionMatch) {
+      const body = await readBody(req);
+      try {
+        const resolution = await resolvePendingSubagentDelivery({
+          lifecycleRoot: SUBAGENT_LIFECYCLE_ROOT,
+          resultsRoot: SUBAGENT_RESULTS_ROOT,
+          operatorRoot: SUBAGENT_OPERATOR_ROOT,
+          runId: decodeURIComponent(deliveryResolutionMatch[1]),
+          action: body.action,
+          reason: body.reason,
+        });
+        return json(res, 200, { ok: true, resolution });
+      } catch (error) {
+        return json(res, 409, { ok: false, error: 'subagent_delivery_resolution_rejected', message: error instanceof Error ? error.message : String(error) });
       }
     }
     const quarantineMatch = method === 'POST' && url.pathname.match(/^\/v1\/admin\/subagents\/([^/]+)\/quarantine$/);
@@ -1512,6 +1544,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       if (method === 'POST' && tail === 'messages') {
+        return withSessionOperation(conv.piSessionId, async () => {
         if (draining) return unavailable(res, 'agentd is draining for deployment');
         if (conv.takeoverPending) return json(res, 409, { error: 'session_takeover_pending' });
         const initialLease = sessionOwnership.get(conv.piSessionId);
@@ -1524,20 +1557,45 @@ const server = http.createServer(async (req, res) => {
           if (branch?.external_advance) throw new SessionExternalAdvance(conv.piSessionId, branch);
           const body = await readBody(req);
           const messageId = body.message_id ?? randomUUID();
+          const dispatchId = body.dispatch_id ?? messageId;
+          let generation; let inspected;
+          try {
+            generation = resolveDispatchGeneration(conv.session.sessionManager, body.generation);
+            inspected = inspectDispatch(conv.session.sessionManager, { dispatchId, generation });
+          }
+          catch (err) { return badRequest(res, err instanceof Error ? err.message : String(err)); }
+          if (inspected.status === 'duplicate') return json(res, 200, { message_id: messageId, turn_id: messageId, thread_id: conv.id, compacted: false, deduplicated: true });
+          if (inspected.status === 'stale') return json(res, 409, { error: 'stale_dispatch_generation', generation: inspected.generation });
           const baseText = textFromContent(body.content);
-          const attachmentPrompt = await prepareAttachmentsForPrompt(conv, body.attachments);
-          const text = [baseText, attachmentPrompt.text].filter(Boolean).join('\n\n');
-          const mode = body.mode === 'steer' ? 'steer' : 'queue';
           let provenance;
           try {
             provenance = normalizeForumProvenance(body.provenance);
           } catch (err) {
             return badRequest(res, err instanceof Error ? err.message : String(err));
           }
-          const config = body.configure ?? body.config ?? {};
-          await applySessionConfig(conv, config);
-          const reservedLease = sessionOwnership.get(conv.piSessionId);
-          if (reservedLease) throw new SessionOwnershipConflict(conv.piSessionId, reservedLease);
+          // Complete every fallible request preparation step first. Durable
+          // at-most-once acceptance is recorded by Pi's successful preflight
+          // hook immediately before the prompt is allowed to execute.
+          const preparedOutcome = await prepareDispatch(
+            conv.session.sessionManager,
+            { dispatchId, generation },
+            async () => {
+              const attachmentPrompt = await prepareAttachmentsForPrompt(conv, body.attachments);
+              const text = [baseText, attachmentPrompt.text].filter(Boolean).join('\n\n');
+              const mode = body.mode === 'steer' ? 'steer' : 'queue';
+              const config = body.configure ?? body.config ?? {};
+              await applySessionConfig(conv, config);
+              const reservedLease = sessionOwnership.get(conv.piSessionId);
+              if (reservedLease) throw new SessionOwnershipConflict(conv.piSessionId, reservedLease);
+              return { attachmentPrompt, text, mode };
+            },
+          );
+          const { inspection, prepared } = preparedOutcome;
+          if (!prepared && inspection.status === 'duplicate') return json(res, 200, { message_id: messageId, turn_id: messageId, thread_id: conv.id, compacted: false, deduplicated: true });
+          if (!prepared && inspection.status === 'stale') return json(res, 409, { error: 'stale_dispatch_generation', generation: inspection.generation });
+          const { attachmentPrompt, text, mode } = prepared;
+          if (inspection.status === 'duplicate') return json(res, 200, { message_id: messageId, turn_id: messageId, thread_id: conv.id, compacted: false, deduplicated: true });
+          if (inspection.status === 'stale') return json(res, 409, { error: 'stale_dispatch_generation', generation: inspection.generation });
           const dispatch = registerDispatch(conv, {
             turnId: messageId,
             dispatchMode: mode,
@@ -1547,7 +1605,11 @@ const server = http.createServer(async (req, res) => {
           const promptOptions = {
             source: 'api',
             streamingBehavior: mode === 'steer' ? 'steer' : 'followUp',
-            preflightResult: (accepted) => { dispatch.accepted = accepted; },
+            preflightResult: dispatchPreflightHandler(
+              conv.session.sessionManager,
+              { dispatchId, generation },
+              (accepted) => { dispatch.accepted = accepted; },
+            ),
             ...(attachmentPrompt.images.length > 0 ? { images: attachmentPrompt.images } : {}),
           };
           const promptPromise = conv.session.prompt(text, promptOptions);
@@ -1571,12 +1633,20 @@ const server = http.createServer(async (req, res) => {
         } finally {
           if (!mutationTransferredToPrompt) conv.pendingMutations -= 1;
         }
+        });
       }
       if (method === 'POST' && tail === 'interrupt') {
-        await conv.session.abort();
-        const background = await conv.subagentLifecycle.requestStops();
-        emit(conv, 'turn_interrupted', { thread_id: conv.id, background });
-        return json(res, 200, { ok: true, background });
+        const body = await readBody(req);
+        return withSessionOperation(conv.piSessionId, async () => {
+          const currentFence = readDispatchFence(conv.session.sessionManager.getBranch()).generation;
+          const generation = body.generation ?? currentFence + 1;
+          try { advanceDispatchFence(conv.session.sessionManager, generation); }
+          catch (err) { return badRequest(res, err instanceof Error ? err.message : String(err)); }
+          await conv.session.abort();
+          const background = await conv.subagentLifecycle.requestStops();
+          emit(conv, 'turn_interrupted', { thread_id: conv.id, background, generation });
+          return json(res, 200, { ok: true, background, generation });
+        });
       }
       if (method === 'POST' && tail === 'close') {
         const snapshot = await subagentSnapshot().catch(() => null);

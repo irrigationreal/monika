@@ -573,7 +573,14 @@ export interface RobotDashboardDto {
     activeCount: number;
     uncertainCount: number;
     runs: RobotSubagentRunDto[];
+    groups: {
+      blockers: RobotSubagentRunDto[];
+      pendingDelivery: RobotSubagentRunDto[];
+      history: RobotSubagentRunDto[];
+    };
     omitted: number;
+    blockerCount: number;
+    omittedBlockerCount: number;
     available: boolean;
     error?: string | null;
   };

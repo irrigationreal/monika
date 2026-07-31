@@ -203,14 +203,38 @@ launches are rejected and completed result files remain durable without triggeri
 an internal continuation until drain is cancelled. Interrupt/takeover still uses
 pi-subagents' public v1 stop RPC.
 
-The package's natural `subagent-notify` continuation is attributed as
-`source_kind: subagent-completion`, persisted as canonical message provenance, and
-projected exactly once beneath the originating forum post when available. Grouped
-notifications retain all contributing run origins. Live bridge projection and
-later sync share the canonical Pi message link, preventing duplicate completion
-posts. The admin Robot Dashboard reads agentd's `/v1/admin/subagents` summary and
-shows background/uncertain work under its parent when possible; disposable child
-sessions still never become robots or topics.
+Recovered package results never invoke the notifier, intercom transport, or
+`pi.sendMessage`; their files remain operational `delivery=pending` evidence.
+Recovered native supervisor requests likewise remain replyable through supervisor
+tooling without becoming Pi messages. Requests created after that session's
+recovery cutoff still wake the live parent normally. The package's natural `subagent-notify` continuation
+is attributed as `source_kind: subagent-completion`, persisted as canonical message
+provenance, and projected exactly once beneath the originating forum post when
+available. If agentd crashes after assistant/provenance persistence but before file
+ack, that canonical run provenance settles the file on the next explicit session
+open without model execution. Unproven legacy result files are never consumed or
+deleted automatically. An operator may retain and dismiss/supersede one with
+`POST /v1/admin/subagents/<run-id>/resolve-delivery` plus an action and reason.
+The source remains pending until retained bytes, a resolution sidecar, and the
+no-follow operator audit under `/data/pi-subagent-operator-state` are durable.
+
+Forum startup calls only agentd `getConversation` for recorded conversation IDs.
+Already-loaded conversations are reattached; missing ones have their stale forum
+thread link cleared and remain idle/unloaded until a new human post explicitly
+opens the canonical Pi session. Durable post dispatch processing starts only after
+this reconciliation. Each topic dispatch carries a durable generation and stable dispatch ID through
+to agentd. Agentd persists acceptance before prompting, deduplicates lost-response
+retries, and persists interrupt fences under the session operation lock. Interrupt
+advances the forum generation before awaiting agentd and supersedes queued or
+claimed rows, so stale work cannot run after restart while current pending human
+posts retain normal retry.
+
+Grouped notifications retain all contributing run origins. Live bridge projection
+and later sync share the canonical Pi message link, preventing duplicate completion
+posts. The admin Robot Dashboard reads agentd's `/v1/admin/subagents` safety counts
+and separates live/uncertain blockers, pending delivery/manual recovery, and
+collapsed retained terminal history; disposable child sessions still never become
+robots or topics.
 
 Agentd runs conservative retention daily. A child session is removed only after
 14 days when its status is proven terminal, it is not active, and its parent

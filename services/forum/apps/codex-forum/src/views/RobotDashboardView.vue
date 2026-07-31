@@ -17,7 +17,9 @@ let refreshTimer: ReturnType<typeof setInterval> | null = null;
 const jobs = computed(() => dashboard.value?.jobs ?? []);
 const queue = computed(() => dashboard.value?.queue ?? []);
 const subagents = computed(() => dashboard.value?.subagents);
-const subagentRuns = computed(() => subagents.value?.runs ?? []);
+const subagentBlockers = computed(() => subagents.value?.groups.blockers ?? []);
+const subagentPendingDelivery = computed(() => subagents.value?.groups.pendingDelivery ?? []);
+const subagentHistory = computed(() => subagents.value?.groups.history ?? []);
 
 const busyJobs = computed(() =>
   jobs.value.filter((job) => job.activity !== 'idle' && job.activity !== 'waiting')
@@ -374,21 +376,42 @@ onBeforeUnmount(() => {
       <div v-if="subagents && !subagents.available" class="vb-login-error" style="margin: 10px;">
         Agentd workload unavailable: {{ subagents.error ?? 'unknown error' }}
       </div>
-      <div v-else-if="subagentRuns.length === 0" class="vb-empty-state vb-empty-state--notice">
+      <div v-else-if="subagentBlockers.length === 0 && subagentPendingDelivery.length === 0 && subagentHistory.length === 0" class="vb-empty-state vb-empty-state--notice">
         <div class="vb-empty-state-text">No retained background subagent runs.</div>
       </div>
-      <div v-else class="vb-dashboard-table-scroll" aria-label="Background subagents">
-        <div v-for="run in subagentRuns" :key="run.runId" class="vb-subagent-row">
-          <div>
-            <strong>{{ run.topicTitle ?? run.topicId ?? 'Unmapped parent' }}</strong>
-            <div class="vb-job-meta"><code>{{ run.runId }}</code><span v-if="run.reason"> · {{ run.reason }}</span></div>
+      <template v-else>
+        <div class="vb-category-title vb-subagent-group-title">Live / uncertain blockers</div>
+        <div v-if="subagentBlockers.length === 0 && (subagents?.blockerCount ?? 0) === 0" class="vb-empty-state vb-empty-state--notice"><div class="vb-empty-state-text">No subagent safety blockers.</div></div>
+        <div v-else-if="subagentBlockers.length === 0" class="vb-login-error" style="margin: 10px;">Authoritative agentd counts report {{ subagents?.blockerCount ?? subagents?.activeCount ?? 'unknown' }} blocker(s), but their details were omitted. Treat deployment as blocked.</div>
+        <div v-if="(subagents?.omittedBlockerCount ?? 0) > 0" class="vb-login-error" style="margin: 10px;">{{ subagents?.omittedBlockerCount }} additional blocker detail(s) omitted by the agentd response cap.</div>
+        <div v-else class="vb-dashboard-table-scroll" aria-label="Subagent blockers">
+          <div v-for="run in subagentBlockers" :key="run.runId" class="vb-subagent-row">
+            <div><strong>{{ run.topicTitle ?? run.topicId ?? 'Unmapped parent' }}</strong><div class="vb-job-meta"><code>{{ run.runId }}</code><span v-if="run.reason"> · {{ run.reason }}</span><span v-if="run.updatedAt"> · {{ formatDateTime(run.updatedAt) }}</span></div></div>
+            <span class="vb-status-pill" :class="subagentStateClass(run.executionState)">{{ run.executionState }}</span>
+            <span>{{ run.deliveryState ?? 'unknown delivery' }}</span>
+            <button v-if="run.topicId" class="vb-btn vb-btn-compact" type="button" @click="openTopic(run.topicId)">Open parent</button><span v-else>Needs attention</span>
           </div>
-          <span class="vb-status-pill" :class="subagentStateClass(run.executionState)">{{ run.executionState }}</span>
-          <span>{{ run.deliveryState ?? 'unknown delivery' }}</span>
-          <button v-if="run.topicId" class="vb-btn vb-btn-compact" type="button" @click="openTopic(run.topicId)">Open parent</button>
-          <span v-else>Needs attention</span>
         </div>
-      </div>
+        <div class="vb-category-title vb-subagent-group-title">Pending delivery / manual recovery</div>
+        <div v-if="subagentPendingDelivery.length === 0" class="vb-empty-state vb-empty-state--notice"><div class="vb-empty-state-text">No completion evidence awaits manual recovery.</div></div>
+        <div v-else class="vb-dashboard-table-scroll" aria-label="Pending subagent delivery">
+          <div v-for="run in subagentPendingDelivery" :key="run.runId" class="vb-subagent-row">
+            <div><strong>{{ run.topicTitle ?? run.topicId ?? 'Unmapped parent' }}</strong><div class="vb-job-meta"><code>{{ run.runId }}</code><span v-if="run.reason"> · {{ run.reason }}</span><span v-if="run.updatedAt"> · {{ formatDateTime(run.updatedAt) }}</span></div></div>
+            <span class="vb-status-pill" :class="subagentStateClass(run.executionState)">{{ run.executionState }}</span><span>pending/manual</span>
+            <button v-if="run.topicId" class="vb-btn vb-btn-compact" type="button" @click="openTopic(run.topicId)">Open parent</button><span v-else>Needs attention</span>
+          </div>
+        </div>
+        <details v-if="subagentHistory.length > 0" class="vb-subagent-history">
+          <summary>Retained terminal history ({{ subagentHistory.length }})</summary>
+          <div class="vb-dashboard-table-scroll" aria-label="Retained subagent history">
+            <div v-for="run in subagentHistory" :key="run.runId" class="vb-subagent-row">
+              <div><strong>{{ run.topicTitle ?? run.topicId ?? 'Unmapped parent' }}</strong><div class="vb-job-meta"><code>{{ run.runId }}</code><span v-if="run.reason"> · {{ run.reason }}</span><span v-if="run.updatedAt"> · {{ formatDateTime(run.updatedAt) }}</span></div></div>
+              <span class="vb-status-pill" :class="subagentStateClass(run.executionState)">{{ run.executionState }}</span><span>{{ run.deliveryState ?? 'settled' }}</span>
+              <button v-if="run.topicId" class="vb-btn vb-btn-compact" type="button" @click="openTopic(run.topicId)">Open parent</button><span v-else>Retained</span>
+            </div>
+          </div>
+        </details>
+      </template>
     </div>
 
     <div class="vb-forum-list vb-forum-list--queue">
