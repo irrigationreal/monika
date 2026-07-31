@@ -2,7 +2,8 @@ import Database from 'better-sqlite3';
 import { describe, expect, it, vi } from 'vitest';
 
 import { runMigrations } from '../migrations';
-import { PiSessionSyncService, detectHistoricalTerminalErrors, isSubagentPiSession } from './piSessionSyncService';
+import { isSubagentPiSession, omitSubagentPiSessions } from './piSessionPolicy';
+import { PiSessionSyncService, detectHistoricalTerminalErrors } from './piSessionSyncService';
 
 import type { ExportedSession } from './piSessionSyncService';
 
@@ -94,6 +95,11 @@ describe('PiSessionSyncService child-session omission', () => {
     expect(isSubagentPiSession({ kind: 'subagent', path: '/tmp/child.jsonl' })).toBe(true);
     expect(isSubagentPiSession({ kind: null, path: '/app/.pi/agent/sessions/subagent/run/child.jsonl' })).toBe(true);
     expect(isSubagentPiSession({ kind: 'sleep', path: '/app/.pi/agent/sessions/sleep/child.jsonl' })).toBe(false);
+    expect(omitSubagentPiSessions([
+      { id: 'normal', kind: 'normal', path: '/app/.pi/agent/sessions/normal.jsonl' },
+      { id: 'child-by-kind', kind: 'subagent', path: '/tmp/child.jsonl' },
+      { id: 'child-by-path', kind: null, path: '/app/.pi/agent/sessions/subagent/run/child.jsonl' },
+    ])).toEqual([{ id: 'normal', kind: 'normal', path: '/app/.pi/agent/sessions/normal.jsonl' }]);
   });
 
   it('skips child summaries before export during normal sync', async () => {
@@ -111,14 +117,17 @@ describe('PiSessionSyncService child-session omission', () => {
     db.close();
   });
 
-  it('does not create a forum, topic, or session when a child export reaches the importer', () => {
+  it.each([
+    { kind: 'subagent', path: '/tmp/child.jsonl', label: 'explicit kind' },
+    { kind: null, path: '/app/.pi/agent/sessions/subagent/run/child.jsonl', label: 'dedicated path' },
+  ])('does not create a forum, topic, or session when a child export reaches the importer by $label', ({ kind, path }) => {
     const { db, importExported } = createSyncFixture();
     const child = exported(
       [{ type: 'message', id: 'u1', role: 'user', text: 'private delegated task', hasVisibleText: true }],
       ['u1']
     );
-    child.session.kind = 'subagent';
-    child.session.path = '/app/.pi/agent/sessions/subagent/run/child.jsonl';
+    child.session.kind = kind;
+    child.session.path = path;
 
     expect(importExported(child)).toBe(0);
     expect(db.prepare('select count(*) as count from topics').get()).toEqual({ count: 0 });

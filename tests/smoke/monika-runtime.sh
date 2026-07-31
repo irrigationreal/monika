@@ -186,6 +186,8 @@ pass "pi CLI pin active: ${PI_VERSION}"
 
 docker exec -i "$CONTAINER_NAME" node - <<'NODE_SUBAGENTS_PIN'
 const fs = require('node:fs');
+if (process.env.PI_SUBAGENT_SESSION_ROOT !== '/app/.pi/agent/sessions/subagent') throw new Error('Dedicated subagent session root is not global');
+if (process.env.PI_SUBAGENT_RUNTIME_ROOT !== '/data/pi-subagents') throw new Error('Dedicated subagent runtime root is not global');
 const reviewed = JSON.parse(fs.readFileSync('/opt/pi-subagents/REVIEWED_SOURCE.json', 'utf8'));
 if (reviewed.version !== '0.37.2') throw new Error(`Unexpected pi-subagents version: ${reviewed.version}`);
 if (reviewed.gitHead !== '8063333661476ca48afbca826dc4aab8707c72d3') throw new Error(`Unexpected pi-subagents gitHead: ${reviewed.gitHead}`);
@@ -219,6 +221,41 @@ for (const tool of ['remember', 'remember_session', 'correct_observation', 'retr
 }
 NODE_SUBAGENTS_PIN
 pass "pi-subagents pin, 5.6 model policy, identity framing, and read-only child memory boundaries active"
+
+docker exec -i "$CONTAINER_NAME" sh -eu -c '
+  dependency=/opt/pi-subagents/node_modules/@earendil-works/pi-coding-agent
+  script=/tmp/subagent-fork-root-test.cjs
+  mkdir -p "$(dirname "$dependency")"
+  trap '\''rm -f "$dependency" "$script"'\'' EXIT
+  ln -s /usr/local/lib/node_modules/@earendil-works/pi-coding-agent "$dependency"
+  cat >"$script"
+  node "$script"
+' <<'NODE_SUBAGENT_FORK_ROOT'
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { createJiti } = require('/opt/pi-subagents/node_modules/jiti/lib/jiti.cjs');
+const jiti = createJiti(__filename, { interopDefault: true });
+const { SessionManager } = jiti('/usr/local/lib/node_modules/@earendil-works/pi-coding-agent/dist/index.js');
+const { createForkContextResolver } = jiti('/opt/pi-subagents/src/shared/fork-context.ts');
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subagent-fork-root-'));
+try {
+  const parentDir = path.join(root, 'parent');
+  const childDir = path.join(root, 'subagent', 'run-id', 'run-0');
+  const parent = SessionManager.create(root, parentDir);
+  parent.appendMessage({ role: 'user', content: 'parent prompt' });
+  parent.appendMessage({ role: 'assistant', content: 'parent response' });
+  const resolver = createForkContextResolver(parent, 'fork', { sessionDirForIndex: () => childDir });
+  const childFile = resolver.sessionFileForIndex(0);
+  assert.ok(childFile);
+  assert.equal(path.dirname(childFile), childDir);
+  assert.equal(childFile.startsWith(`${parentDir}${path.sep}`), false);
+} finally {
+  fs.rmSync(root, { recursive: true, force: true });
+}
+NODE_SUBAGENT_FORK_ROOT
+pass "fork-context child branches honor per-run directories beneath the dedicated root"
 
 if docker exec "$CONTAINER_NAME" sh -c 'test -e /app/.pi/agent/extensions/force-tools.ts || test -e /app/.pi/agent/extensions/delegate'; then
   echo "Legacy force-tools/delegate extension is present"

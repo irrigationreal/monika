@@ -5,6 +5,7 @@ import Database from 'better-sqlite3';
 import { EchsClient } from '../echsClient';
 import { ForumStore } from '../store';
 import { classifyPiSession } from './piSessionClassifier';
+import { isSubagentPiSession, omitSubagentPiSessions } from './piSessionPolicy';
 
 import type { ForumTarget, SessionClassification } from './piSessionClassifier';
 
@@ -168,18 +169,6 @@ const LIVE_DUPLICATE_WINDOW_MS = 5 * 60 * 1000;
 const LIVE_ANOMALY_RETRY_LIMIT_MS = 10 * 60 * 1000;
 const LIVE_ANOMALY_BACKOFF_MS = [30_000, 60_000, 120_000, 300_000];
 const EXTERNAL_SETTLEMENT_MS = 60_000;
-const SUBAGENT_SESSION_ROOT = '/app/.pi/agent/sessions/subagent';
-
-function normalizedSessionPath(path: string | null | undefined): string {
-  return (path ?? '').replace(/\\/g, '/').replace(/\/+$/, '');
-}
-
-export function isSubagentPiSession(summary: Pick<PiSessionSummary, 'kind' | 'path'>): boolean {
-  const kind = summary.kind?.trim().toLowerCase();
-  if (kind === 'subagent') return true;
-  const path = normalizedSessionPath(summary.path);
-  return path === SUBAGENT_SESSION_ROOT || path.startsWith(`${SUBAGENT_SESSION_ROOT}/`);
-}
 
 function provenanceSourceKind(value: PiMessageProvenance | undefined): string | null {
   return value?.sourceKind ?? value?.source_kind ?? (value?.origin === 'subagent-completion' ? value.origin : null);
@@ -404,8 +393,8 @@ export class PiSessionSyncService {
     try {
       this.seedLegacySkippedAnomalies();
       const listed = await this.client.listPiSessions();
-      const sessions = ((listed?.sessions ?? []) as PiSessionSummary[]).filter((summary) =>
-        !isSubagentPiSession(summary) && (opts.piSessionId ? summary.id === opts.piSessionId : true)
+      const sessions = omitSubagentPiSessions((listed?.sessions ?? []) as PiSessionSummary[]).filter((summary) =>
+        opts.piSessionId ? summary.id === opts.piSessionId : true
       );
       let checked = 0;
       let importedPosts = 0;

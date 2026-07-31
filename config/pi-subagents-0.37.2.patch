@@ -105,6 +105,64 @@ index 86e8350..089695e 100644
  			try {
  				fsApi.unlinkSync(resultPath);
  			} catch (error) {
+diff --git a/src/runs/foreground/subagent-executor.ts b/src/runs/foreground/subagent-executor.ts
+index b2bb70d..aeaecf8 100644
+--- a/src/runs/foreground/subagent-executor.ts
++++ b/src/runs/foreground/subagent-executor.ts
+@@ -3940,6 +3940,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+ 		if (spawnPreflight.error) return spawnBudgetErrorResult(spawnPreflight.error, foregroundMode);
+ 
+ 		let forkSessionFileForIndex: (idx?: number) => string | undefined = () => undefined;
++		let forkSessionDirForIndex: ((idx?: number) => string) | undefined;
+ 		let forkThinkingOverrideForIndex: (idx?: number) => AgentConfig["thinking"] | undefined = () => undefined;
+ 		let prepareForkThinking = (_agentName: string, _index: number, _modelOverride?: string): void => {};
+ 		const forkThinkingRequirements = new Map<number, boolean>();
+@@ -3970,6 +3971,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+ 			};
+ 			const forkContextResolver = createForkContextResolver(ctx.sessionManager, contextPolicy.usesFork ? "fork" : undefined, {
+ 				forceThinkingOffForIndex: (index) => forkThinkingRequirements.get(index) ?? true,
++				sessionDirForIndex: (index) => forkSessionDirForIndex?.(index),
+ 			});
+ 			forkSessionFileForIndex = forkContextResolver.sessionFileForIndex;
+ 			forkThinkingOverrideForIndex = forkContextResolver.thinkingOverrideForIndex;
+@@ -4014,6 +4016,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+ 		}
+ 		const sessionDirForIndex = (idx?: number) =>
+ 			path.join(sessionRoot, `run-${idx ?? 0}`);
++		forkSessionDirForIndex = sessionDirForIndex;
+ 		const forkSessionFileForTask: ForkSessionFileForTask = (agentName, idx = 0, modelOverride) => {
+ 			if (!shouldForkAgent(contextPolicy, agentName)) return undefined;
+ 			prepareForkThinking(agentName, idx, modelOverride);
+diff --git a/src/shared/fork-context.ts b/src/shared/fork-context.ts
+index b43f170..b3bfe58 100644
+--- a/src/shared/fork-context.ts
++++ b/src/shared/fork-context.ts
+@@ -36,6 +36,8 @@ interface ForkableSessionManager {
+ 
+ interface ForkContextResolverOptions {
+ 	openSession?: (path: string, sessionDir?: string) => BranchSessionManager;
++	/** Resolve the isolated destination directory for each forked child. */
++	sessionDirForIndex?: (index: number) => string | undefined;
+ 	/** Decide per child index whether a sanitized transcript must also disable the child's
+ 	 * thinking. Defaults to true (the pre-existing conservative behavior) when omitted. */
+ 	forceThinkingOffForIndex?: (index: number) => boolean;
+@@ -152,7 +154,7 @@ export function createForkContextResolver(
+ 	const openSession = options.openSession
+ 		?? sessionManager.openSession
+ 		?? ((file: string, dir?: string) => SessionManager.open(file, dir));
+-	const sessionDir = sessionManager.getSessionDir?.();
++	const fallbackSessionDir = sessionManager.getSessionDir?.();
+ 	const cachedResolutions = new Map<number, ForkContextResolution>();
+ 
+ 	const resolveFork = (index = 0): ForkContextResolution => {
+@@ -162,6 +164,7 @@ export function createForkContextResolver(
+ 			if (!fs.existsSync(parentSessionFile)) {
+ 				throw new Error(`Parent session file does not exist: ${parentSessionFile}. Pi has not persisted enough history to fork yet.`);
+ 			}
++			const sessionDir = options.sessionDirForIndex?.(index) ?? fallbackSessionDir;
+ 			const sourceManager = openSession(parentSessionFile, sessionDir);
+ 			const sessionFile = sourceManager.createBranchedSession(leafId);
+ 			if (!sessionFile) {
 diff --git a/src/shared/types.ts b/src/shared/types.ts
 index 30a3087..2fa619b 100644
 --- a/src/shared/types.ts
@@ -120,3 +178,122 @@ index 30a3087..2fa619b 100644
  export const RESULTS_DIR = path.join(TEMP_ROOT_DIR, "async-subagent-results");
  export const ASYNC_DIR = path.join(TEMP_ROOT_DIR, "async-subagent-runs");
  export const CHAIN_RUNS_DIR = path.join(TEMP_ROOT_DIR, "chain-runs");
+diff --git a/test/integration/fork-context-execution.test.ts b/test/integration/fork-context-execution.test.ts
+index ebd0f07..7d04310 100644
+--- a/test/integration/fork-context-execution.test.ts
++++ b/test/integration/fork-context-execution.test.ts
+@@ -206,8 +206,9 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
+ 		return sessionFile;
+ 	}
+ 
+-	function makeForkingSessionManagerRecorder(options: { sessionFile: string; leafId: string }) {
++	function makeForkingSessionManagerRecorder(options: { sessionFile: string; leafId: string; useSessionDir?: boolean }) {
+ 		const openedPaths: string[] = [];
++		const openedSessionDirs: Array<string | undefined> = [];
+ 		const branchedLeafIds: string[] = [];
+ 		let counter = 0;
+ 		fs.mkdirSync(path.dirname(options.sessionFile), { recursive: true });
+@@ -216,20 +217,22 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
+ 			getSessionId: () => "session-123",
+ 			getSessionFile: () => options.sessionFile,
+ 			getLeafId: () => options.leafId,
+-			openSession: (sessionFile: string) => {
++			openSession: (sessionFile: string, sessionDir?: string) => {
+ 				openedPaths.push(sessionFile);
++				openedSessionDirs.push(sessionDir);
+ 				return {
+ 					createBranchedSession: (leafId: string) => {
+ 						branchedLeafIds.push(leafId);
+ 						counter++;
+-						const childSessionFile = path.join(tempDir, `fork-${counter}.jsonl`);
++						const childSessionFile = path.join(options.useSessionDir ? (sessionDir ?? tempDir) : tempDir, `fork-${counter}.jsonl`);
++						fs.mkdirSync(path.dirname(childSessionFile), { recursive: true });
+ 						fs.writeFileSync(childSessionFile, '{"type":"session","version":1,"id":"child","timestamp":"2026-04-16T00:00:00.000Z","cwd":"/tmp"}\n', "utf-8");
+ 						return childSessionFile;
+ 					},
+ 				};
+ 			},
+ 		};
+-		return { manager, openedPaths, branchedLeafIds };
++		return { manager, openedPaths, openedSessionDirs, branchedLeafIds };
+ 	}
+ 
+ 	function writeAgent(projectRoot: string, name: string, model: string): void {
+@@ -1152,9 +1155,10 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
+ 	});
+ 
+ 	it("creates one forked session for single mode", async () => {
+-		const { manager, openedPaths, branchedLeafIds } = makeForkingSessionManagerRecorder({
++		const { manager, openedPaths, openedSessionDirs, branchedLeafIds } = makeForkingSessionManagerRecorder({
+ 			sessionFile: path.join(tempDir, "parent.jsonl"),
+ 			leafId: "leaf-123",
++			useSessionDir: true,
+ 		});
+ 		const executor = makeExecutor();
+ 
+@@ -1175,12 +1179,15 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
+ 		assert.notEqual(args[sessionIndex + 1], path.join(tempDir, "parent.jsonl"));
+ 		assert.ok(args[sessionIndex + 1]);
+ 		assert.equal(fs.existsSync(args[sessionIndex + 1]!), true);
++		assert.equal(path.dirname(args[sessionIndex + 1]!), openedSessionDirs[0]);
++		assert.equal(path.basename(openedSessionDirs[0]!), "run-0");
+ 	});
+ 
+ 	it("creates isolated forked sessions per parallel task", async () => {
+-		const { manager, openedPaths, branchedLeafIds } = makeForkingSessionManagerRecorder({
++		const { manager, openedPaths, openedSessionDirs, branchedLeafIds } = makeForkingSessionManagerRecorder({
+ 			sessionFile: path.join(tempDir, "parent-parallel.jsonl"),
+ 			leafId: "leaf-777",
++			useSessionDir: true,
+ 		});
+ 		const executor = makeExecutor();
+ 
+@@ -1204,6 +1211,8 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
+ 		const sessionArgs = readSessionArgsFromCalls();
+ 		assert.equal(sessionArgs.length, 2);
+ 		assert.equal(new Set(sessionArgs).size, 2);
++		assert.deepEqual(openedSessionDirs.map((dir) => path.basename(dir!)), ["run-0", "run-1"]);
++		assert.equal(new Set(openedSessionDirs).size, 2);
+ 		for (const childSessionFile of sessionArgs) {
+ 			assert.notEqual(childSessionFile, path.join(tempDir, "parent-parallel.jsonl"));
+ 			assert.equal(fs.existsSync(childSessionFile), true);
+diff --git a/test/unit/fork-context.test.ts b/test/unit/fork-context.test.ts
+index 69b3685..bb54c64 100644
+--- a/test/unit/fork-context.test.ts
++++ b/test/unit/fork-context.test.ts
+@@ -129,11 +129,12 @@ describe("createForkContextResolver", () => {
+ 		}
+ 	});
+ 
+-	it("creates forked sessions through the default package opener", () => {
++	it("creates forked sessions through the default package opener in the configured child directory", () => {
+ 		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-fork-default-"));
+ 		try {
+-			const sessionDir = path.join(tempDir, "sessions");
+-			const parent = SessionManager.create(tempDir, sessionDir);
++			const parentSessionDir = path.join(tempDir, "sessions");
++			const childSessionDir = path.join(tempDir, "subagent-sessions", "run-0");
++			const parent = SessionManager.create(tempDir, parentSessionDir);
+ 			parent.appendMessage({ role: "user", content: "parent prompt" });
+ 			parent.appendMessage({ role: "assistant", content: "parent response" });
+ 			const parentSessionFile = parent.getSessionFile();
+@@ -145,13 +146,17 @@ describe("createForkContextResolver", () => {
+ 			const resolver = createForkContextResolver({
+ 				getSessionFile: () => parentSessionFile,
+ 				getLeafId: () => leafId,
+-				getSessionDir: () => sessionDir,
+-			}, "fork");
++				getSessionDir: () => parentSessionDir,
++			}, "fork", {
++				sessionDirForIndex: () => childSessionDir,
++			});
+ 
+ 			const childSessionFile = resolver.sessionFileForIndex(0);
+ 			assert.ok(childSessionFile);
+ 			assert.notEqual(childSessionFile, parentSessionFile);
+ 			assert.equal(fs.existsSync(childSessionFile), true);
++			assert.equal(path.dirname(childSessionFile), childSessionDir);
++			assert.equal(childSessionFile.startsWith(`${parentSessionDir}${path.sep}`), false);
+ 		} finally {
+ 			fs.rmSync(tempDir, { recursive: true, force: true });
+ 		}

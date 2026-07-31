@@ -60,6 +60,12 @@ ENV AGENT_BROWSER_EXECUTABLE_PATH=/opt/agent-browser/chrome
 # adopted explicitly; the exact version keeps the resulting image reproducible.
 RUN npm install -g --min-release-age=0 @earendil-works/pi-coding-agent@0.82.1
 
+# Keep every pi-subagents entry point—including interactive Pi sessions—on the
+# same isolated child-session and lifecycle roots. Agentd repeats these values
+# defensively before loading Pi, but they must also exist for direct TUI use.
+ENV PI_SUBAGENT_SESSION_ROOT=/app/.pi/agent/sessions/subagent \
+    PI_SUBAGENT_RUNTIME_ROOT=/data/pi-subagents
+
 # pi-subagents — install the exact reviewed git object because npm's dependency
 # cooldown currently excludes the equivalent 0.37.2 artifact. The installer
 # verifies the commit, tree, source/lock hashes, and patch before changing

@@ -164,18 +164,22 @@ runtime permissions and must not circumvent it. Sleep remains its own sequential
 full-persona fork workflow under
 `/app/.pi/agent/sessions/forks/`.
 
-Agentd sets the child session root to
-`/app/.pi/agent/sessions/subagent/`. Forum sync rejects both that path and explicit
-`kind: subagent` listings, so disposable child transcripts never become forum
-topics or memstore sessions. This is distinct from the legacy `System / Delegates`
+The container exports the child session root
+`/app/.pi/agent/sessions/subagent/` for both agentd and direct interactive Pi
+sessions; agentd repeats it defensively before loading Pi. The reviewed package
+patch applies that root to fresh children and gives every fork-context child its
+own per-run directory beneath it. Ongoing forum sync and the standalone historical
+importer reject both that path and explicit `kind: subagent` listings, so
+disposable child transcripts never become forum topics or memstore sessions. This
+is distinct from the legacy `System / Delegates`
 taxonomy, which remains only for importing historical custom-delegate sessions
 marked with `=== FOCUSED TASK MODE ===`.
 
 For async work, agentd owns the lifetime rather than allowing print-mode auto-drain
 to hold the initiating forum response open. Package lifecycle, result, and recovery
-artifacts persist below `/data/pi-subagents/`; the child JSONL remains in the
-dedicated session root. Agentd records a `monika.subagent.run` entry in the
-canonical parent JSONL with the run ID, originating turn/topic/post, and async
+artifacts persist below `/data/pi-subagents/`; fresh and fork-context child JSONL
+remain in the dedicated session root. Agentd records a `monika.subagent.run` entry
+in the canonical parent JSONL with the run ID, originating turn/topic/post, and async
 directory. Active runs block idle reaping, conversation close, interactive
 ownership takeover until stopped, and deployment quiescence. Interrupt/takeover
 requests use pi-subagents' public v1 stop RPC; drain does not close conversations
@@ -436,7 +440,8 @@ restarting the container terminates the session.
 - Forum SQLite is a projection/metadata layer.
 - One forum topic should map to one Pi session.
 - Historical import and ongoing sync include canonical user-facing sessions, but
-  omit disposable pi-subagents child sessions under the dedicated child root.
+  omit disposable pi-subagents child sessions by explicit agentd kind or dedicated
+  child-root path. This applies equally to fresh and fork-context children.
   Curated cwd mappings and system forums prevent other internal sessions from
   making project forums noisy.
 - Sleep forks and historical custom-delegate/fork sessions are imported into
