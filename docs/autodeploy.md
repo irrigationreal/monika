@@ -14,6 +14,12 @@ This runbook describes a host-side deployment lifecycle for standalone Monika ru
 | forum deploy API | Reports whether forum robot dispatch, Pi sync, and robot state are safe to stop. Requires `CODEX_FORUM_DEPLOY_TOKEN`. |
 | systemd timer | Periodically invokes `scripts/deploy-if-safe` from the host. |
 
+Subagent execution ownership and effects safety are separate. `active` and
+`uncertain` runs block because ownership is live or unproven. Pending delivery is
+nonblocking. Effects-unknown does not fabricate a live process, but safe deployment
+also fails closed until the evidence is reconciled or an operator records an audited
+effects resolution; it must never be automatically replayed or dismissed.
+
 The deployment source of truth for unattended updates is the container image tag, not the git checkout. The checkout still matters as the reviewed local deployment contract: compose files, deploy scripts, docs, and runtime layout live there. Autodeploy may fetch and inspect git state, but it must not pull or modify files.
 
 A typical `main`-tracking deployment uses:
@@ -97,7 +103,7 @@ MONIKA_FORUM_IMAGE=ghcr.io/irrigationreal/monika-forum:sha-OLD \
 ./scripts/deploy-if-safe
 ```
 
-If the command exits `75`, do not force a restart. Inspect both forum deploy status and `curl -fsS http://127.0.0.1:7724/v1/admin/subagents`, wait for active work to finish, and retry. An `uncertain` run requires runtime/PID reconciliation or the audited quarantine procedure in `docs/redeployment.md`; never remove lifecycle files merely to make the counter disappear.
+If the command exits `75`, do not force a restart. Inspect both forum deploy status and `curl -fsS http://127.0.0.1:7724/v1/admin/subagents`, wait for active work to finish, and retry. An `uncertain` run requires runtime/PID reconciliation or the audited quarantine procedure in `docs/redeployment.md`; an `effects_state: "unknown"` run requires remote-effect investigation and an audited effects attestation. Never remove lifecycle files merely to make either counter disappear.
 
 Agentd drain has a lease as defense in depth. `MONIKA_AGENTD_DRAIN_AUTO_CANCEL_MS` controls the lease passed by `deploy-if-safe` and defaults to 15 minutes. Agentd also defaults to the same 15-minute auto-cancel window for any `/v1/admin/drain` call that does not override it. The deploy script still owns the normal lifecycle: drain, apply, cancel drain after Compose.
 

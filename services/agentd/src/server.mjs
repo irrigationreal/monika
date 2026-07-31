@@ -36,6 +36,7 @@ import {
   pruneTerminalSubagentRuns,
   quarantineLifecycleRun,
   resolvePendingSubagentDelivery,
+  resolveSubagentEffects,
   scanLifecycleSnapshot,
 } from './subagent-lifecycle.mjs';
 import {
@@ -299,11 +300,16 @@ async function deployState() {
   } catch (err) {
     console.warn('[agentd] subagent lifecycle scan failed:', err instanceof Error ? err.message : String(err));
     blockers.push({ code: 'subagent_lifecycle_unavailable', count: 1 });
-    snapshot = { runs: [], active_count: 0, uncertain_count: 0 };
+    snapshot = { runs: [], active_count: 0, uncertain_count: 0, effects_unknown_count: 0 };
   }
   const idle = convs.filter((c) => !conversationIsActive(c));
   const backgroundRuns = snapshot.active_count;
+  const effectsUnknownRuns = snapshot.effects_unknown_count ?? 0;
   if (backgroundRuns > 0) blockers.push({ code: 'active_subagent_runs', count: backgroundRuns });
+  // Effects uncertainty is independent from process ownership. A terminal run
+  // remains quiescent, but deployment fails closed until the effects evidence
+  // is reconciled or the audited operator endpoint changes the durable state.
+  if (effectsUnknownRuns > 0) blockers.push({ code: 'subagent_effects_unknown', count: effectsUnknownRuns });
   if (externalLeases.length > 0) blockers.push({ code: 'interactive_pi_sessions', count: externalLeases.length });
   if (!memstore.reachable) blockers.push({ code: 'memstore_unreachable' });
   if ((memstore.queue_depth ?? 0) > 0 || memstore.processing) blockers.push({ code: 'memstore_busy', queue_depth: memstore.queue_depth, processing: memstore.processing });
@@ -315,6 +321,7 @@ async function deployState() {
     active_threads: activeTurns.length,
     active_subagent_runs: backgroundRuns,
     uncertain_subagent_runs: snapshot.uncertain_count,
+    effects_unknown_subagent_runs: effectsUnknownRuns,
     loaded_conversations: convs.length,
     idle_loaded_conversations: idle.length,
     interactive_pi_sessions: externalLeases,
@@ -1454,7 +1461,8 @@ const server = http.createServer(async (req, res) => {
         const capped = capLifecycleRuns(snapshot.runs, 64);
         const runs = capped.selected.map((run) => ({ ...run, origin: origins.get(run.run_id) ?? null }));
         return json(res, 200, {
-          ok: true, active_count: snapshot.active_count, uncertain_count: snapshot.uncertain_count, runs,
+          ok: true, active_count: snapshot.active_count, uncertain_count: snapshot.uncertain_count,
+          effects_unknown_count: snapshot.effects_unknown_count ?? 0, runs,
           omitted: capped.omitted, blocker_count: capped.blockerCount, omitted_blocker_count: capped.omittedBlockerCount,
         });
       } catch (error) {
@@ -1476,6 +1484,22 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, { ok: true, resolution });
       } catch (error) {
         return json(res, 409, { ok: false, error: 'subagent_delivery_resolution_rejected', message: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    const effectsResolutionMatch = method === 'POST' && url.pathname.match(/^\/v1\/admin\/subagents\/([^/]+)\/resolve-effects$/);
+    if (effectsResolutionMatch) {
+      const body = await readBody(req);
+      try {
+        const resolution = await resolveSubagentEffects({
+          lifecycleRoot: SUBAGENT_LIFECYCLE_ROOT,
+          runId: decodeURIComponent(effectsResolutionMatch[1]),
+          effectsState: body.effects_state ?? body.effectsState,
+          reason: body.reason,
+          runtimeInstanceFile: RUNTIME_INSTANCE_FILE,
+        });
+        return json(res, 200, { ok: true, resolution });
+      } catch (error) {
+        return json(res, 409, { ok: false, error: 'subagent_effects_resolution_rejected', message: error instanceof Error ? error.message : String(error) });
       }
     }
     const quarantineMatch = method === 'POST' && url.pathname.match(/^\/v1\/admin\/subagents\/([^/]+)\/quarantine$/);

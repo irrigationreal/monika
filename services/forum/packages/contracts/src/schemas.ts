@@ -693,7 +693,13 @@ export const RobotSubagentRunDtoSchema: z.ZodType<RobotSubagentRunDto> = z.objec
   runId: z.string(),
   state: z.string(),
   executionState: z.enum(['active', 'terminal', 'interrupted', 'uncertain', 'quarantined']),
+  outcomeState: optionalNullableString,
+  effectsState: z.enum(['none', 'confirmed', 'unknown']).nullable().optional(),
   deliveryState: optionalNullableString,
+  executionTarget: z.union([
+    z.object({ kind: z.literal('local') }),
+    z.object({ kind: z.literal('ssh'), name: z.string() })
+  ]).nullable().optional(),
   blocking: z.boolean(),
   reason: optionalNullableString,
   parentSessionId: optionalNullableString,
@@ -710,6 +716,7 @@ export const RobotDashboardDtoSchema: z.ZodType<RobotDashboardDto> = z.object({
   subagents: z.object({
     activeCount: z.number(),
     uncertainCount: z.number(),
+    effectsUnknownCount: z.number(),
     runs: z.array(RobotSubagentRunDtoSchema),
     groups: z.object({
       blockers: z.array(RobotSubagentRunDtoSchema),

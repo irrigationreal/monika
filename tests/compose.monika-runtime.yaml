@@ -15,6 +15,9 @@ services:
     environment:
       HOME: /app
       PI_CODING_AGENT_DIR: /app/.pi/agent
+      PI_SUBAGENT_EXECUTION_TARGET_ROOT: /tmp/pi-subagent-test-targets
+      PI_SUBAGENT_SSH_LOCK_EXTENSION: /app/.pi/agent/extensions/ssh.ts
+      MONIKA_SSH_LOCK_DESCRIPTOR: ""
       MEMSTORE_SOCKET: /tmp/memstore.sock
       POOL_CONFIG_URL: ${POOL_CONFIG_URL:-}
       AGENTLOGS_HOME: /agentlogs-home

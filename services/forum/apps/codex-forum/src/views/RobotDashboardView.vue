@@ -388,7 +388,7 @@ onBeforeUnmount(() => {
           <div v-for="run in subagentBlockers" :key="run.runId" class="vb-subagent-row">
             <div><strong>{{ run.topicTitle ?? run.topicId ?? 'Unmapped parent' }}</strong><div class="vb-job-meta"><code>{{ run.runId }}</code><span v-if="run.reason"> · {{ run.reason }}</span><span v-if="run.updatedAt"> · {{ formatDateTime(run.updatedAt) }}</span></div></div>
             <span class="vb-status-pill" :class="subagentStateClass(run.executionState)">{{ run.executionState }}</span>
-            <span>{{ run.deliveryState ?? 'unknown delivery' }}</span>
+            <span>{{ run.effectsState === 'unknown' ? 'effects unknown' : (run.deliveryState ?? 'unknown delivery') }}</span>
             <button v-if="run.topicId" class="vb-btn vb-btn-compact" type="button" @click="openTopic(run.topicId)">Open parent</button><span v-else>Needs attention</span>
           </div>
         </div>

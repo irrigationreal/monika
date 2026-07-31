@@ -145,6 +145,18 @@ for trace interleaving. See "Live trace and saved trace architecture" below.
 
 ### Subagents and background completions
 
+Execution targets are package/runtime metadata, not forum-owned configuration. Agentd
+projects only safe `{kind,name?}` target identity plus execution, outcome, effects,
+and delivery states. Forum never reads SSH descriptors, credentials, lifecycle files,
+or retained result bytes directly. A pending result is delivery work, not a live
+execution blocker. `effects_state=unknown` does not claim a process, but it blocks
+safe deployment until reconciled or operator-attested.
+
+Passive startup recovery is integrated with the execution-target lifecycle. No-wake
+canonical-provenance acknowledgement, retained-delivery resolution, and forum
+startup/dispatch fencing keep historical parent sessions closed until explicit work,
+while the dashboard projects execution and effects blockers from agentd.
+
 The parent agentd runtime loads the reviewed `pi-subagents` 0.37.2 package. Parent
 sessions expose `subagent`, `subagent_wait`, and `subagent_supervisor`; the package
 supports foreground execution, parallel groups, chains, dynamic fanout, and async
@@ -217,6 +229,9 @@ deleted automatically. An operator may retain and dismiss/supersede one with
 `POST /v1/admin/subagents/<run-id>/resolve-delivery` plus an action and reason.
 The source remains pending until retained bytes, a resolution sidecar, and the
 no-follow operator audit under `/data/pi-subagent-operator-state` are durable.
+The Robot Dashboard treats terminal lifecycle-v4 runs with unknown remote effects as
+safety blockers even though their runner is no longer live; agentd's authoritative
+`effects_unknown_count` prevents response capping from hiding that condition.
 
 Forum startup calls only agentd `getConversation` for recorded conversation IDs.
 Already-loaded conversations are reattached; missing ones have their stale forum

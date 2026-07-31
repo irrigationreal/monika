@@ -38,7 +38,10 @@ export interface EchsSubagentRun {
   run_id: string;
   state: string;
   execution_state: 'active' | 'terminal' | 'interrupted' | 'uncertain' | 'quarantined';
+  outcome_state?: string | null;
+  effects_state?: 'none' | 'confirmed' | 'unknown' | null;
   delivery_state?: string | null;
+  execution_target?: { kind: 'local' } | { kind: 'ssh'; name: string } | null;
   blocking: boolean;
   reason?: string | null;
   parent_session_id?: string | null;
@@ -53,6 +56,7 @@ export interface EchsSubagentWorkload {
   ok: boolean;
   active_count: number;
   uncertain_count: number;
+  effects_unknown_count?: number;
   runs: EchsSubagentRun[];
   omitted: number;
   blocker_count?: number;

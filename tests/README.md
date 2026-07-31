@@ -92,6 +92,12 @@ nix-shell -p go gcc --run \
   'cd services/memstore && CGO_ENABLED=1 go test -tags fts5 ./...'
 ```
 
+## Locked SSH helper
+
+Run `node --test tests/ssh-lock.test.mjs`. It uses pure/fake-process boundaries and
+never contacts a real SSH host. Mandatory CI must not depend on Stanza; any Stanza
+canary is manual, read-only, and must not touch the live checkout.
+
 ## Smoke tests
 
 ### `smoke/monika-runtime.sh`

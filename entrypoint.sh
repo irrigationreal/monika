@@ -13,6 +13,17 @@ monika_log() {
 # Monika runs as a standalone container. The image owns Pi/extensions/defaults;
 # compose mounts selected persistent state under /app/.pi and /data.
 export PI_CODING_AGENT_DIR="${PI_CODING_AGENT_DIR:-/app/.pi/agent}"
+ssh_lock_extension="$PI_CODING_AGENT_DIR/extensions/ssh.ts"
+ssh_lock_helper="$PI_CODING_AGENT_DIR/extensions/ssh-lock.mjs"
+if [[ -f "$ssh_lock_extension" && -f "$ssh_lock_helper" ]]; then
+  ssh_lock_extension_sha="$(sha256sum "$ssh_lock_extension" | awk '{print $1}')"
+  ssh_lock_helper_sha="$(sha256sum "$ssh_lock_helper" | awk '{print $1}')"
+  actual_ssh_lock_digest="$(printf '%s\n%s\n' "$ssh_lock_extension_sha" "$ssh_lock_helper_sha" | sha256sum | awk '{print $1}')"
+  if [[ -n "${PI_SUBAGENT_SSH_LOCK_CODE_DIGEST:-}" && "$PI_SUBAGENT_SSH_LOCK_CODE_DIGEST" != "$actual_ssh_lock_digest" ]]; then
+    die "bundled SSH lock code does not match the image attestation"
+  fi
+  export PI_SUBAGENT_SSH_LOCK_CODE_DIGEST="$actual_ssh_lock_digest"
+fi
 MEMSTORE_DATA_DIR="${MEMSTORE_DATA_DIR:-/data/memstore}"
 MEMSTORE_SOCKET="${MEMSTORE_SOCKET:-/tmp/memstore.sock}"
 export MEMSTORE_SOCKET

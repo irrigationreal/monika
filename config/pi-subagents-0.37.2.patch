@@ -15,6 +15,170 @@ index 665db5b..6b2b8fb 100644
      "test:all": "npm run test:unit && npm run test:integration && npm run test:e2e"
    },
    "pi": {
+diff --git a/src/agents/agents.ts b/src/agents/agents.ts
+index 16019bd..ef55e45 100644
+--- a/src/agents/agents.ts
++++ b/src/agents/agents.ts
+@@ -20,6 +20,7 @@ export { buildRuntimeName, frontmatterNameForConfig, parsePackageName } from "./
+ import { parseMemoryFrontmatter } from "./agent-memory.ts";
+ import { resolveTurnBudgetConfig } from "../runs/shared/turn-budget.ts";
+ import { validateAcceptanceInput } from "../runs/shared/acceptance.ts";
++import type { ExecutionTarget } from "../runs/shared/execution-target.ts";
+ 
+ export type AgentScope = "user" | "project" | "both";
+ 
+@@ -167,6 +168,7 @@ const agentFrontmatterFields = new WeakMap<AgentConfig, Set<string>>();
+ 
+ export interface ChainStepConfig {
+ 	agent?: string;
++	executionTarget?: ExecutionTarget;
+ 	task?: string;
+ 	phase?: string;
+ 	label?: string;
+diff --git a/src/agents/chain-serializer.ts b/src/agents/chain-serializer.ts
+index 5b8b8e8..29a4281 100644
+--- a/src/agents/chain-serializer.ts
++++ b/src/agents/chain-serializer.ts
+@@ -4,6 +4,7 @@ import { parseFrontmatter } from "./frontmatter.ts";
+ import { ChainOutputValidationError, validateChainOutputBindings } from "../runs/shared/chain-outputs.ts";
+ import { validateAcceptanceInput } from "../runs/shared/acceptance.ts";
+ import { validateToolBudgetConfig } from "../runs/shared/tool-budget.ts";
++import { validateExecutionTarget } from "../runs/shared/execution-target.ts";
+ import type { ChainStep } from "../shared/settings.ts";
+ import type { AgentSource } from "./agents.ts";
+ 
+@@ -20,6 +21,17 @@ function parseStepBody(agent: string, sectionBody: string): ChainStepConfig {
+ 		const key = match[1].trim().toLowerCase();
+ 		const rawValue = match[2].trim();
+ 
++		if (key === "executiontarget") {
++			let parsed: unknown;
++			try {
++				parsed = JSON.parse(rawValue);
++			} catch (error) {
++				const message = error instanceof Error ? error.message : String(error);
++				throw new Error(`Invalid executionTarget in .chain.md step '${agent}': ${message}`);
++			}
++			step.executionTarget = validateExecutionTarget(parsed, `executionTarget for step '${agent}'`);
++			continue;
++		}
+ 		if (key === "output") {
+ 			if (rawValue === "false") step.output = false;
+ 			else if (rawValue) step.output = rawValue;
+@@ -171,6 +183,7 @@ export function parseJsonChain(content: string, source: AgentSource, filePath: s
+ 			throw new Error(`JSON chain '${filePath}' step ${i + 1} must be an object.`);
+ 		}
+ 		const stepRecord = step as Record<string, unknown>;
++		validateExecutionTarget(stepRecord.executionTarget, `step ${i + 1} executionTarget`);
+ 		if (stepRecord.toolBudget !== undefined) validateJsonChainToolBudget(stepRecord.toolBudget, `step ${i + 1} toolBudget`);
+ 		const acceptanceErrors = validateAcceptanceInput(stepRecord.acceptance, `step ${i + 1} acceptance`);
+ 		if (acceptanceErrors.length > 0) {
+@@ -182,6 +195,7 @@ export function parseJsonChain(content: string, source: AgentSource, filePath: s
+ 				const task = parallel[taskIndex];
+ 				if (!task || typeof task !== "object" || Array.isArray(task)) continue;
+ 				const taskRecord = task as Record<string, unknown>;
++				validateExecutionTarget(taskRecord.executionTarget, `step ${i + 1} parallel task ${taskIndex + 1} executionTarget`);
+ 				if (taskRecord.toolBudget !== undefined) validateJsonChainToolBudget(taskRecord.toolBudget, `step ${i + 1} parallel task ${taskIndex + 1} toolBudget`);
+ 				const taskErrors = validateAcceptanceInput(taskRecord.acceptance, `step ${i + 1} parallel task ${taskIndex + 1} acceptance`);
+ 				if (taskErrors.length > 0) {
+@@ -190,6 +204,7 @@ export function parseJsonChain(content: string, source: AgentSource, filePath: s
+ 			}
+ 		} else if (parallel && typeof parallel === "object") {
+ 			const parallelRecord = parallel as Record<string, unknown>;
++			validateExecutionTarget(parallelRecord.executionTarget, `step ${i + 1} dynamic template executionTarget`);
+ 			if (parallelRecord.toolBudget !== undefined) validateJsonChainToolBudget(parallelRecord.toolBudget, `step ${i + 1} dynamic template toolBudget`);
+ 			const templateErrors = validateAcceptanceInput(parallelRecord.acceptance, `step ${i + 1} dynamic template acceptance`);
+ 			if (templateErrors.length > 0) {
+@@ -254,6 +269,7 @@ export function serializeChain(config: ChainConfig): string {
+ 	for (let i = 0; i < config.steps.length; i++) {
+ 		const step = config.steps[i]!;
+ 		lines.push(`## ${step.agent}`);
++		if (step.executionTarget) lines.push(`executionTarget: ${JSON.stringify(step.executionTarget)}`);
+ 		if (step.output === false) lines.push("output: false");
+ 		else if (step.output) lines.push(`output: ${step.output}`);
+ 		if (step.phase) lines.push(`phase: ${step.phase}`);
+diff --git a/src/api/preflight.ts b/src/api/preflight.ts
+index fe48585..a3b9fe9 100644
+--- a/src/api/preflight.ts
++++ b/src/api/preflight.ts
+@@ -21,8 +21,9 @@ import { agentDefinitionDigest, AGENT_DEFINITION_PROJECTION_VERSION, launchBindi
+ import { ASYNC_DIR, RESULTS_DIR, TEMP_ROOT_DIR } from "../shared/types.ts";
+ import { processTerminalCandidatePath, processTerminalPath } from "../runs/background/process-terminal.ts";
+ import { nestedResultsPath } from "../runs/shared/nested-events.ts";
++import { resolveExecutionTarget, type ExecutionTarget, type PublicExecutionTarget } from "../runs/shared/execution-target.ts";
+ 
+-export const SUBAGENT_LAUNCH_CONTRACT_VERSION = 2 as const;
++export const SUBAGENT_LAUNCH_CONTRACT_VERSION = 3 as const;
+ 
+ export type SubagentLaunchContractReasonCode =
+ 	| "missing_agent"
+@@ -31,6 +32,7 @@ export type SubagentLaunchContractReasonCode =
+ 	| "denied_required_tool"
+ 	| "invalid_artifact_dir"
+ 	| "invalid_cwd"
++	| "invalid_execution_target"
+ 	| "unsupported_mode";
+ 
+ export interface SubagentLaunchContractDiagnostic {
+@@ -41,6 +43,7 @@ export interface SubagentLaunchContractDiagnostic {
+ 
+ export interface SubagentLaunchContractInput {
+ 	agent: string;
++	executionTarget?: ExecutionTarget;
+ 	cwd: string;
+ 	task?: string;
+ 	agentScope?: AgentScope;
+@@ -136,6 +139,8 @@ export interface SubagentLaunchContract {
+ 	runId: string;
+ 	agent: SubagentLaunchContractAgent;
+ 	context: "fresh" | "fork";
++	executionTarget: PublicExecutionTarget;
++	executionTargetDigest?: string;
+ 	model?: string;
+ 	modelCandidates: string[];
+ 	thinking?: string;
+@@ -205,6 +210,14 @@ function candidateList(inputAgent: string, selected: AgentConfig | undefined, cw
+ 
+ export async function resolveSubagentLaunchContract(input: SubagentLaunchContractInput): Promise<SubagentLaunchContractResult> {
+ 	const diagnostics: SubagentLaunchContractDiagnostic[] = [];
++	let executionTarget;
++	try {
++		executionTarget = resolveExecutionTarget(input.executionTarget);
++		if (executionTarget.kind === "ssh") diagnostics.push({ code: "host_required", severity: "host-required", message: "The descriptor was validated locally; SSH connectivity and the pinned remote startup assertion are established only by the child lock extension before its first model turn." });
++	} catch (error) {
++		const message = `Execution target rejected: ${error instanceof Error ? error.message : String(error)}`;
++		return { ok: false, code: "invalid_execution_target", message, diagnostics };
++	}
+ 	const effectiveCwd = path.resolve(input.cwd);
+ 	try {
+ 		if (!fs.statSync(effectiveCwd).isDirectory()) {
+@@ -326,6 +339,8 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
+ 			shadowedCandidates,
+ 		},
+ 		context: input.context ?? agent.defaultContext ?? "fresh",
++		executionTarget: executionTarget.public,
++		...(executionTarget.kind === "ssh" ? { executionTargetDigest: executionTarget.descriptorDigest } : {}),
+ 		...(model ? { model } : {}),
+ 		modelCandidates,
+ 		...(resolveEffectiveThinking(model, effectiveThinkingConfig) ? { thinking: resolveEffectiveThinking(model, effectiveThinkingConfig) } : {}),
+@@ -379,6 +394,8 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
+ 		launchContractDigest: launchBindingDigest({
+ 			task: input.task ?? "",
+ 			definitionDigest,
++			executionTarget: executionTarget.public,
++			executionTargetDigest: executionTarget.kind === "ssh" ? executionTarget.descriptorDigest : undefined,
+ 			...(model ? { model } : {}),
+ 			modelCandidates,
+ 			...(resolveEffectiveThinking(model, effectiveThinkingConfig) ? { thinking: resolveEffectiveThinking(model, effectiveThinkingConfig) } : {}),
+@@ -388,7 +405,7 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
+ 			inheritSkills: agent.inheritSkills,
+ 			skills: requestedSkills,
+ 			tools: toolPlan.effectiveToolAllowlist,
+-			extensions: toolPlan.extensionArgs,
++			extensions: [...toolPlan.extensionArgs, ...(executionTarget.kind === "ssh" ? [executionTarget.lockExtensionPath] : [])],
+ 			mcpDirectTools: toolPlan.effectiveMcpTools,
+ 			...(outputPath ? { outputPath } : {}),
+ 			outputMode: input.outputMode ?? "inline",
 diff --git a/src/extension/fanout-child.ts b/src/extension/fanout-child.ts
 index 0da9904..83bab49 100644
 --- a/src/extension/fanout-child.ts
@@ -86,6 +250,85 @@ index eff8c2d..b97d1d7 100644
  	});
  
  	pi.on("session_shutdown", () => {
+diff --git a/src/extension/rpc.ts b/src/extension/rpc.ts
+index 622ecdd..59ab93f 100644
+--- a/src/extension/rpc.ts
++++ b/src/extension/rpc.ts
+@@ -180,6 +180,7 @@ function pingData(ctx: ExtensionContext | null) {
+ 		capabilities: {
+ 			status: true,
+ 			asyncSpawn: true,
++			executionTargets: ["local", "ssh"],
+ 			steer: true,
+ 			nonRecoveringSteer: true,
+ 			interrupt: true,
+diff --git a/src/extension/schemas.ts b/src/extension/schemas.ts
+index 019eaaa..882ca6e 100644
+--- a/src/extension/schemas.ts
++++ b/src/extension/schemas.ts
+@@ -107,9 +107,28 @@ const ToolBudgetOverride = Type.Object({
+ 	block: Type.Optional(ToolBudgetBlock),
+ }, { additionalProperties: false, description: "Optional child tool-call budget. soft nudges the child; after hard, block tools (default read/grep/find/ls, or '*' for all tools) are blocked so the child can finalize." });
+ 
++// Closed named references only: callers cannot supply hosts, credentials, SSH
++// options, or command text. The executor repeats this validation for direct API
++// callers that bypass TypeBox.
++export const ExecutionTargetSchema = Type.Unsafe({
++	anyOf: [
++		{ type: "object", properties: { kind: { type: "string", enum: ["local"] } }, required: ["kind"], additionalProperties: false },
++		{
++			type: "object",
++			properties: {
++				kind: { type: "string", enum: ["ssh"] },
++				name: { type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" },
++			},
++			required: ["kind", "name"], additionalProperties: false,
++		},
++	],
++	description: "Execution target: {kind:'local'} or {kind:'ssh',name:'configured-name'}. Omitted defaults local. SSH requires async:true.",
++});
++
+ const TaskItem = Type.Object({
+-	agent: Type.String(), 
+-	task: Type.String(), 
++	agent: Type.String(),
++	executionTarget: Type.Optional(ExecutionTargetSchema),
++	task: Type.String(),
+ 	cwd: Type.Optional(Type.String()),
+ 	count: Type.Optional(Type.Integer({ minimum: 1, description: "Repeat this parallel task N times with the same settings." })),
+ 	output: Type.Optional(OutputOverride),
+@@ -127,6 +146,7 @@ const TaskItem = Type.Object({
+ // Parallel task item (within a parallel step)
+ export const ParallelTaskSchema = Type.Object({
+ 	agent: Type.String(),
++	executionTarget: Type.Optional(ExecutionTargetSchema),
+ 	task: Type.Optional(Type.String({ description: "Task template with {task}, {previous}, {chain_dir} variables. Defaults to {previous}." })),
+ 	phase: Type.Optional(Type.String({ description: "Optional phase/group label for status and graph rendering." })),
+ 	label: Type.Optional(Type.String({ description: "Optional user-facing label for this parallel task." })),
+@@ -159,6 +179,7 @@ export const DynamicExpandSchema = Type.Object({
+ 
+ export const DynamicParallelTemplateSchema = Type.Object({
+ 	agent: Type.String(),
++	executionTarget: Type.Optional(ExecutionTargetSchema),
+ 	task: Type.Optional(Type.String({ description: "Task template with {item}, {item.path}, {task}, {previous}, {chain_dir}, and {outputs.name} variables." })),
+ 	phase: Type.Optional(Type.String({ description: "Optional phase/group label for status and graph rendering." })),
+ 	label: Type.Optional(Type.String({ description: "Optional user-facing label; item templates are supported." })),
+@@ -184,6 +205,7 @@ export const DynamicCollectSchema = Type.Object({
+ // Flattened so chain steps do not need an object-shape anyOf/oneOf union.
+ export const ChainItem = Type.Object({
+ 	agent: Type.Optional(Type.String({ description: "Sequential step agent name" })),
++	executionTarget: Type.Optional(ExecutionTargetSchema),
+ 	task: Type.Optional(Type.String({
+ 		description: "Task template with variables: {task}=original request, {previous}=prior step's text response, {chain_dir}=shared folder, {outputs.name}=prior named output. Required for first step, defaults to '{previous}' for subsequent steps."
+ 	})),
+@@ -238,6 +260,7 @@ const ControlOverrides = Type.Object({
+ 
+ const SubagentParamsSchema = Type.Object({
+ 	agent: Type.Optional(Type.String({ description: "Agent name (SINGLE mode) or target for management get/update/delete" })),
++	executionTarget: Type.Optional(ExecutionTargetSchema),
+ 	task: Type.Optional(Type.String({ description: "Task (SINGLE mode, optional for self-contained agents)" })),
+ 	// Management action (when present, tool operates in management mode)
+ 	action: Type.Optional(Type.String({
 diff --git a/src/intercom/native-supervisor-channel.ts b/src/intercom/native-supervisor-channel.ts
 index 4757eeb..b61fd1f 100644
 --- a/src/intercom/native-supervisor-channel.ts
@@ -191,10 +434,27 @@ index 4757eeb..b61fd1f 100644
  			poll();
  			poller = setInterval(poll, CHANNEL_POLL_MS);
 diff --git a/src/runs/background/async-execution.ts b/src/runs/background/async-execution.ts
-index 34213ec..007fb8c 100644
+index 34213ec..b38ce23 100644
 --- a/src/runs/background/async-execution.ts
 +++ b/src/runs/background/async-execution.ts
-@@ -405,6 +405,41 @@ function terminateRunnerBeforeProceed(pid: number): void {
+@@ -58,6 +58,7 @@ import type { SessionLeaseRequest } from "../shared/session-lease.ts";
+ import { finalizeProcessTerminal, readProcessTerminal } from "./process-terminal.ts";
+ import { SUBAGENT_PROCESS_TERMINAL_EVENT } from "../../shared/types.ts";
+ import { decodeSubagentCapabilityCeiling, resolveCurrentSubagentCapabilityCeiling, SUBAGENT_CAPABILITY_CEILING_ENV, type ResolvedSubagentCapabilityCeiling } from "../shared/capability-ceiling.ts";
++import { resolveExecutionTarget, assertExecutionTargetWorktreeCompatible, type ExecutionTarget } from "../shared/execution-target.ts";
+ import { agentDefinitionDigest, launchBindingDigest } from "../../shared/launch-contract.ts";
+ 
+ const require = createRequire(import.meta.url);
+@@ -167,6 +168,8 @@ interface AsyncChainParams {
+ 
+ interface AsyncSingleParams {
+ 	agent: string;
++	executionTarget?: ExecutionTarget;
++	executionTargetDigest?: string;
+ 	task?: string;
+ 	/** Raw caller-facing goal used only by the started event. */
+ 	goal?: string;
+@@ -405,6 +408,41 @@ function terminateRunnerBeforeProceed(pid: number): void {
  	}
  }
  
@@ -236,7 +496,7 @@ index 34213ec..007fb8c 100644
  function spawnRunner(cfg: object, suffix: string, cwd: string, onProcessTerminal?: (proof: unknown) => void): { pid?: number; error?: string } {
  	if (!jitiCliPath) {
  		return { error: "upstream jiti for TypeScript execution could not be found; ensure package dependencies are installed" };
-@@ -421,8 +456,19 @@ function spawnRunner(cfg: object, suffix: string, cwd: string, onProcessTerminal
+@@ -421,8 +459,19 @@ function spawnRunner(cfg: object, suffix: string, cwd: string, onProcessTerminal
  
  	fs.mkdirSync(TEMP_ROOT_DIR, { recursive: true });
  	const cfgPath = getAsyncConfigPath(suffix);
@@ -257,7 +517,7 @@ index 34213ec..007fb8c 100644
  	fs.writeFileSync(cfgPath, JSON.stringify(launchConfig));
  	const runner = path.join(path.dirname(fileURLToPath(import.meta.url)), "subagent-runner.ts");
  	const nodeCommand = resolveAsyncRunnerNodeCommand();
-@@ -457,6 +503,20 @@ function spawnRunner(cfg: object, suffix: string, cwd: string, onProcessTerminal
+@@ -457,6 +506,20 @@ function spawnRunner(cfg: object, suffix: string, cwd: string, onProcessTerminal
  		});
  		closeFd(stdoutFd);
  		closeFd(stderrFd);
@@ -278,7 +538,34 @@ index 34213ec..007fb8c 100644
  		proc.on("error", (error) => {
  			console.error(`[pi-subagents] async spawn failed: ${error.message}`);
  		});
-@@ -873,6 +933,7 @@ export function executeAsyncChain(
+@@ -695,7 +758,9 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
+ 		const effectiveThinking = thinkingOverride ?? a.thinking;
+ 		const model = applyThinkingSuffix(primaryModel, effectiveThinking, thinkingOverride !== undefined);
+ 		const agentContract = s.agentContract ?? params.agentContract;
++		const executionTarget = resolveExecutionTarget(s.executionTarget);
+ 		return {
++			executionTarget,
+ 			parentSessionId: ctx.parentSessionId ?? ctx.currentSessionId,
+ 			...(params.capabilityCeiling ? { capabilityCeiling: params.capabilityCeiling } : {}),
+ 			agent: s.agent,
+@@ -728,6 +793,8 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
+ 			sessionFile,
+ 			maxSubagentDepth: resolveChildMaxSubagentDepth(maxSubagentDepth, a.maxSubagentDepth),
+ 			waitToolEnabled: params.waitToolEnabled,
++			definitionDigest: agentDefinitionDigest(a),
++			launchBindingTask: task,
+ 			effectiveAcceptance: resolveEffectiveAcceptance({
+ 				explicit: s.acceptance,
+ 				agentName: s.agent,
+@@ -763,6 +830,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
+ 	try {
+ 		const builtSteps = chain.map((s, stepIndex) => {
+ 			if (isParallelStep(s)) {
++				if (s.worktree) assertExecutionTargetWorktreeCompatible(s.parallel.map((task) => resolveExecutionTarget(task.executionTarget)), true);
+ 				const parallelBehaviors = s.parallel.map((task) => {
+ 					const agent = agents.find((candidate) => candidate.name === task.agent)!;
+ 					return suppressProgressForReadOnlyTask(resolveStepBehavior(agent, buildStepOverrides(task), chainSkills), task.task, originalTask);
+@@ -873,6 +941,7 @@ export function executeAsyncChain(
  	id: string,
  	params: AsyncChainParams,
  ): AsyncExecutionResult {
@@ -286,7 +573,7 @@ index 34213ec..007fb8c 100644
  	const {
  		chain,
  		agents,
-@@ -964,11 +1025,19 @@ export function executeAsyncChain(
+@@ -964,11 +1033,19 @@ export function executeAsyncChain(
  		return [childIntercomTarget(step.agent, childTargetIndex++)];
  	}) : undefined;
  
@@ -306,7 +593,7 @@ index 34213ec..007fb8c 100644
  				steps,
  				resultPath: inheritedNestedRoute ? nestedResultsPath(inheritedNestedRoute.rootRunId, id) : path.join(RESULTS_DIR, `${id}.json`),
  				cwd: runnerCwd,
-@@ -1011,10 +1080,12 @@ export function executeAsyncChain(
+@@ -1011,10 +1088,12 @@ export function executeAsyncChain(
  		);
  	} catch (error) {
  		const message = error instanceof Error ? error.message : String(error);
@@ -319,15 +606,51 @@ index 34213ec..007fb8c 100644
  		return formatAsyncStartError(resultMode, `Failed to start async ${resultMode} '${id}': ${spawnResult.error}`);
  	}
  
-@@ -1130,6 +1201,7 @@ export function executeAsyncSingle(
+@@ -1130,6 +1209,16 @@ export function executeAsyncSingle(
  	id: string,
  	params: AsyncSingleParams,
  ): AsyncExecutionResult {
 +	if (process.env.PI_SUBAGENTS_HOST_DRAINING === "1") return formatAsyncStartError("single", "Agent host is draining; async launches are temporarily disabled.");
++	let executionTarget;
++	try {
++		executionTarget = resolveExecutionTarget(params.executionTarget);
++		if (params.executionTargetDigest && (executionTarget.kind !== "ssh" || executionTarget.descriptorDigest !== params.executionTargetDigest)) {
++			throw new Error("Persisted SSH descriptor digest changed; automatic resume is refused.");
++		}
++	} catch (error) {
++		return formatAsyncStartError("single", `Execution target rejected: ${error instanceof Error ? error.message : String(error)}`);
++	}
  	const {
  		agent,
  		agentConfig,
-@@ -1304,11 +1376,19 @@ export function executeAsyncSingle(
+@@ -1234,6 +1323,8 @@ export function executeAsyncSingle(
+ 	});
+ 	const launchContractDigest = launchBindingDigest({
+ 		definitionDigest: agentDefinitionDigest(agentConfig),
++		executionTarget: executionTarget.public,
++		executionTargetDigest: executionTarget.kind === "ssh" ? executionTarget.descriptorDigest : undefined,
+ 		task,
+ 		...(model ? { model } : {}),
+ 		modelCandidates,
+@@ -1244,7 +1335,7 @@ export function executeAsyncSingle(
+ 		inheritSkills: agentConfig.inheritSkills,
+ 		skills: resolvedSkills.map((skill) => skill.name),
+ 		tools: toolPlan.effectiveToolAllowlist,
+-		extensions: toolPlan.extensionArgs,
++		extensions: [...toolPlan.extensionArgs, ...(executionTarget.kind === "ssh" ? [executionTarget.lockExtensionPath] : [])],
+ 		mcpDirectTools: toolPlan.effectiveMcpTools,
+ 		...(outputPath ? { outputPath } : {}),
+ 		outputMode,
+@@ -1262,6 +1353,8 @@ export function executeAsyncSingle(
+ 	const recoveryDescriptor: SteeringRecoveryDescriptor = {
+ 		version: 1,
+ 		launchContractDigest,
++		executionTarget: executionTarget.public,
++		...(executionTarget.kind === "ssh" ? { executionTargetDigest: executionTarget.descriptorDigest } : {}),
+ 		sourceRunId: id,
+ 		...(params.agentContract ? { agentContract: params.agentContract } : {}),
+ 		agent,
+@@ -1304,13 +1397,22 @@ export function executeAsyncSingle(
  	} catch (error) {
  		return formatAsyncStartError("single", `Failed to persist async recovery descriptor for '${id}': ${error instanceof Error ? error.message : String(error)}`);
  	}
@@ -346,8 +669,11 @@ index 34213ec..007fb8c 100644
 +				runnerProcessInstanceId,
  				steps: [
  					{
++						executionTarget,
  						parentSessionId: ctx.parentSessionId ?? ctx.currentSessionId,
-@@ -1385,10 +1465,12 @@ export function executeAsyncSingle(
+ 						...(capabilityCeiling ? { capabilityCeiling } : {}),
+ 						agent,
+@@ -1385,10 +1487,12 @@ export function executeAsyncSingle(
  		);
  	} catch (error) {
  		const message = error instanceof Error ? error.message : String(error);
@@ -360,6 +686,243 @@ index 34213ec..007fb8c 100644
  		return formatAsyncStartError("single", `Failed to start async run '${id}': ${spawnResult.error}`);
  	}
  
+diff --git a/src/runs/background/async-resume.ts b/src/runs/background/async-resume.ts
+index 595d013..80273d1 100644
+--- a/src/runs/background/async-resume.ts
++++ b/src/runs/background/async-resume.ts
+@@ -1,11 +1,12 @@
+ import * as fs from "node:fs";
+ import * as path from "node:path";
+-import { ASYNC_DIR, RESULTS_DIR, type AcceptanceInput, type AsyncStatus, type SteeringRecoveryDescriptor } from "../../shared/types.ts";
++import { ASYNC_DIR, RESULTS_DIR, type AcceptanceInput, type AsyncStatus, type PublicExecutionTarget, type SteeringRecoveryDescriptor } from "../../shared/types.ts";
+ import type { AgentConfig } from "../../agents/agents.ts";
+ import { validateAcceptanceInput } from "../shared/acceptance.ts";
+ import { validateToolBudgetConfig } from "../shared/tool-budget.ts";
+ import { intersectSubagentCapabilityCeilings, parseSubagentCapabilityCeiling, type ResolvedSubagentCapabilityCeiling } from "../shared/capability-ceiling.ts";
+ import { resolveTurnBudgetConfig } from "../shared/turn-budget.ts";
++import { validateExecutionTarget } from "../shared/execution-target.ts";
+ import { reconcileAsyncRun } from "./stale-run-reconciler.ts";
+ 
+ export interface AsyncResumeParams {
+@@ -41,6 +42,8 @@ export type AsyncResumeTarget = {
+ 	recoveryDescriptor?: SteeringRecoveryDescriptor;
+ 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
+ 	launchContractDigest?: string;
++	executionTarget?: PublicExecutionTarget;
++	executionTargetDigest?: string;
+ };
+ 
+ interface AsyncResultFile {
+@@ -56,8 +59,10 @@ interface AsyncResultFile {
+ 	model?: string;
+ 	thinking?: string;
+ 	launchContractDigest?: string;
++	executionTarget?: PublicExecutionTarget;
++	executionTargetDigest?: string;
+ 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
+-	results?: Array<{ agent?: string; success?: boolean; sessionFile?: string; intercomTarget?: string; model?: string; thinking?: string; launchContractDigest?: string; capabilityCeiling?: ResolvedSubagentCapabilityCeiling }>;
++	results?: Array<{ agent?: string; success?: boolean; sessionFile?: string; intercomTarget?: string; model?: string; thinking?: string; launchContractDigest?: string; executionTarget?: PublicExecutionTarget; executionTargetDigest?: string; capabilityCeiling?: ResolvedSubagentCapabilityCeiling }>;
+ }
+ 
+ export interface AsyncRunLocation {
+@@ -98,14 +103,20 @@ function validateResultFile(value: unknown, resultPath: string): AsyncResultFile
+ 			const model = validateOptionalString(child, "model", resultPath, `results[${index}].model`);
+ 			const thinking = validateOptionalString(child, "thinking", resultPath, `results[${index}].thinking`);
+ 			const launchContractDigest = validateOptionalString(child, "launchContractDigest", resultPath, `results[${index}].launchContractDigest`);
++			const executionTarget = child.executionTarget === undefined ? undefined : validateExecutionTarget(child.executionTarget, `results[${index}].executionTarget`);
++			const executionTargetDigest = validateOptionalString(child, "executionTargetDigest", resultPath, `results[${index}].executionTargetDigest`);
++			if (executionTarget?.kind === "ssh" && !executionTargetDigest) throw new Error(`Invalid async result file '${resultPath}': results[${index}] SSH executionTarget requires executionTargetDigest.`);
+ 			const capabilityCeiling = child.capabilityCeiling === undefined ? undefined : parseSubagentCapabilityCeiling(child.capabilityCeiling, `async result file '${resultPath}' results[${index}].capabilityCeiling`);
+ 			const success = child.success;
+ 			if (success !== undefined && typeof success !== "boolean") throw new Error(`Invalid async result file '${resultPath}': results[${index}].success must be a boolean.`);
+-			return { agent, sessionFile, intercomTarget, model, thinking, launchContractDigest, ...(capabilityCeiling ? { capabilityCeiling } : {}), ...(typeof success === "boolean" ? { success } : {}) };
++			return { agent, sessionFile, intercomTarget, model, thinking, launchContractDigest, executionTarget, executionTargetDigest, ...(capabilityCeiling ? { capabilityCeiling } : {}), ...(typeof success === "boolean" ? { success } : {}) };
+ 		});
+ 	}
+ 	const success = data.success;
+ 	if (success !== undefined && typeof success !== "boolean") throw new Error(`Invalid async result file '${resultPath}': success must be a boolean.`);
++	const executionTarget = data.executionTarget === undefined ? undefined : validateExecutionTarget(data.executionTarget, "executionTarget");
++	const executionTargetDigest = validateOptionalString(data, "executionTargetDigest", resultPath);
++	if (executionTarget?.kind === "ssh" && !executionTargetDigest) throw new Error(`Invalid async result file '${resultPath}': SSH executionTarget requires executionTargetDigest.`);
+ 	return {
+ 		id: validateOptionalString(data, "id", resultPath),
+ 		runId: validateOptionalString(data, "runId", resultPath),
+@@ -118,12 +129,26 @@ function validateResultFile(value: unknown, resultPath: string): AsyncResultFile
+ 		model: validateOptionalString(data, "model", resultPath),
+ 		thinking: validateOptionalString(data, "thinking", resultPath),
+ 		launchContractDigest: validateOptionalString(data, "launchContractDigest", resultPath),
++		executionTarget,
++		executionTargetDigest,
+ 		...(data.capabilityCeiling === undefined ? {} : { capabilityCeiling: parseSubagentCapabilityCeiling(data.capabilityCeiling, `async result file '${resultPath}' capabilityCeiling`) }),
+ 		...(typeof success === "boolean" ? { success } : {}),
+ 		...(results ? { results } : {}),
+ 	};
+ }
+ 
++function persistedExecutionTarget(
++	value: unknown,
++	digest: unknown,
++	label: string,
++): { executionTarget?: PublicExecutionTarget; executionTargetDigest?: string } {
++	if (value === undefined) return {};
++	const executionTarget = validateExecutionTarget(value, label);
++	const executionTargetDigest = typeof digest === "string" && /^[a-f0-9]{64}$/.test(digest) ? digest : undefined;
++	if (executionTarget?.kind === "ssh" && !executionTargetDigest) throw new Error(`${label} SSH target requires a persisted executionTargetDigest.`);
++	return { executionTarget, executionTargetDigest };
++}
++
+ function readResultFile(resultPath: string): AsyncResultFile {
+ 	let raw: string;
+ 	try {
+@@ -286,7 +311,7 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
+ 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': expected an object.`);
+ 	const parsed = value as Record<string, unknown>;
+ 	const allowedFields = new Set([
+-		"version", "launchContractDigest", "sourceRunId", "agentContract", "agent", "sessionFile", "cwd", "model", "fallbackModels", "thinking", "tools", "extensions",
++		"version", "launchContractDigest", "executionTarget", "executionTargetDigest", "sourceRunId", "agentContract", "agent", "sessionFile", "cwd", "model", "fallbackModels", "thinking", "tools", "extensions",
+ 		"subagentOnlyExtensions", "mcpDirectTools", "systemPrompt", "systemPromptMode", "inheritProjectContext", "inheritSkills", "skills",
+ 		"skillPath", "agentFilePath", "completionGuard", "memory", "outputPath", "outputMode", "structuredOutputSchema", "acceptance", "sessionDir", "artifactConfig",
+ 		"artifactsDir", "maxOutput", "controlConfig", "absoluteDeadlineAt", "initialTurnBudget", "initialToolBudget", "maxSubagentDepth", "share", "capabilityCeiling",
+@@ -299,6 +324,9 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
+ 		if (typeof parsed[field] !== "string" || !(parsed[field] as string).trim()) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': ${field} must be a non-empty string.`);
+ 	}
+ 	if (parsed.version !== 1) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': version must be 1.`);
++	parsed.executionTarget = validateExecutionTarget(parsed.executionTarget) ?? { kind: "local" };
++	if (parsed.executionTargetDigest !== undefined && (typeof parsed.executionTargetDigest !== "string" || !/^[a-f0-9]{64}$/.test(parsed.executionTargetDigest))) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': executionTargetDigest must be a SHA-256 digest.`);
++	if (parsed.executionTarget.kind === "ssh" && parsed.executionTargetDigest === undefined) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': SSH executionTarget requires executionTargetDigest.`);
+ 	if (parsed.capabilityCeiling !== undefined) parsed.capabilityCeiling = parseSubagentCapabilityCeiling(parsed.capabilityCeiling, `async recovery descriptor '${descriptorPath}' capabilityCeiling`);
+ 	if (parsed.agentContract !== undefined) {
+ 		if (!parsed.agentContract || typeof parsed.agentContract !== "object" || Array.isArray(parsed.agentContract)) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': agentContract must be an object.`);
+@@ -417,6 +445,11 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
+ 			const selectedStep = statusSteps[requestedIndex];
+ 			if (selectedStep?.status === "running") {
+ 				const capabilityCeiling = intersectSubagentCapabilityCeilings(status?.capabilityCeiling, selectedStep.capabilityCeiling);
++				const target = persistedExecutionTarget(
++					selectedStep.executionTarget ?? result?.results?.[requestedIndex]?.executionTarget ?? (stepCount === 1 ? status?.executionTarget ?? result?.executionTarget : undefined),
++					selectedStep.executionTargetDigest ?? result?.results?.[requestedIndex]?.executionTargetDigest ?? (stepCount === 1 ? result?.executionTargetDigest : undefined),
++					`Async run '${runId}' child ${requestedIndex} executionTarget`,
++				);
+ 				return {
+ 					kind: "live",
+ 					runId,
+@@ -429,6 +462,7 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
+ 					model: selectedStep.model,
+ 					thinking: selectedStep.thinking,
+ 					launchContractDigest: selectedStep.launchContractDigest ?? result?.results?.[requestedIndex]?.launchContractDigest ?? result?.launchContractDigest ?? recoveryDescriptor?.launchContractDigest,
++					...target,
+ 					...(capabilityCeiling ? { capabilityCeiling } : {}),
+ 					...(recoveryDescriptor ? { recoveryDescriptor } : {}),
+ 				};
+@@ -444,6 +478,11 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
+ 				throw new Error(`Async run '${runId}' has ${running.length} running children. Provide index to choose one.`);
+ 			}
+ 			const capabilityCeiling = intersectSubagentCapabilityCeilings(status?.capabilityCeiling, selected.step.capabilityCeiling);
++			const target = persistedExecutionTarget(
++				selected.step.executionTarget ?? result?.results?.[selected.index]?.executionTarget ?? (stepCount === 1 ? status?.executionTarget ?? result?.executionTarget : undefined),
++				selected.step.executionTargetDigest ?? result?.results?.[selected.index]?.executionTargetDigest ?? (stepCount === 1 ? result?.executionTargetDigest : undefined),
++				`Async run '${runId}' child ${selected.index} executionTarget`,
++			);
+ 			return {
+ 				kind: "live",
+ 				runId,
+@@ -456,6 +495,7 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
+ 				model: selected.step.model,
+ 				thinking: selected.step.thinking,
+ 				launchContractDigest: selected.step.launchContractDigest ?? result?.results?.[selected.index]?.launchContractDigest ?? result?.launchContractDigest ?? recoveryDescriptor?.launchContractDigest,
++				...target,
+ 				...(capabilityCeiling ? { capabilityCeiling } : {}),
+ 				...(recoveryDescriptor ? { recoveryDescriptor } : {}),
+ 			};
+@@ -479,6 +519,11 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
+ 	const stepModel = statusSteps[index]?.model ?? resultSteps[index]?.model ?? (stepCount === 1 ? result?.model : undefined);
+ 	const stepThinking = statusSteps[index]?.thinking ?? resultSteps[index]?.thinking ?? (stepCount === 1 ? result?.thinking : undefined);
+ 	const capabilityCeiling = intersectSubagentCapabilityCeilings(status?.capabilityCeiling, statusSteps[index]?.capabilityCeiling, result?.capabilityCeiling, resultSteps[index]?.capabilityCeiling);
++	const target = persistedExecutionTarget(
++		statusSteps[index]?.executionTarget ?? resultSteps[index]?.executionTarget ?? (stepCount === 1 ? recoveryDescriptor?.executionTarget ?? status?.executionTarget ?? result?.executionTarget : undefined),
++		statusSteps[index]?.executionTargetDigest ?? resultSteps[index]?.executionTargetDigest ?? (stepCount === 1 ? recoveryDescriptor?.executionTargetDigest ?? result?.executionTargetDigest : undefined),
++		`Async run '${runId}' child ${index} executionTarget`,
++	);
+ 
+ 	return {
+ 		kind: "revive",
+@@ -492,6 +537,7 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
+ 		...(stepModel ? { model: stepModel } : {}),
+ 		...(stepThinking ? { thinking: stepThinking } : {}),
+ 		launchContractDigest: statusSteps[index]?.launchContractDigest ?? resultSteps[index]?.launchContractDigest ?? result?.launchContractDigest ?? recoveryDescriptor?.launchContractDigest,
++		...target,
+ 		...(capabilityCeiling ? { capabilityCeiling } : {}),
+ 		...(recoveryDescriptor ? { recoveryDescriptor } : {}),
+ 	};
+diff --git a/src/runs/background/async-status.ts b/src/runs/background/async-status.ts
+index 4e259cf..310f687 100644
+--- a/src/runs/background/async-status.ts
++++ b/src/runs/background/async-status.ts
+@@ -11,10 +11,13 @@ import { flatToLogicalStepIndex, normalizeParallelGroups } from "./parallel-grou
+ import { contextModeLabel, summarizeContextModes, type ContextMode, type ContextSummary } from "../shared/context-mode.ts";
+ import { reconcileAsyncRun, reconcileNestedAsyncDescendants } from "./stale-run-reconciler.ts";
+ import { readProcessTerminal, sanitizeProcessTerminal } from "./process-terminal.ts";
++import type { PublicExecutionTarget } from "../shared/execution-target.ts";
+ 
+ interface AsyncRunStepSummary {
+ 	index: number;
+ 	agent: string;
++	executionTarget?: PublicExecutionTarget;
++	executionTargetDigest?: string;
+ 	context?: ContextMode;
+ 	label?: string;
+ 	phase?: string;
+@@ -63,6 +66,10 @@ export interface AsyncRunSummary {
+ 	asyncDir: string;
+ 	sessionId?: string;
+ 	state: "queued" | "running" | "complete" | "failed" | "paused" | "stopped";
++	executionState?: AsyncStatus["execution_state"];
++	outcomeState?: AsyncStatus["outcome_state"];
++	effectsState?: AsyncStatus["effects_state"];
++	deliveryState?: AsyncStatus["delivery_state"];
+ 	error?: string;
+ 	activityState?: ActivityState;
+ 	lastActivityAt?: number;
+@@ -223,6 +230,8 @@ function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string
+ 		return {
+ 			index,
+ 			agent: step.agent,
++			...(step.executionTarget ? { executionTarget: step.executionTarget } : {}),
++			...(step.executionTargetDigest ? { executionTargetDigest: step.executionTargetDigest } : {}),
+ 			...(step.context ? { context: step.context } : {}),
+ 			...(step.label ? { label: step.label } : {}),
+ 			...(step.phase ? { phase: step.phase } : {}),
+@@ -273,6 +282,10 @@ function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string
+ 		asyncDir,
+ 		...(status.sessionId ? { sessionId: status.sessionId } : {}),
+ 		state: status.state,
++		...(status.execution_state ? { executionState: status.execution_state } : {}),
++		...(status.outcome_state ? { outcomeState: status.outcome_state } : {}),
++		...(status.effects_state ? { effectsState: status.effects_state } : {}),
++		...(status.delivery_state ? { deliveryState: status.delivery_state } : {}),
+ 		...(status.error ? { error: status.error } : {}),
+ 		activityState,
+ 		lastActivityAt,
+@@ -423,8 +436,9 @@ function formatActivityFacts(input: { activityState?: ActivityState; lastActivit
+ function formatStepLine(step: AsyncRunStepSummary): string {
+ 	const display = step.label ? `${step.label} (${step.agent})` : step.agent;
+ 	const context = contextModeLabel(step.context);
++	const target = step.executionTarget?.kind === "ssh" ? `ssh:${step.executionTarget.name}` : step.executionTarget?.kind;
+ 	const phase = step.phase ? `[${step.phase}] ` : "";
+-	const parts = [`${step.index + 1}. ${phase}${display}${context ? ` ${context}` : ""}`, step.status];
++	const parts = [`${step.index + 1}. ${phase}${display}${context ? ` ${context}` : ""}${target ? ` [${target}]` : ""}`, step.status];
+ 	const activity = formatActivityFacts(step);
+ 	if (activity) parts.push(activity);
+ 	const modelThinking = formatModelThinking(step.model, step.thinking);
+@@ -466,7 +480,8 @@ function formatRunHeader(run: AsyncRunSummary): string {
+ 	const activity = formatActivityFacts(run);
+ 	const pending = run.pendingAppends ? ` | ${run.pendingAppends} pending append${run.pendingAppends === 1 ? "" : "s"}` : "";
+ 	const context = contextModeLabel(run.context);
+-	return `${run.id} | ${run.state}${activity ? ` | ${activity}` : ""} | ${run.mode}${context ? ` ${context}` : ""} | ${stepLabel}${pending} | ${cwd}`;
++	const lifecycle = [run.executionState, run.outcomeState, run.effectsState ? `effects:${run.effectsState}` : undefined, run.deliveryState ? `delivery:${run.deliveryState}` : undefined].filter(Boolean).join("/");
++	return `${run.id} | ${run.state}${lifecycle ? ` (${lifecycle})` : ""}${activity ? ` | ${activity}` : ""} | ${run.mode}${context ? ` ${context}` : ""} | ${stepLabel}${pending} | ${cwd}`;
+ }
+ 
+ export function formatAsyncRunList(runs: AsyncRunSummary[], heading = "Active async runs"): string {
 diff --git a/src/runs/background/notify.ts b/src/runs/background/notify.ts
 index 1582ccd..eac578c 100644
 --- a/src/runs/background/notify.ts
@@ -446,11 +1009,148 @@ index 86e8350..9e6a690 100644
  
  	const primeExistingResults = (options: { triggerTurn?: boolean } = {}) => {
  		try {
+diff --git a/src/runs/background/scheduled-runs.ts b/src/runs/background/scheduled-runs.ts
+index 1572598..831be94 100644
+--- a/src/runs/background/scheduled-runs.ts
++++ b/src/runs/background/scheduled-runs.ts
+@@ -14,6 +14,7 @@ import {
+ import type { SubagentParamsLike } from "../foreground/subagent-executor.ts";
+ import { validateExecutionAcceptance } from "../shared/acceptance.ts";
+ import type { ResolvedSubagentCapabilityCeiling } from "../shared/capability-ceiling.ts";
++import { validateExecutionTarget } from "../shared/execution-target.ts";
+ 
+ export const SCHEDULED_RUNS_DIR = path.join(TEMP_ROOT_DIR, "scheduled-subagent-runs");
+ export const SCHEDULED_RUN_ACTIONS = ["schedule", "schedule-list", "schedule-status", "schedule-cancel"] as const;
+@@ -44,7 +45,7 @@ type ScheduledRunJob = {
+ };
+ 
+ type ScheduledRunStoreData = {
+-	version: 1;
++	version: 2;
+ 	cwd: string;
+ 	sessionId: string;
+ 	jobs: ScheduledRunJob[];
+@@ -111,8 +112,23 @@ export function parseScheduledRunTime(schedule: string, now = Date.now()): numbe
+ 	throw new Error(`Invalid schedule "${schedule}". Use a one-shot relative delay like "+10m" or a future ISO timestamp with timezone.`);
+ }
+ 
++function normalizeScheduledTargets(params: SubagentParamsLike, _legacyLocal: boolean): SubagentParamsLike {
++	// Omission is materialized as local in every durable store version. This
++	// prevents a later ambient relocation from changing where a scheduled leaf
++	// executes; v1 records are migrated with the same explicit local identity.
++	const normalized = { ...params };
++	if (normalized.agent && !normalized.tasks && !normalized.chain) normalized.executionTarget = validateExecutionTarget(normalized.executionTarget) ?? { kind: "local" };
++	if (normalized.tasks) normalized.tasks = normalized.tasks.map((task, index) => ({ ...task, executionTarget: validateExecutionTarget(task.executionTarget, `tasks[${index}].executionTarget`) ?? { kind: "local" } }));
++	if (normalized.chain) normalized.chain = normalized.chain.map((step, stepIndex) => {
++		if ("parallel" in step && Array.isArray(step.parallel)) return { ...step, parallel: step.parallel.map((task, index) => ({ ...task, executionTarget: validateExecutionTarget(task.executionTarget, `chain[${stepIndex}].parallel[${index}].executionTarget`) ?? { kind: "local" } })) };
++		if ("parallel" in step && !Array.isArray(step.parallel)) return { ...step, parallel: { ...step.parallel, executionTarget: validateExecutionTarget(step.parallel.executionTarget, `chain[${stepIndex}].parallel.executionTarget`) ?? { kind: "local" } } };
++		return { ...step, executionTarget: validateExecutionTarget(step.executionTarget, `chain[${stepIndex}].executionTarget`) ?? { kind: "local" } };
++	});
++	return normalized;
++}
++
+ function readStoreData(filePath: string, cwd: string, sessionId: string): ScheduledRunStoreData {
+-	if (!fs.existsSync(filePath)) return { version: 1, cwd, sessionId, jobs: [] };
++	if (!fs.existsSync(filePath)) return { version: 2, cwd, sessionId, jobs: [] };
+ 	let parsed: unknown;
+ 	try {
+ 		parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+@@ -123,8 +139,9 @@ function readStoreData(filePath: string, cwd: string, sessionId: string): Schedu
+ 	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+ 		throw new Error(`Scheduled subagent store '${filePath}' must be a JSON object.`);
+ 	}
+-	const data = parsed as Partial<ScheduledRunStoreData>;
+-	if (data.version !== 1) throw new Error(`Unsupported scheduled subagent store version in '${filePath}'.`);
++	const data = parsed as Omit<Partial<ScheduledRunStoreData>, "version"> & { version?: number };
++	if (data.version !== 1 && data.version !== 2) throw new Error(`Unsupported scheduled subagent store version in '${filePath}'.`);
++	const legacyLocal = data.version === 1;
+ 	if (!Array.isArray(data.jobs)) throw new Error(`Scheduled subagent store '${filePath}' must contain a jobs array.`);
+ 	const jobs: ScheduledRunJob[] = [];
+ 	const validStates = new Set<ScheduledRunState>(["scheduled", "running", "fired", "canceled", "missed", "failed"]);
+@@ -140,10 +157,10 @@ function readStoreData(filePath: string, cwd: string, sessionId: string): Schedu
+ 		}
+ 		if (!candidate.state || !validStates.has(candidate.state)) throw new Error(`Scheduled subagent store '${filePath}' job ${index} has invalid state.`);
+ 		if (!candidate.params || typeof candidate.params !== "object" || Array.isArray(candidate.params)) throw new Error(`Scheduled subagent store '${filePath}' job ${index} has invalid params.`);
+-		jobs.push(candidate as ScheduledRunJob);
++		jobs.push({ ...(candidate as ScheduledRunJob), params: normalizeScheduledTargets(candidate.params as SubagentParamsLike, legacyLocal) });
+ 	}
+ 	return {
+-		version: 1,
++		version: 2,
+ 		cwd: typeof data.cwd === "string" ? data.cwd : cwd,
+ 		sessionId: typeof data.sessionId === "string" ? data.sessionId : sessionId,
+ 		jobs,
+@@ -247,7 +264,11 @@ function sanitizeScheduledParams(params: SubagentParamsLike): { params?: Subagen
+ 		scheduleName: _scheduleName,
+ 		...executionParams
+ 	} = params;
+-	return { params: { ...executionParams, async: true, clarify: false, context: "fresh" } };
++	try {
++		return { params: normalizeScheduledTargets({ ...executionParams, async: true, clarify: false, context: "fresh" }, false) };
++	} catch (error) {
++		return { error: error instanceof Error ? error.message : String(error) };
++	}
+ }
+ 
+ export class ScheduledRunManager {
 diff --git a/src/runs/background/subagent-runner.ts b/src/runs/background/subagent-runner.ts
-index 6efb0bd..c04850b 100644
+index 6efb0bd..c94a8d6 100644
 --- a/src/runs/background/subagent-runner.ts
 +++ b/src/runs/background/subagent-runner.ts
-@@ -1449,37 +1449,33 @@ async function runSingleStep(
+@@ -107,6 +107,7 @@ import { resolveWatchdogConfig } from "../../watchdog/settings.ts";
+ import { createBoundedByteTail, createBoundedLineReader, formatProtocolOutputLimit, MAX_CHILD_STDERR_BYTES, projectChildLifecycle, type ChildLifecycleAction, type ProtocolOutputLimit } from "../shared/child-protocol.ts";
+ import { acquireSessionLease, type SessionLeaseRequest } from "../shared/session-lease.ts";
+ import { decodeSubagentCapabilityCeiling, SUBAGENT_CAPABILITY_CEILING_ENV, type ResolvedSubagentCapabilityCeiling } from "../shared/capability-ceiling.ts";
++import { assertExecutionTargetWorktreeCompatible, resolveEffectsEvidenceState } from "../shared/execution-target.ts";
+ import {
+ 	CHILD_WATCHDOG_CONFIG_ENV,
+ 	acceptChildWatchdogEvent,
+@@ -160,6 +161,8 @@ interface SubagentRunConfig {
+ 
+ interface StepResult {
+ 	agent: string;
++	executionTarget?: import("../shared/execution-target.ts").PublicExecutionTarget;
++	executionTargetDigest?: string;
+ 	context?: "fresh" | "fork";
+ 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
+ 	capabilityAudit?: import("../shared/capability-ceiling.ts").SubagentCapabilityAudit;
+@@ -989,6 +992,8 @@ async function runSingleStep(
+ 	ctx: SingleStepContext,
+ ): Promise<{
+ 	agent: string;
++	executionTarget?: import("../shared/execution-target.ts").PublicExecutionTarget;
++	executionTargetDigest?: string;
+ 	context?: "fresh" | "fork";
+ 	agentContract?: import("../../shared/types.ts").AgentContract;
+ 	launchContractDigest?: string;
+@@ -1202,6 +1207,8 @@ async function runSingleStep(
+ 			toolBudget: step.toolBudget,
+ 			childWatchdog,
+ 			waitToolEnabled: step.waitToolEnabled,
++			executionTarget: step.executionTarget,
++			effectsEvidencePath: path.join(path.dirname(ctx.outputFile), "effects", `${ctx.flatIndex}.jsonl`),
+ 		});
+ 		if (step.definitionDigest) {
+ 			const toolPlan = resolvePiLaunchToolPlan({
+@@ -1217,6 +1224,8 @@ async function runSingleStep(
+ 			});
+ 			actualLaunchContractDigest = launchBindingDigest({
+ 				definitionDigest: step.definitionDigest,
++				executionTarget: step.executionTarget?.public ?? { kind: "local" },
++				executionTargetDigest: step.executionTarget?.kind === "ssh" ? step.executionTarget.descriptorDigest : undefined,
+ 				task: step.launchBindingTask ?? task,
+ 				...(candidate ? { model: candidate } : {}),
+ 				modelCandidates: candidates,
+@@ -1227,7 +1236,7 @@ async function runSingleStep(
+ 				inheritSkills: step.inheritSkills,
+ 				skills: step.skills,
+ 				tools: toolPlan.effectiveToolAllowlist,
+-				extensions: toolPlan.extensionArgs,
++				extensions: [...toolPlan.extensionArgs, ...(step.executionTarget?.kind === "ssh" ? [step.executionTarget.lockExtensionPath] : [])],
+ 				mcpDirectTools: toolPlan.effectiveMcpTools,
+ 				...(step.outputPath ? { outputPath: step.outputPath } : {}),
+ 				...(step.outputMode ? { outputMode: step.outputMode } : {}),
+@@ -1449,42 +1458,42 @@ async function runSingleStep(
  					? (finalResult?.error ? `${finalResult.error}\n${acceptanceFailure}` : acceptanceFailure)
  					: finalResult?.error;
  
@@ -495,6 +1195,8 @@ index 6efb0bd..c04850b 100644
 +					modelAttempts, error: effectiveFinalError, acceptance: effectiveAcceptance,
  					...(capabilityAudit ? { capabilityCeiling: capabilityAudit.ceiling, capabilityAudit } : {}),
  					launchContractDigest: actualLaunchContractDigest,
++					executionTarget: step.executionTarget?.public ?? { kind: "local" },
++					...(step.executionTarget?.kind === "ssh" ? { executionTargetDigest: step.executionTarget.descriptorDigest } : {}),
  					...(transcriptWriter ? { transcriptPath: artifactPaths.transcriptPath } : {}),
 -					transcriptError: transcriptWriter?.getError(),
 -					skills: step.skills,
@@ -511,7 +1213,14 @@ index 6efb0bd..c04850b 100644
  		}
  	}
  
-@@ -1500,7 +1496,7 @@ async function runSingleStep(
+ 	const result = {
+ 		agent: step.agent,
++		executionTarget: step.executionTarget?.public ?? { kind: "local" },
++		...(step.executionTarget?.kind === "ssh" ? { executionTargetDigest: step.executionTarget.descriptorDigest } : {}),
+ 		context: step.context,
+ 		...(step.agentContract ? { agentContract: step.agentContract } : {}),
+ 		launchContractDigest: actualLaunchContractDigest,
+@@ -1500,7 +1509,7 @@ async function runSingleStep(
  		totalCost: costSummaryFromAttempts(modelAttempts),
  		artifactPaths,
  		transcriptPath: transcriptWriter ? artifactPaths?.transcriptPath : undefined,
@@ -520,11 +1229,403 @@ index 6efb0bd..c04850b 100644
  		interrupted: timedOutAfterAcceptance || stoppedAfterAcceptance || turnBudgetExceeded ? false : finalResult?.interrupted,
  		timedOut: timedOutAfterAcceptance ? true : finalResult?.timedOut,
  		stopped: stoppedAfterAcceptance ? true : finalResult?.stopped,
+@@ -1575,7 +1584,8 @@ function markParallelGroupSetupFailure(input: {
+ 		input.statusPayload.steps[flatTaskIndex].endedAt = input.failedAt;
+ 		input.statusPayload.steps[flatTaskIndex].durationMs = 0;
+ 		input.statusPayload.steps[flatTaskIndex].exitCode = 1;
+-		input.results.push({ agent: input.group.parallel[taskIndex].agent, context: input.group.parallel[taskIndex].context, output: input.setupError, success: false, exitCode: 1, sessionFile: input.group.parallel[taskIndex].sessionFile });
++		const task = input.group.parallel[taskIndex];
++		input.results.push({ agent: task.agent, executionTarget: task.executionTarget?.public ?? { kind: "local" }, executionTargetDigest: task.executionTarget?.kind === "ssh" ? task.executionTarget.descriptorDigest : undefined, context: task.context, output: input.setupError, success: false, exitCode: 1, sessionFile: task.sessionFile });
+ 	}
+ 	input.statusPayload.currentStep = input.groupStartFlatIndex;
+ 	input.statusPayload.lastUpdate = input.failedAt;
+@@ -1743,6 +1753,8 @@ async function runSubagent(
+ 				const transcriptPath = resolveAsyncStepTranscriptPath({ artifactsDir, artifactConfig, runId: id, agent: task.agent, flatIndex: taskFlatIndex, flatStepCount: initialFlatStepCount });
+ 				initialStatusSteps.push({
+ 					agent: task.agent,
++					executionTarget: task.executionTarget?.public ?? { kind: "local" },
++					...(task.executionTarget?.kind === "ssh" ? { executionTargetDigest: task.executionTarget.descriptorDigest } : {}),
+ 					...(task.context ? { context: task.context } : {}),
+ 					phase: task.phase,
+ 					label: task.label,
+@@ -1768,6 +1780,8 @@ async function runSubagent(
+ 			parallelGroups.push({ start: flatStepCount, count: 1, stepIndex });
+ 			initialStatusSteps.push({
+ 				agent: `expand:${step.parallel.agent}`,
++				executionTarget: step.parallel.executionTarget?.public ?? { kind: "local" },
++				...(step.parallel.executionTarget?.kind === "ssh" ? { executionTargetDigest: step.parallel.executionTarget.descriptorDigest } : {}),
+ 				...(step.parallel.context ? { context: step.parallel.context } : {}),
+ 				phase: step.phase ?? step.parallel.phase,
+ 				label: step.label ?? step.parallel.label ?? `Dynamic fanout (${step.collect.as})`,
+@@ -1786,6 +1800,8 @@ async function runSubagent(
+ 			const transcriptPath = resolveAsyncStepTranscriptPath({ artifactsDir, artifactConfig, runId: id, agent: step.agent, flatIndex: stepFlatIndex, flatStepCount: initialFlatStepCount });
+ 			initialStatusSteps.push({
+ 				agent: step.agent,
++				executionTarget: step.executionTarget?.public ?? { kind: "local" },
++				...(step.executionTarget?.kind === "ssh" ? { executionTargetDigest: step.executionTarget.descriptorDigest } : {}),
+ 				...(step.context ? { context: step.context } : {}),
+ 				phase: step.phase,
+ 				label: step.label,
+@@ -1816,8 +1832,15 @@ async function runSubagent(
+ 			step.processTerminal = { version: 1, state: "pending", runId: id, runnerProcessInstanceId: config.runnerProcessInstanceId };
+ 		}
+ 	}
++	const publicTargets = new Map(initialStatusSteps.flatMap((step) => step.executionTarget ? [[JSON.stringify(step.executionTarget), step.executionTarget] as const] : []));
++	const runExecutionTarget = publicTargets.size === 1 ? [...publicTargets.values()][0] : undefined;
+ 	const statusPayload: RunnerStatusPayload = {
+ 		lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
++		...(runExecutionTarget ? { executionTarget: runExecutionTarget } : {}),
++		execution_state: "active",
++		outcome_state: "pending",
++		effects_state: "unknown",
++		delivery_state: "pending",
+ 		runId: id,
+ 		...(config.sessionId ? { sessionId: config.sessionId } : {}),
+ 		mode: config.resultMode ?? (flatSteps.length > 1 ? "chain" : "single"),
+@@ -3269,6 +3292,7 @@ async function runSubagent(
+ 					break;
+ 				}
+ 				try {
++					assertExecutionTargetWorktreeCompatible(group.parallel.map((task) => task.executionTarget), true);
+ 					worktreeSetup = createWorktrees(cwd, `${id}-s${stepIndex}`, group.parallel.length, {
+ 						agents: group.parallel.map((task) => task.agent),
+ 						setupHook: config.worktreeSetupHook
+@@ -3489,6 +3513,8 @@ async function runSubagent(
+ 				for (const pr of parallelResults) {
+ 					results.push({
+ 						agent: pr.agent,
++						executionTarget: pr.executionTarget,
++						executionTargetDigest: pr.executionTargetDigest,
+ 						context: pr.context,
+ 						agentContract: pr.agentContract,
+ 						launchContractDigest: pr.launchContractDigest,
+@@ -3665,6 +3691,8 @@ async function runSubagent(
+ 			const childStopped = singleResult.stopped === true;
+ 			results.push({
+ 				agent: singleResult.agent,
++				executionTarget: singleResult.executionTarget,
++				executionTargetDigest: singleResult.executionTargetDigest,
+ 				context: singleResult.context,
+ 				agentContract: singleResult.agentContract,
+ 				launchContractDigest: singleResult.launchContractDigest,
+@@ -3922,6 +3950,19 @@ async function runSubagent(
+ 			statusPayload.error = `Step failed: ${failedStep.agent}`;
+ 		}
+ 	}
++	statusPayload.execution_state = stopped || interrupted || timedOut ? "interrupted" : "terminal";
++	statusPayload.outcome_state = stopped || interrupted || timedOut ? "interrupted" : results.every((result) => result.success) ? "succeeded" : "failed";
++	statusPayload.delivery_state = "pending";
++	let effectsState: "none" | "confirmed" | "unknown" = "none";
++	for (let index = 0; index < flatSteps.length; index++) {
++		const step = flatSteps[index]!;
++		const stepEffects = resolveEffectsEvidenceState(step.executionTarget, path.join(asyncDir, "effects", `${index}.jsonl`));
++		if (stepEffects === "unknown") effectsState = "unknown";
++		else if (stepEffects === "confirmed" && effectsState !== "unknown") effectsState = "confirmed";
++	}
++	if (effectsState !== "unknown" && (stopped || interrupted || timedOut) && results.some((result) => result.effects?.fileMutation?.attempted)) effectsState = "unknown";
++	else if (effectsState === "none" && results.some((result) => result.effects?.fileMutation?.attempted)) effectsState = "confirmed";
++	statusPayload.effects_state = effectsState;
+ 	writeStatusPayload();
+ 	appendJsonl(
+ 		eventsPath,
+@@ -3958,6 +3999,11 @@ async function runSubagent(
+ 	try {
+ 		writeAtomicJson(resultPath, {
+ 			lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
++			...(statusPayload.executionTarget ? { executionTarget: statusPayload.executionTarget } : {}),
++			execution_state: statusPayload.execution_state,
++			outcome_state: statusPayload.outcome_state,
++			effects_state: statusPayload.effects_state,
++			delivery_state: statusPayload.delivery_state,
+ 			id,
+ 			agent: agentName,
+ 			mode: resultMode,
+diff --git a/src/runs/foreground/chain-execution.ts b/src/runs/foreground/chain-execution.ts
+index b288c75..c527178 100644
+--- a/src/runs/foreground/chain-execution.ts
++++ b/src/runs/foreground/chain-execution.ts
+@@ -73,6 +73,7 @@ import { injectSingleOutputInstruction, validateFileOnlyOutputMode } from "../sh
+ import { buildWorkflowGraphSnapshot } from "../shared/workflow-graph.ts";
+ import { ChainOutputValidationError, outputEntryFromResult, resolveOutputReferences, validateChainOutputBindings } from "../shared/chain-outputs.ts";
+ import { createStructuredOutputRuntime } from "../shared/structured-output.ts";
++import { assertExecutionTargetWorktreeCompatible, resolveExecutionTarget } from "../shared/execution-target.ts";
+ import { collectDynamicResults, DynamicFanoutError, materializeDynamicParallelStep, validateDynamicCollection, type DynamicCollectedResult } from "../shared/dynamic-fanout.ts";
+ import { acceptanceFailureMessage, aggregateAcceptanceReport, evaluateAcceptance, resolveEffectiveAcceptance } from "../shared/acceptance.ts";
+ import { isAgentContractV1 } from "../shared/agent-contract.ts";
+@@ -343,6 +344,7 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
+ 				: undefined;
+ 			const agentContract = task.agentContract ?? input.step.agentContract ?? input.agentContract;
+ 			const result = await runSync(input.ctx.cwd, input.agents, task.agent, taskStr, {
++				executionTarget: task.executionTarget,
+ 				parentSessionId: input.ctx.sessionManager.getSessionId() ?? undefined,
+ 				capabilityCeiling: input.capabilityCeiling,
+ 				context: input.contextForAgent?.(task.agent),
+@@ -694,6 +696,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
+ 					);
+ 				}
+ 				try {
++					assertExecutionTargetWorktreeCompatible(step.parallel.map((task) => resolveExecutionTarget(task.executionTarget)), true);
+ 					worktreeSetup = createWorktrees(parallelCwd, `${runId}-s${stepIndex}`, step.parallel.length, {
+ 						agents: step.parallel.map((task) => task.agent),
+ 						setupHook: params.worktreeSetupHook
+@@ -1251,6 +1254,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
+ 				dynamicGroupStatuses,
+ 			});
+ 			const r = await runSync(ctx.cwd, agents, seqStep.agent, stepTask, {
++				executionTarget: seqStep.executionTarget,
+ 				parentSessionId: ctx.sessionManager.getSessionId() ?? undefined,
+ 				capabilityCeiling: params.capabilityCeiling,
+ 				context: params.contextForAgent?.(seqStep.agent),
+diff --git a/src/runs/foreground/execution.ts b/src/runs/foreground/execution.ts
+index 66158ba..a096d9c 100644
+--- a/src/runs/foreground/execution.ts
++++ b/src/runs/foreground/execution.ts
+@@ -79,6 +79,7 @@ import { attachContractProjections, isAgentContractV1 } from "../shared/agent-co
+ import { appendTurnBudgetSystemPrompt, formatTurnBudgetOutput, initialTurnBudgetState, turnBudgetDecision, turnBudgetDeferredNote, turnBudgetDeferredState, turnBudgetExceededMessage, turnBudgetSoftNote, turnBudgetState } from "../shared/turn-budget.ts";
+ import { initialToolBudgetState, toolBudgetState } from "../shared/tool-budget.ts";
+ import { resolveWatchdogConfig } from "../../watchdog/settings.ts";
++import { resolveEffectsEvidenceState, resolveExecutionTarget } from "../shared/execution-target.ts";
+ import { agentDefinitionDigest, launchBindingDigest } from "../../shared/launch-contract.ts";
+ import { createBoundedByteTail, createBoundedLineReader, formatProtocolOutputLimit, MAX_CHILD_STDERR_BYTES, projectChildLifecycle, type ChildLifecycleAction, type ProtocolOutputLimit } from "../shared/child-protocol.ts";
+ import {
+@@ -255,6 +256,8 @@ async function runSingleAttempt(
+ 		childWatchdog,
+ 		waitToolEnabled: options.waitToolEnabled,
+ 		capabilityCeiling: options.capabilityCeiling,
++		executionTarget: options.resolvedExecutionTarget,
++		effectsEvidencePath: options.effectsEvidencePath,
+ 	});
+ 
+ 	const effectiveSystemPrompt = appendTurnBudgetSystemPrompt(shared.systemPrompt, options.turnBudget);
+@@ -271,6 +274,8 @@ async function runSingleAttempt(
+ 	});
+ 	const launchContractDigest = launchBindingDigest({
+ 		definitionDigest: agentDefinitionDigest(agent),
++		executionTarget: options.resolvedExecutionTarget?.public ?? { kind: "local" },
++		executionTargetDigest: options.resolvedExecutionTarget?.kind === "ssh" ? options.resolvedExecutionTarget.descriptorDigest : undefined,
+ 		task: shared.originalTask ?? task,
+ 		...(modelArg ? { model: modelArg } : {}),
+ 		modelCandidates: shared.modelCandidates,
+@@ -281,7 +286,7 @@ async function runSingleAttempt(
+ 		inheritSkills: agent.inheritSkills,
+ 		skills: shared.resolvedSkillNames ?? [],
+ 		tools: toolPlan.effectiveToolAllowlist,
+-		extensions: toolPlan.extensionArgs,
++		extensions: [...toolPlan.extensionArgs, ...(options.resolvedExecutionTarget?.kind === "ssh" ? [options.resolvedExecutionTarget.lockExtensionPath] : [])],
+ 		mcpDirectTools: toolPlan.effectiveMcpTools,
+ 		...(options.outputPath ? { outputPath: options.outputPath } : {}),
+ 		outputMode: options.outputMode ?? "inline",
+@@ -290,6 +295,8 @@ async function runSingleAttempt(
+ 	const result: SingleResult = withRunContext({
+ 		agent: agent.name,
+ 		task: shared.originalTask ?? task,
++		executionTarget: options.resolvedExecutionTarget?.public ?? { kind: "local" },
++		...(options.resolvedExecutionTarget?.kind === "ssh" ? { executionTargetDigest: options.resolvedExecutionTarget.descriptorDigest } : {}),
+ 		...(options.agentContract ? { agentContract: options.agentContract } : {}),
+ 		launchContractDigest,
+ 		exitCode: 0,
+@@ -1200,6 +1207,7 @@ async function runSingleAttempt(
+ 	}
+ 		artifactOutputByResult.set(result, fullOutput);
+ 		acceptanceOutputByResult.set(result, acceptanceOutput);
++	result.effects_state = resolveEffectsEvidenceState(options.resolvedExecutionTarget, options.effectsEvidencePath);
+ 	result.outputMode = options.outputMode ?? "inline";
+ 	result.finalOutput = options.outputMode === "file-only" && result.savedOutputPath && result.outputReference
+ 		? result.outputReference.message
+@@ -1232,10 +1240,24 @@ export async function runSync(
+ 	task: string,
+ 	options: RunSyncOptions,
+ ): Promise<SingleResult> {
+-	options = {
+-		...options,
+-		capabilityCeiling: options.capabilityCeiling ?? resolveCurrentSubagentCapabilityCeiling(options.parentSessionId),
+-	};
++	try {
++		const resolvedExecutionTarget = options.resolvedExecutionTarget ?? resolveExecutionTarget(options.executionTarget);
++		options = {
++			...options,
++			resolvedExecutionTarget,
++			effectsEvidencePath: options.effectsEvidencePath ?? path.join(options.artifactsDir ?? options.sessionDir ?? path.dirname(options.sessionFile ?? path.join(runtimeCwd, ".pi-subagents")), "effects", `${options.runId}-${options.index ?? 0}.jsonl`),
++			capabilityCeiling: options.capabilityCeiling ?? resolveCurrentSubagentCapabilityCeiling(options.parentSessionId),
++		};
++	} catch (error) {
++		return {
++			agent: agentName,
++			task,
++			exitCode: 1,
++			messages: [],
++			usage: emptyUsage(),
++			error: `Execution target rejected: ${error instanceof Error ? error.message : String(error)}`,
++		};
++	}
+ 	const agent = agents.find((a) => a.name === agentName);
+ 	if (!agent) {
+ 		return withRunContext({
+@@ -1360,6 +1382,8 @@ export async function runSync(
+ 			error: target.error,
+ 			agentContract: target.agentContract,
+ 			launchContractDigest: target.launchContractDigest,
++			executionTarget: target.executionTarget,
++			executionTargetDigest: target.executionTargetDigest,
+ 			execution: target.execution,
+ 			acceptance: target.acceptance,
+ 			capabilityCeiling: target.capabilityCeiling,
 diff --git a/src/runs/foreground/subagent-executor.ts b/src/runs/foreground/subagent-executor.ts
-index b2bb70d..aeaecf8 100644
+index b2bb70d..ea0cef0 100644
 --- a/src/runs/foreground/subagent-executor.ts
 +++ b/src/runs/foreground/subagent-executor.ts
-@@ -3940,6 +3940,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+@@ -49,6 +49,7 @@ import { formatSpawnBudget, getSpawnBudgetSnapshot, grantSpawnBudget, preflightS
+ import { validateToolBudgetConfig } from "../shared/tool-budget.ts";
+ import { intersectSubagentCapabilityCeilings, resolveCurrentSubagentCapabilityCeiling, type ResolvedSubagentCapabilityCeiling } from "../shared/capability-ceiling.ts";
+ import { isAgentContractV1 } from "../shared/agent-contract.ts";
++import { assertExecutionTargetAsyncCompatible, assertExecutionTargetWorktreeCompatible, resolveExecutionTarget, type ExecutionTarget } from "../shared/execution-target.ts";
+ import { finalizeSingleOutput, injectSingleOutputInstruction, normalizeSingleOutputOverride, resolveSingleOutputPath, validateFileOnlyOutputMode } from "../shared/single-output.ts";
+ import { cleanupStructuredOutputRuntime, createStructuredOutputRuntime } from "../shared/structured-output.ts";
+ import { compactForegroundDetails, getSingleResultOutput, mapConcurrent, readStatus, resolveChildCwd, sumResultsCost, sumResultsUsage } from "../../shared/utils.ts";
+@@ -128,6 +129,7 @@ const MUTATING_MANAGEMENT_ACTIONS = new Set(["create", "update", "delete", "ejec
+ interface TaskParam {
+ 	agent: string;
+ 	task: string;
++	executionTarget?: ExecutionTarget;
+ 	cwd?: string;
+ 	count?: number;
+ 	output?: string | boolean;
+@@ -144,6 +146,7 @@ interface TaskParam {
+ 
+ export interface SubagentParamsLike {
+ 	action?: string;
++	executionTarget?: ExecutionTarget;
+ 	id?: string;
+ 	runId?: string;
+ 	dir?: string;
+@@ -407,6 +410,8 @@ function rememberForegroundRun(state: SubagentState, input: { runId: string; mod
+ 				agent: result.agent,
+ 				index,
+ 				...(result.context ? { context: result.context } : {}),
++				...(result.executionTarget ? { executionTarget: result.executionTarget } : {}),
++				...(result.executionTargetDigest ? { executionTargetDigest: result.executionTargetDigest } : {}),
+ 				status: resolveSubagentResultStatus({ exitCode: result.exitCode, interrupted: result.interrupted, detached: result.detached }),
+ 				...foregroundChildActivityFromProgress(result.progress),
+ 				updatedAt,
+@@ -473,6 +478,8 @@ function updateRememberedForegroundChild(state: SubagentState, input: { runId: s
+ 		agent: input.result.agent,
+ 		index: input.index,
+ 		...(input.result.context ? { context: input.result.context } : {}),
++		...(input.result.executionTarget ? { executionTarget: input.result.executionTarget } : {}),
++		...(input.result.executionTargetDigest ? { executionTargetDigest: input.result.executionTargetDigest } : {}),
+ 		status: input.result.acceptance?.status === "rejected"
+ 			? "failed"
+ 			: resolveSubagentResultStatus({ exitCode: input.result.exitCode, interrupted: input.result.interrupted, detached: false }),
+@@ -523,7 +530,7 @@ function updateRememberedForegroundChild(state: SubagentState, input: { runId: s
+ 	});
+ }
+ 
+-function resolveForegroundResumeTarget(params: SubagentParamsLike, state: SubagentState): { runId: string; mode: "single" | "parallel" | "chain"; state: "complete"; agent: string; index: number; cwd: string; sessionFile: string; model?: string; thinking?: string; launchContractDigest?: string; capabilityCeiling?: ResolvedSubagentCapabilityCeiling } | undefined {
++function resolveForegroundResumeTarget(params: SubagentParamsLike, state: SubagentState): { runId: string; mode: "single" | "parallel" | "chain"; state: "complete"; agent: string; index: number; cwd: string; sessionFile: string; model?: string; thinking?: string; executionTarget?: ExecutionTarget; executionTargetDigest?: string; launchContractDigest?: string; capabilityCeiling?: ResolvedSubagentCapabilityCeiling } | undefined {
+ 	const requested = (params.id ?? params.runId)?.trim();
+ 	if (!requested || !state.foregroundRuns?.size || !state.currentSessionId) return undefined;
+ 	const sessionRuns = [...state.foregroundRuns.values()].filter((run) => run.sessionId === state.currentSessionId);
+@@ -552,6 +559,8 @@ function resolveForegroundResumeTarget(params: SubagentParamsLike, state: Subage
+ 		sessionFile,
+ 		...(child.model ? { model: child.model } : {}),
+ 		...(child.thinking ? { thinking: child.thinking } : {}),
++		...(child.executionTarget ? { executionTarget: child.executionTarget } : { executionTarget: { kind: "local" as const } }),
++		...(child.executionTargetDigest ? { executionTargetDigest: child.executionTargetDigest } : {}),
+ 		...(child.launchContractDigest ? { launchContractDigest: child.launchContractDigest } : {}),
+ 		...(child.capabilityCeiling ? { capabilityCeiling: child.capabilityCeiling } : {}),
+ 	};
+@@ -1353,6 +1362,8 @@ async function resumeAsyncRun(input: {
+ 	const parentModel = input.parentModel;
+ 	const result = executeAsyncSingle(runId, {
+ 		agent: target.agent,
++		executionTarget: recoveryDescriptor?.executionTarget ?? ("executionTarget" in target ? target.executionTarget : undefined),
++		executionTargetDigest: recoveryDescriptor?.executionTargetDigest ?? ("executionTargetDigest" in target ? target.executionTargetDigest : undefined),
+ 		task: buildRevivedAsyncTask(target, followUp),
+ 		goal: followUp,
+ 		agentConfig: recoveryAgentConfig,
+@@ -1545,6 +1556,33 @@ function validateExecutionInput(
+ 		};
+ 	}
+ 
++	try {
++		if (hasSingle) resolveExecutionTarget(params.executionTarget);
++		if (hasTasks && params.tasks) {
++			const targets = params.tasks.map((task) => resolveExecutionTarget(task.executionTarget));
++			assertExecutionTargetWorktreeCompatible(targets, params.worktree);
++		}
++		if (hasChain && params.chain) {
++			for (const step of params.chain) {
++				if (isParallelStep(step)) {
++					const targets = step.parallel.map((task) => resolveExecutionTarget(task.executionTarget));
++					assertExecutionTargetWorktreeCompatible(targets, step.worktree);
++				} else if (isDynamicParallelStep(step)) {
++					const target = resolveExecutionTarget(step.parallel.executionTarget);
++					assertExecutionTargetWorktreeCompatible([target], step.worktree);
++				} else {
++					resolveExecutionTarget(step.executionTarget);
++				}
++			}
++		}
++	} catch (error) {
++		return {
++			content: [{ type: "text", text: `Execution target rejected: ${error instanceof Error ? error.message : String(error)}` }],
++			isError: true,
++			details: { mode: getRequestedModeLabel(params), results: [] },
++		};
++	}
++
+ 	const acceptanceErrors = validateExecutionAcceptance(params);
+ 	if (acceptanceErrors.length > 0) {
+ 		return {
+@@ -2106,6 +2144,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
+ 		const skillOverrides = params.tasks.map((task) => normalizeSkillInput(task.skill));
+ 		const parallelTasks = params.tasks.map((task, index) => ({
+ 			agent: task.agent,
++			executionTarget: task.executionTarget,
+ 			task: shouldForkAgent(contextPolicy, task.agent) ? wrapForkTask(task.task) : task.task,
+ 			cwd: task.cwd,
+ 			...(task.model !== undefined ? { model: task.model } : {}),
+@@ -2219,6 +2258,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
+ 		const modelOverride = resolveEffectiveSubagentModel(params.model as string | undefined, a.model, parentModel, availableModels, currentProvider, { scope: data.modelScope });
+ 		return executeAsyncSingle(id, {
+ 			agent: params.agent!,
++			executionTarget: params.executionTarget,
+ 			task: shouldForkAgent(contextPolicy, params.agent!) ? wrapForkTask(params.task ?? "") : (params.task ?? ""),
+ 			goal: params.task ?? "",
+ 			agentConfig: a,
+@@ -2491,6 +2531,7 @@ function createParallelWorktreeSetup(
+ ): { setup?: WorktreeSetup; errorResult?: AgentToolResult<Details> } {
+ 	if (!enabled) return {};
+ 	try {
++		assertExecutionTargetWorktreeCompatible(tasks.map((task) => resolveExecutionTarget(task.executionTarget)), true);
+ 		return {
+ 			setup: createWorktrees(cwd, runId, tasks.length, {
+ 				agents: tasks.map((task) => task.agent),
+@@ -2657,6 +2698,7 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
+ 			? createStructuredOutputRuntime(task.outputSchema, path.join(input.artifactsDir, "structured-output", input.runId))
+ 			: undefined;
+ 		return runSync(input.ctx.cwd, input.agents, task.agent, taskText, {
++			executionTarget: task.executionTarget,
+ 			parentSessionId: input.ctx.sessionManager.getSessionId() ?? undefined,
+ 			context: input.contextPolicy.contextForAgent(task.agent),
+ 			cwd: taskCwd,
+@@ -3225,6 +3267,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
+ 			};
+ 			return executeAsyncSingle(id, {
+ 				agent: params.agent!,
++				executionTarget: params.executionTarget,
+ 				task: shouldForkAgent(contextPolicy, params.agent!) ? wrapForkTask(task) : task,
+ 				goal: task,
+ 				agentConfig,
+@@ -3310,6 +3353,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
+ 	let r: Awaited<ReturnType<typeof runSync>>;
+ 	try {
+ 		r = await runSync(ctx.cwd, agents, params.agent!, task, {
++			executionTarget: params.executionTarget,
+ 			parentSessionId: ctx.sessionManager.getSessionId() ?? undefined,
+ 			context: data.contextPolicy.contextForAgent(params.agent!),
+ 			cwd: effectiveCwd,
+@@ -3940,6 +3984,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
  		if (spawnPreflight.error) return spawnBudgetErrorResult(spawnPreflight.error, foregroundMode);
  
  		let forkSessionFileForIndex: (idx?: number) => string | undefined = () => undefined;
@@ -532,7 +1633,7 @@ index b2bb70d..aeaecf8 100644
  		let forkThinkingOverrideForIndex: (idx?: number) => AgentConfig["thinking"] | undefined = () => undefined;
  		let prepareForkThinking = (_agentName: string, _index: number, _modelOverride?: string): void => {};
  		const forkThinkingRequirements = new Map<number, boolean>();
-@@ -3970,6 +3971,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+@@ -3970,6 +4015,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
  			};
  			const forkContextResolver = createForkContextResolver(ctx.sessionManager, contextPolicy.usesFork ? "fork" : undefined, {
  				forceThinkingOffForIndex: (index) => forkThinkingRequirements.get(index) ?? true,
@@ -540,7 +1641,27 @@ index b2bb70d..aeaecf8 100644
  			});
  			forkSessionFileForIndex = forkContextResolver.sessionFileForIndex;
  			forkThinkingOverrideForIndex = forkContextResolver.thinkingOverrideForIndex;
-@@ -4014,6 +4016,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+@@ -3979,6 +4025,19 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+ 		const requestedAsync = effectiveParams.async ?? deps.asyncByDefault;
+ 		const backgroundRequestedWhileClarifying = (hasChain || hasTasks) && requestedAsync && effectiveParams.clarify === true;
+ 		const effectiveAsync = requestedAsync && effectiveParams.clarify !== true;
++		try {
++			const executionTargets: ExecutionTarget[] = [];
++			if (hasSingle) executionTargets.push(resolveExecutionTarget(effectiveParams.executionTarget));
++			for (const task of effectiveParams.tasks ?? []) executionTargets.push(resolveExecutionTarget(task.executionTarget));
++			for (const step of effectiveParams.chain ?? []) {
++				if (isParallelStep(step)) for (const task of step.parallel) executionTargets.push(resolveExecutionTarget(task.executionTarget));
++				else if (isDynamicParallelStep(step)) executionTargets.push(resolveExecutionTarget(step.parallel.executionTarget));
++				else executionTargets.push(resolveExecutionTarget(step.executionTarget));
++			}
++			assertExecutionTargetAsyncCompatible(executionTargets, effectiveAsync);
++		} catch (error) {
++			return toExecutionErrorResult(effectiveParams, error, contextPolicy.contextSummary);
++		}
+ 		const foregroundTimeout = resolveForegroundTimeout(
+ 			effectiveParams,
+ 			effectiveAsync ? undefined : DEFAULT_FOREGROUND_TIMEOUT_MS,
+@@ -4014,6 +4073,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
  		}
  		const sessionDirForIndex = (idx?: number) =>
  			path.join(sessionRoot, `run-${idx ?? 0}`);
@@ -548,6 +1669,313 @@ index b2bb70d..aeaecf8 100644
  		const forkSessionFileForTask: ForkSessionFileForTask = (agentName, idx = 0, modelOverride) => {
  			if (!shouldForkAgent(contextPolicy, agentName)) return undefined;
  			prepareForkThinking(agentName, idx, modelOverride);
+diff --git a/src/runs/shared/dynamic-fanout.ts b/src/runs/shared/dynamic-fanout.ts
+index c6e163b..dadf302 100644
+--- a/src/runs/shared/dynamic-fanout.ts
++++ b/src/runs/shared/dynamic-fanout.ts
+@@ -46,12 +46,13 @@ const DYNAMIC_STEP_KEYS = new Set(["expand", "parallel", "collect", "concurrency
+ const RUNNER_DYNAMIC_STEP_KEYS = new Set([...DYNAMIC_STEP_KEYS, "effectiveAcceptance", "acceptanceInput", "acceptanceRole", "sessionFiles", "thinkingOverrides"]);
+ const DYNAMIC_EXPAND_KEYS = new Set(["from", "item", "key", "maxItems", "onEmpty"]);
+ const DYNAMIC_EXPAND_FROM_KEYS = new Set(["output", "path"]);
+-const DYNAMIC_PARALLEL_KEYS = new Set(["agent", "task", "phase", "label", "outputSchema", "cwd", "output", "outputMode", "reads", "progress", "skill", "model", "toolBudget", "acceptance", "agentContract", "gateOn"]);
++const DYNAMIC_PARALLEL_KEYS = new Set(["agent", "executionTarget", "task", "phase", "label", "outputSchema", "cwd", "output", "outputMode", "reads", "progress", "skill", "model", "toolBudget", "acceptance", "agentContract", "gateOn"]);
+ const RUNNER_DYNAMIC_PARALLEL_KEYS = new Set([
+ 	...DYNAMIC_PARALLEL_KEYS,
+ 	"outputName", "structured", "inheritProjectContext", "inheritSkills", "skills", "outputPath", "namespaceOutputPath", "maxSubagentDepth", "waitToolEnabled",
+ 	"structuredOutput", "structuredOutputSchema", "tools", "extensions", "subagentOnlyExtensions", "mcpDirectTools", "capabilityCeiling", "completionGuard", "systemPrompt",
+ 	"systemPromptMode", "thinking", "modelCandidates", "sessionFile", "effectiveAcceptance", "acceptanceInput", "acceptanceRole", "parentSessionId",
++	"definitionDigest", "launchBindingTask", "launchContractDigest",
+ ]);
+ const DYNAMIC_COLLECT_KEYS = new Set(["as", "outputSchema"]);
+ 
+diff --git a/src/runs/shared/execution-target.ts b/src/runs/shared/execution-target.ts
+new file mode 100644
+index 0000000..1790b52
+--- /dev/null
++++ b/src/runs/shared/execution-target.ts
+@@ -0,0 +1,213 @@
++import { createHash } from "node:crypto";
++import * as fs from "node:fs";
++import * as path from "node:path";
++
++export const EXECUTION_TARGET_ROOT_ENV = "PI_SUBAGENT_EXECUTION_TARGET_ROOT";
++export const SSH_LOCK_EXTENSION_ENV = "PI_SUBAGENT_SSH_LOCK_EXTENSION";
++export const SSH_LOCK_CODE_DIGEST_ENV = "PI_SUBAGENT_SSH_LOCK_CODE_DIGEST";
++export const SSH_LOCK_DESCRIPTOR_ENV = "MONIKA_SSH_LOCK_DESCRIPTOR";
++export const EXECUTION_TARGET_NAME_ENV = "PI_SUBAGENT_EXECUTION_TARGET_NAME";
++export const EXECUTION_TARGET_DIGEST_ENV = "PI_SUBAGENT_EXECUTION_TARGET_DIGEST";
++export const EFFECTS_EVIDENCE_PATH_ENV = "PI_SUBAGENT_EFFECTS_EVIDENCE_PATH";
++
++export type ExecutionTarget = { kind: "local" } | { kind: "ssh"; name: string };
++export type PublicExecutionTarget = ExecutionTarget;
++
++export interface LockedSshDescriptor {
++	version: 1;
++	name: string;
++	target: string;
++	hostname: string;
++	cwd: string;
++	allowedRoot: string;
++	knownHosts: string;
++}
++
++export type ResolvedExecutionTarget =
++	| { kind: "local"; public: { kind: "local" } }
++	| {
++		kind: "ssh";
++		name: string;
++		public: { kind: "ssh"; name: string };
++		descriptorPath: string;
++		descriptorDigest: string;
++		descriptor: LockedSshDescriptor;
++		lockExtensionPath: string;
++		lockCodeDigest: string;
++	};
++
++const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
++const SAFE_TARGET = /^(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9][A-Za-z0-9._-]*$/;
++const DESCRIPTOR_KEYS = ["allowedRoot", "cwd", "hostname", "knownHosts", "name", "target", "version"].sort();
++const SECRET_ROOT = "/runtime/secrets/ssh";
++
++function plainObject(value: unknown): value is Record<string, unknown> {
++	return Boolean(value) && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
++}
++
++function noControls(value: string): boolean {
++	return !/[\u0000-\u001f\u007f]/.test(value);
++}
++
++function canonicalContained(root: string, candidate: string): boolean {
++	const relative = path.relative(root, candidate);
++	return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
++}
++
++function requireAbsoluteClean(field: string, value: unknown): string {
++	if (typeof value !== "string" || !path.posix.isAbsolute(value) || !noControls(value) || value.includes("\\")) {
++		throw new Error(`Invalid SSH target descriptor field '${field}': expected an absolute POSIX path.`);
++	}
++	const normalized = path.posix.normalize(value);
++	if (normalized !== value || value.split("/").includes("..")) {
++		throw new Error(`Invalid SSH target descriptor field '${field}': path must be canonical.`);
++	}
++	return value;
++}
++
++export function validateExecutionTarget(value: unknown, field = "executionTarget"): ExecutionTarget | undefined {
++	if (value === undefined) return undefined;
++	if (!plainObject(value)) throw new Error(`${field} must be {kind:'local'} or {kind:'ssh',name:'<configured-name>'}.`);
++	const keys = Object.keys(value).sort();
++	if (value.kind === "local" && keys.length === 1 && keys[0] === "kind") return { kind: "local" };
++	if (value.kind === "ssh" && keys.length === 2 && keys[0] === "kind" && keys[1] === "name" && typeof value.name === "string" && SAFE_NAME.test(value.name)) {
++		return { kind: "ssh", name: value.name };
++	}
++	throw new Error(`${field} must be {kind:'local'} or {kind:'ssh',name:'<safe configured name>'}; extra fields and host options are not allowed.`);
++}
++
++export function parseLockedSshDescriptor(raw: string | Buffer, expectedName?: string): LockedSshDescriptor {
++	let value: unknown;
++	try { value = JSON.parse(raw.toString()); } catch { throw new Error("Invalid SSH target descriptor: malformed JSON."); }
++	if (!plainObject(value) || JSON.stringify(Object.keys(value).sort()) !== JSON.stringify(DESCRIPTOR_KEYS)) {
++		throw new Error("Invalid SSH target descriptor: unknown or missing fields.");
++	}
++	if (value.version !== 1) throw new Error("Invalid SSH target descriptor: unsupported version.");
++	if (typeof value.name !== "string" || !SAFE_NAME.test(value.name) || (expectedName && value.name !== expectedName)) {
++		throw new Error("Invalid SSH target descriptor: name does not match its registry entry.");
++	}
++	for (const field of ["target", "hostname"] as const) {
++		if (typeof value[field] !== "string" || !noControls(value[field] as string) || !(value[field] as string).trim()) {
++			throw new Error(`Invalid SSH target descriptor field '${field}'.`);
++		}
++	}
++	if (!SAFE_TARGET.test(value.target as string)) throw new Error("Invalid SSH target descriptor field 'target'.");
++	if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value.hostname as string)) throw new Error("Invalid SSH target descriptor field 'hostname'.");
++	const cwd = requireAbsoluteClean("cwd", value.cwd);
++	const allowedRoot = requireAbsoluteClean("allowedRoot", value.allowedRoot);
++	if (!canonicalContained(allowedRoot, cwd)) throw new Error("Invalid SSH target descriptor: cwd is outside allowedRoot.");
++	const knownHosts = requireAbsoluteClean("knownHosts", value.knownHosts);
++	if (!canonicalContained(SECRET_ROOT, knownHosts)) throw new Error(`Invalid SSH target descriptor: knownHosts must be beneath ${SECRET_ROOT}.`);
++	return { version: 1, name: value.name as string, target: value.target as string, hostname: value.hostname as string, cwd, allowedRoot, knownHosts };
++}
++
++function sha256(value: string | Buffer): string {
++	return createHash("sha256").update(value).digest("hex");
++}
++
++export function executionTargetBindingDigest(descriptorBytes: Buffer, knownHostsBytes: Buffer, lockCodeDigest: string): string {
++	return sha256(JSON.stringify({ descriptor: sha256(descriptorBytes), knownHosts: sha256(knownHostsBytes), lockCode: lockCodeDigest }));
++}
++
++function descriptorFromPath(descriptorPath: string, lockCodeDigest: string, expectedName?: string): { descriptor: LockedSshDescriptor; digest: string; canonicalPath: string } {
++	const lst = fs.lstatSync(descriptorPath);
++	if (!lst.isFile() || lst.isSymbolicLink() || (lst.mode & 0o222) !== 0) throw new Error("SSH target descriptor must be a read-only regular, non-symlink file.");
++	const raw = fs.readFileSync(descriptorPath);
++	const descriptor = parseLockedSshDescriptor(raw, expectedName);
++	const kh = fs.lstatSync(descriptor.knownHosts);
++	if (!kh.isFile() || kh.isSymbolicLink() || (kh.mode & 0o222) !== 0) throw new Error("SSH target knownHosts must be a non-writable regular file.");
++	const knownHosts = fs.readFileSync(descriptor.knownHosts);
++	return { descriptor, digest: executionTargetBindingDigest(raw, knownHosts, lockCodeDigest), canonicalPath: fs.realpathSync(descriptorPath) };
++}
++
++function registryDescriptor(name: string, env: NodeJS.ProcessEnv): string {
++	const rootValue = env[EXECUTION_TARGET_ROOT_ENV]?.trim();
++	if (!rootValue || !path.isAbsolute(rootValue)) throw new Error(`${EXECUTION_TARGET_ROOT_ENV} must be an absolute administrator-owned directory.`);
++	const root = fs.realpathSync(rootValue);
++	const candidate = path.join(root, `${name}.json`);
++	const canonical = fs.realpathSync(candidate);
++	if (!canonicalContained(root, canonical)) throw new Error(`SSH execution target '${name}' escapes the configured registry root.`);
++	return canonical;
++}
++
++function lockExtension(env: NodeJS.ProcessEnv): { path: string; codeDigest: string } {
++	const configured = env[SSH_LOCK_EXTENSION_ENV]?.trim();
++	if (!configured || !path.isAbsolute(configured)) throw new Error(`${SSH_LOCK_EXTENSION_ENV} must name the locked SSH extension.`);
++	const canonical = fs.realpathSync(configured);
++	const helper = path.join(path.dirname(canonical), "ssh-lock.mjs");
++	for (const [label, file] of [["extension", canonical], ["helper", helper]] as const) {
++		const stat = fs.lstatSync(file);
++		if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Locked SSH ${label} is not a regular file.`);
++		fs.accessSync(file, fs.constants.R_OK);
++	}
++	const codeDigest = sha256(`${sha256(fs.readFileSync(canonical))}\n${sha256(fs.readFileSync(helper))}\n`);
++	const expected = env[SSH_LOCK_CODE_DIGEST_ENV]?.trim();
++	if (!expected || !/^[a-f0-9]{64}$/.test(expected) || expected !== codeDigest) throw new Error("Locked SSH extension code does not match the startup integrity attestation.");
++	return { path: canonical, codeDigest };
++}
++
++export function resolveExecutionTarget(requestedValue: unknown, env: NodeJS.ProcessEnv = process.env): ResolvedExecutionTarget {
++	const requested = validateExecutionTarget(requestedValue);
++	const ambientPath = env[SSH_LOCK_DESCRIPTOR_ENV]?.trim();
++	if (ambientPath) {
++		if (!path.isAbsolute(ambientPath)) throw new Error(`${SSH_LOCK_DESCRIPTOR_ENV} must be absolute.`);
++		const lock = lockExtension(env);
++		const ambient = descriptorFromPath(ambientPath, lock.codeDigest);
++		// Omission is always the local default. Locked parents must explicitly name
++		// their same target; there is no implicit relocation inheritance form.
++		if (!requested || requested.kind === "local" || (requested.kind === "ssh" && requested.name !== ambient.descriptor.name)) {
++			throw new Error(`Locked SSH parent '${ambient.descriptor.name}' must explicitly reuse its same execution target; local/default or target switching is refused.`);
++		}
++		const expectedDigest = env[EXECUTION_TARGET_DIGEST_ENV]?.trim();
++		if (!expectedDigest || !/^[a-f0-9]{64}$/.test(expectedDigest) || expectedDigest !== ambient.digest) throw new Error("Locked SSH target binding changed or is missing; automatic child launch is refused.");
++		return { kind: "ssh", name: ambient.descriptor.name, public: { kind: "ssh", name: ambient.descriptor.name }, descriptorPath: ambient.canonicalPath, descriptorDigest: ambient.digest, descriptor: ambient.descriptor, lockExtensionPath: lock.path, lockCodeDigest: lock.codeDigest };
++	}
++	if (!requested || requested.kind === "local") return { kind: "local", public: { kind: "local" } };
++	const descriptorPath = registryDescriptor(requested.name, env);
++	const lock = lockExtension(env);
++	const resolved = descriptorFromPath(descriptorPath, lock.codeDigest, requested.name);
++	return { kind: "ssh", name: requested.name, public: { kind: "ssh", name: requested.name }, descriptorPath: resolved.canonicalPath, descriptorDigest: resolved.digest, descriptor: resolved.descriptor, lockExtensionPath: lock.path, lockCodeDigest: lock.codeDigest };
++}
++
++export function executionTargetChildLaunch(target: ResolvedExecutionTarget, effectsEvidencePath?: string): { extensions: string[]; env: Record<string, string | undefined> } {
++	if (target.kind === "local") {
++		return { extensions: [], env: { [SSH_LOCK_DESCRIPTOR_ENV]: undefined, [EXECUTION_TARGET_NAME_ENV]: "local", [EXECUTION_TARGET_DIGEST_ENV]: undefined, [EFFECTS_EVIDENCE_PATH_ENV]: undefined } };
++	}
++	return {
++		extensions: [target.lockExtensionPath],
++		env: {
++			[SSH_LOCK_DESCRIPTOR_ENV]: target.descriptorPath,
++			[SSH_LOCK_CODE_DIGEST_ENV]: target.lockCodeDigest,
++			[EXECUTION_TARGET_NAME_ENV]: target.name,
++			[EXECUTION_TARGET_DIGEST_ENV]: target.descriptorDigest,
++			[EFFECTS_EVIDENCE_PATH_ENV]: effectsEvidencePath,
++		},
++	};
++}
++
++export function resolveEffectsEvidenceState(target: ResolvedExecutionTarget | undefined, evidencePath: string | undefined): "none" | "confirmed" | "unknown" {
++	if (!target || target.kind === "local") return "none";
++	if (!evidencePath) return "unknown";
++	try {
++		const records = fs.readFileSync(evidencePath, "utf-8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as { id?: unknown; phase?: unknown; effects_state?: unknown });
++		const intents = new Set(records.filter((record) => record.phase === "intent" && typeof record.id === "string").map((record) => record.id as string));
++		const settled = new Set(records.filter((record) => record.phase === "settled" && typeof record.id === "string" && record.effects_state === "confirmed").map((record) => record.id as string));
++		if (records.some((record) => record.effects_state === "unknown") || [...intents].some((id) => !settled.has(id))) return "unknown";
++		return intents.size > 0 ? "confirmed" : "none";
++	} catch {
++		// Missing, truncated, or malformed evidence cannot prove that a remote
++		// operation had no effects.
++		return "unknown";
++	}
++}
++
++export function assertExecutionTargetAsyncCompatible(targets: Array<ExecutionTarget | ResolvedExecutionTarget | undefined>, async: boolean): void {
++	if (!async && targets.some((target) => target?.kind === "ssh")) {
++		throw new Error("SSH execution targets require async:true so uncertain remote effects have a durable lifecycle ledger.");
++	}
++}
++
++export function assertExecutionTargetWorktreeCompatible(targets: Array<ExecutionTarget | ResolvedExecutionTarget | undefined>, worktree: boolean | undefined): void {
++	if (!worktree) return;
++	if (targets.some((target) => target?.kind === "ssh")) throw new Error("worktree:true is not supported for SSH execution targets; no worktree was created.");
++}
+diff --git a/src/runs/shared/parallel-utils.ts b/src/runs/shared/parallel-utils.ts
+index 9a0d8a6..a170fdd 100644
+--- a/src/runs/shared/parallel-utils.ts
++++ b/src/runs/shared/parallel-utils.ts
+@@ -1,4 +1,5 @@
+ export interface RunnerSubagentStep {
++	executionTarget?: import("./execution-target.ts").ResolvedExecutionTarget;
+ 	/** Session id of the direct parent session for permission-system ask forwarding. */
+ 	parentSessionId?: string;
+ 	agent: string;
+diff --git a/src/runs/shared/pi-args.ts b/src/runs/shared/pi-args.ts
+index fafe66d..848e730 100644
+--- a/src/runs/shared/pi-args.ts
++++ b/src/runs/shared/pi-args.ts
+@@ -14,6 +14,7 @@ import { CHILD_WATCHDOG_CONFIG_ENV, encodeChildWatchdogConfig, type ChildWatchdo
+ import { WAIT_TOOL_ENABLED_ENV } from "../background/wait-config.ts";
+ import { PI_CODING_AGENT_PACKAGE_ROOT_ENV } from "../../shared/utils.ts";
+ import { SUBAGENT_CAPABILITY_CEILING_ENV, decodeSubagentCapabilityCeiling, encodeSubagentCapabilityCeiling, intersectSubagentCapabilityCeilings, type ResolvedSubagentCapabilityCeiling, type SubagentCapabilityAudit } from "./capability-ceiling.ts";
++import { executionTargetChildLaunch, type ResolvedExecutionTarget } from "./execution-target.ts";
+ 
+ const TASK_ARG_LIMIT = 8000;
+ const PROMPT_RUNTIME_EXTENSION_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "subagent-prompt-runtime.ts");
+@@ -85,6 +86,8 @@ export interface BuildPiArgsInput {
+ 	childWatchdog?: ChildWatchdogConfig;
+ 	waitToolEnabled?: boolean;
+ 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
++	executionTarget?: ResolvedExecutionTarget;
++	effectsEvidencePath?: string;
+ }
+ 
+ export interface BuildPiArgsResult {
+@@ -172,11 +175,9 @@ export function resolvePiLaunchToolPlan(input: ResolvePiLaunchToolPlanInput): Pi
+ 	const runtimeExtensions = fanoutAuthorized
+ 		? [PROMPT_RUNTIME_EXTENSION_PATH, FANOUT_CHILD_EXTENSION_PATH]
+ 		: [PROMPT_RUNTIME_EXTENSION_PATH];
+-	const disableAmbientExtensions = capabilityCeiling?.denyExtensions === true || input.extensions !== undefined;
++	const disableAmbientExtensions = true;
+ 	const configuredExtensions = capabilityCeiling?.denyExtensions ? [] : [...toolExtensionPaths, ...(input.extensions ?? []), ...(input.subagentOnlyExtensions ?? [])];
+-	const extensionArgs = disableAmbientExtensions
+-		? [...new Set([...runtimeExtensions, ...configuredExtensions])]
+-		: [...new Set([...runtimeExtensions, ...toolExtensionPaths, ...(input.subagentOnlyExtensions ?? [])])];
++	const extensionArgs = [...new Set([...runtimeExtensions, ...configuredExtensions])];
+ 	const requestedToolNames = input.tools !== undefined
+ 		? [...new Set([...requestedBuiltinTools, ...resolvedMcpSelections.map((selection) => selection.name)])]
+ 		: undefined;
+@@ -248,10 +249,10 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
+ 		args.push(toolPlan.effectiveToolAllowlist.length > 0 ? "--tools" : "--no-tools");
+ 		if (toolPlan.effectiveToolAllowlist.length > 0) args.push(toolPlan.effectiveToolAllowlist.join(","));
+ 	}
+-	if (toolPlan.disableAmbientExtensions) {
+-		args.push("--no-extensions");
+-	}
+-	for (const extPath of toolPlan.extensionArgs) args.push("--extension", extPath);
++	// Child launches are deterministic: ambient Pi extensions are never inherited.
++	args.push("--no-extensions");
++	const targetLaunch = executionTargetChildLaunch(input.executionTarget ?? { kind: "local", public: { kind: "local" } }, input.effectsEvidencePath);
++	for (const extPath of [...new Set([...toolPlan.extensionArgs, ...targetLaunch.extensions])]) args.push("--extension", extPath);
+ 
+ 	if (!input.inheritProjectContext) {
+ 		args.push("--no-context-files");
+@@ -280,7 +281,7 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
+ 		args.push(`Task: ${input.task}`);
+ 	}
+ 
+-	const env: Record<string, string | undefined> = {};
++	const env: Record<string, string | undefined> = { ...targetLaunch.env };
+ 	const piPackageRoot = process.env[PI_CODING_AGENT_PACKAGE_ROOT_ENV] ?? resolvePiPackageRoot();
+ 	if (piPackageRoot) env[PI_CODING_AGENT_PACKAGE_ROOT_ENV] = piPackageRoot;
+ 	let toolDiagnosticPath: string | undefined;
 diff --git a/src/shared/fork-context.ts b/src/shared/fork-context.ts
 index b43f170..b3bfe58 100644
 --- a/src/shared/fork-context.ts
@@ -578,11 +2006,165 @@ index b43f170..b3bfe58 100644
  			const sourceManager = openSession(parentSessionFile, sessionDir);
  			const sessionFile = sourceManager.createBranchedSession(leafId);
  			if (!sessionFile) {
+diff --git a/src/shared/launch-contract.ts b/src/shared/launch-contract.ts
+index 3dd5741..0bbd9b9 100644
+--- a/src/shared/launch-contract.ts
++++ b/src/shared/launch-contract.ts
+@@ -1,9 +1,10 @@
+ import { createHash } from "node:crypto";
+ import * as fs from "node:fs";
+ import type { AgentConfig } from "../agents/agents.ts";
++import type { PublicExecutionTarget } from "../runs/shared/execution-target.ts";
+ 
+ export const AGENT_DEFINITION_PROJECTION_VERSION = 1 as const;
+-export const LAUNCH_BINDING_PROJECTION_VERSION = 1 as const;
++export const LAUNCH_BINDING_PROJECTION_VERSION = 2 as const;
+ 
+ function stableJson(value: unknown): string {
+ 	if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+@@ -74,6 +75,8 @@ export function agentDefinitionDigest(agent: AgentConfig): string {
+ 
+ export interface LaunchBindingInput {
+ 	definitionDigest: string;
++	executionTarget?: PublicExecutionTarget;
++	executionTargetDigest?: string;
+ 	/** Caller task; runtime acceptance/output task annotations are explicitly outside the preflight-known subset. */
+ 	task?: string;
+ 	model?: string;
+@@ -98,6 +101,8 @@ export function projectLaunchBinding(input: LaunchBindingInput): Record<string,
+ 	return {
+ 		version: LAUNCH_BINDING_PROJECTION_VERSION,
+ 		definitionDigest: input.definitionDigest,
++		executionTarget: input.executionTarget ?? { kind: "local" },
++		executionTargetDigest: input.executionTargetDigest,
+ 		taskDigest: input.task === undefined ? undefined : sha256(input.task),
+ 		// The ordered candidate set already contains each attempted model; keeping only
+ 		// this set makes retries correlate to the same preflight binding.
+diff --git a/src/shared/settings.ts b/src/shared/settings.ts
+index b13363e..c7bf496 100644
+--- a/src/shared/settings.ts
++++ b/src/shared/settings.ts
+@@ -5,6 +5,7 @@
+ import * as fs from "node:fs";
+ import * as path from "node:path";
+ import type { AgentConfig } from "../agents/agents.ts";
++import type { ExecutionTarget } from "../runs/shared/execution-target.ts";
+ import { normalizeSkillInput } from "../agents/skills.ts";
+ import { CHAIN_RUNS_DIR, type AcceptanceInput, type AgentContract, type ChainGateLayer, type JsonSchemaObject, type OutputMode, type ToolBudgetConfig } from "./types.ts";
+ const CHAIN_DIR_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
+@@ -43,6 +44,7 @@ function normalizeOutputOverride(output: string | false | undefined): string | f
+ /** Sequential step: single agent execution */
+ export interface SequentialStep {
+ 	agent: string;
++	executionTarget?: ExecutionTarget;
+ 	task?: string;
+ 	phase?: string;
+ 	label?: string;
+@@ -64,6 +66,7 @@ export interface SequentialStep {
+ /** Parallel task item within a parallel step */
+ export interface ParallelTaskItem {
+ 	agent: string;
++	executionTarget?: ExecutionTarget;
+ 	task?: string;
+ 	phase?: string;
+ 	label?: string;
 diff --git a/src/shared/types.ts b/src/shared/types.ts
-index 30a3087..2fa619b 100644
+index 30a3087..d7fde16 100644
 --- a/src/shared/types.ts
 +++ b/src/shared/types.ts
-@@ -1578,7 +1578,9 @@ export function resolveTempScopeId(options?: {
+@@ -10,6 +10,7 @@ import type { FSWatcher } from "node:fs";
+ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+ import type { ModelScopeConfig } from "../runs/shared/model-scope.ts";
+ import type { ResolvedSubagentCapabilityCeiling, SubagentCapabilityAudit } from "../runs/shared/capability-ceiling.ts";
++import type { ExecutionTarget, PublicExecutionTarget, ResolvedExecutionTarget } from "../runs/shared/execution-target.ts";
+ 
+ // ============================================================================
+ // Basic Types
+@@ -318,8 +319,12 @@ export interface EffectsProjection {
+ 	fileMutation?: FileMutationEffect;
+ }
+ 
+-export const SUBAGENT_LIFECYCLE_ARTIFACT_VERSION = 3;
++export const SUBAGENT_LIFECYCLE_ARTIFACT_VERSION = 4;
+ export type SubagentLifecycleArtifactVersion = typeof SUBAGENT_LIFECYCLE_ARTIFACT_VERSION;
++export type SubagentExecutionState = "active" | "terminal" | "interrupted" | "uncertain" | "quarantined";
++export type SubagentOutcomeState = "pending" | "succeeded" | "failed" | "interrupted" | "unknown";
++export type SubagentEffectsState = "none" | "confirmed" | "unknown";
++export type SubagentDeliveryState = "pending" | "settled" | "operator-resolved";
+ 
+ export type ProcessTerminalState = "pending" | "observed" | "unknown" | "not-started";
+ export type ProcessTerminalReason =
+@@ -446,6 +451,8 @@ export interface SteeringNotice {
+ export interface SteeringRecoveryDescriptor {
+ 	version: 1;
+ 	launchContractDigest?: string;
++	executionTarget?: ExecutionTarget;
++	executionTargetDigest?: string;
+ 	sourceRunId: string;
+ 	agentContract?: AgentContract;
+ 	agent: string;
+@@ -759,6 +766,9 @@ export interface ProtocolOutputLimit {
+ export interface SingleResult {
+ 	agent: string;
+ 	task: string;
++	executionTarget?: PublicExecutionTarget;
++	executionTargetDigest?: string;
++	effects_state?: SubagentEffectsState;
+ 	/** Resolved launch context for this child. */
+ 	context?: "fresh" | "fork";
+ 	exitCode: number;
+@@ -1014,6 +1024,10 @@ export interface NestedRouteInfo {
+ 
+ export interface AsyncStartedEvent {
+ 	lifecycleArtifactVersion?: SubagentLifecycleArtifactVersion;
++	execution_state?: SubagentExecutionState;
++	outcome_state?: SubagentOutcomeState;
++	effects_state?: SubagentEffectsState;
++	delivery_state?: SubagentDeliveryState;
+ 	id?: string;
+ 	asyncDir?: string;
+ 	/** Parent-resolved launch directory, used as a trusted artifact root while this session is live. */
+@@ -1041,6 +1055,11 @@ export interface AsyncStartedEvent {
+ 
+ export interface AsyncStatus {
+ 	lifecycleArtifactVersion?: SubagentLifecycleArtifactVersion;
++	executionTarget?: PublicExecutionTarget;
++	execution_state?: SubagentExecutionState;
++	outcome_state?: SubagentOutcomeState;
++	effects_state?: SubagentEffectsState;
++	delivery_state?: SubagentDeliveryState;
+ 	runId: string;
+ 	sessionId?: string;
+ 	mode: SubagentRunMode;
+@@ -1080,6 +1099,8 @@ export interface AsyncStatus {
+ 	capabilityAudit?: SubagentCapabilityAudit;
+ 	steps?: Array<{
+ 		agent: string;
++		executionTarget?: PublicExecutionTarget;
++		executionTargetDigest?: string;
+ 		/** Resolved launch context for this child step. */
+ 		context?: "fresh" | "fork";
+ 		phase?: string;
+@@ -1201,6 +1222,8 @@ export interface AsyncJobState {
+ 
+ export interface ForegroundResumeChild {
+ 	agent: string;
++	executionTarget?: PublicExecutionTarget;
++	executionTargetDigest?: string;
+ 	index: number;
+ 	context?: "fresh" | "fork";
+ 	sessionFile?: string;
+@@ -1367,6 +1390,9 @@ export const SUBAGENT_RESULT_INTERCOM_DELIVERY_EVENT = "subagent:result-intercom
+ // ============================================================================
+ 
+ export interface RunSyncOptions {
++	executionTarget?: ExecutionTarget;
++	resolvedExecutionTarget?: ResolvedExecutionTarget;
++	effectsEvidencePath?: string;
+ 	/** Session id of the direct parent session for permission-system ask forwarding. */
+ 	parentSessionId?: string;
+ 	/** Resolved launch context for this child. */
+@@ -1578,7 +1604,9 @@ export function resolveTempScopeId(options?: {
  
  const MAX_PARALLEL = 8;
  export const MAX_CONCURRENCY = 4;
@@ -593,6 +2175,23 @@ index 30a3087..2fa619b 100644
  export const RESULTS_DIR = path.join(TEMP_ROOT_DIR, "async-subagent-results");
  export const ASYNC_DIR = path.join(TEMP_ROOT_DIR, "async-subagent-runs");
  export const CHAIN_RUNS_DIR = path.join(TEMP_ROOT_DIR, "chain-runs");
+diff --git a/src/tui/fleet-status.ts b/src/tui/fleet-status.ts
+index 7b9c65e..6ecd6ed 100644
+--- a/src/tui/fleet-status.ts
++++ b/src/tui/fleet-status.ts
+@@ -108,9 +108,11 @@ export function collectFleetStatusEntries(state: SubagentState): FleetStatusEntr
+ 			if (!isActiveState(step.status)) continue;
+ 			const index = step.index ?? offset;
+ 			if (step.status === "pending" && job.mode === "chain" && !job.activeParallelGroup && index !== (job.currentStep ?? 0)) continue;
++			const target = step.executionTarget?.kind === "ssh" ? `ssh:${step.executionTarget.name}` : step.executionTarget?.kind;
++			const agent = step.label ? `${step.label} (${step.agent})` : step.agent;
+ 			entries.push({
+ 				key: `async:${job.asyncId}:${index}`,
+-				agent: step.label ? `${step.label} (${step.agent})` : step.agent,
++				agent: target ? `${agent} [${target}]` : agent,
+ 				description: job.description,
+ 				startedAt: step.startedAt ?? startedAt,
+ 				tokens: step.tokens?.total ?? (steps.length === 1 ? job.totalTokens?.total ?? 0 : 0),
 diff --git a/test/integration/fork-context-execution.test.ts b/test/integration/fork-context-execution.test.ts
 index ebd0f07..7d04310 100644
 --- a/test/integration/fork-context-execution.test.ts
@@ -728,10 +2327,10 @@ index e91cf0a..74667f3 100644
  		try {
 diff --git a/test/support/isolated-test-runner.mjs b/test/support/isolated-test-runner.mjs
 new file mode 100644
-index 0000000..a02e1be
+index 0000000..81a9265
 --- /dev/null
 +++ b/test/support/isolated-test-runner.mjs
-@@ -0,0 +1,31 @@
+@@ -0,0 +1,38 @@
 +import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 +import os from "node:os";
 +import path from "node:path";
@@ -742,7 +2341,14 @@ index 0000000..a02e1be
 +const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-test-"));
 +const dir = path.join("test", suite);
 +for (const child of ["home", "tmp", "runtime", "sessions", "operator"]) mkdirSync(path.join(root, child));
-+const files = readdirSync(dir).filter((name) => name.endsWith(".test.ts")).sort().map((name) => path.join(dir, name));
++const requested = process.argv.slice(3);
++const names = requested.length > 0 ? requested : readdirSync(dir).filter((name) => name.endsWith(".test.ts")).sort();
++for (const name of names) {
++	if (path.basename(name) !== name || !name.endsWith(".test.ts")) throw new Error(`invalid isolated test filename: ${name}`);
++}
++const available = new Set(readdirSync(dir).filter((name) => name.endsWith(".test.ts")));
++for (const name of names) if (!available.has(name)) throw new Error(`isolated test file not found in ${dir}: ${name}`);
++const files = names.map((name) => path.join(dir, name));
 +const loader = suite === "unit" ? [] : ["--import", "./test/support/register-loader.mjs"];
 +try {
 +	const result = spawnSync(process.execPath, ["--experimental-strip-types", ...loader, "--test", ...files], {
@@ -763,6 +2369,195 @@ index 0000000..a02e1be
 +} finally {
 +	rmSync(root, { recursive: true, force: true });
 +}
+diff --git a/test/unit/async-recovery-descriptor.test.ts b/test/unit/async-recovery-descriptor.test.ts
+index 35fc917..07b2790 100644
+--- a/test/unit/async-recovery-descriptor.test.ts
++++ b/test/unit/async-recovery-descriptor.test.ts
+@@ -27,6 +27,20 @@ describe("async recovery descriptor", () => {
+ 			const descriptor = readAsyncRecoveryDescriptor(root);
+ 
+ 			assert.equal(descriptor?.launchContractDigest, digest);
++			assert.deepEqual(descriptor?.executionTarget, { kind: "local" }, "legacy descriptors remain explicitly local");
++		} finally {
++			fs.rmSync(root, { recursive: true, force: true });
++		}
++	});
++
++	it("requires a persisted digest for SSH recovery identity", () => {
++		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-recovery-target-"));
++		try {
++			const base = { version: 1, sourceRunId: "run-target", agent: "worker", cwd: root, systemPromptMode: "replace", inheritProjectContext: false, inheritSkills: false, outputMode: "inline", maxSubagentDepth: 2, share: false };
++			fs.writeFileSync(path.join(root, "recovery-descriptor.json"), JSON.stringify({ ...base, executionTarget: { kind: "ssh", name: "stanza" } }), "utf-8");
++			assert.throws(() => readAsyncRecoveryDescriptor(root), /requires executionTargetDigest/);
++			fs.writeFileSync(path.join(root, "recovery-descriptor.json"), JSON.stringify({ ...base, executionTarget: { kind: "ssh", name: "stanza" }, executionTargetDigest: "a".repeat(64) }), "utf-8");
++			assert.deepEqual(readAsyncRecoveryDescriptor(root)?.executionTarget, { kind: "ssh", name: "stanza" });
+ 		} finally {
+ 			fs.rmSync(root, { recursive: true, force: true });
+ 		}
+diff --git a/test/unit/async-resume.test.ts b/test/unit/async-resume.test.ts
+index 7d57683..c2bec7a 100644
+--- a/test/unit/async-resume.test.ts
++++ b/test/unit/async-resume.test.ts
+@@ -41,6 +41,24 @@ describe("async resume lookup", () => {
+ 		}
+ 	});
+ 
++	it("preserves a chain child's SSH target and binding digest when reviving", () => {
++		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-resume-ssh-chain-"));
++		try {
++			const asyncRoot = path.join(root, "runs"); const sessionFile = path.join(root, "child.jsonl");
++			fs.writeFileSync(sessionFile, "", "utf-8");
++			writeJson(path.join(asyncRoot, "run-chain", "status.json"), {
++				runId: "run-chain", mode: "chain", state: "complete", startedAt: 100, lastUpdate: 200, cwd: root,
++				steps: [
++					{ agent: "scout", status: "complete" },
++					{ agent: "worker", status: "complete", sessionFile, executionTarget: { kind: "ssh", name: "stanza" }, executionTargetDigest: "a".repeat(64) },
++				],
++			});
++			const target = resolveAsyncResumeTarget({ id: "run-chain", index: 1 }, { asyncDirRoot: asyncRoot, resultsDir: path.join(root, "results") });
++			assert.deepEqual(target.executionTarget, { kind: "ssh", name: "stanza" });
++			assert.equal(target.executionTargetDigest, "a".repeat(64));
++		} finally { fs.rmSync(root, { recursive: true, force: true }); }
++	});
++
+ 	it("preserves and validates persisted capability ceilings for resume", () => {
+ 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-resume-ceiling-"));
+ 		try {
+diff --git a/test/unit/chain-serializer.test.ts b/test/unit/chain-serializer.test.ts
+index c9e4ec4..8181e51 100644
+--- a/test/unit/chain-serializer.test.ts
++++ b/test/unit/chain-serializer.test.ts
+@@ -64,6 +64,25 @@ Review the diff
+ 		assert.match(serializeChain(parsed), /toolBudget: \{"soft":3,"hard":5,"block":\["read","grep"\]\}/);
+ 	});
+ 
++	it("round-trips named execution targets and rejects host options", () => {
++		const parsed = parseChain(`---
++name: remote-review
++description: Remote review
++---
++
++## reviewer
++executionTarget: {"kind":"ssh","name":"stanza"}
++
++Review the diff
++`, "project", "/tmp/remote-review.chain.md");
++		assert.deepEqual(parsed.steps[0]?.executionTarget, { kind: "ssh", name: "stanza" });
++		assert.match(serializeChain(parsed), /executionTarget: \{"kind":"ssh","name":"stanza"\}/);
++		assert.throws(() => parseJsonChain(JSON.stringify({
++			name: "bad-target", description: "Bad target",
++			chain: [{ agent: "reviewer", task: "Review", executionTarget: { kind: "ssh", name: "stanza", host: "evil" } }],
++		}), "project", "/tmp/bad-target.chain.json"), /executionTarget.*extra fields/i);
++	});
++
+ 	it("rejects invalid markdown chain toolBudget", () => {
+ 		assert.throws(
+ 			() => parseChain(`---
+diff --git a/test/unit/execution-target.test.ts b/test/unit/execution-target.test.ts
+new file mode 100644
+index 0000000..2341f60
+--- /dev/null
++++ b/test/unit/execution-target.test.ts
+@@ -0,0 +1,99 @@
++import assert from "node:assert/strict";
++import { mkdtempSync, writeFileSync } from "node:fs";
++import { tmpdir } from "node:os";
++import path from "node:path";
++import { describe, it } from "node:test";
++import { launchBindingDigest } from "../../src/shared/launch-contract.ts";
++import {
++  assertExecutionTargetAsyncCompatible,
++  assertExecutionTargetWorktreeCompatible,
++  parseLockedSshDescriptor,
++  executionTargetBindingDigest,
++  executionTargetChildLaunch,
++  resolveEffectsEvidenceState,
++  resolveExecutionTarget,
++  validateExecutionTarget,
++} from "../../src/runs/shared/execution-target.ts";
++
++const descriptor = {
++  version: 1,
++  name: "stanza",
++  target: "deploy@stanza",
++  hostname: "stanza",
++  cwd: "/home/monika/repos/monika",
++  allowedRoot: "/home/monika/repos",
++  knownHosts: "/runtime/secrets/ssh/known_hosts",
++};
++
++describe("execution targets", () => {
++  it("defaults locally and validates the closed public shape", () => {
++    assert.deepEqual(resolveExecutionTarget(undefined, {}).public, { kind: "local" });
++    assert.deepEqual(validateExecutionTarget({ kind: "ssh", name: "stanza" }), { kind: "ssh", name: "stanza" });
++    assert.throws(() => validateExecutionTarget({ kind: "ssh", name: "../stanza" }), /executionTarget/);
++    assert.throws(() => validateExecutionTarget({ kind: "local", name: "stanza" }), /extra fields/);
++    assert.throws(() => validateExecutionTarget({ kind: "ssh", name: "stanza", host: "evil" }), /extra fields/);
++  });
++
++  it("never infers relocation metadata when executionTarget is omitted", () => {
++    assert.deepEqual(resolveExecutionTarget(undefined, {
++      PI_SUBAGENT_EXECUTION_TARGET_NAME: "stanza",
++      PI_SUBAGENT_EXECUTION_TARGET_DIGEST: "a".repeat(64),
++    }).public, { kind: "local" });
++    assert.deepEqual(executionTargetChildLaunch({ kind: "local", public: { kind: "local" } }).env, {
++      MONIKA_SSH_LOCK_DESCRIPTOR: undefined,
++      PI_SUBAGENT_EXECUTION_TARGET_NAME: "local",
++      PI_SUBAGENT_EXECUTION_TARGET_DIGEST: undefined,
++      PI_SUBAGENT_EFFECTS_EVIDENCE_PATH: undefined,
++    });
++    assert.throws(() => resolveExecutionTarget(undefined, {
++      MONIKA_SSH_LOCK_DESCRIPTOR: "/definitely/missing/locked-target.json",
++    }), /locked SSH extension|ENOENT|no such file/i, "a locked ambient process cannot downgrade its local default or fall back");
++  });
++
++  it("binds descriptor, known_hosts, and lock code into target recovery identity", () => {
++    const raw = Buffer.from(JSON.stringify(descriptor));
++    const first = executionTargetBindingDigest(raw, Buffer.from("host-a"), "a".repeat(64));
++    assert.notEqual(first, executionTargetBindingDigest(raw, Buffer.from("host-b"), "a".repeat(64)));
++    assert.notEqual(first, executionTargetBindingDigest(raw, Buffer.from("host-a"), "b".repeat(64)));
++  });
++
++  it("binds public target identity and descriptor digest into launch recovery identity", () => {
++    const common = { definitionDigest: "d".repeat(64), task: "inspect" };
++    const local = launchBindingDigest({ ...common, executionTarget: { kind: "local" } });
++    const remoteA = launchBindingDigest({ ...common, executionTarget: { kind: "ssh", name: "stanza" }, executionTargetDigest: "a".repeat(64) });
++    const remoteB = launchBindingDigest({ ...common, executionTarget: { kind: "ssh", name: "stanza" }, executionTargetDigest: "b".repeat(64) });
++    assert.notEqual(local, remoteA);
++    assert.notEqual(remoteA, remoteB);
++  });
++
++  it("parses strict descriptors and rejects path escapes", () => {
++    assert.deepEqual(parseLockedSshDescriptor(JSON.stringify(descriptor), "stanza"), descriptor);
++    assert.throws(() => parseLockedSshDescriptor(JSON.stringify({ ...descriptor, cwd: "/etc" })), /outside allowedRoot/);
++    assert.throws(() => parseLockedSshDescriptor(JSON.stringify({ ...descriptor, target: "host;touch" })), /target/);
++    assert.throws(() => parseLockedSshDescriptor(JSON.stringify({ ...descriptor, extra: true })), /unknown or missing/);
++  });
++
++  it("treats missing, malformed, ambiguous, and unmatched remote effects evidence as unknown", () => {
++    const dir = mkdtempSync(path.join(tmpdir(), "execution-effects-"));
++    const evidence = path.join(dir, "effects.jsonl");
++    const remote = { kind: "ssh", public: { kind: "ssh", name: "stanza" } } as any;
++    assert.equal(resolveEffectsEvidenceState(remote, evidence), "unknown");
++    writeFileSync(evidence, `${JSON.stringify({ phase: "intent", id: "one" })}\n`);
++    assert.equal(resolveEffectsEvidenceState(remote, evidence), "unknown");
++    writeFileSync(evidence, `${JSON.stringify({ phase: "intent", id: "one" })}\n${JSON.stringify({ phase: "settled", id: "one", effects_state: "confirmed" })}\n`);
++    assert.equal(resolveEffectsEvidenceState(remote, evidence), "confirmed");
++    writeFileSync(evidence, `${JSON.stringify({ phase: "settled", id: "one", effects_state: "unknown" })}\n`);
++    assert.equal(resolveEffectsEvidenceState(remote, evidence), "unknown");
++  });
++
++  it("requires durable async lifecycle for SSH targets", () => {
++    assert.throws(() => assertExecutionTargetAsyncCompatible([{ kind: "ssh", name: "stanza" }], false), /require async:true/);
++    assert.doesNotThrow(() => assertExecutionTargetAsyncCompatible([{ kind: "ssh", name: "stanza" }], true));
++    assert.doesNotThrow(() => assertExecutionTargetAsyncCompatible([{ kind: "local" }], false));
++  });
++
++  it("rejects SSH worktrees before setup", () => {
++    assert.throws(() => assertExecutionTargetWorktreeCompatible([{ kind: "ssh", name: "stanza" }], true), /not supported/);
++    assert.doesNotThrow(() => assertExecutionTargetWorktreeCompatible([{ kind: "local" }], true));
++  });
++});
 diff --git a/test/unit/fork-context.test.ts b/test/unit/fork-context.test.ts
 index 69b3685..bb54c64 100644
 --- a/test/unit/fork-context.test.ts
@@ -943,6 +2738,129 @@ index 916128b..75c2480 100644
  	});
  
  	it("ignores successes from other sessions instead of grouping them", () => {
+diff --git a/test/unit/package-manifest.test.ts b/test/unit/package-manifest.test.ts
+index 9c1f0d8..4bd0a03 100644
+--- a/test/unit/package-manifest.test.ts
++++ b/test/unit/package-manifest.test.ts
+@@ -71,7 +71,7 @@ test("published extension APIs use supported package entrypoints", async () => {
+ 	assert.equal(delegation.SUBAGENT_DELEGATION_V2_PROTOCOL_VERSION, 2);
+ 	assert.equal(delegation.SUBAGENT_DELEGATION_REQUEST_EVENT, "prompt-template:subagent:request");
+ 	const preflight = await import("pi-subagents/preflight");
+-	assert.equal(preflight.SUBAGENT_LAUNCH_CONTRACT_VERSION, 2);
++	assert.equal(preflight.SUBAGENT_LAUNCH_CONTRACT_VERSION, 3);
+ 	assert.equal(typeof preflight.resolveSubagentLaunchContract, "function");
+ });
+ 
+diff --git a/test/unit/pi-args.test.ts b/test/unit/pi-args.test.ts
+index be218b9..f1f9131 100644
+--- a/test/unit/pi-args.test.ts
++++ b/test/unit/pi-args.test.ts
+@@ -406,6 +406,30 @@ describe("buildPiArgs system prompt mode wiring", () => {
+ 		assert.ok(!args.includes("--append-system-prompt"));
+ 	});
+ 
++	it("loads locked SSH explicitly with no ambient extensions", () => {
++		const target = {
++			kind: "ssh" as const,
++			name: "stanza",
++			public: { kind: "ssh" as const, name: "stanza" },
++			descriptorPath: "/runtime/secrets/ssh/targets/stanza.json",
++			descriptorDigest: "a".repeat(64),
++			descriptor: { version: 1 as const, name: "stanza", target: "deploy@stanza", hostname: "stanza", cwd: "/repos/project", allowedRoot: "/repos", knownHosts: "/runtime/secrets/ssh/known_hosts" },
++			lockExtensionPath: "/app/.pi/agent/extensions/ssh.ts",
++			lockCodeDigest: "b".repeat(64),
++		};
++		const result = buildPiArgs({ baseArgs: [], task: "task", sessionEnabled: false, inheritProjectContext: true, inheritSkills: true, executionTarget: target, effectsEvidencePath: "/tmp/effects.jsonl" });
++		assert.ok(result.args.includes("--no-extensions"));
++		assert.deepEqual(result.args.slice(result.args.indexOf("--extension", result.args.indexOf("--no-extensions"))), [
++			"--extension", result.args[result.args.indexOf("--extension") + 1],
++			"--extension", "/app/.pi/agent/extensions/ssh.ts",
++			"Task: task",
++		]);
++		assert.equal(result.env.MONIKA_SSH_LOCK_DESCRIPTOR, target.descriptorPath);
++		assert.equal(result.env.PI_SUBAGENT_EXECUTION_TARGET_DIGEST, target.descriptorDigest);
++		assert.equal(result.env.PI_SUBAGENT_SSH_LOCK_CODE_DIGEST, target.lockCodeDigest);
++		assert.equal(result.env.PI_SUBAGENT_EFFECTS_EVIDENCE_PATH, "/tmp/effects.jsonl");
++	});
++
+ 	it("injects the subagent prompt runtime extension and env flags", () => {
+ 		const { args, env } = buildPiArgs({
+ 			baseArgs: ["-p"],
+diff --git a/test/unit/preflight.test.ts b/test/unit/preflight.test.ts
+index 2c577b6..a83c547 100644
+--- a/test/unit/preflight.test.ts
++++ b/test/unit/preflight.test.ts
+@@ -111,6 +111,8 @@ Project prompt.
+ 
+ 			assert.equal(result.ok, true);
+ 			assert.equal(result.contract.version, SUBAGENT_LAUNCH_CONTRACT_VERSION);
++			assert.deepEqual(result.contract.executionTarget, { kind: "local" });
++			assert.equal(result.contract.executionTargetDigest, undefined);
+ 			assert.equal(result.contract.agent.source, "project");
+ 			assert.equal(result.contract.agent.definitionProjectionVersion, 1);
+ 			assert.match(result.contract.agent.definitionDigest, /^[a-f0-9]{64}$/);
+diff --git a/test/unit/scheduled-runs.test.ts b/test/unit/scheduled-runs.test.ts
+index a4c9ae4..0ff129f 100644
+--- a/test/unit/scheduled-runs.test.ts
++++ b/test/unit/scheduled-runs.test.ts
+@@ -227,6 +227,18 @@ describe("ScheduledRunManager create/list/status/cancel", () => {
+ 		assert.match(list.content[0]!.text, /nightly review/);
+ 	});
+ 
++	it("writes store v2 with explicit local defaults and preserves named targets", async () => {
++		const harness = freshHarness();
++		await harness.manager.handleToolCall({ action: "schedule", agent: "scout", task: "local", schedule: "+10m" }, harness.ctx);
++		await harness.manager.handleToolCall({ action: "schedule", tasks: [{ agent: "scout", task: "remote", executionTarget: { kind: "ssh", name: "stanza" } }], schedule: "+20m" }, harness.ctx);
++		const sessionId = harness.ctx.sessionManager.getSessionFile()!;
++		const storePath = scheduledRunStorePath(harness.ctx.cwd, sessionId, harness.storeRoot);
++		const store = JSON.parse(fs.readFileSync(storePath, "utf-8"));
++		assert.equal(store.version, 2);
++		assert.deepEqual(store.jobs[0].params.executionTarget, { kind: "local" });
++		assert.deepEqual(store.jobs[1].params.tasks[0].executionTarget, { kind: "ssh", name: "stanza" });
++	});
++
+ 	it("requires exactly one execution mode", async () => {
+ 		const harness = freshHarness();
+ 		// tasks + chain is genuinely ambiguous (both are execution arrays)
+diff --git a/test/unit/schemas.test.ts b/test/unit/schemas.test.ts
+index baee740..d8b1da5 100644
+--- a/test/unit/schemas.test.ts
++++ b/test/unit/schemas.test.ts
+@@ -174,6 +174,25 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
+ 		assert.match(String(concurrencySchema.description ?? ""), /parallel/i);
+ 	});
+ 
++	it("uses a closed executionTarget schema on every executable leaf", { skip: !CompileSchema ? "typebox compiler not available" : undefined }, () => {
++		assert.ok(SubagentParams, "SubagentParams schema should exist");
++		const validator = CompileSchema!(SubagentParams);
++		for (const value of [
++			{ agent: "worker", task: "x", executionTarget: { kind: "local" } },
++			{ tasks: [{ agent: "worker", task: "x", executionTarget: { kind: "ssh", name: "stanza" } }] },
++			{ chain: [{ agent: "worker", task: "x", executionTarget: { kind: "ssh", name: "stanza" } }] },
++			{ chain: [{ parallel: [{ agent: "worker", task: "x", executionTarget: { kind: "local" } }] }] },
++			{ chain: [{ expand: { from: { output: "items", path: "/items" } }, parallel: { agent: "worker", executionTarget: { kind: "ssh", name: "stanza" } }, collect: { as: "done" } }] },
++		]) assert.equal(validator.Check(value), true, JSON.stringify(value));
++		for (const executionTarget of [
++			{ kind: "ssh" },
++			{ kind: "local", name: "stanza" },
++			{ kind: "ssh", name: "../escape" },
++			{ kind: "ssh", name: "stanza", host: "untrusted" },
++			{ kind: "other" },
++		]) assert.equal(validator.Check({ agent: "worker", task: "x", executionTarget }), false, JSON.stringify(executionTarget));
++	});
++
+ 	it("allows runtime validation of management and control action strings", () => {
+ 		const actionSchema = SubagentParams?.properties?.action;
+ 		assert.ok(actionSchema, "action schema should exist");
+@@ -318,7 +337,7 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
+ 		assert.ok(SubagentParams, "SubagentParams schema should exist");
+ 		const schema = SubagentParams as unknown as JsonSchemaNode;
+ 		const serialized = JSON.stringify(schema);
+-		assert.ok(serialized.length < 15_000, `expected compact schema under 15k chars, got ${serialized.length}`);
++		assert.ok(serialized.length < 17_000, `expected compact schema under 17k chars after discriminated execution-target leaves, got ${serialized.length}`);
+ 		assert.equal(serialized.includes('"$ref"'), false);
+ 		assert.equal(serialized.includes('"$defs"'), false);
+ 		assert.equal(serialized.split("Optional acceptance policy.").length - 1, 1);
 diff --git a/test/unit/temp-paths.test.ts b/test/unit/temp-paths.test.ts
 index 113c46f..931fa88 100644
 --- a/test/unit/temp-paths.test.ts

@@ -23,6 +23,16 @@ function validObservedProcessTerminal(value, expectedRunId = null) {
 }
 function terminalObserved(value, id = null) { return validObservedProcessTerminal(record(value)?.processTerminal ?? value, id); }
 function safeState(value) { return string(value) ?? 'unknown'; }
+const EXECUTION_STATES = new Set(['active', 'terminal', 'interrupted', 'uncertain', 'quarantined']);
+const OUTCOME_STATES = new Set(['pending', 'succeeded', 'failed', 'interrupted', 'unknown']);
+const EFFECTS_STATES = new Set(['none', 'confirmed', 'unknown']);
+const DELIVERY_STATES = new Set(['pending', 'settled', 'operator-resolved']);
+function publicExecutionTarget(value) {
+  const data = record(value); const keys = data ? Object.keys(data).sort() : [];
+  if (data?.kind === 'local' && keys.length === 1) return { kind: 'local' };
+  if (data?.kind === 'ssh' && keys.join(',') === 'kind,name' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(data.name ?? '')) return { kind: 'ssh', name: data.name };
+  return null;
+}
 function sessionMatches(conv, value) {
   const ref = string(value);
   if (!ref) return false;
@@ -44,8 +54,15 @@ export function validateLifecycleArtifact(value, expected = {}) {
   if (!id || !sessionId || !asyncDir || !path.isAbsolute(asyncDir)) return null;
   if (expected.runId && expected.runId !== id) return null;
   if (expected.sessionId && expected.sessionId !== sessionId) return null;
+  if (data.lifecycleArtifactVersion >= 4 && (!EXECUTION_STATES.has(data.execution_state) || !OUTCOME_STATES.has(data.outcome_state)
+    || !EFFECTS_STATES.has(data.effects_state) || !DELIVERY_STATES.has(data.delivery_state))) return null;
   return {
     lifecycleArtifactVersion: data.lifecycleArtifactVersion, runId: id, sessionId,
+    executionState: data.lifecycleArtifactVersion >= 4 ? data.execution_state : null,
+    outcomeState: data.lifecycleArtifactVersion >= 4 ? data.outcome_state : null,
+    effectsState: data.lifecycleArtifactVersion >= 4 ? data.effects_state : 'unknown',
+    deliveryState: data.lifecycleArtifactVersion >= 4 ? data.delivery_state : null,
+    executionTarget: publicExecutionTarget(data.executionTarget ?? data.execution_target),
     asyncDir: path.resolve(asyncDir), sessionDir: sessionDir && path.isAbsolute(sessionDir) ? path.resolve(sessionDir) : null,
     state: safeState(data.state), pid: Number.isInteger(data.pid) ? data.pid : null,
     processTerminal: record(data.processTerminal),
@@ -65,7 +82,9 @@ function originFor(conv) {
 function publicRun(run) {
   return {
     run_id: run.runId, state: run.state, execution_state: run.executionState ?? (run.active ? 'active' : 'terminal'),
-    delivery_state: run.deliveryState ?? null, blocking: Boolean(run.active), reason: run.reason ?? null,
+    outcome_state: run.outcomeState ?? 'unknown', effects_state: run.effectsState === undefined ? 'unknown' : run.effectsState,
+    delivery_state: run.deliveryState ?? null, execution_target: run.executionTarget ?? null,
+    blocking: Boolean(run.active), reason: run.reason ?? null,
     parent_session_id: run.sessionId ?? null, parent_session_path: run.artifactSessionId ?? null,
     async_dir: run.asyncDir ?? null, origin: run.origin ?? null,
     started_at: run.startedAt ?? null, updated_at: run.updatedAt ?? null, completed_at: run.completedAt ?? null,
@@ -111,6 +130,7 @@ export class SubagentLifecycle {
       run.state = summary.state; run.executionState = summary.execution_state; run.reason = summary.reason;
       run.processTerminal = summary.processTerminal; run.active = summary.blocking;
       run.updatedAt = summary.updated_at; run.deliveryState = summary.delivery_state;
+      run.outcomeState = summary.outcome_state; run.effectsState = summary.effects_state; run.executionTarget = summary.execution_target;
       if (!run.active) run.completedAt = summary.updated_at;
     }
     return backgroundStatus(this.conv);
@@ -188,18 +208,38 @@ async function processAlive(pid, launch = null) {
     return actualTicks === expectedTicks;
   } catch (error) { if (error?.code === 'ENOENT') return false; throw error; }
 }
-async function classifyRunDirectory(asyncDir, { runtime = null, processInspector = processAlive, resultsRoot = null } = {}) {
+async function readOperatorResolutionAudit(lifecycleRoot) {
+  const text = await fs.readFile(path.join(lifecycleRoot, 'operator-resolutions.jsonl'), 'utf8').catch(() => '');
+  const records = [];
+  for (const line of text.split('\n').filter(Boolean)) {
+    try { const value = JSON.parse(line); if (record(value)) records.push(value); } catch { /* an incomplete tail cannot authorize a resolution */ }
+  }
+  return records;
+}
+function auditedEffectsResolution(value, id, operatorAudit) {
+  const resolution = record(value);
+  if (resolution?.version !== 1 || resolution.kind !== 'effects-attestation' || resolution.runId !== id
+    || !['none', 'confirmed'].includes(resolution.effectsState) || !string(resolution.reason)
+    || typeof resolution.resolvedAt !== 'number' || !Number.isFinite(resolution.resolvedAt)) return null;
+  return operatorAudit.some((entry) => entry?.version === resolution.version && entry?.kind === resolution.kind
+    && entry?.runId === resolution.runId && entry?.effectsState === resolution.effectsState
+    && entry?.reason === resolution.reason && entry?.resolvedAt === resolution.resolvedAt) ? resolution : null;
+}
+async function classifyRunDirectory(asyncDir, { runtime = null, processInspector = processAlive, resultsRoot = null, operatorAudit = [] } = {}) {
   const statusRaw = await readJson(path.join(asyncDir, 'status.json')).catch(() => null);
   const launch = await readJson(path.join(asyncDir, 'launch.json')).catch(() => null);
   const id = runId(statusRaw) ?? runId(launch) ?? path.basename(asyncDir);
   const status = statusRaw ? validateLifecycleArtifact(statusRaw, { runId: id, asyncDir }) : null;
-  if (!status && !launch) return { run_id: id, state: 'unknown', execution_state: 'uncertain', delivery_state: null, blocking: true, reason: 'malformed-lifecycle-artifact', async_dir: asyncDir, processTerminal: null };
+  if (!status && !launch) return { run_id: id, state: 'unknown', execution_state: 'uncertain', outcome_state: 'unknown', effects_state: 'unknown', delivery_state: null, execution_target: null, blocking: true, reason: 'malformed-lifecycle-artifact', async_dir: asyncDir, processTerminal: null };
   let proof = await readJson(path.join(asyncDir, 'process-terminal.json')).catch(() => null);
   if (!proof) proof = status?.processTerminal ?? null;
   const operatorResolution = await readJson(path.join(asyncDir, 'operator-resolution.json')).catch(() => null);
+  const effectsResolution = await readJson(path.join(asyncDir, 'effects-resolution.json')).catch(() => null);
   const expectedInstanceId = string(proof?.runnerProcessInstanceId) ?? string(launch?.runnerProcessInstanceId);
   const operatorQuarantined = operatorResolution?.version === 1 && operatorResolution.action === 'quarantine'
     && operatorResolution.runId === id && string(operatorResolution.runnerProcessInstanceId) === expectedInstanceId;
+  const auditedEffects = auditedEffectsResolution(effectsResolution, id, operatorAudit);
+  const operatorEffectsState = auditedEffects?.effectsState ?? null;
   const logicalTerminal = status ? !ACTIVE_STATES.has(status.state) && status.state !== 'unknown' : false;
   const runnerPid = Number.isInteger(status?.pid) ? status.pid : Number.isInteger(launch?.pid) ? launch.pid : null;
   const launchRuntimeId = string(launch?.runtimeInstanceId);
@@ -220,8 +260,17 @@ async function classifyRunDirectory(asyncDir, { runtime = null, processInspector
     .map((step) => string(record(step)?.agent)).filter(Boolean))];
   const profile = profiles.length === 1 ? profiles[0] : profiles.length > 1 ? 'mixed' : null;
   const resultFile = resultsRoot ? path.join(resultsRoot, `${id}.json`) : null;
-  const deliveryState = resultFile && await fs.access(resultFile).then(() => true).catch(() => false) ? 'pending' : 'settled-or-unavailable';
-  return { run_id: id, state: status?.state ?? safeState(launch?.state), execution_state: executionState, delivery_state: deliveryState,
+  const resultPending = Boolean(resultFile && await fs.access(resultFile).then(() => true).catch(() => false));
+  // Result-file presence is the durable pending-delivery fact. Runner status is
+  // written before host acknowledgement and must not leave delivery stuck at
+  // pending after the host has acknowledged and removed the result.
+  const deliveryState = resultPending ? 'pending' : status?.deliveryState === 'operator-resolved' ? 'operator-resolved' : 'settled';
+  const outcomeState = status?.outcomeState ?? (logicalTerminal ? (status?.state === 'complete' ? 'succeeded' : 'unknown') : 'pending');
+  const effectsState = operatorEffectsState ?? (status?.lifecycleArtifactVersion >= 4 ? status.effectsState : null);
+  return { run_id: id, state: status?.state ?? safeState(launch?.state), lifecycle_artifact_version: status?.lifecycleArtifactVersion ?? null, execution_state: executionState,
+    outcome_state: outcomeState, effects_state: effectsState, delivery_state: deliveryState,
+    effects_resolution: operatorEffectsState ? auditedEffects : null,
+    execution_target: status?.executionTarget ?? null,
     blocking, reason, parent_session_id: status?.sessionId ?? string(launch?.sessionId), parent_session_path: status?.sessionId ?? string(launch?.sessionId),
     async_dir: asyncDir, mode: status?.mode ?? string(launch?.mode), profile, pid: runnerPid,
     started_at: status?.startedAt ?? launch?.registeredAt ?? null, updated_at: status?.updatedAt ?? launch?.updatedAt ?? null,
@@ -231,14 +280,17 @@ export async function scanLifecycleSnapshot({ lifecycleRoot, runtimeInstanceFile
   const resolvedRoot = path.resolve(lifecycleRoot ?? '');
   if (!path.isAbsolute(lifecycleRoot ?? '') || resolvedRoot === path.parse(resolvedRoot).root) throw new Error('dedicated absolute subagent lifecycle root is required');
   const runtime = await readRuntimeInstance(runtimeInstanceFile); const runs = [];
-  for (const dir of await lifecycleEntries(resolvedRoot)) { if (!isWithin(resolvedRoot, dir)) continue; try { runs.push(await classifyRunDirectory(dir, { runtime, processInspector, resultsRoot })); } catch (error) { runs.push({ run_id: path.basename(dir), state: 'unknown', execution_state: 'uncertain', delivery_state: null, blocking: true, reason: `lifecycle-read-failed:${error?.code ?? error?.message ?? 'error'}`, async_dir: dir }); } }
+  const operatorAudit = await readOperatorResolutionAudit(resolvedRoot);
+  for (const dir of await lifecycleEntries(resolvedRoot)) { if (!isWithin(resolvedRoot, dir)) continue; try { runs.push(await classifyRunDirectory(dir, { runtime, processInspector, resultsRoot, operatorAudit })); } catch (error) { runs.push({ run_id: path.basename(dir), state: 'unknown', execution_state: 'uncertain', outcome_state: 'unknown', effects_state: 'unknown', delivery_state: null, execution_target: null, blocking: true, reason: `lifecycle-read-failed:${error?.code ?? error?.message ?? 'error'}`, async_dir: dir }); } }
   runs.sort((a, b) => (b.started_at ?? 0) - (a.started_at ?? 0));
-  return { runtime, runs, byId: new Map(runs.map((run) => [run.run_id, { ...run, runId: run.run_id, active: run.blocking, asyncDir: run.async_dir, updatedAt: run.updated_at, deliveryState: run.delivery_state, executionState: run.execution_state }])), active_count: runs.filter((run) => run.blocking).length, uncertain_count: runs.filter((run) => run.execution_state === 'uncertain').length };
+  return { runtime, runs, byId: new Map(runs.map((run) => [run.run_id, { ...run, runId: run.run_id, active: run.blocking, asyncDir: run.async_dir, updatedAt: run.updated_at, deliveryState: run.delivery_state, executionState: run.execution_state }])), active_count: runs.filter((run) => run.blocking).length, uncertain_count: runs.filter((run) => run.execution_state === 'uncertain').length, effects_unknown_count: runs.filter((run) => run.lifecycle_artifact_version >= 4 && run.effects_state === 'unknown').length };
 }
 export async function scanActiveLifecycleRuns(opts = {}) { const snapshot = await scanLifecycleSnapshot(opts); return snapshot.runs.filter((run) => run.blocking).map((run) => ({ ...run, runId: run.run_id, asyncDir: run.async_dir })); }
 
 export function prioritizeLifecycleRuns(runs, limit = 64) {
-  const rank = (run) => run.blocking || run.execution_state === 'uncertain' ? 0 : run.delivery_state === 'pending' ? 1 : 2;
+  const safetyBlocker = (run) => run.blocking || run.execution_state === 'uncertain'
+    || (run.lifecycle_artifact_version >= 4 && run.effects_state === 'unknown');
+  const rank = (run) => safetyBlocker(run) ? 0 : run.delivery_state === 'pending' ? 1 : 2;
   return [...runs].sort((left, right) => rank(left) - rank(right)
     || ((timestampMs(right.updated_at ?? right.started_at) ?? 0) - (timestampMs(left.updated_at ?? left.started_at) ?? 0)))
     .slice(0, Math.max(0, limit));
@@ -246,7 +298,8 @@ export function prioritizeLifecycleRuns(runs, limit = 64) {
 
 export function capLifecycleRuns(runs, limit = 64) {
   const selected = prioritizeLifecycleRuns(runs, limit);
-  const blocker = (run) => run.blocking || run.execution_state === 'uncertain';
+  const blocker = (run) => run.blocking || run.execution_state === 'uncertain'
+    || (run.lifecycle_artifact_version >= 4 && run.effects_state === 'unknown');
   const blockerCount = runs.filter(blocker).length;
   return {
     selected,
@@ -261,7 +314,8 @@ export function mergeMappedLifecycleRuns(snapshot, conversations = []) {
     conv.subagentLifecycle?.adoptSnapshotRuns(snapshot);
     for (const run of conv.subagents?.runs?.values?.() ?? []) {
       if (snapshot.byId.has(run.runId)) continue;
-      const missing = { run_id: run.runId, runId: run.runId, state: 'unknown', execution_state: 'uncertain', executionState: 'uncertain',
+      const missing = { run_id: run.runId, runId: run.runId, state: 'unknown', lifecycle_artifact_version: null, execution_state: 'uncertain', executionState: 'uncertain',
+        outcome_state: run.outcomeState ?? 'unknown', effects_state: run.effectsState ?? 'unknown', execution_target: run.executionTarget ?? null,
         delivery_state: run.deliveryState ?? null, deliveryState: run.deliveryState ?? null, blocking: true, active: true,
         reason: 'mapped-lifecycle-artifact-missing', parent_session_id: run.sessionId, parent_session_path: run.artifactSessionId,
         async_dir: run.asyncDir, asyncDir: run.asyncDir, started_at: run.startedAt, updated_at: null, updatedAt: null, origin: run.origin ?? null };
@@ -270,6 +324,7 @@ export function mergeMappedLifecycleRuns(snapshot, conversations = []) {
   }
   snapshot.active_count = snapshot.runs.filter((run) => run.blocking).length;
   snapshot.uncertain_count = snapshot.runs.filter((run) => run.execution_state === 'uncertain').length;
+  snapshot.effects_unknown_count = snapshot.runs.filter((run) => run.lifecycle_artifact_version >= 4 && run.effects_state === 'unknown').length;
   return snapshot;
 }
 
@@ -351,6 +406,54 @@ export async function resolvePendingSubagentDelivery({ lifecycleRoot, resultsRoo
   }
   await fs.unlink(source);
   return completed;
+}
+
+export async function resolveSubagentEffects({ lifecycleRoot, runId: requestedRunId, effectsState, reason, runtimeInstanceFile = '/run/monika-runtime-instance.json', processInspector } = {}) {
+  const id = string(requestedRunId); const operatorReason = string(reason);
+  if (!id || path.basename(id) !== id || !['none', 'confirmed'].includes(effectsState) || !operatorReason) {
+    throw new Error('runId, effectsState (none|confirmed), and reason are required');
+  }
+  const root = path.resolve(lifecycleRoot ?? '');
+  const matches = (await lifecycleEntries(root)).filter((candidate) => path.basename(candidate) === id);
+  if (matches.length !== 1) throw new Error(matches.length === 0 ? 'run lifecycle directory not found' : 'run id is ambiguous');
+  const asyncDir = matches[0];
+  if (!isWithin(root, asyncDir)) throw new Error('invalid run path');
+  const runtime = await readRuntimeInstance(runtimeInstanceFile);
+  const operatorAudit = await readOperatorResolutionAudit(root);
+  const current = await classifyRunDirectory(asyncDir, { runtime, processInspector, operatorAudit });
+  if (current.blocking || !['terminal', 'interrupted', 'quarantined'].includes(current.execution_state)) {
+    throw new Error('effects can only be attested after execution is durably inactive');
+  }
+  if (current.lifecycle_artifact_version < 4) throw new Error('effects attestation requires lifecycle artifact version 4 or newer');
+  if (current.effects_state !== 'unknown') {
+    const existing = current.effects_resolution;
+    if (existing?.effectsState === effectsState && existing?.reason === operatorReason) return existing;
+    throw new Error('run effects are already resolved');
+  }
+  const resolution = {
+    version: 1, kind: 'effects-attestation', runId: id, effectsState,
+    reason: operatorReason, resolvedAt: Date.now(),
+  };
+  const file = path.join(asyncDir, 'effects-resolution.json'); const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  const syncDirectory = async (dir) => {
+    const handle = await fs.open(dir, fsConstants.O_RDONLY | (fsConstants.O_DIRECTORY ?? 0));
+    try { await handle.sync(); } finally { await handle.close(); }
+  };
+  try {
+    const sidecar = await fs.open(tmp, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY | fsConstants.O_NOFOLLOW, 0o600);
+    try { await sidecar.writeFile(`${JSON.stringify(resolution, null, 2)}\n`); await sidecar.sync(); } finally { await sidecar.close(); }
+    // Audit publication precedes the effective per-run attestation. A failed
+    // audit therefore cannot make an unknown remote mutation deploy-safe.
+    const audit = await fs.open(path.join(root, 'operator-resolutions.jsonl'), fsConstants.O_APPEND | fsConstants.O_CREAT | fsConstants.O_WRONLY | fsConstants.O_NOFOLLOW, 0o600);
+    try { await audit.writeFile(`${JSON.stringify(resolution)}\n`); await audit.sync(); } finally { await audit.close(); }
+    await syncDirectory(root);
+    await fs.rename(tmp, file);
+    await syncDirectory(asyncDir);
+  } catch (error) {
+    await fs.rm(tmp, { force: true }).catch(() => {});
+    throw error;
+  }
+  return resolution;
 }
 
 export async function quarantineLifecycleRun({ lifecycleRoot, runId: requestedRunId, runnerProcessInstanceId, reason, runtimeInstanceFile = '/run/monika-runtime-instance.json', processInspector } = {}) {

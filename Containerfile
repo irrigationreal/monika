@@ -64,7 +64,8 @@ RUN npm install -g --min-release-age=0 @earendil-works/pi-coding-agent@0.82.1
 # same isolated child-session and lifecycle roots. Agentd repeats these values
 # defensively before loading Pi, but they must also exist for direct TUI use.
 ENV PI_SUBAGENT_SESSION_ROOT=/app/.pi/agent/sessions/subagent \
-    PI_SUBAGENT_RUNTIME_ROOT=/data/pi-subagents
+    PI_SUBAGENT_RUNTIME_ROOT=/data/pi-subagents \
+    PI_SUBAGENT_SSH_LOCK_CODE_DIGEST=d96004cbd0cd4010c6b5d7e42ff5441998d748f57e9bd155f6ed97eba0ccfcc0
 
 # pi-subagents — install the exact reviewed git object because npm's dependency
 # cooldown currently excludes the equivalent 0.37.2 artifact. The installer
@@ -73,7 +74,7 @@ ENV PI_SUBAGENT_SESSION_ROOT=/app/.pi/agent/sessions/subagent \
 COPY scripts/install-pi-subagents /usr/local/bin/install-pi-subagents
 COPY config/pi-subagents-0.37.2.patch /tmp/pi-subagents-0.37.2.patch
 RUN chmod +x /usr/local/bin/install-pi-subagents && \
-    install-pi-subagents /opt/pi-subagents /tmp/pi-subagents-0.37.2.patch && \
+    PI_SUBAGENTS_VERIFY_TESTS=1 install-pi-subagents /opt/pi-subagents /tmp/pi-subagents-0.37.2.patch && \
     rm -f /tmp/pi-subagents-0.37.2.patch
 
 # AgentLogs CLI — pinned version. Authentication/config is runtime-owned and

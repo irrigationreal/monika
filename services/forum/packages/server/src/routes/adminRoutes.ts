@@ -64,7 +64,7 @@ export function groupSubagentRuns(runs: RobotSubagentRunDto[]): {
   pendingDelivery: RobotSubagentRunDto[];
   history: RobotSubagentRunDto[];
 } {
-  const blockers = runs.filter((run) => run.blocking === true || run.executionState === 'uncertain');
+  const blockers = runs.filter((run) => run.blocking === true || run.executionState === 'uncertain' || run.effectsState === 'unknown');
   const blockerIds = new Set(blockers.map((run) => run.runId));
   const pendingDelivery = runs.filter((run) => !blockerIds.has(run.runId) && run.deliveryState === 'pending');
   const pendingIds = new Set(pendingDelivery.map((run) => run.runId));
@@ -1527,7 +1527,7 @@ export function registerAdminRoutes({
     });
 
     let subagents: {
-      activeCount: number; uncertainCount: number; runs: RobotSubagentRunDto[];
+      activeCount: number; uncertainCount: number; effectsUnknownCount: number; runs: RobotSubagentRunDto[];
       groups: { blockers: RobotSubagentRunDto[]; pendingDelivery: RobotSubagentRunDto[]; history: RobotSubagentRunDto[] };
       omitted: number; blockerCount: number; omittedBlockerCount: number; available: boolean; error?: string | null;
     };
@@ -1547,20 +1547,23 @@ export function registerAdminRoutes({
         };
         return {
           runId: run.run_id, state: run.state, executionState: run.execution_state,
-          deliveryState: run.delivery_state ?? null, blocking: run.blocking, reason: run.reason ?? null,
+          outcomeState: run.outcome_state ?? null, effectsState: run.effects_state ?? null,
+          deliveryState: run.delivery_state ?? null, executionTarget: run.execution_target ?? null,
+          blocking: run.blocking, reason: run.reason ?? null,
           parentSessionId: run.parent_session_id ?? null, topicId, topicTitle: topic?.title ?? null,
           postId: run.origin?.postId ?? null, startedAt: iso(run.started_at), updatedAt: iso(run.updated_at)
         };
       });
       subagents = {
-        activeCount: workload.active_count, uncertainCount: workload.uncertain_count, runs,
+        activeCount: workload.active_count, uncertainCount: workload.uncertain_count,
+        effectsUnknownCount: workload.effects_unknown_count ?? runs.filter((run) => run.effectsState === 'unknown').length, runs,
         groups: groupSubagentRuns(runs), omitted: workload.omitted,
         blockerCount: workload.blocker_count ?? Math.max(workload.active_count, workload.uncertain_count),
         omittedBlockerCount: workload.omitted_blocker_count ?? 0,
         available: true, error: null,
       };
     } catch (err) {
-      subagents = { activeCount: 0, uncertainCount: 0, runs: [], groups: { blockers: [], pendingDelivery: [], history: [] }, omitted: 0, blockerCount: 0, omittedBlockerCount: 0, available: false, error: err instanceof Error ? err.message : 'Agentd subagent workload unavailable' };
+      subagents = { activeCount: 0, uncertainCount: 0, effectsUnknownCount: 0, runs: [], groups: { blockers: [], pendingDelivery: [], history: [] }, omitted: 0, blockerCount: 0, omittedBlockerCount: 0, available: false, error: err instanceof Error ? err.message : 'Agentd subagent workload unavailable' };
     }
 
     return {
