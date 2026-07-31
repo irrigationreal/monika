@@ -188,6 +188,14 @@ docker exec -i "$CONTAINER_NAME" node - <<'NODE_SUBAGENTS_PIN'
 const fs = require('node:fs');
 if (process.env.PI_SUBAGENT_SESSION_ROOT !== '/app/.pi/agent/sessions/subagent') throw new Error('Dedicated subagent session root is not global');
 if (process.env.PI_SUBAGENT_RUNTIME_ROOT !== '/data/pi-subagents') throw new Error('Dedicated subagent runtime root is not global');
+const runtime = JSON.parse(fs.readFileSync('/run/monika-runtime-instance.json', 'utf8'));
+if (runtime.version !== 1 || typeof runtime.id !== 'string' || !Number.isFinite(runtime.createdAt)) throw new Error('Container runtime instance identity is invalid');
+const asyncSource = fs.readFileSync('/opt/pi-subagents/src/runs/background/async-execution.ts', 'utf8');
+const runnerSource = fs.readFileSync('/opt/pi-subagents/src/runs/background/subagent-runner.ts', 'utf8');
+const watcherSource = fs.readFileSync('/opt/pi-subagents/src/runs/background/result-watcher.ts', 'utf8');
+if (!asyncSource.includes('launch.json') || !asyncSource.includes('PI_SUBAGENTS_HOST_DRAINING')) throw new Error('Durable async launch/drain patch missing');
+if (!runnerSource.includes('Optional subagent artifact write failed')) throw new Error('Resilient artifact finalization patch missing');
+if (!watcherSource.includes('PI_SUBAGENTS_HOST_DRAINING')) throw new Error('Completion drain barrier patch missing');
 const reviewed = JSON.parse(fs.readFileSync('/opt/pi-subagents/REVIEWED_SOURCE.json', 'utf8'));
 if (reviewed.version !== '0.37.2') throw new Error(`Unexpected pi-subagents version: ${reviewed.version}`);
 if (reviewed.gitHead !== '8063333661476ca48afbca826dc4aab8707c72d3') throw new Error(`Unexpected pi-subagents gitHead: ${reviewed.gitHead}`);

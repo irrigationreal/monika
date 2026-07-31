@@ -527,9 +527,32 @@ export interface RobotQueueItemDto {
   sessionId: string;
 }
 
+export interface RobotSubagentRunDto {
+  runId: string;
+  state: string;
+  executionState: 'active' | 'terminal' | 'interrupted' | 'uncertain' | 'quarantined';
+  deliveryState?: string | null;
+  blocking: boolean;
+  reason?: string | null;
+  parentSessionId?: string | null;
+  topicId?: string | null;
+  topicTitle?: string | null;
+  postId?: string | null;
+  startedAt?: string | null;
+  updatedAt?: string | null;
+}
+
 export interface RobotDashboardDto {
   jobs: RobotJobDto[];
   queue: RobotQueueItemDto[];
+  subagents?: {
+    activeCount: number;
+    uncertainCount: number;
+    runs: RobotSubagentRunDto[];
+    omitted: number;
+    available: boolean;
+    error?: string | null;
+  };
   settings?: {
     maxConcurrentTurns: number;
     activeTurnsCount: number;

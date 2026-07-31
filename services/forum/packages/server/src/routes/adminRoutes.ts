@@ -117,10 +117,19 @@ export function registerAdminRoutes({
   let lastDeployFinishedAt: string | null = initialDeployState?.lastFinishedAt ?? null;
   let lastDeployExitCode: number | null = initialDeployState?.lastExitCode ?? null;
   let lastDeployError: string | null = initialDeployState?.lastError ?? null;
-  let deployOnFinishRequestedAt: string | null = null;
-  let deployOnFinishLastCheckedAt: string | null = null;
-  let deployOnFinishLastError: string | null = null;
+  let deployOnFinishRequestedAt: string | null = initialDeployState?.deployOnFinishRequestedAt ?? null;
+  let deployOnFinishLastCheckedAt: string | null = initialDeployState?.deployOnFinishLastCheckedAt ?? null;
+  let deployOnFinishLastError: string | null = initialDeployState?.deployOnFinishLastError ?? null;
   let deployOnFinishTimer: ReturnType<typeof setInterval> | null = null;
+  let deployOnFinishChecking = false;
+
+  function persistDeployState(): void {
+    writeDeployState(DEPLOY_STATE_FILE, {
+      lastStartedAt: lastDeployStartedAt, lastFinishedAt: lastDeployFinishedAt,
+      lastExitCode: lastDeployExitCode, lastError: lastDeployError, commitSha,
+      deployOnFinishRequestedAt, deployOnFinishLastCheckedAt, deployOnFinishLastError
+    });
+  }
 
   function getDeployBlockers(): Array<Record<string, unknown>> {
     const blockers: Array<Record<string, unknown>> = [];
@@ -159,13 +168,7 @@ export function registerAdminRoutes({
     lastDeployStartedAt = new Date().toISOString();
     lastDeployError = null;
     try {
-      writeDeployState(DEPLOY_STATE_FILE, {
-        lastStartedAt: lastDeployStartedAt,
-        lastFinishedAt: lastDeployFinishedAt,
-        lastExitCode: lastDeployExitCode,
-        lastError: lastDeployError,
-        commitSha
-      });
+      persistDeployState();
     } catch (err) {
       console.warn(
         `Failed to write deploy state file (${DEPLOY_STATE_FILE}):`,
@@ -210,14 +213,14 @@ export function registerAdminRoutes({
         lastDeployFinishedAt = finishedAt;
         lastDeployExitCode = typeof code === 'number' ? code : null;
         lastDeployError = null;
+        if (opts.source === 'on_finish' && code === 75) {
+          deployOnFinishRequestedAt ??= lastDeployStartedAt;
+          deployOnFinishLastError = 'Deployment deferred by quiescence (exit 75); it will retry.';
+        } else if (opts.source === 'on_finish') {
+          deployOnFinishLastError = code === 0 ? null : `Deploy on Finish exited with code ${code ?? 'unknown'}.`;
+        }
         try {
-          writeDeployState(DEPLOY_STATE_FILE, {
-            lastStartedAt: lastDeployStartedAt,
-            lastFinishedAt: lastDeployFinishedAt,
-            lastExitCode: lastDeployExitCode,
-            lastError: lastDeployError,
-            commitSha
-          });
+          persistDeployState();
         } catch (err) {
           console.warn(
             `Failed to write deploy state file (${DEPLOY_STATE_FILE}):`,
@@ -234,14 +237,12 @@ export function registerAdminRoutes({
         lastDeployFinishedAt = finishedAt;
         lastDeployExitCode = null;
         lastDeployError = err instanceof Error ? err.message : 'unknown error';
+        if (opts.source === 'on_finish') {
+          deployOnFinishRequestedAt ??= lastDeployStartedAt;
+          deployOnFinishLastError = lastDeployError;
+        }
         try {
-          writeDeployState(DEPLOY_STATE_FILE, {
-            lastStartedAt: lastDeployStartedAt,
-            lastFinishedAt: lastDeployFinishedAt,
-            lastExitCode: lastDeployExitCode,
-            lastError: lastDeployError,
-            commitSha
-          });
+          persistDeployState();
         } catch (stateErr) {
           console.warn(
             `Failed to write deploy state file (${DEPLOY_STATE_FILE}):`,
@@ -269,27 +270,41 @@ export function registerAdminRoutes({
   function ensureDeployOnFinishTimer(): void {
     if (deployOnFinishTimer) return;
     deployOnFinishTimer = setInterval(() => {
-      if (!deployOnFinishRequestedAt) return;
-      if (deployInProgress) return;
-      if (!deployEnabled || !DEPLOY_SCRIPT) return;
-
-      deployOnFinishLastCheckedAt = new Date().toISOString();
-      const blocked = hasBlockingRobotWork();
-      if (blocked) return;
-
-      // Clear before starting deploy so a failure doesn't spam retries.
-      // If startDeploy throws synchronously, we restore the request.
-      const requestedAt = deployOnFinishRequestedAt;
-      deployOnFinishRequestedAt = null;
-      deployOnFinishLastError = null;
-
-      startDeploy({ source: 'on_finish' }).catch((err) => {
-        deployOnFinishRequestedAt = requestedAt;
-        deployOnFinishLastError = err instanceof Error ? err.message : 'Failed to start deploy';
-      });
+      if (!deployOnFinishRequestedAt || deployInProgress || deployOnFinishChecking || !deployEnabled || !DEPLOY_SCRIPT) return;
+      deployOnFinishChecking = true;
+      void (async () => {
+        deployOnFinishLastCheckedAt = new Date().toISOString();
+        if (hasBlockingRobotWork()) { persistDeployState(); return; }
+        try {
+          const agentd = await codex.getAgentdQuiescence();
+          if (agentd['status'] === 'blocked') {
+            deployOnFinishLastError = `Waiting for agentd quiescence: ${JSON.stringify(agentd['blockers'] ?? [])}`;
+            persistDeployState();
+            return;
+          }
+        } catch (err) {
+          deployOnFinishLastError = `Waiting for agentd: ${err instanceof Error ? err.message : String(err)}`;
+          persistDeployState();
+          return;
+        }
+        const requestedAt = deployOnFinishRequestedAt;
+        deployOnFinishRequestedAt = null;
+        deployOnFinishLastError = null;
+        persistDeployState();
+        try { await startDeploy({ source: 'on_finish' }); }
+        catch (err) {
+          deployOnFinishRequestedAt = requestedAt;
+          deployOnFinishLastError = err instanceof Error ? err.message : 'Failed to start deploy';
+          persistDeployState();
+        }
+      })().catch((err) => {
+        deployOnFinishLastError = err instanceof Error ? err.message : String(err);
+        try { persistDeployState(); } catch {}
+      }).finally(() => { deployOnFinishChecking = false; });
     }, 2_000);
     deployOnFinishTimer.unref?.();
   }
+  if (deployOnFinishRequestedAt) ensureDeployOnFinishTimer();
 
   function getDeployStatus() {
     return {
@@ -1261,6 +1276,7 @@ export function registerAdminRoutes({
       deployOnFinishLastError = null;
     }
 
+    persistDeployState();
     ensureDeployOnFinishTimer();
 
     return {
@@ -1275,6 +1291,7 @@ export function registerAdminRoutes({
     deployOnFinishRequestedAt = null;
     deployOnFinishLastCheckedAt = null;
     deployOnFinishLastError = null;
+    persistDeployState();
 
     return { ok: true };
   });
@@ -1495,9 +1512,40 @@ export function registerAdminRoutes({
       };
     });
 
+    let subagents: {
+      activeCount: number; uncertainCount: number; runs: Array<Record<string, unknown>>;
+      omitted: number; available: boolean; error?: string | null;
+    };
+    try {
+      const workload = await codex.getSubagentWorkload();
+      const runs = workload.runs.map((run) => {
+        const directTopicId = run.origin?.topicId ?? null;
+        const link = run.parent_session_id
+          ? store.getPiSessionLinkByPiSessionId(run.parent_session_id) ?? store.getPiSessionLinkByPiSessionPath(run.parent_session_id)
+          : null;
+        const topicId = directTopicId ?? link?.topic_id ?? null;
+        const topic = topicId ? store.getTopic(topicId) : null;
+        const iso = (value: number | string | null | undefined): string | null => {
+          if (value === null || value === undefined) return null;
+          const date = new Date(value);
+          return Number.isNaN(date.getTime()) ? null : date.toISOString();
+        };
+        return {
+          runId: run.run_id, state: run.state, executionState: run.execution_state,
+          deliveryState: run.delivery_state ?? null, blocking: run.blocking, reason: run.reason ?? null,
+          parentSessionId: run.parent_session_id ?? null, topicId, topicTitle: topic?.title ?? null,
+          postId: run.origin?.postId ?? null, startedAt: iso(run.started_at), updatedAt: iso(run.updated_at)
+        };
+      });
+      subagents = { activeCount: workload.active_count, uncertainCount: workload.uncertain_count, runs, omitted: workload.omitted, available: true, error: null };
+    } catch (err) {
+      subagents = { activeCount: 0, uncertainCount: 0, runs: [], omitted: 0, available: false, error: err instanceof Error ? err.message : 'Agentd subagent workload unavailable' };
+    }
+
     return {
       jobs,
       queue,
+      subagents,
       settings: {
         maxConcurrentTurns: codex.maxConcurrentTurns,
         activeTurnsCount: codex.listActiveTurns().length

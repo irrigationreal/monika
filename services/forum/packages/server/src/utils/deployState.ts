@@ -6,6 +6,9 @@ export type DeployState = {
   lastFinishedAt?: string | null;
   lastExitCode?: number | null;
   lastError?: string | null;
+  deployOnFinishRequestedAt?: string | null;
+  deployOnFinishLastCheckedAt?: string | null;
+  deployOnFinishLastError?: string | null;
   /**
    * Git commit SHA that the *server process* believes it's running.
    * Typically set at deploy time (env var) or inferred from a local checkout.
@@ -35,6 +38,9 @@ export function readDeployState(stateFile: string): DeployState | null {
     }
     if (typeof parsed['lastError'] === 'string' || parsed['lastError'] === null) {
       state.lastError = parsed['lastError'] as string | null;
+    }
+    for (const key of ['deployOnFinishRequestedAt', 'deployOnFinishLastCheckedAt', 'deployOnFinishLastError'] as const) {
+      if (typeof parsed[key] === 'string' || parsed[key] === null) state[key] = parsed[key] as string | null;
     }
     if (typeof parsed['commitSha'] === 'string' || parsed['commitSha'] === null) {
       state.commitSha = parsed['commitSha'] as string | null;

@@ -3,6 +3,7 @@ import { EchsBridge } from './echsBridge';
 import type { MessageTamperContext, MessageTamperLayer, MessageTamperPlugin } from '@irrigationreal/codex-forum-core';
 
 import type { ForumStore } from './store';
+import type { EchsSubagentWorkload } from './echsClient';
 import type { StreamBusInterface } from './streamBus';
 
 export type AgentBackend = 'echs';
@@ -144,6 +145,14 @@ export class AgentBridge {
 
   async closeTopic(topicId: string): Promise<{ ok: boolean; message: string }> {
     return this.echs.closeTopic(topicId);
+  }
+
+  async getSubagentWorkload(): Promise<EchsSubagentWorkload> {
+    return this.echs.getSubagentWorkload();
+  }
+
+  async getAgentdQuiescence(): Promise<Record<string, unknown>> {
+    return this.echs.getAgentdQuiescence();
   }
 
   async isThreadLoaded(threadId: string): Promise<boolean> {

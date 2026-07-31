@@ -176,25 +176,41 @@ taxonomy, which remains only for importing historical custom-delegate sessions
 marked with `=== FOCUSED TASK MODE ===`.
 
 For async work, agentd owns the lifetime rather than allowing print-mode auto-drain
-to hold the initiating forum response open. Package lifecycle, result, and recovery
-artifacts persist below `/data/pi-subagents/`; fresh and fork-context child JSONL
-remain in the dedicated session root. Agentd records a `monika.subagent.run` entry
-in the canonical parent JSONL with the run ID, originating turn/topic/post, and async
-directory. Active runs block idle reaping, conversation close, interactive
-ownership takeover until stopped, and deployment quiescence. Interrupt/takeover
-requests use pi-subagents' public v1 stop RPC; drain does not close conversations
-that still own active work.
+to hold the initiating forum response open. Package lifecycle, result, launch, and
+recovery artifacts persist below `/data/pi-subagents/`; fresh and fork-context
+child JSONL remain in the dedicated session root. Before spawn, the package writes
+a durable `launch.json` containing the run, parent, runtime-instance, runner
+instance, PID, and Linux process-start identity. Agentd records the corresponding
+`monika.subagent.run` origin entry in canonical parent JSONL. The JSONL entry is an
+audit/mapping record, not an eternal process lease.
 
-After restart, agentd restores run mappings from the parent JSONL, reconciles the
-persistent `status.json` artifact and package lifecycle events, and asks the
-package to trigger recovered results. Logical completion alone does not release
-lifecycle ownership: exact observed process-terminal proof is required. The
-package's natural `subagent-notify` continuation is attributed as
+Execution ownership and result delivery are separate. Only a process that is
+active or genuinely uncertain blocks close, takeover, and deployment. A terminal
+run with a durable result awaiting continuation/projection does not pretend to be
+a live process. Agentd reconciles the filesystem ledger before every quiescence
+decision and periodically before idle reaping; missed package events therefore
+cannot leave stale in-memory leases. Strict observed process-terminal proof ends
+ownership immediately. After an agentd-only restart, PID start identity allows a
+surviving runner to remain owned; a missing or reused PID is reconciled as
+interrupted. After container replacement, the new `/run/monika-runtime-instance.json`
+epoch proves old runners were destroyed and safely migrates legacy unknown records
+without deleting their diagnostics.
+
+Optional project artifacts are not supervisor state. The runner recreates their
+directory at final write and records failures without bypassing result/status/
+process-terminal finalization. Drain installs a package-level barrier: new async
+launches are rejected and completed result files remain durable without triggering
+an internal continuation until drain is cancelled. Interrupt/takeover still uses
+pi-subagents' public v1 stop RPC.
+
+The package's natural `subagent-notify` continuation is attributed as
 `source_kind: subagent-completion`, persisted as canonical message provenance, and
 projected exactly once beneath the originating forum post when available. Grouped
 notifications retain all contributing run origins. Live bridge projection and
 later sync share the canonical Pi message link, preventing duplicate completion
-posts.
+posts. The admin Robot Dashboard reads agentd's `/v1/admin/subagents` summary and
+shows background/uncertain work under its parent when possible; disposable child
+sessions still never become robots or topics.
 
 Agentd runs conservative retention daily. A child session is removed only after
 14 days when its status is proven terminal, it is not active, and its parent

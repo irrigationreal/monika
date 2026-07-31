@@ -155,7 +155,8 @@ describe('Admin deploy endpoints', () => {
     const codex = {
       pauseActiveThreads: vi.fn(async () => ({ paused: 0, skipped: 0 })),
       listActiveTurns: vi.fn(() => Array.from({ length: activeTurnsCount }, (_, i) => ({ topicId: `t${i}`, turnId: `turn${i}` }))),
-      listQueuedTurns: vi.fn(() => [])
+      listQueuedTurns: vi.fn(() => []),
+      getAgentdQuiescence: vi.fn(async () => ({ status: 'safe_to_stop', blockers: [] }))
     } as any;
 
     registerAdminRoutes({ app, store, db, access, codex });
@@ -210,5 +211,16 @@ describe('Admin deploy endpoints', () => {
 
     expect(spawn).toHaveBeenCalledTimes(1);
     expect(codex.pauseActiveThreads).toHaveBeenCalledWith('deploy:on_finish');
+
+    // A quiescence deferral is not a lost one-shot request. The timer keeps the
+    // durable intent and will retry after the blocker clears.
+    child.emit('close', 75);
+    const deferred = await app.inject({
+      method: 'GET', url: '/admin/deploy/status', headers: { authorization: `Bearer ${token}` }
+    });
+    expect(deferred.json()).toMatchObject({
+      deployOnFinishRequestedAt: expect.any(String),
+      deployOnFinishLastError: expect.stringContaining('exit 75')
+    });
   });
 });

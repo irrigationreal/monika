@@ -20,6 +20,20 @@ export HOME="${MONIKA_HOME:-/app}"
 monika_log "[monika] Standalone mode: container-owned Pi runtime"
 mkdir -p "$MEMSTORE_DATA_DIR" /data/sessions /app/.config /app/.ssh /app/.gnupg "$PI_CODING_AGENT_DIR"
 
+# One identity per container lifetime lets agentd distinguish a surviving runner
+# after an agentd-only restart from a process destroyed by container replacement.
+export MONIKA_RUNTIME_INSTANCE_FILE="${MONIKA_RUNTIME_INSTANCE_FILE:-/run/monika-runtime-instance.json}"
+node - "$MONIKA_RUNTIME_INSTANCE_FILE" <<'NODE'
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const file = process.argv[2];
+fs.mkdirSync(path.dirname(file), { recursive: true });
+const tmp = `${file}.${process.pid}.tmp`;
+fs.writeFileSync(tmp, `${JSON.stringify({ version: 1, id: crypto.randomUUID(), createdAt: Date.now() })}\n`, { mode: 0o644 });
+fs.renameSync(tmp, file);
+NODE
+
 # ── AgentLogs runtime state ──────────────────────────────
 # AgentLogs writes auth/config to ~/.config/agentlogs. Keep that state separate
 # from Monika's HOME so read-only runtime config mounts do not block login.
