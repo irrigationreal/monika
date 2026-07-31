@@ -97,9 +97,10 @@ The runtime installs `pi-subagents` 0.37.2 from reviewed git object
 reviewed patch in `config/pi-subagents-0.37.2.patch`. The installer verifies the
 git tree, selected source files, lockfile, and patch hashes before installing
 lockfile-pinned production dependencies. The patch adds deployment-owned
-session/runtime roots, machine-readable completion IDs and process-terminal
-proof, and agentd controls for auto-drain, recovered-result triggering, and
-host-acknowledged result cleanup.
+session/runtime roots—including per-run branch directories for fork-context
+children—machine-readable completion IDs and process-terminal proof, and agentd
+controls for auto-drain, recovered-result triggering, and host-acknowledged result
+cleanup.
 
 The parent receives the package's `subagent`, `subagent_wait`, and
 `subagent_supervisor` tools, supporting foreground runs, parallel groups, chains,
@@ -128,8 +129,11 @@ A parent-only prompt extension defines role selection, execution modes, low-loss
 task packets, write isolation, validation, and the positive boundary for using
 `monika-delegate` when authored judgment materially improves the work.
 
-Child JSONL lives under `/app/.pi/agent/sessions/subagent/` and is deliberately
-omitted from forum session sync and direct memstore ingestion. Useful child results
+The container exports the dedicated roots globally so agentd and direct
+interactive Pi sessions apply the same isolation policy. Fresh and fork-context
+child JSONL lives under `/app/.pi/agent/sessions/subagent/` and is deliberately
+omitted from both ongoing forum sync and the standalone historical importer, as
+well as direct memstore ingestion. Useful child results
 return through the canonical parent transcript; the parent alone decides what to
 write as durable memory. Async lifecycle/results live under
 `/data/pi-subagents/`; agentd keeps the canonical parent conversation loaded while

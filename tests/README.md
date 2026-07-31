@@ -33,9 +33,9 @@ tests/forum/e2e.sh
 
 See `tests/forum/README.md` for the split between Vitest, mocked Playwright E2E,
 and opt-in live backend canaries. Forum unit coverage verifies that dedicated
-subagent child paths are omitted from sync and that live and historical async
-completion continuations project once beneath their recorded origin without a
-fake user post.
+subagent child paths are omitted from both normal sync and direct import paths,
+and that live and historical async completion continuations project once beneath
+their recorded origin without a fake user post.
 
 ## Agentd tests
 
@@ -100,7 +100,7 @@ The script verifies:
 3. agentd answers `/healthz`;
 4. `pi --version` reports the repository's exact Pi pin;
 5. npm's 10-day dependency cooldown, pnpm 10.26.2, and the pinned agent-browser version are active;
-6. the reviewed pi-subagents 0.37.2 gitHead (`8063333661476ca48afbca826dc4aab8707c72d3`) is installed, `defaultExtensions=[]` and isolated child profiles are configured, and legacy force-tools/delegate extensions are absent;
+6. the reviewed pi-subagents 0.37.2 gitHead (`8063333661476ca48afbca826dc4aab8707c72d3`) is installed, the dedicated roots are global for agentd and interactive Pi, its fork-context regression test proves branched children use per-run directories beneath the child root, `defaultExtensions=[]` and isolated child profiles are configured, and legacy force-tools/delegate extensions are absent;
 7. interactive project-trust state is linked into persistent `/data`;
 8. agentd sends a complete Pi turn to a local OpenAI Responses fixture, which requires `pi_run`, `browser`, `subagent`, `subagent_wait`, and `subagent_supervisor` while rejecting the legacy `delegate` tool;
 9. every strict function schema in the serialized request satisfies OpenAI's

@@ -2,11 +2,13 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import Database from 'better-sqlite3';
 
 import { bootstrap, migrate } from '../db';
 import { classifyPiSession } from '../services/piSessionClassifier';
+import { isSubagentPiSession, omitSubagentPiSessions } from '../services/piSessionPolicy';
 
 import type { ForumTarget, SessionClassification } from '../services/piSessionClassifier';
 
@@ -48,7 +50,13 @@ type ExportedSession = {
   entries: PiEntry[];
   parse_errors?: Array<{ line: number; message: string }>;
 };
-type Args = { agentdBaseUrl: string; dbPath: string; resetDb: boolean; dryRun: boolean; limit: number | null };
+export type PiSessionImportArgs = {
+  agentdBaseUrl: string;
+  dbPath: string;
+  resetDb: boolean;
+  dryRun: boolean;
+  limit: number | null;
+};
 
 const nowIso = () => new Date().toISOString();
 
@@ -59,8 +67,14 @@ function usage(exitCode = 1): never {
   process.exit(exitCode);
 }
 
-function parseArgs(argv: string[]): Args {
-  const args: Args = { agentdBaseUrl: DEFAULT_AGENTD, dbPath: DEFAULT_DB, resetDb: false, dryRun: false, limit: null };
+function parseArgs(argv: string[]): PiSessionImportArgs {
+  const args: PiSessionImportArgs = {
+    agentdBaseUrl: DEFAULT_AGENTD,
+    dbPath: DEFAULT_DB,
+    resetDb: false,
+    dryRun: false,
+    limit: null,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--') continue;
@@ -310,19 +324,22 @@ function importMessages(
   return imported;
 }
 
-async function main(): Promise<void> {
-  const args = parseArgs(process.argv.slice(2));
+export async function runPiSessionImport(args: PiSessionImportArgs): Promise<void> {
   console.log(`[pi-import] agentd=${args.agentdBaseUrl}`);
   console.log(`[pi-import] db=${args.dbPath}${args.dryRun ? ' (dry run)' : ''}${args.resetDb ? ' (reset)' : ''}`);
   const { sessions } = await fetchJson<{ sessions: PiSessionSummary[] }>(`${args.agentdBaseUrl}/v1/pi/sessions`);
-  const selected = args.limit ? sessions.slice(0, args.limit) : sessions;
-  console.log(`[pi-import] sessions discovered=${sessions.length} selected=${selected.length}`);
+  const importable = omitSubagentPiSessions(sessions);
+  const selected = args.limit ? importable.slice(0, args.limit) : importable;
+  console.log(
+    `[pi-import] sessions discovered=${sessions.length} subagents_omitted=${sessions.length - importable.length} selected=${selected.length}`
+  );
   if (args.dryRun) {
     const counts = new Map<string, number>();
     for (const summary of selected) {
       const exported = await fetchJson<ExportedSession>(
         `${args.agentdBaseUrl}/v1/pi/sessions/${encodeURIComponent(summary.id)}/export`
       );
+      if (isSubagentPiSession(exported.session)) continue;
       const classification = classifyPiSession(exported.session, exported.entries);
       const key = `${targetLabel(classification.target)} (${classification.kind})`;
       counts.set(key, (counts.get(key) ?? 0) + 1);
@@ -350,6 +367,7 @@ async function main(): Promise<void> {
       const exported = await fetchJson<ExportedSession>(
         `${args.agentdBaseUrl}/v1/pi/sessions/${encodeURIComponent(summary.id)}/export`
       );
+      if (isSubagentPiSession(exported.session)) continue;
       const classification = classifyPiSession(exported.session, exported.entries);
       const result = db.transaction(() => {
         const importedSession = ensureImportedSession(db, exported, classification, runId);
@@ -386,7 +404,9 @@ async function main(): Promise<void> {
   console.log(`[pi-import] complete: sessions_created=${sessionsImported} posts_imported=${postsImported}`);
 }
 
-main().catch((err) => {
-  console.error('[pi-import] failed:', err);
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  runPiSessionImport(parseArgs(process.argv.slice(2))).catch((err) => {
+    console.error('[pi-import] failed:', err);
+    process.exit(1);
+  });
+}

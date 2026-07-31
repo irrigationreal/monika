@@ -187,9 +187,10 @@ two child-only prompt seams with no memory-mutation APIs, session saves, or slee
 
 Both seams restore bounded child-local auto-compaction because parent automatic
 compaction is disabled. This compaction preserves only task and validation state;
-it does not add persistence. Child sessions are written beneath
-`/app/.pi/agent/sessions/subagent/`, omitted from forum sync, and never saved to
-memstore. Useful outputs return through the canonical parent transcript and enter
+it does not add persistence. Fresh and fork-context child sessions are written
+beneath `/app/.pi/agent/sessions/subagent/`, omitted from ongoing forum sync and
+the standalone historical importer, and never saved to memstore. Useful outputs
+return through the canonical parent transcript and enter
 normal memory processing there; the parent remains the only authority that can
 create or change durable observations through the memory API. This is not an OS
 sandbox: shell-capable profiles retain runtime permissions and are explicitly
