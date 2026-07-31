@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag. Defaults to YYYY.MM.DD."
+        description: "Release tag. Defaults to the candidate publication date (YYYY.MM.DD)."
         required: false
         type: string
       force:
@@ -113,7 +113,7 @@ jobs:
 
           RELEASE_TAG="$REQUESTED_TAG"
           if [ -z "$RELEASE_TAG" ]; then
-            RELEASE_TAG=$(date -u +%Y.%m.%d)
+            RELEASE_TAG=$(date -u -d "$PUBLISHED_AT" +%Y.%m.%d)
           fi
 
           if ! [[ "$RELEASE_TAG" =~ ^[0-9A-Za-z][0-9A-Za-z._-]{0,127}$ ]] || \

@@ -212,7 +212,7 @@ Publishing workflows are intentionally separate from CI gates:
 - `Image / Monika` publishes multi-arch `ghcr.io/irrigationreal/monika:main` and `sha-*`.
 - `Image / Forum` publishes multi-arch `ghcr.io/irrigationreal/monika-forum:main` and `sha-*`.
 - `Release / Nightly` builds both images from one commit, publishes immutable candidate manifests, and updates the rolling nightly images.
-- `Release / Stable` automatically promotes a candidate to a date-style release tag and `latest` after a seven-day soak without a newer candidate.
+- `Release / Stable` automatically promotes a candidate to a release tag based on its UTC publication date and to `latest` after a seven-day soak without a newer candidate.
 
 See [`docs/releases.md`](docs/releases.md) for candidate eligibility, changelog,
 and manual-override behavior.
