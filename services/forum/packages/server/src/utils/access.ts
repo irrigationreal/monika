@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import type { IdentityRow, TopicRow as DbTopicRow, PostRow as DbPostRow } from '../db';
+import type { ForumRow, IdentityRow, TopicRow as DbTopicRow, PostRow as DbPostRow } from '../db';
 import type { ForumStore } from '../store';
 import { type AuthContext, type AuthScope, hashToken, isTokenExpired, parseScopes } from './auth';
 
@@ -17,6 +17,7 @@ export function createAccessHelpers(app: FastifyInstance, store: ForumStore): {
   canCreateTopic: (forum: { visibility: string; tenant_id: string | null }, identity: IdentityRow | null) => boolean;
   canPostTopic: (_topic: { forum_id: string }, forum: { visibility: string; tenant_id: string | null }, identity: IdentityRow | null) => boolean;
   requireForumVisible: (forum: { visibility: string; tenant_id: string | null }, identity: IdentityRow | null) => void;
+  requireForumVisibleById: (forumId: string, identity: IdentityRow | null) => ForumRow;
   requireTopicVisible: (topicId: string, request: HeadersRequest) => DbTopicRow;
   requirePostVisible: (postId: string, request: HeadersRequest) => DbPostRow;
 } {
@@ -184,6 +185,12 @@ export function createAccessHelpers(app: FastifyInstance, store: ForumStore): {
     }
   }
 
+  function requireForumVisibleById(forumId: string, identity: ReturnType<ForumStore['getIdentity']>): NonNullable<ReturnType<ForumStore['getForum']>> {
+    const forum = store.getForum(forumId);
+    if (!forum || !canViewForum(forum, identity)) throw app.httpErrors.notFound('Forum not found');
+    return forum;
+  }
+
   function requireTopicVisible(topicId: string, request: HeadersRequest): DbTopicRow {
     const topic = store.getTopic(topicId);
     if (!topic) {
@@ -220,6 +227,7 @@ export function createAccessHelpers(app: FastifyInstance, store: ForumStore): {
     canCreateTopic,
     canPostTopic,
     requireForumVisible,
+    requireForumVisibleById,
     requireTopicVisible,
     requirePostVisible
   };

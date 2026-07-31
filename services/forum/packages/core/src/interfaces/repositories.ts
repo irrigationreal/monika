@@ -13,6 +13,12 @@ import type {
   TopicId
 } from '../domain/ids';
 import type { ForumCoreEvent } from '../domain/events';
+import type {
+  MessageTemplate,
+  MessageTemplateContext,
+  MessageTemplateScope,
+  MessageTemplateWriteInput
+} from '../domain/messageTemplates';
 import type { ExternalRef, ExternalRefKind } from '../domain/surfaces';
 import type { AccessRule, AccessRuleScopeKind } from '../domain/access';
 
@@ -49,6 +55,38 @@ export interface IdentityRepository {
   listByTopic(topicId: TopicId, page?: number, pageSize?: number): Promise<IdentityPublic[]>;
   create(identity: IdentityPrivate): Promise<void>;
   update(identity: IdentityPrivate): Promise<void>;
+}
+
+export interface MessageTemplateRepository {
+  listPersonal(ownerIdentityId: IdentityId): Promise<MessageTemplate[]>;
+  listSystem(): Promise<MessageTemplate[]>;
+  listEffective(input: {
+    identityId: IdentityId;
+    context: MessageTemplateContext;
+    forumId: ForumId;
+    includePersonal: boolean;
+  }): Promise<MessageTemplate[]>;
+  create(input: MessageTemplate, quota: number): Promise<MessageTemplate>;
+  update(input: {
+    id: string;
+    scope: MessageTemplateScope;
+    ownerIdentityId: IdentityId | null;
+    expectedRevision: number;
+    actorId: IdentityId;
+    value: MessageTemplateWriteInput;
+  }): Promise<MessageTemplate | 'missing' | 'conflict'>;
+  delete(input: {
+    id: string;
+    scope: MessageTemplateScope;
+    ownerIdentityId: IdentityId | null;
+    expectedRevision: number;
+  }): Promise<'deleted' | 'missing' | 'conflict'>;
+  reorder(input: {
+    scope: MessageTemplateScope;
+    ownerIdentityId: IdentityId | null;
+    actorId: IdentityId;
+    items: { id: string; revision: number }[];
+  }): Promise<MessageTemplate[] | 'missing' | 'conflict' | 'invalid'>;
 }
 
 export interface ExternalRefRepository {

@@ -120,3 +120,26 @@ curl -sS \
 - OpenAPI spec: `GET /api/openapi.json` — **manual reference only**; the contracts in
   `packages/contracts/src/schemas.ts` are the canonical API boundary.
 - Postman collection: `GET /api/postman/collection.json`
+
+## Message Templates
+
+Create a private all-forum reply template:
+
+```bash
+curl -sS -X POST "$CODEX_FORUM_BASE_URL/api/message-templates" \
+  -H "Authorization: Bearer $CODEX_FORUM_TOKEN" -H 'content-type: application/json' \
+  -d '{"name":"Approval","category":"Review","body":"Approved after review.","threadTitle":null,"forumScope":"all","forumIds":[],"contexts":["reply"],"enabled":true}'
+```
+
+List templates effective in one composer (filtering and forum authorization happen server-side):
+
+```bash
+curl -sS "$CODEX_FORUM_BASE_URL/api/message-templates/effective?context=reply&forumId=$FORUM_ID" \
+  -H "Authorization: Bearer $CODEX_FORUM_TOKEN"
+```
+
+All Message Template endpoints require authentication; system management additionally
+requires an administrator account. Update, delete, and reorder requests must send the
+current integer `revision` returned by the API. Stale revisions return `409 Conflict`.
+Administrators use the same payload shape under `/api/admin/message-templates` to
+manage the separate system library.

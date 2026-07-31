@@ -462,6 +462,12 @@ const updateTopicTitleSchema = schemas.UpdateTopicTitleRequestSchema;
 const updateTopicStatusSchema = schemas.UpdateTopicStatusRequestSchema;
 
 const updateIdentitySchema = schemas.UpdateIdentityRequestSchema;
+const messageTemplateWriteSchema = schemas.MessageTemplateWriteRequestSchema;
+const messageTemplateUpdateSchema = schemas.MessageTemplateUpdateRequestSchema;
+const messageTemplateReorderSchema = schemas.MessageTemplateReorderRequestSchema;
+const messageTemplateEffectiveQuerySchema = schemas.MessageTemplateEffectiveQuerySchema;
+const messageTemplateDeleteQuerySchema = schemas.MessageTemplateRevisionQuerySchema;
+const okResponseSchema = z.object({ ok: z.boolean() });
 
 const createTopicSchema = schemas.CreateTopicRequestSchema;
 
@@ -975,6 +981,51 @@ export const apiRoutes: ApiRoute[] = [
     response: { schema: schemas.UserPostHistoryResponseDtoSchema }
   },
 
+  // Message templates
+  {
+    method: 'get', path: '/message-templates/effective', summary: 'List effective message templates', tags: ['message-templates'],
+    request: { query: messageTemplateEffectiveQuerySchema }, response: { schema: schemas.MessageTemplateListResponseDtoSchema }
+  },
+  {
+    method: 'get', path: '/message-templates/mine', summary: 'List personal message templates', tags: ['message-templates'],
+    response: { schema: schemas.MessageTemplateListResponseDtoSchema }
+  },
+  {
+    method: 'post', path: '/message-templates', summary: 'Create personal message template', tags: ['message-templates'],
+    request: { body: { schema: messageTemplateWriteSchema } }, response: { schema: schemas.MessageTemplateDtoSchema }
+  },
+  {
+    method: 'patch', path: '/message-templates/{id}', summary: 'Update personal message template', tags: ['message-templates'],
+    request: { params: stringParam('id'), body: { schema: messageTemplateUpdateSchema } }, response: { schema: schemas.MessageTemplateDtoSchema }
+  },
+  {
+    method: 'delete', path: '/message-templates/{id}', summary: 'Delete personal message template', tags: ['message-templates'],
+    request: { params: stringParam('id'), query: messageTemplateDeleteQuerySchema }, response: { schema: okResponseSchema }
+  },
+  {
+    method: 'post', path: '/message-templates/reorder', summary: 'Reorder personal message templates', tags: ['message-templates'],
+    request: { body: { schema: messageTemplateReorderSchema } }, response: { schema: schemas.MessageTemplateListResponseDtoSchema }
+  },
+  {
+    method: 'get', path: '/admin/message-templates', summary: 'List system message templates', tags: ['admin', 'message-templates'],
+    response: { schema: schemas.MessageTemplateListResponseDtoSchema }
+  },
+  {
+    method: 'post', path: '/admin/message-templates', summary: 'Create system message template', tags: ['admin', 'message-templates'],
+    request: { body: { schema: messageTemplateWriteSchema } }, response: { schema: schemas.MessageTemplateDtoSchema }
+  },
+  {
+    method: 'patch', path: '/admin/message-templates/{id}', summary: 'Update system message template', tags: ['admin', 'message-templates'],
+    request: { params: stringParam('id'), body: { schema: messageTemplateUpdateSchema } }, response: { schema: schemas.MessageTemplateDtoSchema }
+  },
+  {
+    method: 'delete', path: '/admin/message-templates/{id}', summary: 'Delete system message template', tags: ['admin', 'message-templates'],
+    request: { params: stringParam('id'), query: messageTemplateDeleteQuerySchema }, response: { schema: okResponseSchema }
+  },
+  {
+    method: 'post', path: '/admin/message-templates/reorder', summary: 'Reorder system message templates', tags: ['admin', 'message-templates'],
+    request: { body: { schema: messageTemplateReorderSchema } }, response: { schema: schemas.MessageTemplateListResponseDtoSchema }
+  },
   // Topic extras
   {
     method: 'get',

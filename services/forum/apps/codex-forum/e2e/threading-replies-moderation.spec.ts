@@ -4,6 +4,7 @@ import type {
   ForumDto,
   ForumLastPostDto,
   IdentityDto,
+  MessageTemplateDto,
   PostDto,
   RecentPostDto,
   RobotStateDto,
@@ -50,6 +51,7 @@ type MockState = {
   operationalEventsByTopic: Record<string, TopicOperationalEventDto[]>;
   compactionOperations: Record<string, CompactionOperationDto>;
   compactionRequests: Array<Record<string, unknown>>;
+  messageTemplates: MessageTemplateDto[];
 };
 
 const REGULAR_TOKEN = 'token-regular';
@@ -117,7 +119,11 @@ function createMockState(): MockState {
     lastMoveRequest: null,
     operationalEventsByTopic: {},
     compactionOperations: {},
-    compactionRequests: []
+    compactionRequests: [],
+    messageTemplates: [
+      { id: 'template-reply', scope: 'personal', name: 'Review approval', category: 'Review', body: 'Approved after review.', threadTitle: null, forumScope: 'all', forumIds: [], contexts: ['reply'], enabled: true, sortOrder: 0, revision: 1, createdAt: now, updatedAt: now },
+      { id: 'template-thread', scope: 'system', name: 'Project kickoff', category: 'Project', body: 'Kickoff details for this project.', threadTitle: 'Project kickoff thread', forumScope: 'all', forumIds: [], contexts: ['new_thread'], enabled: true, sortOrder: 0, revision: 1, createdAt: now, updatedAt: now }
+    ]
   };
 }
 
@@ -424,6 +430,12 @@ async function attachMockApi(target: Page | BrowserContext, state: MockState): P
 
     if (path === '/api/forums' && method === 'GET') {
       await fulfillJson(route, 200, state.forums);
+      return;
+    }
+
+    if (path === '/api/message-templates/effective' && method === 'GET') {
+      const context = url.searchParams.get('context');
+      await fulfillJson(route, 200, { templates: state.messageTemplates.filter((template) => template.enabled && template.contexts.includes(context as 'reply' | 'new_thread')) });
       return;
     }
 
@@ -875,6 +887,46 @@ test.describe('Threading and reply flows', () => {
     const topicRow = topicRowForTitle(page, 'Shipping Roadmap Q1');
     await expect(topicRow).toBeVisible();
     await expect(topicRow.locator('.vb-lastpost-author').first()).toContainText('Regular User');
+  });
+
+  test('message template inserts in quick and full reply without submitting', async ({ page, context }) => {
+    const state = createMockState();
+    await attachMockApi(page, state);
+    await setAuthTokens(context, REGULAR_TOKEN);
+    await page.goto('/');
+    const fixture = await createFixture(page, { postCount: 2 });
+
+    await page.goto(`/topics/${fixture.topicId}`);
+    const quickPicker = page.locator('.vb-quick-reply [data-testid="message-template-picker"]');
+    await quickPicker.locator('[data-testid="message-template-select"]').selectOption('template-reply');
+    await quickPicker.locator('[data-testid="message-template-insert"]').click();
+    await expect(quickReplyBox(page)).toHaveValue('Approved after review.');
+
+    await page.click('button:has-text("Post Reply")');
+    const fullPicker = page.locator('.vb-newthread-form [data-testid="message-template-picker"]');
+    await fullPicker.locator('[data-testid="message-template-select"]').selectOption('template-reply');
+    await fullPicker.locator('[data-testid="message-template-insert"]').click();
+    await expect(page.locator('.vb-editor-textarea')).toHaveValue('Approved after review.');
+  });
+
+  test('new-thread template fills body and preserves a non-empty title', async ({ page, context }) => {
+    const state = createMockState();
+    await attachMockApi(page, state);
+    await setAuthTokens(context, REGULAR_TOKEN);
+    await page.goto('/');
+    const fixture = await createFixture(page, { postCount: 1 });
+    await page.goto(`/forums/${fixture.forumId}/newthread`);
+    await page.fill('#thread-title', 'My existing title');
+    const picker = page.locator('[data-testid="message-template-picker"]');
+    await picker.locator('[data-testid="message-template-select"]').selectOption('template-thread');
+    await picker.locator('[data-testid="message-template-insert"]').click();
+    await expect(page.locator('.vb-editor-textarea')).toHaveValue('Kickoff details for this project.');
+    await expect(page.locator('#thread-title')).toHaveValue('My existing title');
+
+    await page.fill('#thread-title', '');
+    await page.fill('.vb-editor-textarea', '');
+    await picker.locator('[data-testid="message-template-insert"]').click();
+    await expect(page.locator('#thread-title')).toHaveValue('Project kickoff thread');
   });
 
   test('quick reply, full reply view, edit, and delete update the post list in order', async ({ page, context }) => {

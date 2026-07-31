@@ -68,6 +68,11 @@ const breadcrumbs = computed((): BreadcrumbItem[] => {
     crumbs.push({ label: 'User Control Panel' });
   }
 
+  if (route.name === 'user.messageTemplates') {
+    crumbs.push({ label: 'User Control Panel', to: { name: 'user.profile' } });
+    crumbs.push({ label: 'Message Templates' });
+  }
+
   if (route.name === 'user.files') {
     crumbs.push({ label: 'User Control Panel', to: { name: 'user.profile' } });
     crumbs.push({ label: 'File Storage' });

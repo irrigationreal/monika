@@ -8,6 +8,7 @@ import rateLimit from '@fastify/rate-limit';
 import sensible from '@fastify/sensible';
 import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
+import { MessageTemplateService } from '@irrigationreal/codex-forum-core';
 
 import { createAdapterRegistry } from './adapters/adapterRegistry';
 import { AgentBridge } from './agentBridge';
@@ -20,6 +21,7 @@ import { EchsClient } from './echsClient';
 import { InMemoryMessageTamperLayer } from './messageTamper';
 import { createModelCatalog } from './modelCatalog';
 import { SqliteStatsReadModel } from './readModels/statsReadModel';
+import { SqliteMessageTemplateRepository } from './repositories/sqliteMessageTemplateRepository';
 import { registerAdapterRoutes } from './routes/adapterRoutes';
 import { registerAdminRoutes } from './routes/adminRoutes';
 import { registerAttachmentRoutes } from './routes/attachmentRoutes';
@@ -27,6 +29,7 @@ import { registerAuthRoutes } from './routes/authRoutes';
 import { registerChatRoutes } from './routes/chatRoutes';
 import { registerForumRoutes } from './routes/forumRoutes';
 import { registerNotificationRoutes } from './routes/notificationRoutes';
+import { registerMessageTemplateRoutes } from './routes/messageTemplateRoutes';
 import { registerProfileRoutes } from './routes/profileRoutes';
 import { registerRobotRoutes } from './routes/robotRoutes';
 import { registerSearchRoutes } from './routes/searchRoutes';
@@ -97,6 +100,7 @@ import type { FastifyPluginAsync } from 'fastify';
 const featureFlags = loadFeatureFlags();
 const { db } = openDb({ path: DB_PATH });
 migrate(db);
+const messageTemplateService = new MessageTemplateService(new SqliteMessageTemplateRepository(db));
 const bootstrapResult = bootstrap(db, {
   defaultWebIdentityId: DEFAULT_WEB_IDENTITY_ID,
   defaultWebIdentityUsername: DEFAULT_WEB_IDENTITY_USERNAME,
@@ -482,6 +486,7 @@ const registerApiRoutes: FastifyPluginAsync = async (api) => {
   registerAttachmentRoutes({ app: api, store, access });
   registerRobotRoutes({ app: api, store, codex, bus, access, autoRunDirector });
   registerProfileRoutes({ app: api, store, access });
+  registerMessageTemplateRoutes({ app: api, access, service: messageTemplateService });
   registerSearchRoutes({ app: api, store, featureFlags, access });
   registerAdapterRoutes({
     app: api,

@@ -4,6 +4,9 @@ import {
   AccessRulePrincipalKindValues,
   AccessRuleScopeKindValues,
   ForumVisibilityValues,
+  MessageTemplateContextValues,
+  MessageTemplateForumScopeValues,
+  MessageTemplateScopeValues,
   RobotModeValues
 } from '@irrigationreal/codex-forum-core';
 import { RegistrationModeValues } from './dto';
@@ -60,6 +63,8 @@ import type {
   LoginResponseDto,
   MatrixBridgeStatusDto,
   MatrixRoomMappingDto,
+  MessageTemplateDto,
+  MessageTemplateListResponseDto,
   ModelCatalogDto,
   ModelInfoDto,
   PlanDto,
@@ -135,6 +140,9 @@ import type {
   LoginRequest,
   MatrixMapRoomRequest,
   MatrixSendRequest,
+  MessageTemplateReorderRequest,
+  MessageTemplateUpdateRequest,
+  MessageTemplateWriteRequest,
   MoveTopicRequest,
   RegisterRequest,
   UpdateIdentityRequest,
@@ -1082,6 +1090,74 @@ export const RegisterRequestSchema: z.ZodType<RegisterRequest> = z.object({
   password: z.string().min(1).optional(),
   email: z.string().min(1).optional(),
   inviteCode: z.string().min(1).optional()
+});
+
+export const MessageTemplateContextSchema = z.enum(MessageTemplateContextValues);
+export const MessageTemplateScopeSchema = z.enum(MessageTemplateScopeValues);
+export const MessageTemplateForumScopeSchema = z.enum(MessageTemplateForumScopeValues);
+
+export const MessageTemplateDtoSchema: z.ZodType<MessageTemplateDto> = z.object({
+  id: z.string(),
+  scope: MessageTemplateScopeSchema,
+  name: z.string(),
+  category: nullableString,
+  body: z.string(),
+  threadTitle: nullableString,
+  forumScope: MessageTemplateForumScopeSchema,
+  forumIds: z.array(z.string()),
+  contexts: z.array(MessageTemplateContextSchema),
+  enabled: z.boolean(),
+  sortOrder: z.number().int(),
+  revision: z.number().int().positive(),
+  createdAt: z.string(),
+  updatedAt: z.string()
+});
+
+export const MessageTemplateListResponseDtoSchema: z.ZodType<MessageTemplateListResponseDto> = z.object({
+  templates: z.array(MessageTemplateDtoSchema)
+});
+
+const messageTemplateWriteRequestObjectSchema = z.object({
+  name: z.string().min(1).max(80).refine((value) => value.trim().length > 0, 'Name is required'),
+  category: z.string().max(40).nullable().optional(),
+  body: z.string().min(1).refine((value) => value.trim().length > 0, 'Body is required'),
+  threadTitle: z.string().max(255).nullable().optional(),
+  forumScope: MessageTemplateForumScopeSchema,
+  forumIds: z.array(z.string().min(1)),
+  contexts: z.array(MessageTemplateContextSchema).min(1),
+  enabled: z.boolean()
+});
+function validateMessageTemplateForumScope(
+  value: Pick<MessageTemplateWriteRequest, 'forumScope' | 'forumIds'>,
+  context: z.RefinementCtx
+): void {
+  if (value.forumScope === 'selected' && value.forumIds.length === 0) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['forumIds'], message: 'Select at least one forum' });
+  }
+  if (value.forumScope === 'all' && value.forumIds.length > 0) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['forumIds'],
+      message: 'All-forum templates cannot include forum ids'
+    });
+  }
+}
+export const MessageTemplateWriteRequestSchema: z.ZodType<MessageTemplateWriteRequest> =
+  messageTemplateWriteRequestObjectSchema.superRefine(validateMessageTemplateForumScope);
+export const MessageTemplateUpdateRequestSchema: z.ZodType<MessageTemplateUpdateRequest> =
+  messageTemplateWriteRequestObjectSchema
+    .extend({ revision: z.number().int().positive() })
+    .superRefine(validateMessageTemplateForumScope);
+
+export const MessageTemplateReorderRequestSchema: z.ZodType<MessageTemplateReorderRequest> = z.object({
+  items: z.array(z.object({ id: z.string(), revision: z.number().int().positive() })).min(1)
+});
+export const MessageTemplateEffectiveQuerySchema = z.object({
+  context: MessageTemplateContextSchema,
+  forumId: z.string().min(1)
+});
+export const MessageTemplateRevisionQuerySchema = z.object({
+  revision: z.coerce.number().int().positive()
 });
 
 export const UpdatePrivateEmailRequestSchema: z.ZodType<UpdatePrivateEmailRequest> = z.object({

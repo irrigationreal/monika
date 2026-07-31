@@ -491,6 +491,24 @@ export interface AttachmentRow {
   created_at: string;
 }
 
+export interface MessageTemplateRow {
+  id: string;
+  scope: string;
+  owner_identity_id: string | null;
+  name: string;
+  category: string | null;
+  body: string;
+  thread_title: string | null;
+  forum_scope: string;
+  enabled: number;
+  sort_order: number;
+  revision: number;
+  created_by: string | null;
+  updated_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface UserFileRow {
   id: string;
   identity_id: string;
