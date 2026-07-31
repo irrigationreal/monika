@@ -155,10 +155,15 @@ the admin Robot Dashboard. Restart reconciliation is passive: it never opens his
 Pi sessions or wakes a model from recovered result/request files. Canonical completion
 provenance permits result-file acknowledgement after a crash; unproven legacy results
 remain pending for manual review. Dashboard sections separate live/uncertain blockers,
-pending delivery, and collapsed terminal history. Pending delivery is nonblocking.
-Effects-unknown remote mutations block safe deployment and automatic replay until
-reconciled or operator-attested. Sleep remains a
-separate stateful-memory workflow under `sessions/forks/`. See
+pending delivery, collapsed terminal history, and a retention dry-run summary.
+Pending delivery is nonblocking, while effects-unknown remote mutations block safe
+deployment and automatic replay until reconciled or operator-attested. Delivery
+acknowledgement is bound to agentd's central operator ledger and precedes atomic
+result custody/removal. Daily 14-day compaction applies only to explicit bulky
+lifecycle logs for proven-terminal, explicitly non-resumable runs with affirmative
+settlement proof. Every child session is preserved, and resumable, pending,
+malformed, nested, or uncertain records remain protected until explicit review.
+Sleep remains a separate stateful-memory workflow under `sessions/forks/`. See
 [`docs/forum.md`](docs/forum.md#subagents-and-background-completions) for the
 agentd/forum lifecycle.
 

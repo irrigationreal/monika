@@ -59,6 +59,19 @@ import {
 import { readDeployState, writeDeployState } from '../utils/deployState';
 import { parseBody } from '../utils/validation';
 
+type RetentionDashboard = { available: boolean; generatedAt: string | null; retentionDays: number; counts: { protected: number; waiting: number; eligible: number; compacted: number; error: number }; trackedRemovableBytes: number; eligibleBytes: number; omitted: number; running: boolean; lastError: string | null };
+export function retentionDashboard(summary: Awaited<ReturnType<AgentBridge['getSubagentRetention']>>): RetentionDashboard {
+  return { available: true, generatedAt: summary.generatedAt ? new Date(summary.generatedAt).toISOString() : null,
+    retentionDays: Math.round(summary.retentionMs / 86_400_000), counts: summary.counts,
+    trackedRemovableBytes: summary.bytes.tracked_removable, eligibleBytes: summary.bytes.eligible, omitted: summary.omitted,
+    running: summary.running, lastError: summary.last_error ?? null };
+}
+export function unavailableRetentionDashboard(error: unknown): RetentionDashboard {
+  return { available: false, generatedAt: null, retentionDays: 14,
+    counts: { protected: 0, waiting: 0, eligible: 0, compacted: 0, error: 0 }, trackedRemovableBytes: 0, eligibleBytes: 0, omitted: 0, running: false,
+    lastError: error instanceof Error ? error.message : 'Retention inventory unavailable' };
+}
+
 export function groupSubagentRuns(runs: RobotSubagentRunDto[]): {
   blockers: RobotSubagentRunDto[];
   pendingDelivery: RobotSubagentRunDto[];
@@ -66,7 +79,7 @@ export function groupSubagentRuns(runs: RobotSubagentRunDto[]): {
 } {
   const blockers = runs.filter((run) => run.blocking === true || run.executionState === 'uncertain' || run.effectsState === 'unknown');
   const blockerIds = new Set(blockers.map((run) => run.runId));
-  const pendingDelivery = runs.filter((run) => !blockerIds.has(run.runId) && run.deliveryState === 'pending');
+  const pendingDelivery = runs.filter((run) => !blockerIds.has(run.runId) && ['pending', 'unproven'].includes(run.deliveryState ?? ''));
   const pendingIds = new Set(pendingDelivery.map((run) => run.runId));
   const history = runs.filter((run) => !blockerIds.has(run.runId) && !pendingIds.has(run.runId));
   return { blockers, pendingDelivery, history };
@@ -1530,6 +1543,7 @@ export function registerAdminRoutes({
       activeCount: number; uncertainCount: number; effectsUnknownCount: number; runs: RobotSubagentRunDto[];
       groups: { blockers: RobotSubagentRunDto[]; pendingDelivery: RobotSubagentRunDto[]; history: RobotSubagentRunDto[] };
       omitted: number; blockerCount: number; omittedBlockerCount: number; available: boolean; error?: string | null;
+      retention?: { available: boolean; generatedAt?: string | null; retentionDays: number; counts: { protected: number; waiting: number; eligible: number; compacted: number; error: number }; trackedRemovableBytes: number; eligibleBytes: number; omitted: number; running: boolean; lastError?: string | null };
     };
     try {
       const workload = await codex.getSubagentWorkload();
@@ -1546,7 +1560,7 @@ export function registerAdminRoutes({
           return Number.isNaN(date.getTime()) ? null : date.toISOString();
         };
         return {
-          runId: run.run_id, state: run.state, executionState: run.execution_state,
+          runId: run.run_key ?? run.run_id, state: run.state, executionState: run.execution_state,
           outcomeState: run.outcome_state ?? null, effectsState: run.effects_state ?? null,
           deliveryState: run.delivery_state ?? null, executionTarget: run.execution_target ?? null,
           blocking: run.blocking, reason: run.reason ?? null,
@@ -1554,13 +1568,20 @@ export function registerAdminRoutes({
           postId: run.origin?.postId ?? null, startedAt: iso(run.started_at), updatedAt: iso(run.updated_at)
         };
       });
+      let retention;
+      try {
+        const summary = await codex.getSubagentRetention();
+        retention = retentionDashboard(summary);
+      } catch (retentionError) {
+        retention = unavailableRetentionDashboard(retentionError);
+      }
       subagents = {
         activeCount: workload.active_count, uncertainCount: workload.uncertain_count,
         effectsUnknownCount: workload.effects_unknown_count ?? runs.filter((run) => run.effectsState === 'unknown').length, runs,
         groups: groupSubagentRuns(runs), omitted: workload.omitted,
         blockerCount: workload.blocker_count ?? Math.max(workload.active_count, workload.uncertain_count),
         omittedBlockerCount: workload.omitted_blocker_count ?? 0,
-        available: true, error: null,
+        available: true, error: null, retention,
       };
     } catch (err) {
       subagents = { activeCount: 0, uncertainCount: 0, effectsUnknownCount: 0, runs: [], groups: { blockers: [], pendingDelivery: [], history: [] }, omitted: 0, blockerCount: 0, omittedBlockerCount: 0, available: false, error: err instanceof Error ? err.message : 'Agentd subagent workload unavailable' };

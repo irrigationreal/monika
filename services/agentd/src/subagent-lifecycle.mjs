@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { constants as fsConstants, promises as fs } from 'node:fs';
 import path from 'node:path';
 
@@ -21,7 +21,6 @@ function validObservedProcessTerminal(value, expectedRunId = null) {
     && instance.processInstanceId === proof.runnerProcessInstanceId
     && typeof instance.closeObservedAt === 'number' && Number.isFinite(instance.closeObservedAt));
 }
-function terminalObserved(value, id = null) { return validObservedProcessTerminal(record(value)?.processTerminal ?? value, id); }
 function safeState(value) { return string(value) ?? 'unknown'; }
 const EXECUTION_STATES = new Set(['active', 'terminal', 'interrupted', 'uncertain', 'quarantined']);
 const OUTCOME_STATES = new Set(['pending', 'succeeded', 'failed', 'interrupted', 'unknown']);
@@ -45,6 +44,204 @@ function isWithin(root, candidate) {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 async function readJson(file) { try { return JSON.parse(await fs.readFile(file, 'utf8')); } catch (error) { if (error?.code === 'ENOENT') return null; throw error; } }
+async function syncDirectory(dir) {
+  const handle = await fs.open(dir, fsConstants.O_RDONLY | (fsConstants.O_DIRECTORY ?? 0));
+  try { await handle.sync(); } finally { await handle.close(); }
+}
+function validSimpleId(value) { return Boolean(string(value)?.match(/^[A-Za-z0-9][A-Za-z0-9._-]*$/)); }
+export function lifecycleRunIdentity(lifecycleRoot, asyncDir, id) {
+  const root = path.resolve(lifecycleRoot ?? ''); const dir = path.resolve(asyncDir ?? ''); const run = string(id);
+  if (!path.isAbsolute(lifecycleRoot ?? '') || !run || !validSimpleId(run) || !isWithin(root, dir)) return null;
+  const parts = path.relative(root, dir).split(path.sep).filter(Boolean);
+  if ((parts.length === 1 || (parts.length === 2 && parts[0] === 'async-subagent-runs')) && parts.at(-1) === run) {
+    return { scope: 'top', runId: run, runKey: `top:${run}`, rootRunId: null, asyncDir: dir };
+  }
+  if (parts.length === 3 && parts[0] === 'nested-subagent-runs' && validSimpleId(parts[1]) && parts[2] === run) {
+    return { scope: 'nested', runId: run, runKey: `nested:${parts[1]}:${run}`, rootRunId: parts[1], asyncDir: dir };
+  }
+  return null;
+}
+export function resultPathForIdentity(resultsRoot, identity) {
+  const root = path.resolve(resultsRoot ?? '');
+  if (!path.isAbsolute(resultsRoot ?? '') || !identity) return null;
+  return identity.scope === 'nested'
+    ? path.join(root, 'nested', identity.rootRunId, `${identity.runId}.json`)
+    : path.join(root, `${identity.runId}.json`);
+}
+async function exactFileBytes(file) {
+  const handle = await fs.open(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  try { const stat = await handle.stat(); if (!stat.isFile()) throw new Error('result is not a regular file'); return { bytes: await handle.readFile(), stat }; }
+  finally { await handle.close(); }
+}
+async function readDeliveryAckRecord(file) {
+  try { const record = await exactFileBytes(file); return { ...record, value: JSON.parse(record.bytes.toString('utf8')) }; }
+  catch (error) { if (error?.code === 'ENOENT') return null; throw error; }
+}
+async function readDeliveryAck(file) { return (await readDeliveryAckRecord(file))?.value ?? null; }
+function compatibleDeliveryAck(value, expected, resultData = null) {
+  return value?.version === 1 && value.kind === 'completion-delivery' && value.runId === expected.runId && value.runKey === expected.runKey
+    && value.proofKind === expected.proofKind && value.proofReference === expected.proofReference
+    && /^[a-f0-9]{64}$/.test(value.resultSha256 ?? '') && Number.isSafeInteger(value.resultSize) && value.resultSize >= 0
+    && (!resultData || (value.resultSha256 === createHash('sha256').update(resultData.bytes).digest('hex') && value.resultSize === resultData.bytes.length));
+}
+const DELIVERY_LEDGER_FILE = 'delivery-acknowledgements.jsonl';
+function validLedgerRecord(value) {
+  return value?.version === 1 && value.kind === 'completion-delivery-ledger' && validSimpleId(value.runId)
+    && typeof value.runKey === 'string' && /^(?:top|nested):/.test(value.runKey)
+    && /^[a-f0-9]{64}$/.test(value.ackSha256 ?? '') && /^[a-f0-9]{64}$/.test(value.resultSha256 ?? '')
+    && Number.isSafeInteger(value.resultSize) && value.resultSize >= 0 && string(value.proofKind)
+    && string(value.proofReference) && Number.isFinite(value.acknowledgedAt);
+}
+async function validateOperatorRoot(operatorRoot, { create = false } = {}) {
+  const root = path.resolve(operatorRoot ?? '');
+  if (!path.isAbsolute(operatorRoot ?? '') || root === path.parse(root).root) throw new Error('dedicated absolute operator root is required');
+  if (create) await fs.mkdir(root, { recursive: true, mode: 0o700 });
+  const stat = await fs.lstat(root); const real = await fs.realpath(root);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || real !== root) throw new Error('unsafe operator root');
+  return root;
+}
+export async function readDeliveryAcknowledgementLedger(operatorRoot) {
+  const root = await validateOperatorRoot(operatorRoot); const file = path.join(root, DELIVERY_LEDGER_FILE);
+  let text;
+  try { text = await exactFileBytes(file).then((entry) => entry.bytes.toString('utf8')); }
+  catch (error) { if (error?.code === 'ENOENT') return []; throw error; }
+  const lines = text.split('\n'); if (lines.at(-1) !== '') throw new Error('malformed delivery acknowledgement ledger');
+  const records = lines.slice(0, -1).map((line) => { try { const value = JSON.parse(line); if (!validLedgerRecord(value)) throw new Error(); return value; } catch { throw new Error('malformed delivery acknowledgement ledger'); } });
+  const byRun = new Map();
+  for (const value of records) { const key = `${value.runKey}\0${value.runId}`; const prior = byRun.get(key); if (prior && JSON.stringify(prior) !== JSON.stringify(value)) throw new Error('conflicting delivery acknowledgement ledger'); byRun.set(key, value); }
+  return records;
+}
+function ledgerRecordFor(ack, ackBytes) {
+  return { version: 1, kind: 'completion-delivery-ledger', runId: ack.runId, runKey: ack.runKey,
+    ackSha256: createHash('sha256').update(ackBytes).digest('hex'), resultSha256: ack.resultSha256,
+    resultSize: ack.resultSize, proofKind: ack.proofKind, proofReference: ack.proofReference, acknowledgedAt: ack.acknowledgedAt };
+}
+export async function trustedDeliveryAcknowledgement(operatorRoot, ack, ackBytes) {
+  if (!ack || !ackBytes) return false;
+  const expected = ledgerRecordFor(ack, ackBytes); const records = await readDeliveryAcknowledgementLedger(operatorRoot);
+  return records.some((record) => JSON.stringify(record) === JSON.stringify(expected));
+}
+const deliveryLedgerQueues = new Map();
+function sameDeliveryProof(left, right) {
+  return left.runId === right.runId && left.runKey === right.runKey && left.resultSha256 === right.resultSha256
+    && left.resultSize === right.resultSize && left.proofKind === right.proofKind && left.proofReference === right.proofReference;
+}
+async function appendDeliveryLedgerUnlocked(operatorRoot, ack, ackBytes) {
+  const root = await validateOperatorRoot(operatorRoot, { create: true });
+  const expected = ledgerRecordFor(ack, ackBytes); const records = await readDeliveryAcknowledgementLedger(root);
+  const matchingRun = records.filter((record) => record.runId === ack.runId && record.runKey === ack.runKey);
+  if (matchingRun.length) {
+    if (matchingRun.length !== 1 || !sameDeliveryProof(matchingRun[0], expected)) throw new Error('conflicting delivery acknowledgement ledger');
+    return matchingRun[0];
+  }
+  const file = path.join(root, DELIVERY_LEDGER_FILE); const handle = await fs.open(file, fsConstants.O_APPEND | fsConstants.O_CREAT | fsConstants.O_WRONLY | fsConstants.O_NOFOLLOW, 0o600);
+  try { await handle.writeFile(`${JSON.stringify(expected)}\n`); await handle.sync(); } finally { await handle.close(); }
+  await syncDirectory(root); return expected;
+}
+async function appendDeliveryLedger(operatorRoot, ack, ackBytes) {
+  const key = path.resolve(operatorRoot ?? ''); const prior = deliveryLedgerQueues.get(key) ?? Promise.resolve();
+  const current = prior.catch(() => {}).then(() => appendDeliveryLedgerUnlocked(operatorRoot, ack, ackBytes));
+  deliveryLedgerQueues.set(key, current);
+  try { return await current; } finally { if (deliveryLedgerQueues.get(key) === current) deliveryLedgerQueues.delete(key); }
+}
+export async function writeSubagentDeliveryAck({ lifecycleRoot, asyncDir, resultsRoot, operatorRoot, runId: requestedRunId, runKey = null, proofKind, proofReference, resultFile = null, beforePublish = async () => {} } = {}) {
+  const identity = lifecycleRunIdentity(lifecycleRoot, asyncDir, requestedRunId);
+  if (!identity || (runKey && runKey !== identity.runKey)) throw new Error('exact lifecycle run identity is required');
+  const result = resultFile ?? resultPathForIdentity(resultsRoot, identity);
+  if (!result || !isWithin(path.resolve(resultsRoot), result)) throw new Error('safe result path is required');
+  const requestedProofKind = string(proofKind); const requestedProofReference = string(proofReference);
+  if (!requestedProofKind || !requestedProofReference) throw new Error('delivery proof kind and reference are required');
+  const file = path.join(identity.asyncDir, 'delivery-ack.json'); const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  const existingRecord = await readDeliveryAckRecord(file); const existing = existingRecord?.value ?? null;
+  let resultData = null;
+  try { resultData = await exactFileBytes(result); } catch (error) {
+    if (error?.code !== 'ENOENT' || !existing) throw error;
+  }
+  if (existing) {
+    if (!compatibleDeliveryAck(existing, { ...identity, proofKind: requestedProofKind, proofReference: requestedProofReference }, resultData)) throw new Error('conflicting delivery acknowledgement');
+    const ledger = await appendDeliveryLedger(operatorRoot, existing, existingRecord.bytes);
+    if (JSON.stringify(ledger) !== JSON.stringify(ledgerRecordFor(existing, existingRecord.bytes))) throw new Error('delivery acknowledgement does not match durable ledger');
+    return { ack: existing, resultFile: result, identity, resultIdentity: resultData ? { dev: resultData.stat.dev, ino: resultData.stat.ino, size: resultData.stat.size } : null };
+  }
+  const { bytes } = resultData;
+  let ack = { version: 1, kind: 'completion-delivery', runId: identity.runId, runKey: identity.runKey,
+    resultSha256: createHash('sha256').update(bytes).digest('hex'), resultSize: bytes.length,
+    proofKind: requestedProofKind, proofReference: requestedProofReference, acknowledgedAt: Date.now() };
+  let ackBytes = Buffer.from(`${JSON.stringify(ack, null, 2)}\n`);
+  const ledger = await appendDeliveryLedger(operatorRoot, ack, ackBytes);
+  if (ledger.ackSha256 !== createHash('sha256').update(ackBytes).digest('hex')) {
+    ack = { ...ack, acknowledgedAt: ledger.acknowledgedAt };
+    ackBytes = Buffer.from(`${JSON.stringify(ack, null, 2)}\n`);
+    if (JSON.stringify(ledger) !== JSON.stringify(ledgerRecordFor(ack, ackBytes))) throw new Error('delivery ledger cannot reconstruct acknowledgement');
+  }
+  const handle = await fs.open(tmp, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY | fsConstants.O_NOFOLLOW, 0o600);
+  try { await handle.writeFile(ackBytes); await handle.sync(); } finally { await handle.close(); }
+  try {
+    await beforePublish(ack);
+    try {
+      await fs.link(tmp, file);
+      await fs.unlink(tmp);
+      await syncDirectory(identity.asyncDir);
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+      const racedRecord = await readDeliveryAckRecord(file); const raced = racedRecord?.value;
+      if (!compatibleDeliveryAck(raced, ack, resultData)) throw new Error('conflicting delivery acknowledgement');
+      const racedLedger = await appendDeliveryLedger(operatorRoot, raced, racedRecord.bytes);
+      if (JSON.stringify(racedLedger) !== JSON.stringify(ledgerRecordFor(raced, racedRecord.bytes))) throw new Error('raced acknowledgement does not match durable ledger');
+      await fs.rm(tmp, { force: true });
+      return { ack: raced, resultFile: result, identity, resultIdentity: { dev: resultData.stat.dev, ino: resultData.stat.ino, size: resultData.stat.size } };
+    }
+  } catch (error) { await fs.rm(tmp, { force: true }).catch(() => {}); throw error; }
+  return { ack, resultFile: result, identity, resultIdentity: { dev: resultData.stat.dev, ino: resultData.stat.ino, size: resultData.stat.size } };
+}
+
+export async function resultCustodyFiles(resultFile) {
+  const source = path.resolve(resultFile); const dir = path.dirname(source); const prefix = `.${path.basename(source)}.custody.`;
+  let entries;
+  try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch (error) { if (error?.code === 'ENOENT') return []; throw error; }
+  const files = [];
+  for (const entry of entries) {
+    if (!entry.name.startsWith(prefix)) continue;
+    const candidate = path.join(dir, entry.name); const stat = await fs.lstat(candidate);
+    if (!entry.isFile() || stat.isSymbolicLink()) throw new Error(`unsafe result custody: ${candidate}`);
+    files.push(candidate);
+  }
+  return files.sort();
+}
+
+async function verifyCustody(custody, ack, expectedIdentity = null) {
+  const captured = await exactFileBytes(custody);
+  return (!expectedIdentity || (captured.stat.dev === expectedIdentity.dev && captured.stat.ino === expectedIdentity.ino && captured.stat.size === expectedIdentity.size))
+    && captured.bytes.length === ack?.resultSize && createHash('sha256').update(captured.bytes).digest('hex') === ack?.resultSha256;
+}
+
+async function restoreMismatchedCustody(custody, source, dir) {
+  try {
+    await fs.link(custody, source); await fs.unlink(custody); await syncDirectory(dir);
+    throw new Error('captured result does not match delivery acknowledgement; source restored');
+  } catch (error) {
+    if (error?.code === 'EEXIST') throw new Error(`captured result does not match delivery acknowledgement; custody retained at ${custody}`);
+    throw error;
+  }
+}
+
+export async function removeAcknowledgedResultWithCustody(resultFile, ack, { expectedIdentity = null, beforeCustody = async () => {}, afterCapture = async () => {} } = {}) {
+  const source = path.resolve(resultFile); const dir = path.dirname(source);
+  const existingCustody = await resultCustodyFiles(source);
+  if (existingCustody.length > 1) throw new Error('multiple result custody files require operator review');
+  if (existingCustody.length === 1) {
+    const custody = existingCustody[0];
+    if (!await verifyCustody(custody, ack, expectedIdentity)) await restoreMismatchedCustody(custody, source, dir);
+    await fs.unlink(custody); await syncDirectory(dir);
+    return { removed: true, custody, recovered: true };
+  }
+  const custody = path.join(dir, `.${path.basename(source)}.custody.${process.pid}.${randomUUID()}`);
+  await beforeCustody({ source, custody, ack });
+  await fs.rename(source, custody); await syncDirectory(dir); await afterCapture({ source, custody, ack });
+  if (!await verifyCustody(custody, ack, expectedIdentity)) await restoreMismatchedCustody(custody, source, dir);
+  await fs.unlink(custody); await syncDirectory(dir);
+  return { removed: true, custody, recovered: false };
+}
 
 export function validateLifecycleArtifact(value, expected = {}) {
   const data = record(value);
@@ -81,7 +278,8 @@ function originFor(conv) {
 }
 function publicRun(run) {
   return {
-    run_id: run.runId, state: run.state, execution_state: run.executionState ?? (run.active ? 'active' : 'terminal'),
+    run_id: run.runId, run_key: run.runKey ?? null, state: run.state,
+    execution_state: run.executionState ?? (run.active ? 'active' : 'terminal'),
     outcome_state: run.outcomeState ?? 'unknown', effects_state: run.effectsState === undefined ? 'unknown' : run.effectsState,
     delivery_state: run.deliveryState ?? null, execution_target: run.executionTarget ?? null,
     blocking: Boolean(run.active), reason: run.reason ?? null,
@@ -111,7 +309,7 @@ export class SubagentLifecycle {
       const id = string(summary.run_id); const sessionRef = string(summary.parent_session_id ?? summary.parent_session_path);
       if (!id || this.conv.subagents.runs.has(id) || !sessionMatches(this.conv, sessionRef)) continue;
       this.conv.subagents.runs.set(id, {
-        runId: id, sessionId: this.conv.piSessionId, artifactSessionId: sessionRef,
+        runId: id, runKey: string(summary.run_key), sessionId: this.conv.piSessionId, artifactSessionId: sessionRef,
         asyncDir: string(summary.async_dir), state: summary.state, active: summary.blocking,
         executionState: summary.execution_state, reason: summary.reason ?? null,
         origin: record(summary.origin) ?? {}, startedAt: summary.started_at ?? null,
@@ -122,12 +320,12 @@ export class SubagentLifecycle {
   async reconcileArtifacts(snapshot = null) {
     const byId = snapshot?.byId;
     for (const run of this.conv?.subagents?.runs?.values?.() ?? []) {
-      let summary = byId?.get(run.runId) ?? null;
-      if (!summary && run.asyncDir) {
+      let summary = (run.asyncDir ? snapshot?.byDir?.get(path.resolve(run.asyncDir)) : null) ?? byId?.get(run.runId) ?? null;
+      if (!summary && !snapshot && run.asyncDir) {
         try { summary = await classifyRunDirectory(run.asyncDir, { runtime: snapshot?.runtime }); } catch { summary = null; }
       }
       if (!summary) continue;
-      run.state = summary.state; run.executionState = summary.execution_state; run.reason = summary.reason;
+      run.state = summary.state; run.runKey = string(summary.run_key) ?? run.runKey; run.executionState = summary.execution_state; run.reason = summary.reason;
       run.processTerminal = summary.processTerminal; run.active = summary.blocking;
       run.updatedAt = summary.updated_at; run.deliveryState = summary.delivery_state;
       run.outcomeState = summary.outcome_state; run.effectsState = summary.effects_state; run.executionTarget = summary.execution_target;
@@ -187,9 +385,18 @@ async function lifecycleEntries(root) {
     let entries;
     try { entries = await fs.readdir(dir, { withFileTypes: true }); }
     catch (error) { if (error?.code === 'ENOENT' && depth === 0) return; throw error; }
-    for (const entry of entries) { const candidate = path.join(dir, entry.name); if (entry.isSymbolicLink()) continue; if (entry.isDirectory()) await walk(candidate, depth + 1); else if (entry.isFile() && (entry.name === 'status.json' || entry.name === 'launch.json')) output.set(path.dirname(candidate), true); }
+    for (const entry of entries) { const candidate = path.join(dir, entry.name); if (entry.isSymbolicLink()) throw new Error(`unsafe lifecycle symlink: ${candidate}`); if (entry.isDirectory()) await walk(candidate, depth + 1); else if (entry.isFile() && (entry.name === 'status.json' || entry.name === 'launch.json')) output.set(path.dirname(candidate), true); }
   }
   await walk(root, 0); return [...output.keys()];
+}
+export async function findLifecycleRunIdentities(lifecycleRoot, requestedRunId) {
+  const root = path.resolve(lifecycleRoot ?? ''); const id = string(requestedRunId); const matches = [];
+  for (const dir of await lifecycleEntries(root)) {
+    const status = await readJson(path.join(dir, 'status.json')).catch(() => null); const launch = await readJson(path.join(dir, 'launch.json')).catch(() => null);
+    const candidateId = runId(status) ?? runId(launch) ?? path.basename(dir); const identity = lifecycleRunIdentity(root, dir, candidateId);
+    if (identity && candidateId === id) matches.push(identity);
+  }
+  return matches;
 }
 function timestampMs(value) { if (typeof value === 'number' && Number.isFinite(value)) return value; const parsed = Date.parse(value ?? ''); return Number.isFinite(parsed) ? parsed : null; }
 async function readRuntimeInstance(runtimeInstanceFile) {
@@ -225,12 +432,17 @@ function auditedEffectsResolution(value, id, operatorAudit) {
     && entry?.runId === resolution.runId && entry?.effectsState === resolution.effectsState
     && entry?.reason === resolution.reason && entry?.resolvedAt === resolution.resolvedAt) ? resolution : null;
 }
-async function classifyRunDirectory(asyncDir, { runtime = null, processInspector = processAlive, resultsRoot = null, operatorAudit = [] } = {}) {
+async function classifyRunDirectory(asyncDir, { lifecycleRoot = path.dirname(asyncDir), runtime = null, processInspector = processAlive,
+  resultsRoot = null, operatorRoot = null, operatorAudit = [] } = {}) {
   const statusRaw = await readJson(path.join(asyncDir, 'status.json')).catch(() => null);
   const launch = await readJson(path.join(asyncDir, 'launch.json')).catch(() => null);
   const id = runId(statusRaw) ?? runId(launch) ?? path.basename(asyncDir);
   const status = statusRaw ? validateLifecycleArtifact(statusRaw, { runId: id, asyncDir }) : null;
-  if (!status && !launch) return { run_id: id, state: 'unknown', execution_state: 'uncertain', outcome_state: 'unknown', effects_state: 'unknown', delivery_state: null, execution_target: null, blocking: true, reason: 'malformed-lifecycle-artifact', async_dir: asyncDir, processTerminal: null };
+  const identity = lifecycleRunIdentity(lifecycleRoot, asyncDir, id);
+  if (!identity || (!status && !launch)) return { run_id: id, run_key: identity?.runKey ?? null, state: 'unknown',
+    lifecycle_artifact_version: null, execution_state: 'uncertain', outcome_state: 'unknown', effects_state: 'unknown',
+    delivery_state: null, execution_target: null, blocking: true,
+    reason: identity ? 'malformed-lifecycle-artifact' : 'invalid-lifecycle-location', async_dir: asyncDir, processTerminal: null };
   let proof = await readJson(path.join(asyncDir, 'process-terminal.json')).catch(() => null);
   if (!proof) proof = status?.processTerminal ?? null;
   const operatorResolution = await readJson(path.join(asyncDir, 'operator-resolution.json')).catch(() => null);
@@ -259,38 +471,67 @@ async function classifyRunDirectory(asyncDir, { runtime = null, processInspector
   const profiles = [...new Set((Array.isArray(statusRaw?.steps) ? statusRaw.steps : [])
     .map((step) => string(record(step)?.agent)).filter(Boolean))];
   const profile = profiles.length === 1 ? profiles[0] : profiles.length > 1 ? 'mixed' : null;
-  const resultFile = resultsRoot ? path.join(resultsRoot, `${id}.json`) : null;
-  const resultPending = Boolean(resultFile && await fs.access(resultFile).then(() => true).catch(() => false));
-  // Result-file presence is the durable pending-delivery fact. Runner status is
-  // written before host acknowledgement and must not leave delivery stuck at
-  // pending after the host has acknowledged and removed the result.
-  const deliveryState = resultPending ? 'pending' : status?.deliveryState === 'operator-resolved' ? 'operator-resolved' : 'settled';
+  const resultFile = resultsRoot ? resultPathForIdentity(resultsRoot, identity) : null;
+  let resultPending = false;
+  if (resultFile) {
+    try { const stat = await fs.lstat(resultFile); if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('unsafe pending result'); resultPending = true; }
+    catch (error) { if (error?.code !== 'ENOENT') throw error; }
+    if ((await resultCustodyFiles(resultFile)).length > 0) resultPending = true;
+  }
+  const deliveryAckRecord = await readDeliveryAckRecord(path.join(asyncDir, 'delivery-ack.json')).catch(() => null);
+  const deliveryAck = deliveryAckRecord?.value;
+  const validDeliveryAck = deliveryAck?.version === 1 && deliveryAck.kind === 'completion-delivery'
+    && deliveryAck.runId === identity.runId && deliveryAck.runKey === identity.runKey
+    && /^[a-f0-9]{64}$/.test(deliveryAck.resultSha256 ?? '')
+    && Number.isSafeInteger(deliveryAck.resultSize) && deliveryAck.resultSize >= 0
+    && string(deliveryAck.proofKind) && string(deliveryAck.proofReference);
+  let trustedDeliveryAck = false;
+  if (validDeliveryAck && operatorRoot) trustedDeliveryAck = await trustedDeliveryAcknowledgement(operatorRoot, deliveryAck, deliveryAckRecord.bytes).catch(() => false);
+  const deliveryState = resultPending ? 'pending' : trustedDeliveryAck ? 'settled' : 'unproven';
   const outcomeState = status?.outcomeState ?? (logicalTerminal ? (status?.state === 'complete' ? 'succeeded' : 'unknown') : 'pending');
   const effectsState = operatorEffectsState ?? (status?.lifecycleArtifactVersion >= 4 ? status.effectsState : null);
-  return { run_id: id, state: status?.state ?? safeState(launch?.state), lifecycle_artifact_version: status?.lifecycleArtifactVersion ?? null, execution_state: executionState,
-    outcome_state: outcomeState, effects_state: effectsState, delivery_state: deliveryState,
-    effects_resolution: operatorEffectsState ? auditedEffects : null,
-    execution_target: status?.executionTarget ?? null,
-    blocking, reason, parent_session_id: status?.sessionId ?? string(launch?.sessionId), parent_session_path: status?.sessionId ?? string(launch?.sessionId),
+  return { run_id: id, run_key: identity.runKey, scope: identity.scope, root_run_id: identity.rootRunId,
+    result_path: resultFile, result_file: resultFile,
+    state: status?.state ?? safeState(launch?.state), lifecycle_artifact_version: status?.lifecycleArtifactVersion ?? null,
+    execution_state: executionState, outcome_state: outcomeState, effects_state: effectsState, delivery_state: deliveryState,
+    effects_resolution: operatorEffectsState ? auditedEffects : null, execution_target: status?.executionTarget ?? null,
+    blocking, reason, parent_session_id: status?.sessionId ?? string(launch?.sessionId),
+    parent_session_path: string(statusRaw?.parentSessionPath ?? statusRaw?.sessionPath ?? launch?.parentSessionPath ?? launch?.sessionPath) ?? status?.sessionId ?? string(launch?.sessionId),
     async_dir: asyncDir, mode: status?.mode ?? string(launch?.mode), profile, pid: runnerPid,
     started_at: status?.startedAt ?? launch?.registeredAt ?? null, updated_at: status?.updatedAt ?? launch?.updatedAt ?? null,
     processTerminal: proof, runtime_instance_id: launchRuntimeId, origin: null };
 }
-export async function scanLifecycleSnapshot({ lifecycleRoot, runtimeInstanceFile = '/run/monika-runtime-instance.json', processInspector, resultsRoot } = {}) {
+export async function scanLifecycleSnapshot({ lifecycleRoot, runtimeInstanceFile = '/run/monika-runtime-instance.json', processInspector, resultsRoot, operatorRoot } = {}) {
   const resolvedRoot = path.resolve(lifecycleRoot ?? '');
   if (!path.isAbsolute(lifecycleRoot ?? '') || resolvedRoot === path.parse(resolvedRoot).root) throw new Error('dedicated absolute subagent lifecycle root is required');
   const runtime = await readRuntimeInstance(runtimeInstanceFile); const runs = [];
   const operatorAudit = await readOperatorResolutionAudit(resolvedRoot);
-  for (const dir of await lifecycleEntries(resolvedRoot)) { if (!isWithin(resolvedRoot, dir)) continue; try { runs.push(await classifyRunDirectory(dir, { runtime, processInspector, resultsRoot, operatorAudit })); } catch (error) { runs.push({ run_id: path.basename(dir), state: 'unknown', execution_state: 'uncertain', outcome_state: 'unknown', effects_state: 'unknown', delivery_state: null, execution_target: null, blocking: true, reason: `lifecycle-read-failed:${error?.code ?? error?.message ?? 'error'}`, async_dir: dir }); } }
+  for (const dir of await lifecycleEntries(resolvedRoot)) {
+    if (!isWithin(resolvedRoot, dir)) continue;
+    try { runs.push(await classifyRunDirectory(dir, { lifecycleRoot: resolvedRoot, runtime, processInspector, resultsRoot, operatorRoot, operatorAudit })); }
+    catch (error) { runs.push({ run_id: path.basename(dir), run_key: null, state: 'unknown', lifecycle_artifact_version: null,
+      execution_state: 'uncertain', outcome_state: 'unknown', effects_state: 'unknown', delivery_state: null,
+      execution_target: null, blocking: true, reason: `lifecycle-read-failed:${error?.code ?? error?.message ?? 'error'}`, async_dir: dir }); }
+  }
+  const byRawId = new Map(); for (const run of runs) { const list = byRawId.get(run.run_id) ?? []; list.push(run); byRawId.set(run.run_id, list); }
+  for (const list of byRawId.values()) if (list.length > 1) for (const run of list) { run.blocking = true; run.execution_state = 'uncertain'; run.reason = 'ambiguous-run-identity'; }
   runs.sort((a, b) => (b.started_at ?? 0) - (a.started_at ?? 0));
-  return { runtime, runs, byId: new Map(runs.map((run) => [run.run_id, { ...run, runId: run.run_id, active: run.blocking, asyncDir: run.async_dir, updatedAt: run.updated_at, deliveryState: run.delivery_state, executionState: run.execution_state }])), active_count: runs.filter((run) => run.blocking).length, uncertain_count: runs.filter((run) => run.execution_state === 'uncertain').length, effects_unknown_count: runs.filter((run) => run.lifecycle_artifact_version >= 4 && run.effects_state === 'unknown').length };
+  const mapped = (run) => ({ ...run, runId: run.run_id, runKey: run.run_key, active: run.blocking, asyncDir: run.async_dir, updatedAt: run.updated_at, deliveryState: run.delivery_state, executionState: run.execution_state });
+  const byKey = new Map(runs.filter((run) => run.run_key).map((run) => [run.run_key, mapped(run)]));
+  const byDir = new Map(runs.map((run) => [path.resolve(run.async_dir), mapped(run)]));
+  const byId = new Map([...byRawId].filter(([, list]) => list.length === 1).map(([id, [run]]) => [id, mapped(run)]));
+  return { runtime, runs, byId, byKey, byDir,
+    active_count: runs.filter((run) => run.blocking).length,
+    uncertain_count: runs.filter((run) => run.execution_state === 'uncertain').length,
+    effects_unknown_count: runs.filter((run) => run.lifecycle_artifact_version >= 4 && run.effects_state === 'unknown').length };
 }
 export async function scanActiveLifecycleRuns(opts = {}) { const snapshot = await scanLifecycleSnapshot(opts); return snapshot.runs.filter((run) => run.blocking).map((run) => ({ ...run, runId: run.run_id, asyncDir: run.async_dir })); }
 
 export function prioritizeLifecycleRuns(runs, limit = 64) {
   const safetyBlocker = (run) => run.blocking || run.execution_state === 'uncertain'
     || (run.lifecycle_artifact_version >= 4 && run.effects_state === 'unknown');
-  const rank = (run) => safetyBlocker(run) ? 0 : run.delivery_state === 'pending' ? 1 : 2;
+  const rank = (run) => safetyBlocker(run) ? 0
+    : run.delivery_state === 'unproven' ? 1 : run.delivery_state === 'pending' ? 2 : 3;
   return [...runs].sort((left, right) => rank(left) - rank(right)
     || ((timestampMs(right.updated_at ?? right.started_at) ?? 0) - (timestampMs(left.updated_at ?? left.started_at) ?? 0)))
     .slice(0, Math.max(0, limit));
@@ -313,8 +554,9 @@ export function mergeMappedLifecycleRuns(snapshot, conversations = []) {
   for (const conv of conversations) {
     conv.subagentLifecycle?.adoptSnapshotRuns(snapshot);
     for (const run of conv.subagents?.runs?.values?.() ?? []) {
-      if (snapshot.byId.has(run.runId)) continue;
-      const missing = { run_id: run.runId, runId: run.runId, state: 'unknown', lifecycle_artifact_version: null, execution_state: 'uncertain', executionState: 'uncertain',
+      if (snapshot.byId.has(run.runId) || (run.asyncDir && snapshot.byDir?.has(path.resolve(run.asyncDir)))) continue;
+      const missing = { run_id: run.runId, runId: run.runId, run_key: run.runKey ?? null, runKey: run.runKey ?? null,
+        state: 'unknown', lifecycle_artifact_version: null, execution_state: 'uncertain', executionState: 'uncertain',
         outcome_state: run.outcomeState ?? 'unknown', effects_state: run.effectsState ?? 'unknown', execution_target: run.executionTarget ?? null,
         delivery_state: run.deliveryState ?? null, deliveryState: run.deliveryState ?? null, blocking: true, active: true,
         reason: 'mapped-lifecycle-artifact-missing', parent_session_id: run.sessionId, parent_session_path: run.artifactSessionId,
@@ -328,7 +570,7 @@ export function mergeMappedLifecycleRuns(snapshot, conversations = []) {
   return snapshot;
 }
 
-export async function resolvePendingSubagentDelivery({ lifecycleRoot, resultsRoot, operatorRoot, runId: requestedRunId, action, reason, beforeStep = async () => {} } = {}) {
+export async function resolvePendingSubagentDelivery({ lifecycleRoot, resultsRoot, operatorRoot, runId: requestedRunId, runKey: requestedRunKey = null, action, reason, beforeStep = async () => {} } = {}) {
   const id = string(requestedRunId); const operatorReason = string(reason);
   if (!id || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id) || !['dismiss', 'supersede'].includes(action) || !operatorReason) {
     throw new Error('runId, action (dismiss|supersede), and reason are required');
@@ -336,6 +578,14 @@ export async function resolvePendingSubagentDelivery({ lifecycleRoot, resultsRoo
   const lifecycle = path.resolve(lifecycleRoot ?? ''); const resultRoot = path.resolve(resultsRoot ?? '');
   const auditRoot = path.resolve(operatorRoot ?? '');
   if (!isWithin(lifecycle, resultRoot) || auditRoot === path.parse(auditRoot).root) throw new Error('dedicated lifecycle, results, and operator roots are required');
+  const matches = [];
+  for (const dir of await lifecycleEntries(lifecycle)) {
+    const status = await readJson(path.join(dir, 'status.json')).catch(() => null); const launch = await readJson(path.join(dir, 'launch.json')).catch(() => null);
+    const candidateId = runId(status) ?? runId(launch) ?? path.basename(dir); const identity = lifecycleRunIdentity(lifecycle, dir, candidateId);
+    if (identity && candidateId === id && (!requestedRunKey || requestedRunKey === identity.runKey)) matches.push(identity);
+  }
+  if (matches.length !== 1) throw new Error(matches.length ? 'run identity is ambiguous' : 'run lifecycle directory not found');
+  const identity = matches[0];
   await fs.mkdir(auditRoot, { recursive: true, mode: 0o700 });
   const auditStat = await fs.lstat(auditRoot); const auditReal = await fs.realpath(auditRoot);
   if (!auditStat.isDirectory() || auditStat.isSymbolicLink() || auditReal !== auditRoot) throw new Error('unsafe operator root');
@@ -343,15 +593,23 @@ export async function resolvePendingSubagentDelivery({ lifecycleRoot, resultsRoo
   await fs.mkdir(retainedDir, { recursive: true, mode: 0o700 });
   const retainedStat = await fs.lstat(retainedDir); const retainedReal = await fs.realpath(retainedDir);
   if (!retainedStat.isDirectory() || retainedStat.isSymbolicLink() || !isWithin(auditReal, retainedReal)) throw new Error('unsafe retained result directory');
-  const source = path.join(resultRoot, `${id}.json`);
-  const sourceHandle = await fs.open(source, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  const source = resultPathForIdentity(resultRoot, identity);
+  let readableSource = source; let sourceHandle;
+  try { sourceHandle = await fs.open(source, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW); }
+  catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+    const custody = await resultCustodyFiles(source);
+    if (custody.length !== 1) throw new Error(custody.length ? 'multiple result custody files require operator review' : 'pending result file not found');
+    readableSource = custody[0]; sourceHandle = await fs.open(readableSource, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  }
   let bytes; let sourceIdentity;
   try {
     const stat = await sourceHandle.stat(); if (!stat.isFile()) throw new Error('pending result file not found');
     sourceIdentity = { dev: stat.dev, ino: stat.ino, size: stat.size }; bytes = await sourceHandle.readFile();
   } finally { await sourceHandle.close(); }
-  const resolution = { version: 1, kind: 'completion-delivery', action, runId: id, reason: operatorReason, resolvedAt: Date.now() };
-  const destination = path.join(retainedReal, `${id}.${action}.json`);
+  const resolution = { version: 1, kind: 'completion-delivery', action, runId: id, runKey: identity.runKey, reason: operatorReason, resolvedAt: Date.now() };
+  const retainedName = identity.scope === 'top' ? id : `${identity.rootRunId}.${id}`;
+  const destination = path.join(retainedReal, `${retainedName}.${action}.json`);
   const sidecar = `${destination}.resolution.json`;
   const auditFile = path.join(auditReal, 'operator-resolutions.jsonl');
   const syncDirectory = async (dir) => {
@@ -399,12 +657,11 @@ export async function resolvePendingSubagentDelivery({ lifecycleRoot, resultsRoo
   await beforeStep('sidecar');
   await appendAudit(completed);
   await beforeStep('completed-audit');
-  const currentSource = await fs.lstat(source);
-  if (currentSource.isSymbolicLink() || !currentSource.isFile() || currentSource.dev !== sourceIdentity.dev
-    || currentSource.ino !== sourceIdentity.ino || currentSource.size !== sourceIdentity.size) {
-    throw new Error('pending result changed during operator resolution; source retained');
-  }
-  await fs.unlink(source);
+  const acknowledgement = await writeSubagentDeliveryAck({ lifecycleRoot: lifecycle, asyncDir: identity.asyncDir, resultsRoot: resultRoot,
+    operatorRoot: auditRoot, runId: id, runKey: identity.runKey, resultFile: source, proofKind: 'operator-resolution', proofReference: sidecar,
+    beforePublish: async () => beforeStep('delivery-ack'), });
+  await removeAcknowledgedResultWithCustody(source, acknowledgement.ack, { expectedIdentity: sourceIdentity,
+    beforeCustody: async () => beforeStep('result-custody'), afterCapture: async () => beforeStep('result-captured') });
   return completed;
 }
 
@@ -489,20 +746,9 @@ export async function quarantineLifecycleRun({ lifecycleRoot, runId: requestedRu
   return resolution;
 }
 
-/** Conservative retention: malformed, active, leased, and unproven-terminal child sessions survive. */
-export async function pruneTerminalSubagentRuns({ lifecycleRoot, sessionRoot, nowMs = Date.now(), retentionMs = SUBAGENT_RETENTION_MS, activeRunIds = new Set(), hasSessionLease = () => false } = {}) {
-  const resolvedLifecycleRoot = path.resolve(lifecycleRoot ?? ''); const resolvedSessionRoot = path.resolve(sessionRoot ?? '');
-  for (const [label, raw, resolved] of [['lifecycle', lifecycleRoot, resolvedLifecycleRoot], ['session', sessionRoot, resolvedSessionRoot]]) if (!path.isAbsolute(raw ?? '') || resolved === path.parse(resolved).root) throw new Error(`dedicated absolute subagent ${label} root is required`);
-  const canonicalSessionRoot = await fs.realpath(resolvedSessionRoot).catch(() => null); if (!canonicalSessionRoot) return { removed: [], retained: ['session-root-unavailable'] };
-  const removed = []; const retained = [];
-  for (const asyncDir of await lifecycleEntries(resolvedLifecycleRoot)) {
-    const artifact = validateLifecycleArtifact(await readJson(path.join(asyncDir, 'status.json')).catch(() => null), { asyncDir });
-    if (!artifact || artifact.asyncDir !== asyncDir || !artifact.sessionDir || !isWithin(resolvedSessionRoot, artifact.sessionDir)) { retained.push(asyncDir); continue; }
-    const canonicalSessionDir = await fs.realpath(artifact.sessionDir).catch(() => null); const relative = canonicalSessionDir ? path.relative(canonicalSessionRoot, canonicalSessionDir) : '';
-    if (!canonicalSessionDir || !relative || relative.startsWith('..') || path.isAbsolute(relative)) { retained.push(asyncDir); continue; }
-    const timestamp = timestampMs(artifact.updatedAt);
-    if (!terminalObserved(artifact, artifact.runId) || ACTIVE_STATES.has(artifact.state) || activeRunIds.has(artifact.runId) || hasSessionLease(artifact.sessionId) || timestamp === null || nowMs - timestamp < retentionMs) { retained.push(asyncDir); continue; }
-    try { await fs.rm(canonicalSessionDir, { recursive: true, force: false }); removed.push(canonicalSessionDir); } catch (error) { if (error?.code !== 'ENOENT') throw error; }
-  }
-  return { removed, retained };
+/** Child sessions are inventory-only until cross-process lease fencing is authoritative. */
+export async function pruneTerminalSubagentRuns({ lifecycleRoot } = {}) {
+  const resolvedLifecycleRoot = path.resolve(lifecycleRoot ?? '');
+  if (!path.isAbsolute(lifecycleRoot ?? '') || resolvedLifecycleRoot === path.parse(resolvedLifecycleRoot).root) throw new Error('dedicated absolute subagent lifecycle root is required');
+  return { removed: [], retained: await lifecycleEntries(resolvedLifecycleRoot) };
 }

@@ -3,7 +3,7 @@ import { EchsBridge } from './echsBridge';
 import type { MessageTamperContext, MessageTamperLayer, MessageTamperPlugin } from '@irrigationreal/codex-forum-core';
 
 import type { ForumStore } from './store';
-import type { EchsSubagentWorkload } from './echsClient';
+import type { EchsSubagentRetention, EchsSubagentWorkload } from './echsClient';
 import type { StreamBusInterface } from './streamBus';
 
 export type AgentBackend = 'echs';
@@ -149,6 +149,10 @@ export class AgentBridge {
 
   async getSubagentWorkload(): Promise<EchsSubagentWorkload> {
     return this.echs.getSubagentWorkload();
+  }
+
+  async getSubagentRetention(): Promise<EchsSubagentRetention> {
+    return this.echs.getSubagentRetention();
   }
 
   async getAgentdQuiescence(): Promise<Record<string, unknown>> {

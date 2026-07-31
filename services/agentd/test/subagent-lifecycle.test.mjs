@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { access, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -20,6 +20,7 @@ import {
   scanActiveLifecycleRuns,
   scanLifecycleSnapshot,
   validateLifecycleArtifact,
+  writeSubagentDeliveryAck,
 } from '../src/subagent-lifecycle.mjs';
 
 function conversation(sessionId = 'parent-session') {
@@ -47,11 +48,23 @@ function start(runId = 'run-1', overrides = {}) {
   return { lifecycleArtifactVersion: 1, id: runId, sessionId: 'parent-session', mode: 'async', asyncDir: `/tmp/async/${runId}`, ...overrides };
 }
 
-function observedProof(runId = 'run-1') {
+function observedProof(runId = 'run-1', resumeDisposition) {
   return {
     version: 1, state: 'observed', runId, runnerProcessInstanceId: `runner-${runId}`, observedAt: 2000,
     instances: [{ kind: 'runner', processInstanceId: `runner-${runId}`, closeObservedAt: 2000, exitCode: 0, signal: null }],
+    ...(resumeDisposition ? { resumeDisposition } : {}),
   };
+}
+
+async function deliveryFixture(root, id) {
+  const lifecycleRoot = path.join(root, 'lifecycle'); const runsRoot = path.join(lifecycleRoot, 'async-subagent-runs');
+  const resultsRoot = path.join(lifecycleRoot, 'async-subagent-results'); const asyncDir = path.join(runsRoot, id);
+  await mkdir(asyncDir, { recursive: true }); await mkdir(resultsRoot, { recursive: true });
+  const proof = observedProof(id, 'unavailable');
+  await writeFile(path.join(asyncDir, 'status.json'), JSON.stringify({ lifecycleArtifactVersion: 3, runId: id, sessionId: `session-${id}`, asyncDir, state: 'complete', processTerminal: proof, lastUpdate: 2000 }));
+  await writeFile(path.join(asyncDir, 'process-terminal.json'), JSON.stringify(proof));
+  await writeFile(path.join(resultsRoot, `${id}.json`), '{"pending":true}\n');
+  return { lifecycleRoot, resultsRoot, asyncDir };
 }
 
 test('workload capping prioritizes blockers and reports omitted blocker details', () => {
@@ -72,13 +85,12 @@ test('workload capping prioritizes blockers and reports omitted blocker details'
 
 test('operator delivery resolution is audited and retains uncertain result bytes', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'subagent-delivery-resolution-'));
-  const resultsRoot = path.join(root, 'async-subagent-results');
+  const { lifecycleRoot, resultsRoot } = await deliveryFixture(root, 'run-legacy');
   const operatorRoot = path.join(root, 'operator-state');
-  await mkdir(resultsRoot);
   await writeFile(path.join(resultsRoot, 'run-legacy.json'), '{"legacy":true}\n');
   try {
     const resolution = await resolvePendingSubagentDelivery({
-      lifecycleRoot: root, resultsRoot, operatorRoot, runId: 'run-legacy', action: 'supersede', reason: 'operator verified newer work',
+      lifecycleRoot, resultsRoot, operatorRoot, runId: 'run-legacy', action: 'supersede', reason: 'operator verified newer work',
     });
     assert.equal(JSON.parse(await readFile(resolution.retainedResult, 'utf8')).legacy, true);
     assert.match(await readFile(path.join(operatorRoot, 'operator-resolutions.jsonl'), 'utf8'), /operator verified newer work/);
@@ -88,13 +100,35 @@ test('operator delivery resolution is audited and retains uncertain result bytes
   }
 });
 
+test('operator resolution custody preserves a concurrently swapped newer result', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'subagent-delivery-swap-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const { lifecycleRoot, resultsRoot } = await deliveryFixture(root, 'run-swap'); const operatorRoot = path.join(root, 'operator');
+  const source = path.join(resultsRoot, 'run-swap.json'); const displaced = path.join(resultsRoot, 'run-swap.old.json');
+  await assert.rejects(() => resolvePendingSubagentDelivery({ lifecycleRoot, resultsRoot, operatorRoot, runId: 'run-swap', action: 'dismiss', reason: 'verified', beforeStep: async (step) => {
+    if (step === 'result-custody') { await rename(source, displaced); await writeFile(source, '{"new":true}\n'); }
+  } }), /source restored/);
+  assert.equal(JSON.parse(await readFile(source, 'utf8')).new, true); assert.equal(JSON.parse(await readFile(displaced, 'utf8')).pending, true);
+});
+
+test('operator delivery retry recovers a result left in custody after interruption', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'subagent-delivery-custody-retry-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const { lifecycleRoot, resultsRoot } = await deliveryFixture(root, 'run-retry'); const operatorRoot = path.join(root, 'operator');
+  const input = { lifecycleRoot, resultsRoot, operatorRoot, runId: 'run-retry', action: 'dismiss', reason: 'verified interrupted custody' };
+  await assert.rejects(() => resolvePendingSubagentDelivery({ ...input, beforeStep: async (step) => { if (step === 'result-captured') throw new Error('interrupted after capture'); } }), /interrupted after capture/);
+  await assert.rejects(() => access(path.join(resultsRoot, 'run-retry.json')));
+  assert.equal((await readdir(resultsRoot)).filter((name) => name.includes('.custody.')).length, 1);
+  const resolution = await resolvePendingSubagentDelivery(input);
+  assert.equal(JSON.parse(await readFile(resolution.retainedResult, 'utf8')).pending, true);
+  assert.equal((await readdir(resultsRoot)).filter((name) => name.includes('.custody.')).length, 0);
+});
+
 test('delivery resolution rejects retained-directory symlink escape and preserves source on partial failure', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'subagent-delivery-safety-'));
-  const resultsRoot = path.join(root, 'async-subagent-results'); const operatorRoot = path.join(root, 'operator'); const escape = path.join(root, 'escape');
-  await mkdir(resultsRoot); await mkdir(operatorRoot); await mkdir(escape);
+  const { lifecycleRoot, resultsRoot } = await deliveryFixture(root, 'run-safe'); const operatorRoot = path.join(root, 'operator'); const escape = path.join(root, 'escape');
+  await mkdir(operatorRoot); await mkdir(escape);
   await writeFile(path.join(resultsRoot, 'run-safe.json'), '{"safe":true}\n');
   await symlink(escape, path.join(operatorRoot, 'retained-results'));
-  const input = { lifecycleRoot: root, resultsRoot, operatorRoot, runId: 'run-safe', action: 'dismiss', reason: 'verified' };
+  const input = { lifecycleRoot, resultsRoot, operatorRoot, runId: 'run-safe', action: 'dismiss', reason: 'verified' };
   try {
     await assert.rejects(() => resolvePendingSubagentDelivery(input), /unsafe retained/);
     await access(path.join(resultsRoot, 'run-safe.json'));
@@ -109,15 +143,15 @@ test('delivery resolution rejects retained-directory symlink escape and preserve
 
 test('delivery resolution rejects a destination symlink to the pending source without completing audit', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'subagent-delivery-destination-link-'));
-  const resultsRoot = path.join(root, 'async-subagent-results'); const operatorRoot = path.join(root, 'operator');
+  const { lifecycleRoot, resultsRoot } = await deliveryFixture(root, 'run-link'); const operatorRoot = path.join(root, 'operator');
   const retained = path.join(operatorRoot, 'retained-results');
-  await mkdir(resultsRoot); await mkdir(operatorRoot); await mkdir(retained);
+  await mkdir(operatorRoot); await mkdir(retained);
   const source = path.join(resultsRoot, 'run-link.json');
   await writeFile(source, '{"pending":true}\n');
   await symlink(source, path.join(retained, 'run-link.dismiss.json'));
   try {
     await assert.rejects(() => resolvePendingSubagentDelivery({
-      lifecycleRoot: root, resultsRoot, operatorRoot, runId: 'run-link', action: 'dismiss', reason: 'verified',
+      lifecycleRoot, resultsRoot, operatorRoot, runId: 'run-link', action: 'dismiss', reason: 'verified',
     }), /unsafe retained result destination/);
     assert.equal(JSON.parse(await readFile(source, 'utf8')).pending, true);
     const audit = (await readFile(path.join(operatorRoot, 'operator-resolutions.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
@@ -350,6 +384,7 @@ test('global lifecycle scan keeps unloaded and unproven runs deployment-active',
   }
   const active = await scanActiveLifecycleRuns({ lifecycleRoot: root, runtimeInstanceFile: path.join(root, 'runtime-instance.json') });
   assert.deepEqual(active.map((run) => run.runId).sort(), ['running', 'unknown-proof']);
+  assert.ok(active.every((run) => run.run_key === `top:${run.run_id}` && run.scope === 'top' && run.root_run_id === null));
 });
 
 test('durable reconciliation clears a stale loaded lease without a completion event', async (t) => {
@@ -394,16 +429,62 @@ test('nested lifecycle trees and mapped missing artifacts remain deployment-visi
   const root = await mkdtemp(path.join(os.tmpdir(), 'agentd-subagent-nested-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const nested = path.join(root, 'nested-subagent-runs', 'parent-run', 'nested-run'); await mkdir(nested, { recursive: true });
-  await writeFile(path.join(nested, 'status.json'), JSON.stringify({ lifecycleArtifactVersion: 3, runId: 'nested-run', sessionId: 'parent-session', state: 'running', pid: 42, lastUpdate: 3 }));
-  const snapshot = await scanLifecycleSnapshot({ lifecycleRoot: root, runtimeInstanceFile: path.join(root, 'none') });
+  await writeFile(path.join(nested, 'status.json'), JSON.stringify({ lifecycleArtifactVersion: 3, runId: 'nested-run', sessionId: 'parent-session', asyncDir: nested, state: 'running', pid: 42, lastUpdate: 3 }));
+  const resultsRoot = path.join(root, 'async-subagent-results'); await mkdir(path.join(resultsRoot, 'nested', 'parent-run'), { recursive: true });
+  await writeFile(path.join(resultsRoot, 'nested', 'parent-run', 'nested-run.json'), '{}\n');
+  const snapshot = await scanLifecycleSnapshot({ lifecycleRoot: root, resultsRoot, runtimeInstanceFile: path.join(root, 'none') });
   assert.equal(snapshot.active_count, 1);
   assert.equal(snapshot.runs[0].run_id, 'nested-run');
+  assert.equal(snapshot.runs[0].run_key, 'nested:parent-run:nested-run');
+  assert.equal(snapshot.runs[0].scope, 'nested');
+  assert.equal(snapshot.runs[0].root_run_id, 'parent-run');
+  assert.equal(snapshot.runs[0].result_path, path.join(resultsRoot, 'nested', 'parent-run', 'nested-run.json'));
+  assert.equal(snapshot.runs[0].delivery_state, 'pending');
 
   const conv = conversation(); const lifecycle = new SubagentLifecycle(); await lifecycle.attach(conv);
   lifecycle.onStarted(start('mapped-missing', { asyncDir: path.join(root, 'deleted-run') }));
   mergeMappedLifecycleRuns(snapshot, [conv]);
   assert.equal(snapshot.active_count, 2);
   assert.equal(snapshot.byId.get('mapped-missing').reason, 'mapped-lifecycle-artifact-missing');
+});
+
+test('delivery classification requires an identity-bound central acknowledgement and ranking surfaces unproven first', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agentd-subagent-delivery-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const resultsRoot = path.join(root, 'async-subagent-results'); const operatorRoot = path.join(root, 'operator'); await mkdir(resultsRoot); await mkdir(operatorRoot);
+  const fixtures = [
+    { id: 'top-settled', dir: path.join(root, 'async-subagent-runs', 'top-settled'), key: 'top:top-settled', ack: true },
+    { id: 'nested-unproven', dir: path.join(root, 'nested-subagent-runs', 'parent', 'nested-unproven'), key: 'nested:parent:nested-unproven', ack: false },
+    { id: 'top-pending', dir: path.join(root, 'async-subagent-runs', 'top-pending'), key: 'top:top-pending', pending: true },
+  ];
+  for (const fixture of fixtures) {
+    await mkdir(fixture.dir, { recursive: true });
+    await writeFile(path.join(fixture.dir, 'status.json'), JSON.stringify({ lifecycleArtifactVersion: 3, runId: fixture.id, sessionId: 'parent-session', asyncDir: fixture.dir, state: 'complete', processTerminal: observedProof(fixture.id), lastUpdate: 1 }));
+    if (fixture.ack) {
+      const result = path.join(resultsRoot, `${fixture.id}.json`); await writeFile(result, '{}');
+      await writeSubagentDeliveryAck({ lifecycleRoot: root, asyncDir: fixture.dir, resultsRoot, operatorRoot, runId: fixture.id, runKey: fixture.key, proofKind: 'notification', proofReference: 'message-1' });
+      await rm(result);
+    }
+    if (fixture.pending) await writeFile(path.join(resultsRoot, `${fixture.id}.json`), '{}');
+  }
+  const snapshot = await scanLifecycleSnapshot({ lifecycleRoot: root, resultsRoot, operatorRoot, runtimeInstanceFile: path.join(root, 'none') });
+  assert.equal(snapshot.byKey.get('top:top-settled').delivery_state, 'settled');
+  assert.equal(snapshot.byKey.get('nested:parent:nested-unproven').delivery_state, 'unproven');
+  assert.equal(snapshot.byKey.get('top:top-pending').delivery_state, 'pending');
+  assert.equal(prioritizeLifecycleRuns(snapshot.runs, 3)[0].run_key, 'nested:parent:nested-unproven');
+});
+
+test('scoped run-key collisions fail closed instead of overwriting raw IDs', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agentd-subagent-collision-')); t.after(() => rm(root, { recursive: true, force: true }));
+  for (const dir of [path.join(root, 'async-subagent-runs', 'same'), path.join(root, 'nested-subagent-runs', 'root', 'same')]) {
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, 'status.json'), JSON.stringify({ lifecycleArtifactVersion: 3, runId: 'same', sessionId: 'parent', asyncDir: dir, state: 'complete', processTerminal: observedProof('same'), lastUpdate: 1 }));
+  }
+  const snapshot = await scanLifecycleSnapshot({ lifecycleRoot: root, runtimeInstanceFile: path.join(root, 'none') });
+  assert.equal(snapshot.active_count, 2); assert.equal(snapshot.uncertain_count, 2); assert.equal(snapshot.byId.has('same'), false);
+  assert.deepEqual(new Set(snapshot.runs.map((run) => run.run_key)), new Set(['top:same', 'nested:root:same']));
+  assert.equal(snapshot.byKey.get('top:same').scope, 'top');
+  assert.equal(snapshot.byKey.get('nested:root:same').root_run_id, 'root');
+  assert.ok(snapshot.runs.every((run) => run.reason === 'ambiguous-run-identity'));
 });
 
 test('same-runtime dead runner reconciles interrupted while a matching live identity blocks', async (t) => {
@@ -439,6 +520,8 @@ test('pre-spawn launch records block and lifecycle traversal errors fail closed'
 
   const notDirectory = path.join(root, 'not-a-directory'); await writeFile(notDirectory, 'x');
   await assert.rejects(scanLifecycleSnapshot({ lifecycleRoot: notDirectory }), /ENOTDIR/);
+  await symlink(asyncDir, path.join(root, 'unsafe-link'));
+  await assert.rejects(scanLifecycleSnapshot({ lifecycleRoot: root }), /unsafe lifecycle symlink/);
 });
 
 test('operator quarantine is identity-bound, audited, and refuses a live runner', async (t) => {
@@ -464,36 +547,25 @@ test('operator quarantine is identity-bound, audited, and refuses a live runner'
   assert.match(await readFile(path.join(root, 'operator-resolutions.jsonl'), 'utf8'), /operator verified no process/);
 });
 
-test('14-day retention removes only old proven-terminal unleased child sessions', async (t) => {
+test('automatic child-session pruning preserves every terminal session', async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'agentd-subagent-retention-'));
-  const lifecycleRoot = path.join(root, 'lifecycle');
-  const sessionRoot = path.join(root, 'sessions');
-  await mkdir(lifecycleRoot); await mkdir(sessionRoot);
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const lifecycleRoot = path.join(root, 'lifecycle'); const sessionRoot = path.join(root, 'sessions');
+  await mkdir(lifecycleRoot); await mkdir(sessionRoot); t.after(() => rm(root, { recursive: true, force: true }));
   const now = Date.UTC(2026, 6, 30); const old = now - 15 * 24 * 60 * 60 * 1000;
-  async function fixture(id, patch = {}) {
-    const asyncDir = path.join(lifecycleRoot, id); await mkdir(asyncDir);
-    const sessionDir = path.join(sessionRoot, id); await mkdir(sessionDir);
-    await writeFile(path.join(sessionDir, 'session.jsonl'), '{}\n');
-    await writeFile(path.join(asyncDir, 'status.json'), JSON.stringify({
-      lifecycleArtifactVersion: 3, runId: id, sessionId: `session-${id}`, sessionDir,
-      state: 'completed', processTerminal: observedProof(id), lastUpdate: old, ...patch,
-    }));
-    return { asyncDir, sessionDir };
+  async function fixture(id, resumeDisposition, proofDisposition = resumeDisposition) {
+    const asyncDir = path.join(lifecycleRoot, id); const sessionDir = path.join(sessionRoot, id);
+    await mkdir(asyncDir); await mkdir(sessionDir); await writeFile(path.join(sessionDir, 'session.jsonl'), '{}\n');
+    const terminal = { ...observedProof(id, resumeDisposition), observedAt: old, instances: [{ kind: 'runner', processInstanceId: `runner-${id}`, closeObservedAt: old, exitCode: 0, signal: null }] };
+    const proof = { ...terminal, resumeDisposition: proofDisposition };
+    await writeFile(path.join(asyncDir, 'status.json'), JSON.stringify({ lifecycleArtifactVersion: 3, runId: id, sessionId: `session-${id}`, asyncDir, sessionDir, state: 'completed', processTerminal: terminal, lastUpdate: old }));
+    await writeFile(path.join(asyncDir, 'process-terminal.json'), JSON.stringify(proof)); return { asyncDir, sessionDir };
   }
-  const removable = await fixture('remove');
-  const active = await fixture('active');
-  const unobserved = await fixture('unobserved', { processTerminal: { state: 'pending' } });
-  const leased = await fixture('leased');
-  const malformed = path.join(lifecycleRoot, 'malformed'); await mkdir(malformed); await writeFile(path.join(malformed, 'status.json'), '{}');
-
-  const result = await pruneTerminalSubagentRuns({
-    lifecycleRoot, sessionRoot, nowMs: now, activeRunIds: new Set(['active']),
-    hasSessionLease: (id) => id === 'session-leased',
-  });
-  assert.deepEqual(result.removed, [removable.sessionDir]);
-  await assert.rejects(readFile(path.join(removable.sessionDir, 'session.jsonl')));
-  assert.ok(await readFile(path.join(removable.asyncDir, 'status.json')), 'lifecycle diagnostics follow package cleanup');
-  for (const item of [active, unobserved, leased]) assert.ok(await readFile(path.join(item.sessionDir, 'session.jsonl')));
-  assert.ok(await readFile(path.join(malformed, 'status.json')));
+  const unavailable = await fixture('unavailable', 'unavailable');
+  const resumable = await fixture('resumable', 'resumable');
+  const statusResumable = await fixture('status-resumable', 'resumable', 'unavailable');
+  const result = await pruneTerminalSubagentRuns({ lifecycleRoot, sessionRoot, nowMs: now });
+  assert.deepEqual(result.removed, []);
+  await access(unavailable.sessionDir);
+  await access(resumable.sessionDir);
+  await access(statusResumable.sessionDir);
 });

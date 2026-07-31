@@ -228,10 +228,13 @@ open without model execution. Unproven legacy result files are never consumed or
 deleted automatically. An operator may retain and dismiss/supersede one with
 `POST /v1/admin/subagents/<run-id>/resolve-delivery` plus an action and reason.
 The source remains pending until retained bytes, a resolution sidecar, and the
-no-follow operator audit under `/data/pi-subagent-operator-state` are durable.
-The Robot Dashboard treats terminal lifecycle-v4 runs with unknown remote effects as
-safety blockers even though their runner is no longer live; agentd's authoritative
-`effects_unknown_count` prevents response capping from hiding that condition.
+no-follow operator audit under `/data/pi-subagent-operator-state` are durable. A
+central agentd-owned delivery ledger in that operator root is fsynced before the
+run-local acknowledgement and atomic result custody; a run-local sidecar alone is
+never settlement authority. The Robot Dashboard treats terminal lifecycle-v4 runs
+with unknown remote effects as safety blockers even though their runner is no longer
+live; agentd's authoritative `effects_unknown_count` prevents response capping from
+hiding that condition.
 
 Forum startup calls only agentd `getConversation` for recorded conversation IDs.
 Already-loaded conversations are reattached; missing ones have their stale forum
@@ -251,10 +254,27 @@ and separates live/uncertain blockers, pending delivery/manual recovery, and
 collapsed retained terminal history; disposable child sessions still never become
 robots or topics.
 
-Agentd runs conservative retention daily. A child session is removed only after
-14 days when its status is proven terminal, it is not active, and its parent
-session has no ownership lease. Malformed, uncertain, active, leased, and
-unproven-terminal runs are retained; lifecycle artifacts remain for diagnostics.
+Agentd runs conservative retention daily and exposes the same deterministic
+dry-run inventory at `GET /v1/admin/subagents/retention` (every GET refreshes the inventory;
+dry run). Its storage metric is **tracked removable bytes**, not total retained
+storage; eligible bytes are the expected reclaimable subset. Compaction remains
+fenced to the exact inventory digest returned by the dry run. Compaction requires an exact, unique top-level run that is at least 14
+days old, proven terminal, explicitly non-resumable, affirmatively delivery-
+acknowledged by the central operator ledger, result-free, unloaded and unleased,
+and free of nested descendants. It removes only explicit owned verbose lifecycle
+logs, then keeps exact lifecycle identity, terminal/delivery proof digests, origin
+linkage, and an audited tombstone. Every child session and canonical parent/forum
+Pi JSONL is preserved; session bytes are excluded from tracked-removable and
+eligible byte totals.
+
+Missing result bytes are not settlement proof. Canonical completion provenance or
+a completed operator resolution appends and fsyncs the central delivery ledger,
+then publishes the run-local acknowledgement before same-directory atomic result
+custody and removal. Nested results use
+`async-subagent-results/nested/<rootRunId>/<runId>.json` and scoped run keys;
+ambiguous legacy IDs fail closed for mutation. Resumable, pending, malformed,
+uncertain, nested, leased, or unproven records are intentionally unbounded until
+explicit review. This favors preserved evidence over automatic disk reclamation.
 
 ## Admin analytics
 

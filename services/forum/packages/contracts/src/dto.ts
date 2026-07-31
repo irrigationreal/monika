@@ -593,6 +593,17 @@ export interface RobotDashboardDto {
     omittedBlockerCount: number;
     available: boolean;
     error?: string | null;
+    retention?: {
+      available: boolean;
+      generatedAt?: string | null;
+      retentionDays: number;
+      counts: { protected: number; waiting: number; eligible: number; compacted: number; error: number };
+      trackedRemovableBytes: number;
+      eligibleBytes: number;
+      omitted: number;
+      running: boolean;
+      lastError?: string | null;
+    };
   };
   settings?: {
     maxConcurrentTurns: number;

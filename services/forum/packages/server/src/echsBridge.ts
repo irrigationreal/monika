@@ -15,7 +15,7 @@ import type {
   MessageTamperTrailEntry,
 } from '@irrigationreal/codex-forum-core';
 
-import type { EchsConversationRecord, EchsEvent, EchsSubagentWorkload } from './echsClient';
+import type { EchsConversationRecord, EchsEvent, EchsSubagentRetention, EchsSubagentWorkload } from './echsClient';
 import type { ForumStore } from './store';
 import type { StreamBusInterface } from './streamBus';
 
@@ -846,6 +846,10 @@ export class EchsBridge {
 
   async getSubagentWorkload(): Promise<EchsSubagentWorkload> {
     return this.client.getSubagentWorkload();
+  }
+
+  async getSubagentRetention(): Promise<EchsSubagentRetention> {
+    return this.client.getSubagentRetention();
   }
 
   async getAgentdQuiescence(): Promise<Record<string, unknown>> {

@@ -731,7 +731,18 @@ export const RobotDashboardDtoSchema: z.ZodType<RobotDashboardDto> = z.object({
     blockerCount: z.number(),
     omittedBlockerCount: z.number(),
     available: z.boolean(),
-    error: optionalNullableString
+    error: optionalNullableString,
+    retention: z.object({
+      available: z.boolean(),
+      generatedAt: optionalNullableString,
+      retentionDays: z.number(),
+      counts: z.object({ protected: z.number(), waiting: z.number(), eligible: z.number(), compacted: z.number(), error: z.number() }),
+      trackedRemovableBytes: z.number(),
+      eligibleBytes: z.number(),
+      omitted: z.number(),
+      running: z.boolean(),
+      lastError: optionalNullableString
+    }).optional()
   }).optional(),
   settings: z
     .object({
