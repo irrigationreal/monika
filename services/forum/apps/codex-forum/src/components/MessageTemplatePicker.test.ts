@@ -71,7 +71,11 @@ describe('MessageTemplatePicker', () => {
 
     await wrapper.get('[data-testid="message-template-search"]').setValue('approve');
     expect(wrapper.findAll('option')).toHaveLength(2);
+    expect(wrapper.get('[data-testid="message-template-search"]').classes()).toContain('vb-template-control');
+    expect(wrapper.get('[data-testid="message-template-select"]').classes()).toContain('vb-template-control');
     await wrapper.get('[data-testid="message-template-select"]').setValue('personal-1');
+    expect(wrapper.get('[data-testid="message-template-preview"]').attributes('role')).toBe('region');
+    expect(wrapper.get('[data-testid="message-template-preview"]').text()).toContain('Preview');
     expect(wrapper.get('[data-testid="message-template-preview"]').html()).toContain('Approved after review.');
     await wrapper.get('[data-testid="message-template-insert"]').trigger('click');
 

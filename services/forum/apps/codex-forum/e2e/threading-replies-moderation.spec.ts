@@ -439,6 +439,13 @@ async function attachMockApi(target: Page | BrowserContext, state: MockState): P
       return;
     }
 
+    if (path === '/api/message-templates/mine' && method === 'GET') {
+      await fulfillJson(route, 200, {
+        templates: state.messageTemplates.filter((template) => template.scope === 'personal')
+      });
+      return;
+    }
+
     if (path.startsWith('/api/forums/') && path.endsWith('/topics')) {
       const forumId = path.split('/')[3];
       if (method === 'GET') {
@@ -823,6 +830,69 @@ function quickReplyBox(page: Page) {
   return page.locator('.vb-quick-reply textarea');
 }
 
+async function themedStyleSnapshot(
+  page: Page,
+  selector: string,
+  tokens: { background?: string; color?: string; border?: string }
+): Promise<{ actual: Record<string, string>; expected: Record<string, string> }> {
+  return page.locator(selector).evaluate((element, requestedTokens) => {
+    const probe = document.createElement('div');
+    probe.style.position = 'fixed';
+    probe.style.pointerEvents = 'none';
+    const requestedEntries = Object.entries(requestedTokens).filter((entry): entry is [string, string] => Boolean(entry[1]));
+    for (const [property, token] of requestedEntries) {
+      probe.style.setProperty(`--resolved-${property}`, `var(${token})`);
+    }
+    if (requestedTokens.background) probe.style.background = `var(${requestedTokens.background})`;
+    if (requestedTokens.color) probe.style.color = `var(${requestedTokens.color})`;
+    if (requestedTokens.border) probe.style.border = `1px solid var(${requestedTokens.border})`;
+    document.body.appendChild(probe);
+    const actualStyle = getComputedStyle(element);
+    const expectedStyle = getComputedStyle(probe);
+    const unresolvedTokens = requestedEntries
+      .filter(([property]) => !expectedStyle.getPropertyValue(`--resolved-${property}`).trim())
+      .map(([, token]) => token);
+    if (unresolvedTokens.length) {
+      probe.remove();
+      throw new Error(`CSS custom properties resolved empty: ${unresolvedTokens.join(', ')}`);
+    }
+    const actual: Record<string, string> = {};
+    const expected: Record<string, string> = {};
+    if (requestedTokens.background) {
+      actual['backgroundColor'] = actualStyle.backgroundColor;
+      expected['backgroundColor'] = expectedStyle.backgroundColor;
+    }
+    if (requestedTokens.color) {
+      actual['color'] = actualStyle.color;
+      expected['color'] = expectedStyle.color;
+    }
+    if (requestedTokens.border) {
+      actual['borderColor'] = actualStyle.borderLeftColor;
+      expected['borderColor'] = expectedStyle.borderLeftColor;
+    }
+    probe.remove();
+    return { actual, expected };
+  }, tokens);
+}
+
+async function expectThemedStyle(
+  page: Page,
+  selector: string,
+  tokens: { background?: string; color?: string; border?: string }
+): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        const snapshot = await themedStyleSnapshot(page, selector, tokens);
+        return Object.keys(snapshot.expected)
+          .filter((property) => snapshot.actual[property] !== snapshot.expected[property])
+          .map((property) => `${property}: ${snapshot.actual[property]} !== ${snapshot.expected[property]}`);
+      },
+      { message: `${selector} should use requested theme tokens` }
+    )
+    .toEqual([]);
+}
+
 test.describe('Threading and reply flows', () => {
   test.describe.configure({ mode: 'serial' });
   test('create new thread with preview, BBCode insertions, validation, and cancel confirmation', async ({ page, context }) => {
@@ -927,6 +997,69 @@ test.describe('Threading and reply flows', () => {
     await page.fill('.vb-editor-textarea', '');
     await picker.locator('[data-testid="message-template-insert"]').click();
     await expect(page.locator('#thread-title')).toHaveValue('Project kickoff thread');
+  });
+
+  test('message template controls follow theme tokens and remain aligned', async ({ page, context }) => {
+    const state = createMockState();
+    await attachMockApi(page, state);
+    await setAuthTokens(context, REGULAR_TOKEN);
+    await page.goto('/');
+    const fixture = await createFixture(page, { postCount: 1 });
+
+    for (const theme of ['classic-dark', 'classic-light', 'cn-portal-2000s']) {
+      await page.goto(`/topics/${fixture.topicId}`);
+      await expect(page.locator('[data-testid="message-template-select"]')).toBeEnabled();
+      await page.evaluate((themeKey) => document.documentElement.setAttribute('data-theme', themeKey), theme);
+      await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+      await expectThemedStyle(page, '[data-testid="message-template-select"]', {
+        background: '--bg-input',
+        color: '--text-primary',
+        border: '--border-strong'
+      });
+      await expectThemedStyle(page, '.vb-template-label', { color: '--text-primary' });
+      await expectThemedStyle(page, '.vb-template-manage', { color: '--text-primary' });
+      await page.locator('[data-testid="message-template-select"]').selectOption('template-reply');
+      await expectThemedStyle(page, '.vb-template-preview-heading', {
+        background: '--bg-surface-muted',
+        color: '--text-primary'
+      });
+
+      await page.goto('/profile/message-templates');
+      await expect(page.locator('[data-testid="message-template-manager"]')).toBeVisible();
+      await page.evaluate((themeKey) => document.documentElement.setAttribute('data-theme', themeKey), theme);
+      await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+      await expectThemedStyle(page, '[data-testid="message-template-name"]', {
+        background: '--bg-input',
+        color: '--text-primary',
+        border: '--border-strong'
+      });
+      await expectThemedStyle(page, '[data-testid="message-templates-panel"]', {
+        background: '--bg-surface-alt',
+        color: '--text-primary',
+        border: '--border-muted'
+      });
+      await expectThemedStyle(page, '.vb-template-name', { color: '--text-primary' });
+      await expectThemedStyle(page, '.vb-template-preview-label', {
+        background: '--bg-surface-muted',
+        color: '--text-primary'
+      });
+    }
+
+    const enabledLabel = page.locator('.vb-template-enabled');
+    expect(await enabledLabel.evaluate((element) => getComputedStyle(element).display)).toMatch(/^(inline-)?flex$/);
+    await expect(enabledLabel).toHaveCSS('align-items', 'center');
+    const checkboxBox = await page.locator('[data-testid="message-template-enabled"]').boundingBox();
+    const labelBox = await page.locator('[data-testid="message-template-enabled-label"]').boundingBox();
+    expect(checkboxBox).not.toBeNull();
+    expect(labelBox).not.toBeNull();
+    if (!checkboxBox || !labelBox) throw new Error('Enabled checkbox alignment boxes unavailable');
+    expect(Math.abs(checkboxBox.y + checkboxBox.height / 2 - (labelBox.y + labelBox.height / 2))).toBeLessThan(3);
+
+    await page.setViewportSize({ width: 375, height: 800 });
+    const managerOverflow = await page
+      .locator('[data-testid="message-template-manager"]')
+      .evaluate((element) => element.scrollWidth - element.clientWidth);
+    expect(managerOverflow).toBeLessThanOrEqual(1);
   });
 
   test('quick reply, full reply view, edit, and delete update the post list in order', async ({ page, context }) => {

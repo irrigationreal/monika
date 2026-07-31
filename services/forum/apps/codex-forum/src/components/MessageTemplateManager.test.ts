@@ -52,6 +52,17 @@ describe('MessageTemplateManager', () => {
     apiMocks.listSystemMessageTemplates.mockResolvedValue({ templates: [] });
   });
 
+  it('uses themed control and inline-choice structure for the form', async () => {
+    apiMocks.listMyMessageTemplates.mockResolvedValue({ templates: [template(1)] });
+    const wrapper = mount(MessageTemplateManager);
+    await flushPromises();
+
+    expect(wrapper.get('[data-testid="message-template-name"]').classes()).toContain('vb-template-control');
+    expect(wrapper.get('[data-testid="message-template-body"]').classes()).toContain('vb-template-control');
+    expect(wrapper.get('.vb-template-enabled').classes()).toContain('vb-template-inline-check');
+    expect(wrapper.find('[role="region"][aria-label="Template preview"]').exists()).toBe(true);
+  });
+
   it('preserves the form and reports a refresh failure after a successful create', async () => {
     apiMocks.listMyMessageTemplates
       .mockResolvedValueOnce({ templates: [] })
