@@ -54,9 +54,11 @@ at nightly publication, then rechecks `main` and the nightly tag immediately
 before promotion. A commit visible by that final pre-promotion check stops the
 release rather than promoting stale artifacts.
 
-Eligible releases promote the exact candidate manifest digests to a UTC
-`YYYY.MM.DD` tag and `latest`, then create a GitHub release at the candidate
-commit. The first automated stable release says `Initial stable release` rather
+Eligible releases promote the exact candidate manifest digests to a
+`YYYY.MM.DD` tag derived from the coordinated candidate publication date in UTC,
+as well as `latest`, then create a GitHub release at the candidate commit. The
+GitHub release publication time separately records when stable promotion
+occurred. The first automated stable release says `Initial stable release` rather
 than manufacturing a historical changelog. Later releases use GitHub's generated
 release notes to list changes since the previous stable tag.
 
@@ -69,8 +71,8 @@ recorded candidate digests.
 
 ## Manual operation
 
-A manual Stable dispatch may provide a custom tag. By default it enforces the
-same eligibility rules as the schedule. The `force` input bypasses only the
+A manual Stable dispatch may provide a custom tag instead of the candidate
+publication date. By default it enforces the same eligibility rules as the schedule. The `force` input bypasses only the
 seven-day timer for the current coordinated candidate; it does not allow an old
 candidate, mismatched `main`, or missing images to be released.
 
