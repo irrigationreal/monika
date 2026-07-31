@@ -138,6 +138,9 @@ let pendingAssistantDelta = '';
 let flushHandle: number | null = null;
 let assistantMessagePending = false;
 let topicLoadCounter = 0;
+let forumsLoadCounter = 0;
+let archivedForumsLoadCounter = 0;
+let recentPostsLoadCounter = 0;
 let topicHydrationEnabled = true;
 let liveTurnStartedAt: number | null = null;
 // --- Committed segments (append-only trace model) ---
@@ -552,15 +555,33 @@ export function useForumState() {
   }
 
   async function loadForums(params?: ListForumsParams): Promise<void> {
-    forums.value = await api.listForums(params);
+    const loadId = ++forumsLoadCounter;
+    try {
+      const nextForums = await api.listForums(params);
+      if (loadId === forumsLoadCounter) forums.value = nextForums;
+    } catch (err) {
+      if (loadId === forumsLoadCounter) throw err;
+    }
   }
 
   async function loadArchivedForums(): Promise<void> {
-    archivedForums.value = await api.listForums({ status: 'archived', includeArchived: true });
+    const loadId = ++archivedForumsLoadCounter;
+    try {
+      const nextForums = await api.listForums({ status: 'archived', includeArchived: true });
+      if (loadId === archivedForumsLoadCounter) archivedForums.value = nextForums;
+    } catch (err) {
+      if (loadId === archivedForumsLoadCounter) throw err;
+    }
   }
 
   async function loadRecentPosts(limit = 3): Promise<void> {
-    recentPosts.value = await api.listRecentPosts(limit);
+    const loadId = ++recentPostsLoadCounter;
+    try {
+      const nextPosts = await api.listRecentPosts(limit);
+      if (loadId === recentPostsLoadCounter) recentPosts.value = nextPosts;
+    } catch (err) {
+      if (loadId === recentPostsLoadCounter) throw err;
+    }
   }
 
   async function loadForumLeaders(limit = 5): Promise<void> {

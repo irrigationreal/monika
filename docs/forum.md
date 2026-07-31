@@ -20,6 +20,20 @@ reactions, sync state, and UI metadata.
 Host mode has been removed. Pi tools operate inside the container by default; host
 or infrastructure access should be explicit through SSH/`relocate`.
 
+### Homepage snapshot freshness
+
+The Vue forum state is module-scoped and survives client-side route changes. The
+homepage therefore refreshes its active forums, archived forums, and three recent
+posts on every route entry instead of treating non-empty arrays as permanently
+fresh caches. Existing values remain rendered while their replacements load.
+Each loader uses latest-request-wins assignment so an older overlapping response
+cannot replace a newer snapshot.
+
+This is deliberately route-entry refresh rather than polling or a homepage SSE
+subscription. It bounds network and listener lifetimes to ordinary navigation,
+while migration 34's partial `idx_posts_recent_created_at` index keeps the global
+undeleted-post recency query efficient as post history grows.
+
 ## Thread moves
 
 Admins can move a topic between forums through `POST /admin/topics/:topicId/move`.
