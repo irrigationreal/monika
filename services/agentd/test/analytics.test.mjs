@@ -98,7 +98,8 @@ test('normalizes tool operations without exposing arguments', () => {
 test('aggregates only the active branch and emits privacy-safe canonical metrics', () => {
   const result = aggregateAnalytics([fixtureSession()], query());
 
-  assert.equal(result.schema_version, 1);
+  assert.equal(result.schema_version, 2);
+  assert.match(result.generated_at, /^20\d\d-/);
   assert.deepEqual(result.build, analyticsBuildInfo());
   assert.deepEqual(result.coverage, {
     requested_sessions: 1,
@@ -116,6 +117,22 @@ test('aggregates only the active branch and emits privacy-safe canonical metrics
     latest_observation_at: at(3, '01:00:00.000'),
   });
   assert.equal(result.buckets.length, 3);
+  assert.deepEqual(
+    result.buckets.map((bucket) => ({
+      start: bucket.start,
+      end: bucket.end,
+      observedFrom: bucket.observed_from,
+      observedTo: bucket.observed_to,
+      partial: bucket.is_partial,
+    })),
+    [1, 2, 3].map((day) => ({
+      start: at(day),
+      end: at(day + 1),
+      observedFrom: at(day),
+      observedTo: at(day + 1),
+      partial: false,
+    })),
+  );
   assert.deepEqual(result.totals.token_footprint, { samples: 2, median: 150 });
   assert.equal(result.totals.successful_terminal_responses, 2);
   assert.deepEqual(result.totals.model_vendors.map((row) => [row.vendor, row.response_count]), [
@@ -169,6 +186,28 @@ test('honors a reconciled live branch and excludes uncertain lifecycle outcomes'
   assert.equal(result.totals.model_vendors[0].vendor, 'Other');
   assert.equal(result.totals.subagent_lifecycle.outcomes_observed, 0);
   assert.equal(result.totals.subagent_lifecycle.records, 1);
+});
+
+test('keeps calendar bucket identity while marking clipped daily and weekly intervals partial', () => {
+  const daily = aggregateAnalytics([], query({
+    from: at(1, '12:00:00.000'),
+    to: at(3, '12:00:00.000'),
+  }));
+  assert.deepEqual(daily.buckets.map((bucket) => [bucket.start, bucket.end, bucket.observed_from, bucket.observed_to, bucket.is_partial]), [
+    [at(1), at(2), at(1, '12:00:00.000'), at(2), true],
+    [at(2), at(3), at(2), at(3), false],
+    [at(3), at(4), at(3), at(3, '12:00:00.000'), true],
+  ]);
+
+  const weekly = aggregateAnalytics([], query({
+    from: '2026-01-07T12:00:00.000Z',
+    to: '2026-01-14T12:00:00.000Z',
+    bucket: 'week',
+  }));
+  assert.deepEqual(weekly.buckets.map((bucket) => [bucket.start, bucket.end, bucket.is_partial]), [
+    ['2026-01-05T00:00:00.000Z', '2026-01-12T00:00:00.000Z', true],
+    ['2026-01-12T00:00:00.000Z', '2026-01-19T00:00:00.000Z', true],
+  ]);
 });
 
 test('reports missing coverage, empty buckets, and null rates without inventing data', () => {

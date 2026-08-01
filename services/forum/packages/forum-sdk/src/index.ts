@@ -28,9 +28,8 @@ import type {
   ChatRoomDto,
   ChatRoomListDto,
   ChatTypingDto,
-  CompactionOperationDto,
   CompactionCheckpointDispatchDto,
-  TopicCompactionStateDto,
+  CompactionOperationDto,
   CreateCompactionRequestDto,
   DiscordBridgeStatusDto,
   DiscordChannelMappingDto,
@@ -84,6 +83,7 @@ import type {
   ToolRunDto,
   TopicAttachmentsDto,
   TopicAutoRunDto,
+  TopicCompactionStateDto,
   TopicDto,
   TopicMoveDto,
   TopicOperationalEventDto,
@@ -812,14 +812,16 @@ export function createForumSdk(options?: ForumSdkOptions) {
     deleteTopic: (topicId: string) => json<{ ok: boolean }>(`/topics/${topicId}`, { method: 'DELETE' }),
     listOperationalEvents: (topicId: string) =>
       json<{ items: TopicOperationalEventDto[] }>(`/topics/${topicId}/operational-events`),
-    getCompactionState: (topicId: string) =>
-      json<TopicCompactionStateDto>(`/topics/${topicId}/compactions`),
+    getCompactionState: (topicId: string) => json<TopicCompactionStateDto>(`/topics/${topicId}/compactions`),
     compactTopic: (topicId: string, payload: CreateCompactionRequestDto) =>
       json<CompactionOperationDto>(`/topics/${topicId}/compactions`, { method: 'POST', body: JSON.stringify(payload) }),
     getCompaction: (topicId: string, operationId: string) =>
       json<CompactionOperationDto>(`/topics/${topicId}/compactions/${encodeURIComponent(operationId)}`),
     retryCompactionCheckpoint: (topicId: string, operationId: string) =>
-      json<TopicCompactionStateDto>(`/topics/${topicId}/compactions/${encodeURIComponent(operationId)}/retry-checkpoint`, { method: 'POST' }),
+      json<TopicCompactionStateDto>(
+        `/topics/${topicId}/compactions/${encodeURIComponent(operationId)}/retry-checkpoint`,
+        { method: 'POST' }
+      ),
     listPosts: (topicId: string, opts?: { page?: number; pageSize?: number; include?: string[] | string }) => {
       const params = new URLSearchParams();
       if (opts?.page) params.set('page', String(opts.page));
@@ -1044,10 +1046,16 @@ export function createForumSdk(options?: ForumSdkOptions) {
       json<AdminCancelDeployOnFinishResponse>('/admin/deploy/on-finish/cancel', { method: 'POST' }),
 
     // Analytics (Admin)
-    getAdminAnalytics: (input: { from: string; to: string; bucket: 'day' | 'week'; forumId?: string | null }) => {
+    getAdminAnalytics: (
+      input: { from: string; to: string; bucket: 'day' | 'week'; forumId?: string | null },
+      options?: { signal?: AbortSignal }
+    ) => {
       const params = new URLSearchParams({ from: input.from, to: input.to, bucket: input.bucket });
       if (input.forumId) params.set('forumId', input.forumId);
-      return json<AdminAnalyticsDto>(`/admin/analytics?${params.toString()}`);
+      return json<AdminAnalyticsDto>(
+        `/admin/analytics?${params.toString()}`,
+        options?.signal ? { signal: options.signal } : undefined
+      );
     },
 
     // Robot automations (Admin)

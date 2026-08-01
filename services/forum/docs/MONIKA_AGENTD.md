@@ -41,7 +41,11 @@ The forum server calls `POST /v1/admin/analytics/query` with an aggregate-only, 
 ```
 
 The range is `[from, to)`, cannot exceed 366 days, and supports UTC `day` or
-Monday-based `week` buckets. At most 5,000 session IDs may be supplied. The forum
+Monday-based `week` buckets. Schema version 2 reports aligned calendar `start` and
+`end`, clipped `observed_from` and `observed_to`, `is_partial`, and an aggregate
+`generated_at` timestamp. Values still include only observations inside the
+requested half-open range; aligned boundaries are presentation metadata, not an
+expansion of scope. At most 5,000 session IDs may be supplied. The forum
 resolves those IDs from its authorized topic links; agentd does not infer forum
 or tenant ownership. Agentd returns only sanitized aggregates and coverage
 counts. It never returns message text, raw errors, tool arguments/results,
@@ -50,8 +54,10 @@ paths, or canonical IDs. The process-local aggregate cache defaults to a
 
 The browser-facing route is `GET /api/admin/analytics`; it requires an admin
 identity and combines the canonical runtime result with forum-native distinctive
-vocabulary. Runtime failure is represented as `runtime.available=false` while
-forum vocabulary remains available.
+vocabulary. The browser uses calendar-aligned presets, URL-persisted filters,
+race-fenced refreshes, partial-bucket labels, progressive semantic tables, and
+pointer/keyboard/touch chart details. Runtime failure is represented as
+`runtime.available=false` while forum vocabulary remains available.
 
 ## Stop Robot cancellation
 

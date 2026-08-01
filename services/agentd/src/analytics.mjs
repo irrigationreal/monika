@@ -554,16 +554,22 @@ export function aggregateAnalytics(sessions, queryInput) {
   const step = query.bucket === 'day' ? DAY_MS : 7 * DAY_MS;
   for (let start = firstBucket; start < query.toMs; start += step) {
     const end = start + step;
+    const observedStart = Math.max(start, query.fromMs);
+    const observedEnd = Math.min(end, query.toMs);
     buckets.push({
-      start: new Date(Math.max(start, query.fromMs)).toISOString(),
-      end: new Date(Math.min(end, query.toMs)).toISOString(),
+      start: new Date(start).toISOString(),
+      end: new Date(end).toISOString(),
+      observed_from: new Date(observedStart).toISOString(),
+      observed_to: new Date(observedEnd).toISOString(),
+      is_partial: observedStart !== start || observedEnd !== end,
       ...summarize(bucketAccumulators.get(start) ?? createAccumulator(), query.minToolSamples),
     });
   }
 
   const scannedSessions = Array.isArray(sessions) ? sessions.length : 0;
   return {
-    schema_version: 1,
+    schema_version: 2,
+    generated_at: new Date().toISOString(),
     from: query.from,
     to: query.to,
     bucket: query.bucket,
