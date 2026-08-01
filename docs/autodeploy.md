@@ -109,7 +109,13 @@ Agentd drain has a lease as defense in depth. `MONIKA_AGENTD_DRAIN_AUTO_CANCEL_M
 
 ## Backups
 
-Redeploy backups are complete runtime capsules: the archive contains the entire live Monika repo, including `runtime/secrets`, sessions, forum data, local compose configuration, scripts, docs, and git metadata. This makes restore simple and avoids partial-restore ambiguity.
+Redeploy backups are complete runtime capsules: the archive contains the entire live Monika repo, including `runtime/secrets`, sessions, forum data, local compose configuration, scripts, docs, and git metadata. This makes immediate rollback simple and avoids partial-restore ambiguity.
+
+These local archives are **not** the off-host disaster recovery system. The host's
+separate Nix-managed writer uses a transient read-only Btrfs capture, hourly portable
+restic history and standalone Object-Locked WORM capsules. Root never executes this
+checkout's scripts for those jobs. See [`docs/backups.md`](backups.md) for the four
+artifact types and cold recovery procedures.
 
 Backups are stored under:
 
@@ -150,7 +156,7 @@ Pruning happens only after a new backup has been created and verified. The reten
 
 The buckets are unioned, so quiet periods may retain fewer than four archives. The newest archive is always preserved.
 
-## Restoring from backup
+## Restoring a local redeploy capsule
 
 Stop the timer first so it does not race the restore:
 
@@ -243,3 +249,7 @@ journalctl -u monika-redeploy -n 100 --no-pager
 ```
 
 Normal deferrals are quiet journal entries. They should not page or notify. A non-75 failure leaves the systemd unit failed for operator review.
+
+This timer and its local capsule behavior are intentionally unchanged by the tiered
+B2 service. Do not add cloud credentials or off-host upload behavior to
+`deploy-if-safe`; Shadowsea's immutable Nix-store service is the sole writer.

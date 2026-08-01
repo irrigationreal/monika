@@ -52,11 +52,19 @@ jobs:
               'tests/' \
               '.github/workflows/ci-monika-container.yml' \
               '.github/workflows/image-monika.yml' \
+            | grep -v '^tests/smoke/backup-doc-contract.sh$' \
             | grep -qvE '\.md$'; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
+
+  backup-doc-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - name: Check backup and restore documentation contract
+        run: tests/smoke/backup-doc-contract.sh
 
   monika-container-build:
     needs: monika-container-changes
@@ -81,12 +89,16 @@ jobs:
   # Gate job — branch protection should require this check.
   monika-container-checks:
     if: always()
-    needs: [monika-container-changes, monika-container-build]
+    needs: [monika-container-changes, backup-doc-contract, monika-container-build]
     runs-on: ubuntu-latest
     steps:
       - name: Evaluate result
         shell: bash
         run: |
+          if [ "${{ needs.backup-doc-contract.result }}" != "success" ]; then
+            echo "Backup documentation contract failed or was cancelled"
+            exit 1
+          fi
           if [ "${{ needs.monika-container-build.result }}" = "failure" ] || [ "${{ needs.monika-container-build.result }}" = "cancelled" ]; then
             echo "Monika runtime container build/smoke failed or was cancelled"
             exit 1
