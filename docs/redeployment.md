@@ -2,7 +2,7 @@
 
 Monika runtime redeploys are gated on application-level quiescence rather than Docker process state alone. The runtime must not replace containers while Pi is producing a turn, while forum robot dispatch is queued/running, or while memstore/forum persistence work is active.
 
-For the generic operator runbook and autodeploy lifecycle, see [`docs/autodeploy.md`](autodeploy.md).
+For the generic operator runbook and autodeploy lifecycle, see [`docs/autodeploy.md`](autodeploy.md). For off-host restic/WORM recovery and the emergency kit, see [`docs/backups.md`](backups.md).
 
 ## Safety contract
 
@@ -62,7 +62,7 @@ Forum deploy blockers include active robot turns, queued turns, non-idle robot s
 12. Prunes old redeploy backups by tiered retention bucket.
 13. Prunes old dangling Docker image layers conservatively.
 
-Forum-only image updates do not drain agentd because Docker Compose is not expected to recreate the `monika` container. Backup-only mode still drains and cancels agentd because its purpose is to create a quiescence-gated runtime capsule.
+Forum-only image updates do not drain agentd because Docker Compose is not expected to recreate the `monika` container. Backup-only mode still drains and cancels agentd because its purpose is to create a quiescence-gated **local redeploy** runtime capsule. It does not run the tiered B2 writer. Off-host jobs take a read-only Btrfs capture independently and root executes only the immutable Shadowsea Nix-store program, never this writable checkout.
 
 The script intentionally orchestrates only Docker and image tags. The knowledge of whether stopping is safe lives in agentd/forum APIs so the same contract can be reused by admin UI, timers, Watchtower hooks, or future tooling.
 

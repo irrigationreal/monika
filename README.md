@@ -66,7 +66,9 @@ runtime/
 `runtime/` is intentionally ignored by git and excluded from Docker build context.
 For this deployment model, the practical backup unit is the repository checkout plus
 its gitignored `runtime/` directory. Keep `runtime/` as real files/directories, not
-symlinks.
+symlinks. Local redeploy capsules, transient Btrfs capture, portable restic history
+and standalone WORM capsules have different guarantees; the complete backup and cold
+restore model is in [`docs/backups.md`](docs/backups.md).
 
 Pi JSONL sessions remain canonical. Forum SQLite is a projection/metadata store;
 agent execution, memory lifecycle, tools, and memstore stay behind `agentd` in the

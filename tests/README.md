@@ -160,6 +160,17 @@ The script verifies:
 This protects the failure mode where agentd stays in deploy drain after a
 forum-only update because the monika container was not recreated.
 
+### `smoke/backup-doc-contract.sh`
+
+Checks that the operator docs continue to distinguish local redeploy capsules,
+transient Btrfs capture, portable restic restore and standalone WORM recovery, and
+retain the canonical path/offline-custody safety statements. It is static and does
+not contact B2 or the live runtime.
+
+```bash
+tests/smoke/backup-doc-contract.sh
+```
+
 ### `smoke/forum-runtime.sh`
 
 Validates that a forum runtime image starts, serves health and static frontend,
