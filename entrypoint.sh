@@ -13,6 +13,18 @@ monika_log() {
 # Monika runs as a standalone container. The image owns Pi/extensions/defaults;
 # compose mounts selected persistent state under /app/.pi and /data.
 export PI_CODING_AGENT_DIR="${PI_CODING_AGENT_DIR:-/app/.pi/agent}"
+# Agentd's delivery ledger, retained-result custody, and operator audits need a
+# dedicated persistent root before the retention inventory runs at startup.
+operator_root_input="${PI_SUBAGENT_OPERATOR_ROOT:-/data/pi-subagent-operator-state}"
+if [[ "$operator_root_input" != /* ]]; then
+  monika_log "[monika] ERROR: PI_SUBAGENT_OPERATOR_ROOT must be an absolute dedicated path"
+  exit 1
+fi
+export PI_SUBAGENT_OPERATOR_ROOT="$(realpath -m -- "$operator_root_input")"
+if [[ "$PI_SUBAGENT_OPERATOR_ROOT" == "/" || "$(dirname -- "$PI_SUBAGENT_OPERATOR_ROOT")" == "/" ]]; then
+  monika_log "[monika] ERROR: PI_SUBAGENT_OPERATOR_ROOT must not be a filesystem or top-level mount root"
+  exit 1
+fi
 ssh_lock_extension="$PI_CODING_AGENT_DIR/extensions/ssh.ts"
 ssh_lock_helper="$PI_CODING_AGENT_DIR/extensions/ssh-lock.mjs"
 if [[ -f "$ssh_lock_extension" && -f "$ssh_lock_helper" ]]; then
@@ -30,6 +42,7 @@ export MEMSTORE_SOCKET
 export HOME="${MONIKA_HOME:-/app}"
 monika_log "[monika] Standalone mode: container-owned Pi runtime"
 mkdir -p "$MEMSTORE_DATA_DIR" /data/sessions /app/.config /app/.ssh /app/.gnupg "$PI_CODING_AGENT_DIR"
+install -d -m 0700 -- "$PI_SUBAGENT_OPERATOR_ROOT"
 
 # One identity per container lifetime lets agentd distinguish a surviving runner
 # after an agentd-only restart from a process destroyed by container replacement.

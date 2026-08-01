@@ -154,12 +154,16 @@ identity across restarts, fails closed on uncertainty, and exposes background wo
 the admin Robot Dashboard. Restart reconciliation is passive: it never opens historical
 Pi sessions or wakes a model from recovered result/request files. Canonical completion
 provenance permits result-file acknowledgement after a crash; unproven legacy results
-remain pending for manual review. Dashboard sections separate live/uncertain blockers,
-pending delivery, collapsed terminal history, and a retention dry-run summary.
-Pending delivery is nonblocking, while effects-unknown remote mutations block safe
-deployment and automatic replay until reconciled or operator-attested. Delivery
-acknowledgement is bound to agentd's central operator ledger and precedes atomic
-result custody/removal. Daily 14-day compaction applies only to explicit bulky
+remain pending for manual review. Dashboard sections separate deployment-safety
+blockers, pending delivery, collapsed terminal history, and a retention dry-run
+summary. Pending delivery is nonblocking, while effects-unknown remote mutations
+block safe deployment and automatic replay until reconciled or operator-attested.
+The container creates the private persistent operator root
+`/data/pi-subagent-operator-state` before agentd starts. An override through
+`PI_SUBAGENT_OPERATOR_ROOT` must be an absolute dedicated path below a top-level
+mount; relative, filesystem-root, and mount-root values fail startup. Delivery acknowledgement
+is bound to the central operator ledger in that root and precedes atomic result
+custody/removal. Daily 14-day compaction applies only to explicit bulky
 lifecycle logs for proven-terminal, explicitly non-resumable runs with affirmative
 settlement proof. Every child session is preserved, and resumable, pending,
 malformed, nested, or uncertain records remain protected until explicit review.

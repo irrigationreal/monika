@@ -29,6 +29,17 @@ fi
 # image smoke never contacts an external SSH host.
 node --test "$SCRIPT_DIR/../ssh-lock.test.mjs"
 
+# The operator authority must never be interpreted as an install option or
+# allowed to collapse onto a shared top-level mount.
+if docker run --rm -e PI_SUBAGENT_OPERATOR_ROOT=--help "$IMAGE" true >/dev/null 2>&1; then
+  echo "runtime accepted a relative option-like operator root"
+  exit 1
+fi
+if docker run --rm -e PI_SUBAGENT_OPERATOR_ROOT=/data/operator/.. "$IMAGE" true >/dev/null 2>&1; then
+  echo "runtime accepted a shared top-level operator root"
+  exit 1
+fi
+
 CONTAINER_NAME="${MONIKA_SMOKE_CONTAINER:-monika-smoke-$$}"
 AGENTD_CONTAINER_PORT="7724"
 MEMSTORE_SOCKET="/tmp/memstore.sock"
@@ -195,6 +206,9 @@ const fs = require('node:fs');
 const { createHash } = require('node:crypto');
 if (process.env.PI_SUBAGENT_SESSION_ROOT !== '/app/.pi/agent/sessions/subagent') throw new Error('Dedicated subagent session root is not global');
 if (process.env.PI_SUBAGENT_RUNTIME_ROOT !== '/data/pi-subagents') throw new Error('Dedicated subagent runtime root is not global');
+if (process.env.PI_SUBAGENT_OPERATOR_ROOT !== '/data/pi-subagent-operator-state') throw new Error('Dedicated subagent operator root is not global');
+const operatorRoot = fs.statSync(process.env.PI_SUBAGENT_OPERATOR_ROOT);
+if (!operatorRoot.isDirectory() || (operatorRoot.mode & 0o777) !== 0o700) throw new Error('Dedicated subagent operator root is missing or not private');
 const runtime = JSON.parse(fs.readFileSync('/run/monika-runtime-instance.json', 'utf8'));
 if (runtime.version !== 1 || typeof runtime.id !== 'string' || !Number.isFinite(runtime.createdAt)) throw new Error('Container runtime instance identity is invalid');
 const asyncSource = fs.readFileSync('/opt/pi-subagents/src/runs/background/async-execution.ts', 'utf8');

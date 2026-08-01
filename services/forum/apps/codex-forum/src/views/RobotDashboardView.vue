@@ -404,7 +404,7 @@ onBeforeUnmount(() => {
         <div class="vb-empty-state-text">No retained background subagent runs.</div>
       </div>
       <template v-else>
-        <div class="vb-category-title vb-subagent-group-title">Live / uncertain blockers</div>
+        <div class="vb-category-title vb-subagent-group-title">Deployment safety blockers</div>
         <div v-if="subagentBlockers.length === 0 && (subagents?.blockerCount ?? 0) === 0" class="vb-empty-state vb-empty-state--notice"><div class="vb-empty-state-text">No subagent safety blockers.</div></div>
         <div v-else-if="subagentBlockers.length === 0" class="vb-login-error" style="margin: 10px;">Authoritative agentd counts report {{ subagents?.blockerCount ?? subagents?.activeCount ?? 'unknown' }} blocker(s), but their details were omitted. Treat deployment as blocked.</div>
         <div v-if="(subagents?.omittedBlockerCount ?? 0) > 0" class="vb-login-error" style="margin: 10px;">{{ subagents?.omittedBlockerCount }} additional blocker detail(s) omitted by the agentd response cap.</div>
