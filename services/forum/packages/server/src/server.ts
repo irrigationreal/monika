@@ -304,7 +304,11 @@ try {
   console.warn('Passive startup reconciliation failed; durable dispatch processing remains stopped:', err instanceof Error ? err.message : err);
   throw err;
 }
+const recoveredCompactions = compactionService.start();
 postDispatchService.start();
+if (recoveredCompactions > 0) {
+  console.warn(`Requeued ${recoveredCompactions} interrupted compaction operation(s) for canonical reconciliation.`);
+}
 
 const app = Fastify({ logger: true, bodyLimit: MAX_REQUEST_BODY_BYTES, trustProxy: TRUST_PROXY });
 const access = createAccessHelpers(app, store);
@@ -349,7 +353,10 @@ app.setErrorHandler((error, _request, reply) => {
 });
 app.addHook('onClose', async () => {
   piSessionSync?.stop();
+  const postDispatchStop = postDispatchService.stop();
   await piSessionSync?.waitForIdle();
+  await compactionService.stop();
+  await postDispatchStop;
   await autoRunDirector.stop();
   await codex.stop();
   if (bus instanceof RedisStreamBus) {
@@ -454,6 +461,8 @@ const forumDeploymentStatus = () => {
   if (activeTurns > 0) blockers.push({ code: 'active_robot_turns', count: activeTurns });
   if (queuedTurns > 0) blockers.push({ code: 'queued_robot_turns', count: queuedTurns });
   if (piSync.running) blockers.push({ code: 'pi_session_sync_running' });
+  const activeCompactions = store.countActiveCompactionOperations();
+  if (activeCompactions > 0) blockers.push({ code: 'active_compactions', count: activeCompactions });
   const blockingRobotStates = store
     .listRobotStates()
     .filter((state) => state.activity !== 'idle' && state.activity !== 'error');

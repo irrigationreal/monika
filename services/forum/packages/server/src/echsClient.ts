@@ -196,7 +196,7 @@ export class EchsClient {
     if (opts.piSessionPath) payload['pi_session_path'] = opts.piSessionPath;
     if (opts.cwd) payload['cwd'] = opts.cwd;
     if (opts.autoCompact !== undefined) payload['auto_compact'] = opts.autoCompact;
-    const result = (await this.request('/v1/conversations/open', { method: 'POST', body: payload })) as {
+    const result = (await this.request('/v1/conversations/open', { method: 'POST', body: payload, timeoutMs: 30_000 })) as {
       conversation?: EchsConversationRecord;
     };
     if (!result?.conversation?.conversation_id) throw new Error('ECHS openConversation did not return conversation_id');
@@ -219,6 +219,7 @@ export class EchsClient {
         expected_leaf_id: opts.expectedLeafId,
         ...(opts.customInstructions ? { custom_instructions: opts.customInstructions } : {}),
       },
+      timeoutMs: 10 * 60_000,
     })) as Record<string, unknown>;
   }
   async createConversation(opts: {
@@ -369,6 +370,7 @@ export class EchsClient {
     const result = (await this.request(`/v1/conversations/${conversationId}/messages`, {
       method: 'POST',
       body: payload,
+      timeoutMs: 30_000,
     })) as { message_id: string; thread_id?: string | null; compacted?: boolean; deduplicated?: boolean };
     const out: { messageId: string; threadId?: string | null; compacted?: boolean; deduplicated?: boolean } = {
       messageId: result.message_id,
@@ -546,15 +548,27 @@ export class EchsClient {
     return this.subscribeStream(`/v1/threads/${threadId}/events`, onEvent, opts);
   }
 
-  private async request(path: string, opts?: { method?: string; body?: Record<string, unknown> }): Promise<unknown> {
+  private async request(
+    path: string,
+    opts?: { method?: string; body?: Record<string, unknown>; timeoutMs?: number }
+  ): Promise<unknown> {
     const method = opts?.method ?? 'GET';
     const headers: Record<string, string> = { Accept: 'application/json' };
     if (this.apiToken) headers['Authorization'] = `Bearer ${this.apiToken}`;
     if (opts?.body) headers['Content-Type'] = 'application/json';
     const fetchInit: RequestInit = { method, headers };
     if (opts?.body) fetchInit.body = JSON.stringify(opts.body);
-    const response = await fetch(`${this.baseUrl}${path.startsWith('/') ? path : `/${path}`}`, fetchInit);
-    const text = await response.text();
+    const controller = opts?.timeoutMs ? new AbortController() : null;
+    const timeout = controller ? setTimeout(() => controller.abort(), opts?.timeoutMs) : null;
+    if (controller) fetchInit.signal = controller.signal;
+    let response: Response;
+    let text: string;
+    try {
+      response = await fetch(`${this.baseUrl}${path.startsWith('/') ? path : `/${path}`}`, fetchInit);
+      text = await response.text();
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
     const data = text ? safeJsonParse(text) : null;
     if (!response.ok) {
       const message = `ECHS ${response.status}: ${typeof data === 'string' ? data : JSON.stringify(data)}`;

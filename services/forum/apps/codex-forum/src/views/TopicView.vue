@@ -28,6 +28,7 @@ import type {
   RobotPersonaDto,
   SessionInspectorDto,
   ToolRunDto,
+  TopicCompactionStateDto,
   TopicOperationalEventDto,
 } from '../lib/apiClient';
 import type { ReasoningStep } from '../lib/reasoning';
@@ -48,13 +49,7 @@ type LiveTurnItem = {
 
 const { renderContent, renderBBCode } = useMarkdown();
 const apiAny = api as any;
-const compactionApi = api as unknown as {
-  compactTopic(
-    topicId: string,
-    payload: { operationId: string; confirmation: 'COMPACT'; customInstructions: string | null; recoveryPrompt: string }
-  ): Promise<CompactionOperationDto>;
-  getCompaction(topicId: string, operationId: string): Promise<CompactionOperationDto>;
-};
+const compactionApi = api;
 
 const route = useRoute();
 const router = useRouter();
@@ -151,12 +146,40 @@ const compactionRecoveryPrompt = ref(DEFAULT_RECOVERY_PROMPT);
 const compactionInstructions = ref('');
 const compactionConfirmed = ref(false);
 const compactionOperation = ref<CompactionOperationDto | null>(null);
+const compactionState = ref<TopicCompactionStateDto>({ active: null, latest: null, checkpointDispatch: null });
 const compactionError = ref('');
-const compactionActive = computed(
-  () => compactionOperation.value?.status === 'pending' || compactionOperation.value?.status === 'running'
+const compactionSubmitting = ref(false);
+const compactionRetryingCheckpoint = ref(false);
+const compactionModalRef = ref<HTMLElement | null>(null);
+const COMPACTION_INTENT_GRACE_MS = 60_000;
+let compactionPollTimer: number | null = null;
+let compactionFocusOrigin: HTMLElement | null = null;
+let bodyOverflowBeforeCompactionModal = '';
+let compactionRequestGeneration = 0;
+const compactionActive = computed(() => {
+  const operation = compactionState.value.active ?? compactionOperation.value;
+  return operation?.status === 'pending' || operation?.status === 'running';
+});
+const checkpointDispatchPending = computed(
+  () =>
+    compactionState.value.checkpointDispatch?.status === 'pending' ||
+    compactionState.value.checkpointDispatch?.status === 'dispatching'
+);
+const checkpointNeedsRecovery = computed(
+  () =>
+    compactionState.value.latest?.status === 'succeeded' &&
+    ['failed', 'superseded', 'abandoned'].includes(compactionState.value.checkpointDispatch?.status ?? '')
+);
+const compactionFence = computed(
+  () => compactionActive.value || checkpointDispatchPending.value || checkpointNeedsRecovery.value
 );
 const canCompact = computed(
-  () => isAdmin.value && !isRobotBusy.value && !state.isTopicLocked() && !compactionActive.value
+  () =>
+    isAdmin.value &&
+    !isRobotBusy.value &&
+    !state.isTopicLocked() &&
+    !compactionSubmitting.value &&
+    !compactionFence.value
 );
 
 const autoRun = computed(() => state.topicAutoRun.value);
@@ -197,30 +220,144 @@ function isRecoveryCheckpoint(postId: string): boolean {
   );
 }
 
+function compactionIntentKey(topicId: string): string {
+  return `codex-forum:compaction-intent:${topicId}`;
+}
+
+function persistCompactionIntent(operation: CompactionOperationDto): void {
+  try {
+    window.localStorage.setItem(compactionIntentKey(operation.topicId), JSON.stringify(operation));
+  } catch {
+    // Runtime state and the server-side fence remain authoritative when storage is unavailable.
+  }
+}
+
+function loadCompactionIntent(topicId: string): CompactionOperationDto | null {
+  try {
+    const raw = window.localStorage.getItem(compactionIntentKey(topicId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as CompactionOperationDto;
+    return parsed.topicId === topicId && (parsed.status === 'pending' || parsed.status === 'running') ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function clearCompactionIntent(topicId: string): void {
+  try {
+    window.localStorage.removeItem(compactionIntentKey(topicId));
+  } catch {
+    // Nothing else is required; a successful state read has already reconciled the operation.
+  }
+}
+
+function stopCompactionPolling(): void {
+  if (compactionPollTimer !== null) window.clearTimeout(compactionPollTimer);
+  compactionPollTimer = null;
+}
+
+function scheduleCompactionPolling(): void {
+  stopCompactionPolling();
+  const topicId = routeTopicId.value;
+  if ((!compactionActive.value && !checkpointDispatchPending.value) || !topicId) return;
+  compactionPollTimer = window.setTimeout(() => void refreshCompactionState(topicId), 2000);
+}
+
+async function refreshCompactionDependentState(topicId: string): Promise<void> {
+  await Promise.all([
+    state.loadPosts(topicId),
+    state.loadOperationalEvents(topicId),
+    state.loadState(topicId, { reconstructTrace: false }),
+  ]);
+  await Promise.all([
+    state.loadAttachmentsForPosts(state.posts.value.map((post) => post.id)),
+    state.loadSessionInspector(),
+  ]);
+}
+
+async function refreshCompactionState(topicId: string, refreshTopic = false): Promise<boolean> {
+  const generation = ++compactionRequestGeneration;
+  try {
+    const previousStatus = compactionState.value.active?.status ?? compactionOperation.value?.status ?? null;
+    const next = await compactionApi.getCompactionState(topicId);
+    if (generation !== compactionRequestGeneration || routeTopicId.value !== topicId) return false;
+    const intent = loadCompactionIntent(topicId);
+    const intentAge = intent ? Date.now() - new Date(intent.createdAt).getTime() : Infinity;
+    if (intent && !next.active && next.latest?.id !== intent.id && intentAge < COMPACTION_INTENT_GRACE_MS) {
+      compactionState.value = { ...next, active: intent };
+      compactionOperation.value = intent;
+      return true;
+    }
+    if (next.active) persistCompactionIntent(next.active);
+    else if (intent) clearCompactionIntent(topicId);
+    compactionState.value = next;
+    compactionOperation.value = next.active ?? next.latest;
+    if (
+      refreshTopic ||
+      (previousStatus !== null && previousStatus !== next.active?.status && !next.active)
+    ) {
+      await refreshCompactionDependentState(topicId);
+    }
+    return true;
+  } catch (err) {
+    if (generation === compactionRequestGeneration && routeTopicId.value === topicId && isAdmin.value) {
+      compactionError.value = err instanceof Error ? err.message : 'Could not refresh compaction status.';
+    }
+    return false;
+  } finally {
+    if (generation === compactionRequestGeneration && routeTopicId.value === topicId) scheduleCompactionPolling();
+  }
+}
+
+function restoreCompactionModalEnvironment(): void {
+  document.body.style.overflow = bodyOverflowBeforeCompactionModal;
+  const focusTarget = compactionFocusOrigin;
+  compactionFocusOrigin = null;
+  void nextTick(() => focusTarget?.focus());
+}
+
 function openCompactionModal(): void {
   if (!canCompact.value) return;
+  compactionFocusOrigin = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  bodyOverflowBeforeCompactionModal = document.body.style.overflow;
+  document.body.style.overflow = 'hidden';
   showCompactionModal.value = true;
   showCompactionAdvanced.value = false;
   compactionRecoveryPrompt.value = DEFAULT_RECOVERY_PROMPT;
   compactionInstructions.value = '';
   compactionConfirmed.value = false;
-  compactionOperation.value = null;
   compactionError.value = '';
+  void nextTick(() => compactionModalRef.value?.querySelector<HTMLElement>('.vb-modal-close')?.focus());
 }
 
 function closeCompactionModal(): void {
-  if (compactionActive.value) return;
+  if (compactionSubmitting.value) return;
   showCompactionModal.value = false;
+  restoreCompactionModalEnvironment();
 }
 
-async function awaitCompaction(topicId: string, operation: CompactionOperationDto): Promise<CompactionOperationDto> {
-  let current = operation;
-  while (current.status === 'pending' || current.status === 'running') {
-    await new Promise((resolve) => window.setTimeout(resolve, 500));
-    current = await compactionApi.getCompaction(topicId, current.id);
-    compactionOperation.value = current;
+function handleCompactionKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape' && !compactionSubmitting.value) {
+    event.preventDefault();
+    closeCompactionModal();
+    return;
   }
-  return current;
+  if (event.key !== 'Tab') return;
+  const focusable = Array.from(
+    compactionModalRef.value?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href]'
+    ) ?? []
+  ).filter((element) => element.offsetParent !== null);
+  const first = focusable.at(0);
+  const last = focusable.at(-1);
+  if (!first || !last) return;
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
 }
 
 async function submitCompaction(): Promise<void> {
@@ -236,15 +373,18 @@ async function submitCompaction(): Promise<void> {
   }
 
   compactionError.value = '';
+  compactionSubmitting.value = true;
+  let operationId: string | null = null;
   try {
-    const operationId = createClientOperationId();
-    compactionOperation.value = {
+    operationId = createClientOperationId();
+    const customInstructions = compactionInstructions.value.trim();
+    const pendingIntent: CompactionOperationDto = {
       id: operationId,
       topicId,
       sessionId: '',
-      initiatedBy: '',
+      initiatedBy: state.currentUser.value?.id ?? '',
       expectedLeafId: '',
-      customInstructions: null,
+      customInstructions: customInstructions ? customInstructions : null,
       recoveryPrompt: compactionRecoveryPrompt.value.trim(),
       status: 'pending',
       eventId: null,
@@ -254,39 +394,97 @@ async function submitCompaction(): Promise<void> {
       startedAt: null,
       finishedAt: null,
     };
-    const started = await compactionApi.compactTopic(topicId, {
+    compactionOperation.value = pendingIntent;
+    compactionState.value = { ...compactionState.value, active: pendingIntent };
+    persistCompactionIntent(pendingIntent);
+    const accepted = await compactionApi.compactTopic(topicId, {
       operationId,
       confirmation: 'COMPACT',
-      customInstructions: compactionInstructions.value.trim() ? compactionInstructions.value.trim() : null,
+      customInstructions: customInstructions ? customInstructions : null,
       recoveryPrompt: compactionRecoveryPrompt.value.trim(),
     });
-    const completed = await awaitCompaction(topicId, started);
-    compactionOperation.value = completed;
-    await Promise.all([
-      state.loadPosts(topicId),
-      state.loadOperationalEvents(topicId),
-      state.loadState(topicId, { reconstructTrace: false }),
-    ]);
-    await Promise.all([
-      state.loadAttachmentsForPosts(state.posts.value.map((post) => post.id)),
-      state.loadSessionInspector(),
-    ]);
-    if (completed.status === 'failed') {
-      compactionError.value = completed.errorMessage || 'Compaction failed.';
+    if (routeTopicId.value !== topicId) return;
+    compactionOperation.value = accepted;
+    compactionState.value = { ...compactionState.value, active: accepted };
+    persistCompactionIntent(accepted);
+    compactionSubmitting.value = false;
+    closeCompactionModal();
+    await refreshCompactionState(topicId, accepted.status === 'succeeded' || accepted.status === 'failed');
+  } catch (err) {
+    const status = typeof err === 'object' && err !== null ? (err as { status?: unknown }).status : null;
+    if (typeof status === 'number' && [400, 401, 403, 404, 409, 422].includes(status)) {
+      if (routeTopicId.value !== topicId) return;
+      if (status === 409) {
+        const refreshed = await refreshCompactionState(topicId);
+        if (routeTopicId.value !== topicId) return;
+        if (refreshed) clearCompactionIntent(topicId);
+        compactionError.value = refreshed && compactionFence.value
+          ? ''
+          : refreshed
+            ? err instanceof Error
+              ? err.message
+              : 'Compaction request conflicted with current topic state.'
+            : 'Compaction request conflicted; checking the authoritative server status.';
+      } else {
+        clearCompactionIntent(topicId);
+        compactionOperation.value = null;
+        compactionState.value = { ...compactionState.value, active: null };
+        compactionError.value = err instanceof Error ? err.message : 'Compaction request was rejected.';
+      }
       return;
     }
-    showCompactionModal.value = false;
-  } catch (err) {
-    compactionError.value = err instanceof Error ? err.message : 'Compaction failed.';
-    const operation = compactionOperation.value;
-    if (operation?.status === 'pending' || operation?.status === 'running') {
-      compactionOperation.value = {
-        ...operation,
-        status: 'failed',
-        errorMessage: compactionError.value,
-      };
+    if (!operationId) {
+      if (routeTopicId.value !== topicId) return;
+      compactionError.value = err instanceof Error ? err.message : 'Compaction request failed.';
+      return;
     }
-    await state.loadOperationalEvents(topicId).catch(() => undefined);
+    // The acceptance response can be lost after the durable row is written. Query
+    // the client-owned operation ID before presenting the transport error as final.
+    try {
+      const reconciled = await compactionApi.getCompaction(topicId, operationId);
+      if (routeTopicId.value !== topicId) return;
+      compactionOperation.value = reconciled;
+      await refreshCompactionState(topicId, reconciled.status === 'succeeded' || reconciled.status === 'failed');
+      if (reconciled.status === 'pending' || reconciled.status === 'running') {
+        compactionSubmitting.value = false;
+        closeCompactionModal();
+      } else if (reconciled.status === 'failed') {
+        compactionError.value = reconciled.errorMessage ?? 'Compaction failed.';
+      } else {
+        compactionSubmitting.value = false;
+        closeCompactionModal();
+      }
+    } catch {
+      if (routeTopicId.value !== topicId) return;
+      compactionError.value = `${err instanceof Error ? err.message : 'Compaction request failed.'} The outcome is unknown; do not retry while the forum checks the durable operation.`;
+      compactionSubmitting.value = false;
+      closeCompactionModal();
+      scheduleCompactionPolling();
+    }
+  } finally {
+    if (routeTopicId.value === topicId) compactionSubmitting.value = false;
+  }
+}
+
+async function retryCompactionCheckpoint(): Promise<void> {
+  const topicId = routeTopicId.value;
+  const operationId = compactionState.value.latest?.id;
+  if (!topicId || !operationId || !checkpointNeedsRecovery.value || compactionRetryingCheckpoint.value) return;
+  compactionRetryingCheckpoint.value = true;
+  compactionError.value = '';
+  try {
+    const next = await compactionApi.retryCompactionCheckpoint(topicId, operationId);
+    if (routeTopicId.value !== topicId) return;
+    compactionState.value = next;
+    scheduleCompactionPolling();
+  } catch (err) {
+    await refreshCompactionState(topicId);
+    if (routeTopicId.value !== topicId) return;
+    if (checkpointNeedsRecovery.value) {
+      compactionError.value = err instanceof Error ? err.message : 'Could not retry the recovery checkpoint.';
+    }
+  } finally {
+    if (routeTopicId.value === topicId) compactionRetryingCheckpoint.value = false;
   }
 }
 
@@ -1355,7 +1553,7 @@ async function applyQuickReplyTemplate(template: MessageTemplateDto, replace: bo
 }
 
 async function reply(): Promise<void> {
-  if (!replyBody.value.trim()) return;
+  if (!replyBody.value.trim() || compactionFence.value) return;
   const shouldClearReplyFiles = replyFiles.value.length > 0;
   isReplying.value = true;
   try {
@@ -1443,8 +1641,8 @@ async function runAutoRunDirector(): Promise<void> {
 }
 
 function openReplyPage(): void {
-  if (!state.selectedTopic.value) return;
-  router.push({
+  if (!state.selectedTopic.value || compactionFence.value) return;
+  void router.push({
     name: 'topic.reply',
     params: { topicId: state.selectedTopic.value.id },
     query: { model: effectiveSelectedModel.value, reasoning: selectedReasoning.value },
@@ -1552,6 +1750,14 @@ async function handleDeleteTopic(): Promise<void> {
 async function loadTopic(topicId: string): Promise<void> {
   try {
     await state.selectTopicById(topicId);
+    if (isAdmin.value) {
+      const intent = loadCompactionIntent(topicId);
+      if (intent) {
+        compactionOperation.value = intent;
+        compactionState.value = { ...compactionState.value, active: intent };
+      }
+      await refreshCompactionState(topicId);
+    }
     const page = Number.isFinite(routePage.value) && routePage.value > 0 ? routePage.value : 1;
     state.setPage(page);
   } catch (err) {
@@ -1664,9 +1870,18 @@ watch(
 watch(
   routeTopicId,
   async (topicId) => {
-    if (topicId) {
-      await loadTopic(topicId);
+    stopCompactionPolling();
+    compactionRequestGeneration += 1;
+    if (showCompactionModal.value) {
+      showCompactionModal.value = false;
+      restoreCompactionModalEnvironment();
     }
+    compactionOperation.value = null;
+    compactionSubmitting.value = false;
+    compactionRetryingCheckpoint.value = false;
+    compactionState.value = { active: null, latest: null, checkpointDispatch: null };
+    compactionError.value = '';
+    if (topicId) await loadTopic(topicId);
   },
   { immediate: true }
 );
@@ -1677,6 +1892,8 @@ onMounted(() => {
 
 onUnmounted(() => {
   state.closeStream();
+  stopCompactionPolling();
+  if (showCompactionModal.value) document.body.style.overflow = bodyOverflowBeforeCompactionModal;
   window.removeEventListener('scroll', handleScroll);
 });
 </script>
@@ -1791,28 +2008,42 @@ onUnmounted(() => {
     </div>
   </div>
 
-  <div v-if="showCompactionModal" class="vb-modal-overlay" @click.self="closeCompactionModal">
-    <div class="vb-modal vb-compaction-modal">
+  <div v-if="showCompactionModal" class="vb-modal-overlay vb-compaction-modal-overlay">
+    <div
+      ref="compactionModalRef"
+      class="vb-modal vb-compaction-modal"
+      role="dialog"
+      tabindex="-1"
+      aria-modal="true"
+      aria-labelledby="compaction-modal-title"
+      @keydown="handleCompactionKeydown"
+    >
       <div class="vb-modal-header">
-        <span>Compact Session and Recover</span>
-        <button class="vb-modal-close" type="button" :disabled="compactionActive" @click="closeCompactionModal">
+        <span id="compaction-modal-title">Compact Session and Recover</span>
+        <button
+          class="vb-modal-close"
+          type="button"
+          aria-label="Close compaction dialog"
+          :disabled="compactionSubmitting"
+          @click="closeCompactionModal"
+        >
           &times;
         </button>
       </div>
       <div class="vb-modal-body">
         <p class="vb-delete-warning">
           <strong>This permanently replaces older session context with an AI-generated summary.</strong>
-          Exact wording, tool output, and details may be lost. The operation cannot be undone, and a recovery checkpoint
-          will be posted immediately afterward so the assistant can state what survived.
+          Exact wording, tool output, and details may be lost. The operation cannot be undone. Once accepted, it runs on
+          the server and this page may be closed; a recovery checkpoint will be queued afterward.
         </p>
         <label class="vb-inline-check vb-compaction-confirm">
-          <input v-model="compactionConfirmed" type="checkbox" :disabled="compactionActive" />
+          <input v-model="compactionConfirmed" type="checkbox" :disabled="compactionSubmitting" />
           <span>I understand that compaction is destructive and may lose context.</span>
         </label>
         <button
           class="vb-small-btn"
           type="button"
-          :disabled="compactionActive"
+          :disabled="compactionSubmitting"
           @click="showCompactionAdvanced = !showCompactionAdvanced"
         >
           {{ showCompactionAdvanced ? 'Hide advanced options' : 'Advanced options' }}
@@ -1824,7 +2055,7 @@ onUnmounted(() => {
             v-model="compactionRecoveryPrompt"
             rows="10"
             class="vb-modal-textarea"
-            :disabled="compactionActive"
+            :disabled="compactionSubmitting"
           ></textarea>
           <label for="compaction-summary-instructions">Custom summary instructions (optional)</label>
           <textarea
@@ -1832,36 +2063,60 @@ onUnmounted(() => {
             v-model="compactionInstructions"
             rows="4"
             class="vb-modal-textarea"
-            :disabled="compactionActive"
+            :disabled="compactionSubmitting"
             placeholder="Emphasize particular decisions, files, or unresolved work in the compaction summary."
           ></textarea>
         </div>
-        <div v-if="compactionActive" class="vb-note" role="status">
-          Compacting the canonical Pi session and preparing the recovery checkpoint…
+        <div v-if="compactionSubmitting" class="vb-note" role="status">
+          Securing the durable server-side compaction request…
         </div>
         <div v-if="compactionError" class="vb-error vb-compaction-error" role="alert">
           <strong>Compaction failed:</strong> {{ compactionError }}
         </div>
-        <div class="vb-modal-actions">
-          <button
-            class="vb-btn vb-btn-danger"
-            type="button"
-            :disabled="!canCompact || !compactionConfirmed"
-            @click="submitCompaction"
-          >
-            {{ compactionActive ? 'Compacting…' : 'Compact and recover' }}
-          </button>
-          <button
-            class="vb-btn vb-btn-secondary"
-            type="button"
-            :disabled="compactionActive"
-            @click="closeCompactionModal"
-          >
-            Cancel
-          </button>
-        </div>
+      </div>
+      <div class="vb-modal-actions vb-compaction-modal-actions">
+        <button
+          class="vb-btn vb-btn-danger"
+          type="button"
+          :disabled="!canCompact || !compactionConfirmed"
+          @click="submitCompaction"
+        >
+          {{ compactionSubmitting ? 'Submitting…' : 'Compact and recover' }}
+        </button>
+        <button
+          class="vb-btn vb-btn-secondary"
+          type="button"
+          :disabled="compactionSubmitting"
+          @click="closeCompactionModal"
+        >
+          Cancel
+        </button>
       </div>
     </div>
+  </div>
+
+  <div v-if="isAdmin && compactionActive" class="vb-note vb-compaction-status" role="status" aria-live="polite">
+    <strong>Compaction is running on the server.</strong>
+    You may leave or close this page. New replies are paused until compaction finishes and the recovery checkpoint is
+    queued.
+  </div>
+  <div v-else-if="isAdmin && checkpointDispatchPending" class="vb-note vb-compaction-status" role="status">
+    <strong>Compaction finished; the recovery checkpoint is being dispatched.</strong>
+    You may leave this page. New replies remain paused until agentd accepts the checkpoint turn.
+  </div>
+  <div v-else-if="isAdmin && checkpointNeedsRecovery" class="vb-error vb-compaction-status" role="alert">
+    <div>
+      <strong>The session was compacted, but its recovery checkpoint could not be dispatched.</strong>
+      <span v-if="compactionState.checkpointDispatch?.errorMessage">
+        {{ compactionState.checkpointDispatch.errorMessage }}
+      </span>
+    </div>
+    <button class="vb-btn" type="button" :disabled="compactionRetryingCheckpoint" @click="retryCompactionCheckpoint">
+      {{ compactionRetryingCheckpoint ? 'Retrying…' : 'Retry recovery checkpoint' }}
+    </button>
+  </div>
+  <div v-if="isAdmin && compactionError && !showCompactionModal" class="vb-error vb-compaction-status" role="alert">
+    {{ compactionError }}
   </div>
 
   <section class="vb-section">
@@ -1902,10 +2157,10 @@ onUnmounted(() => {
 
     <div class="vb-controls">
       <div class="vb-control-group">
-        <button class="vb-btn" :disabled="state.loading.value || state.isTopicLocked()" @click="openReplyPage">
+        <button class="vb-btn" :disabled="state.loading.value || state.isTopicLocked() || compactionFence" @click="openReplyPage">
           Post Reply
         </button>
-        <button class="vb-btn" :disabled="state.loading.value || state.isTopicLocked()" @click="openHandoffModal">
+        <button class="vb-btn" :disabled="state.loading.value || state.isTopicLocked() || compactionFence" @click="openHandoffModal">
           Handoff
         </button>
         <button v-if="isAdmin" class="vb-btn" :disabled="!canCompact" @click="openCompactionModal">Compact</button>
@@ -1961,7 +2216,7 @@ onUnmounted(() => {
     <div v-if="showAdminPanel && canModerate" class="vb-admin-panel">
       <div class="vb-admin-actions">
         <button class="vb-small-btn" :disabled="state.loading.value" @click="openEditTitle">Edit Title</button>
-        <button v-if="isAdmin" class="vb-small-btn" :disabled="state.loading.value" @click="openMoveTopicModal">
+        <button v-if="isAdmin" class="vb-small-btn" :disabled="state.loading.value || compactionFence" @click="openMoveTopicModal">
           Move Thread
         </button>
         <button class="vb-small-btn" :disabled="state.loading.value" @click="handleToggleSticky">
@@ -1970,7 +2225,7 @@ onUnmounted(() => {
         <button
           v-if="state.selectedTopic.value?.status === 'open'"
           class="vb-small-btn"
-          :disabled="state.loading.value"
+          :disabled="state.loading.value || compactionFence"
           @click="handleLockTopic"
         >
           Lock Topic
@@ -1986,7 +2241,7 @@ onUnmounted(() => {
         <button
           v-if="state.selectedTopic.value?.status !== 'archived'"
           class="vb-small-btn"
-          :disabled="state.loading.value"
+          :disabled="state.loading.value || compactionFence"
           @click="handleArchiveTopic"
         >
           Archive Topic
@@ -2001,7 +2256,7 @@ onUnmounted(() => {
         </button>
         <button
           class="vb-small-btn vb-btn-danger"
-          :disabled="state.loading.value"
+          :disabled="state.loading.value || compactionFence"
           @click="showDeleteTopicConfirm = true"
         >
           Delete Topic
@@ -2017,13 +2272,13 @@ onUnmounted(() => {
               <input type="checkbox" v-model="autoRunEnabled" :disabled="!canEditAutoRun || autoRunBusy" />
               <span>Enabled</span>
             </label>
-            <button class="vb-small-btn" type="button" :disabled="!canEditAutoRun || autoRunBusy" @click="saveAutoRun">
+            <button class="vb-small-btn" type="button" :disabled="!canEditAutoRun || autoRunBusy || compactionFence" @click="saveAutoRun">
               Save
             </button>
             <button
               class="vb-small-btn"
               type="button"
-              :disabled="!canEditAutoRun || autoRunBusy || !autoRunEnabled"
+              :disabled="!canEditAutoRun || autoRunBusy || compactionFence || !autoRunEnabled"
               @click="runAutoRunDirector"
             >
               Run
@@ -2120,7 +2375,7 @@ onUnmounted(() => {
           <button
             class="vb-btn"
             type="button"
-            :disabled="!canEditAutoRun || autoRunBusy || !autoRunEnabled"
+            :disabled="!canEditAutoRun || autoRunBusy || compactionFence || !autoRunEnabled"
             @click="runAutoRunDirector"
           >
             {{ autoRunBusy ? 'Running...' : 'Run Auto-Director' }}
@@ -2412,7 +2667,7 @@ onUnmounted(() => {
           <button
             v-if="canEditPost(post)"
             class="vb-control-btn"
-            :disabled="state.isTopicLocked() || !!post.deletedAt"
+            :disabled="state.isTopicLocked() || compactionFence || !!post.deletedAt"
             @click="openEditModal(post)"
           >
             Edit
@@ -2431,7 +2686,7 @@ onUnmounted(() => {
           <button
             v-if="canDeletePost(post)"
             class="vb-control-btn"
-            :disabled="state.isTopicLocked() || !!post.deletedAt"
+            :disabled="state.isTopicLocked() || compactionFence || !!post.deletedAt"
             @click="confirmDelete(post)"
           >
             Delete
@@ -2439,7 +2694,7 @@ onUnmounted(() => {
         </div>
         <div v-if="showDeleteConfirm === post.id" class="vb-delete-confirm">
           <span>Delete this post?</span>
-          <button class="vb-small-btn vb-btn-danger" :disabled="state.loading.value" @click="handleDelete(post.id)">
+          <button class="vb-small-btn vb-btn-danger" :disabled="state.loading.value || compactionFence" @click="handleDelete(post.id)">
             Yes, Delete
           </button>
           <button class="vb-small-btn" @click="cancelDelete">Cancel</button>
@@ -2487,10 +2742,10 @@ onUnmounted(() => {
 
     <div class="vb-controls vb-controls-bottom">
       <div class="vb-control-group">
-        <button class="vb-btn" :disabled="state.loading.value || state.isTopicLocked()" @click="openReplyPage">
+        <button class="vb-btn" :disabled="state.loading.value || state.isTopicLocked() || compactionFence" @click="openReplyPage">
           Post Reply
         </button>
-        <button class="vb-btn" :disabled="state.loading.value || state.isTopicLocked()" @click="openHandoffModal">
+        <button class="vb-btn" :disabled="state.loading.value || state.isTopicLocked() || compactionFence" @click="openHandoffModal">
           Handoff
         </button>
         <button v-if="isAdmin" class="vb-btn" :disabled="!canCompact" @click="openCompactionModal">Compact</button>
@@ -2734,7 +2989,7 @@ onUnmounted(() => {
           </div>
           <span v-if="robotModeNotice" class="vb-reply-options-callout">{{ robotModeNotice }}</span>
         </div>
-        <AutoCompactOption v-model="autoCompactEnabled" :can-edit="isAdmin" :busy="isRobotBusy" />
+        <AutoCompactOption v-model="autoCompactEnabled" :can-edit="isAdmin" :busy="isRobotBusy || compactionFence" />
         <div v-if="sessionContext" class="vb-reply-context-meter">
           <strong>Context:</strong>
           <span
@@ -2751,9 +3006,12 @@ onUnmounted(() => {
           <span v-else>usage unavailable</span>
           <span v-if="sessionContext.model" class="vb-context-model">· {{ sessionContext.model }}</span>
         </div>
+        <div v-if="compactionFence" class="vb-reply-options-callout" role="status">
+          Replies are paused while server-side compaction is running.
+        </div>
         <button
           class="vb-btn"
-          :disabled="state.loading.value || isReplying || isUploadingReply || !replyBody.trim()"
+          :disabled="state.loading.value || isReplying || isUploadingReply || compactionFence || !replyBody.trim()"
           @click="reply"
         >
           <span v-if="isReplying" class="vb-spinner" style="width: 12px; height: 12px; margin-right: 4px"></span>

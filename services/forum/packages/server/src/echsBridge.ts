@@ -1588,6 +1588,7 @@ export class EchsBridge {
               afterPostId: lastDispatchedPostId,
               beforePostId: parentPostId,
               excludePiSessionId: piSessionLink?.pi_session_id ?? null,
+              excludePendingDispatches: this.store.isCompactionRecoveryPost(parentPostId),
             })
           : [];
       let catchupText =

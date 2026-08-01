@@ -531,6 +531,19 @@ async function attachMockApi(target: Page | BrowserContext, state: MockState): P
       return;
     }
 
+    if (/^\/api\/topics\/[^/]+\/compactions$/.test(path) && method === 'GET') {
+      const topicId = path.split('/')[3];
+      const operations = Object.values(state.compactionOperations).filter((operation) => operation.topicId === topicId);
+      const latest = operations.at(-1) ?? null;
+      const active = operations.find((operation) => operation.status === 'pending' || operation.status === 'running') ?? null;
+      await fulfillJson(route, 200, {
+        active,
+        latest,
+        checkpointDispatch: latest?.recoveryPostId ? { status: 'dispatched', errorMessage: null } : null
+      });
+      return;
+    }
+
     if (/^\/api\/topics\/[^/]+\/compactions$/.test(path) && method === 'POST') {
       const topicId = path.split('/')[3];
       const requestPayload = (payload ?? {}) as unknown as Record<string, unknown>;
@@ -553,7 +566,18 @@ async function attachMockApi(target: Page | BrowserContext, state: MockState): P
         finishedAt: nextTimestamp(state)
       };
       state.compactionOperations[operationId] = operation;
-      await fulfillJson(route, 200, operation);
+      await fulfillJson(route, 202, operation);
+      return;
+    }
+
+    if (/^\/api\/topics\/[^/]+\/compactions\/[^/]+\/retry-checkpoint$/.test(path) && method === 'POST') {
+      const operationId = path.split('/')[5];
+      const operation = state.compactionOperations[operationId] ?? null;
+      await fulfillJson(route, operation ? 200 : 404, {
+        active: null,
+        latest: operation,
+        checkpointDispatch: operation ? { status: 'pending', errorMessage: null } : null
+      });
       return;
     }
 
@@ -1263,6 +1287,111 @@ test.describe('Threading and reply flows', () => {
     expect(state.compactionRequests[0]?.['operationId']).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
     );
+  });
+
+  test('compaction dialog remains reachable in short mobile portrait with advanced options', async ({ page, context }) => {
+    const state = createMockState();
+    await attachMockApi(page, state);
+    await setAuthTokens(context, MODERATOR_TOKEN);
+    await page.setViewportSize({ width: 375, height: 667 });
+
+    await page.goto('/');
+    const fixture = await createFixture(page, { postCount: 2 });
+    await page.goto(`/topics/${fixture.topicId}`);
+    const compactTrigger = page.getByRole('button', { name: 'Compact', exact: true }).first();
+    await compactTrigger.click();
+    await expect(page.getByRole('dialog', { name: 'Compact Session and Recover' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Close compaction dialog' })).toBeFocused();
+    await page.getByRole('button', { name: 'Advanced options' }).click();
+
+    const dialog = page.getByRole('dialog', { name: 'Compact Session and Recover' });
+    const box = await dialog.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.y).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(375);
+    expect(box!.y + box!.height).toBeLessThanOrEqual(667);
+    await expect(dialog.getByRole('button', { name: 'Compact and recover' })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeVisible();
+
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    await expect(compactTrigger).toBeFocused();
+  });
+
+  test('compaction dialog keeps its actions reachable in short mobile landscape', async ({ page, context }) => {
+    const state = createMockState();
+    await attachMockApi(page, state);
+    await setAuthTokens(context, MODERATOR_TOKEN);
+    await page.setViewportSize({ width: 667, height: 375 });
+
+    await page.goto('/');
+    const fixture = await createFixture(page, { postCount: 2 });
+    await page.goto(`/topics/${fixture.topicId}`);
+    await page.getByRole('button', { name: 'Compact', exact: true }).first().click();
+    await page.getByRole('button', { name: 'Advanced options' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Compact Session and Recover' });
+    const box = await dialog.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.y + box!.height).toBeLessThanOrEqual(375);
+    await expect(dialog.getByRole('button', { name: 'Compact and recover' })).toBeVisible();
+    await dialog.getByLabel('Custom summary instructions (optional)').fill('Preserve the current implementation state.');
+  });
+
+  test('reload hydrates a server-owned compaction without trapping the topic in a modal', async ({ page, context }) => {
+    const state = createMockState();
+    await attachMockApi(page, state);
+    await setAuthTokens(context, MODERATOR_TOKEN);
+
+    await page.goto('/');
+    const fixture = await createFixture(page, { postCount: 2 });
+    state.compactionOperations['op-active'] = {
+      id: 'op-active',
+      topicId: fixture.topicId,
+      sessionId: 'session-1',
+      initiatedBy: MODERATOR_ID,
+      expectedLeafId: 'leaf-1',
+      customInstructions: null,
+      recoveryPrompt: 'recover',
+      status: 'running',
+      eventId: null,
+      recoveryPostId: null,
+      errorMessage: null,
+      createdAt: nextTimestamp(state),
+      startedAt: nextTimestamp(state),
+      finishedAt: null
+    };
+
+    await page.goto(`/topics/${fixture.topicId}`);
+    await expect(page.getByText('Compaction is running on the server.')).toBeVisible();
+    await expect(page.getByText('You may leave or close this page.')).toBeVisible();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Post Reply' }).first()).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Post Quick Reply' })).toBeDisabled();
+  });
+
+  test('lost acceptance and reconciliation responses retain a conservative durable intent', async ({ page, context }) => {
+    const state = createMockState();
+    await attachMockApi(page, state);
+    await setAuthTokens(context, MODERATOR_TOKEN);
+
+    await page.goto('/');
+    const fixture = await createFixture(page, { postCount: 2 });
+    await page.goto(`/topics/${fixture.topicId}`);
+    await page.route('**/api/topics/*/compactions**', async (route) => {
+      await route.abort('connectionfailed');
+    });
+    await page.getByRole('button', { name: 'Compact', exact: true }).first().click();
+    await page.getByLabel('I understand that compaction is destructive and may lose context.').check();
+    await page.getByRole('dialog').getByRole('button', { name: 'Compact and recover' }).click();
+
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect(page.getByText('Compaction is running on the server.')).toBeVisible();
+    await expect(page.getByRole('alert')).toContainText('The outcome is unknown; do not retry');
+    await expect(page.getByRole('button', { name: 'Compact', exact: true }).first()).toBeDisabled();
+    const persisted = await page.evaluate((topicId) =>
+      localStorage.getItem(`codex-forum:compaction-intent:${topicId}`), fixture.topicId);
+    expect(persisted).toContain(fixture.topicId);
   });
 
   test('compaction capability failures are surfaced in the modal', async ({ page, context }) => {

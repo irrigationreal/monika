@@ -1,6 +1,10 @@
 import { CreateCompactionRequestSchema } from '@irrigationreal/codex-forum-contracts';
 
-import { mapCompactionOperationToDto, mapTopicOperationalEventToDto } from '../mappers/dto';
+import {
+  mapCompactionOperationToDto,
+  mapTopicCompactionStateToDto,
+  mapTopicOperationalEventToDto,
+} from '../mappers/dto';
 import { CompactionConflictError, CompactionNotFoundError } from '../services/compactionService';
 import { serializePost, serializeTopic } from '../utils/serializers';
 
@@ -436,7 +440,15 @@ export function registerForumRoutes({
     };
   });
 
-  app.post('/topics/:topicId/compactions', async (request) => {
+  app.get('/topics/:topicId/compactions', async (request) => {
+    requireAdmin(request);
+    const { topicId } = request.params as { topicId: string };
+    requireTopicVisible(topicId, request);
+    if (!compactionService) throw app.httpErrors.serviceUnavailable('Compaction service is unavailable');
+    return mapTopicCompactionStateToDto(compactionService.getState(topicId));
+  });
+
+  app.post('/topics/:topicId/compactions', async (request, reply) => {
     const user = requireAdmin(request);
     const { topicId } = request.params as { topicId: string };
     requireTopicVisible(topicId, request);
@@ -444,13 +456,16 @@ export function registerForumRoutes({
     const parsed = CreateCompactionRequestSchema.safeParse(request.body);
     if (!parsed.success) throw app.httpErrors.badRequest(parsed.error.issues[0]?.message ?? 'Invalid compaction request');
     try {
-      return mapCompactionOperationToDto(await compactionService.compact({
+      const operation = await compactionService.enqueue({
         operationId: parsed.data.operationId,
         topicId,
         initiatedBy: user.identityId,
         customInstructions: parsed.data.customInstructions,
         recoveryPrompt: parsed.data.recoveryPrompt,
-      }));
+      });
+      reply.code(202);
+      reply.header('Location', `${request.url}/${encodeURIComponent(operation.id)}`);
+      return mapCompactionOperationToDto(operation);
     } catch (error) {
       if (error instanceof CompactionConflictError) throw app.httpErrors.conflict(error.message);
       throw error;
@@ -470,6 +485,20 @@ export function registerForumRoutes({
     }
   });
 
+  app.post('/topics/:topicId/compactions/:operationId/retry-checkpoint', async (request) => {
+    requireAdmin(request);
+    const { topicId, operationId } = request.params as { topicId: string; operationId: string };
+    requireTopicVisible(topicId, request);
+    if (!compactionService) throw app.httpErrors.serviceUnavailable('Compaction service is unavailable');
+    try {
+      return mapTopicCompactionStateToDto(compactionService.retryCheckpoint(topicId, operationId));
+    } catch (error) {
+      if (error instanceof CompactionNotFoundError) throw app.httpErrors.notFound(error.message);
+      if (error instanceof CompactionConflictError) throw app.httpErrors.conflict(error.message);
+      throw error;
+    }
+  });
+
   app.post('/topics/:topicId/handoff/draft', async (request) => {
     const user = requireScope(getCurrentUser(request), 'write');
     const { topicId } = request.params as { topicId: string };
@@ -479,6 +508,9 @@ export function registerForumRoutes({
     if (!forum) throw app.httpErrors.notFound('forum not found');
     const identity = store.getIdentity(user.identityId);
     if (!canViewTopic(topic, forum, identity)) throw app.httpErrors.notFound('topic not found');
+    if (store.hasCompactionFence(topicId)) {
+      throw app.httpErrors.conflict('Handoff is unavailable while conversation compaction is in progress');
+    }
 
     const body = request.body as {
       goal?: string;
@@ -508,6 +540,9 @@ export function registerForumRoutes({
     if (!sourceForum) throw app.httpErrors.notFound('forum not found');
     const identity = store.getIdentity(user.identityId);
     if (!canViewTopic(sourceTopic, sourceForum, identity)) throw app.httpErrors.notFound('topic not found');
+    if (store.hasCompactionFence(topicId)) {
+      throw app.httpErrors.conflict('Handoff is unavailable while conversation compaction is in progress');
+    }
 
     const body = request.body as {
       title?: string;
@@ -648,6 +683,9 @@ export function registerForumRoutes({
       throw app.httpErrors.notFound('topic not found');
     }
     requireModerator(request, existing.tenant_id);
+    if (store.hasCompactionFence(topicId) && body.status !== 'open') {
+      throw app.httpErrors.conflict('Topic cannot be locked or archived until compaction recovery is dispatched');
+    }
 
     try {
       const topic = store.updateTopicStatus(topicId, body.status as 'open' | 'locked' | 'archived');
@@ -750,6 +788,9 @@ export function registerForumRoutes({
         throw new Error('topic not found');
       }
       requireModerator(request, topic.tenant_id);
+      if (store.hasCompactionFence(topicId)) {
+        throw app.httpErrors.conflict('Topic cannot be deleted until compaction recovery is dispatched');
+      }
       store.deleteTopic(topicId);
       return { ok: true };
     } catch (err) {
@@ -849,6 +890,9 @@ export function registerForumRoutes({
       if (topic.status === 'locked' || topic.status === 'archived') {
         throw app.httpErrors.forbidden('topic is locked or archived');
       }
+      if (store.hasCompactionFence(topicId)) {
+        throw app.httpErrors.conflict('Posting is unavailable while conversation compaction is in progress');
+      }
       const changingAutoCompact =
         body.autoCompactEnabled !== undefined && body.autoCompactEnabled !== Boolean(topic.auto_compact_enabled);
       if (body.autoCompactEnabled !== undefined) {
@@ -862,7 +906,7 @@ export function registerForumRoutes({
         if (
           (state && state.activity !== 'idle') ||
           store.countActionablePostDispatches(topicId) > 0 ||
-          store.hasRunningCompactionOperation(topicId)
+          store.hasCompactionFence(topicId)
         ) {
           throw app.httpErrors.conflict('Auto-compaction can only be changed while the topic is idle');
         }
@@ -972,6 +1016,9 @@ export function registerForumRoutes({
     if (topic.status === 'locked' || topic.status === 'archived') {
       throw app.httpErrors.forbidden('topic is locked or archived');
     }
+    if (store.hasCompactionFence(topic.id)) {
+      throw app.httpErrors.conflict('Dispatch is unavailable while conversation compaction is in progress');
+    }
 
     const robotMode = resolveRobotMode(topic.robot_mode);
     const shouldDispatchRobot = robotMode !== 'off' && (robotMode !== 'mention' || hasRobotMention(post.body ?? ''));
@@ -1023,6 +1070,9 @@ export function registerForumRoutes({
     if (topic && (topic.status === 'locked' || topic.status === 'archived')) {
       throw app.httpErrors.forbidden('topic is locked or archived');
     }
+    if (store.hasCompactionFence(existingPost.topic_id)) {
+      throw app.httpErrors.conflict('Posts cannot be changed until compaction recovery is dispatched');
+    }
 
     try {
       const post = store.updatePost(postId, { body: body.body });
@@ -1064,6 +1114,9 @@ export function registerForumRoutes({
     const topic = store.getTopic(existingPost.topic_id);
     if (topic && (topic.status === 'locked' || topic.status === 'archived')) {
       throw app.httpErrors.forbidden('topic is locked or archived');
+    }
+    if (store.hasCompactionFence(existingPost.topic_id)) {
+      throw app.httpErrors.conflict('Posts cannot be changed until compaction recovery is dispatched');
     }
 
     try {

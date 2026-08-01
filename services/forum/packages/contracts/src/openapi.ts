@@ -43,7 +43,7 @@ export function buildOpenApiDocument(options?: OpenApiBuildOptions): unknown {
         body: requestBody
       },
       responses: {
-        200: {
+        [route.response.statusCode ?? 200]: {
           description: route.response.description ?? 'OK',
           content: responseContent
         }

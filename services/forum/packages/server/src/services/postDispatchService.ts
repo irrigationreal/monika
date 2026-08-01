@@ -23,6 +23,8 @@ function isStaleDispatching(row: PostDispatchRow): boolean {
 export class PostDispatchService {
   private timer: ReturnType<typeof setInterval> | null = null;
   private running = false;
+  private stopped = true;
+  private readonly stopWaiters: Array<() => void> = [];
   private readonly activeTopics = new Set<string>();
 
   constructor(
@@ -33,23 +35,27 @@ export class PostDispatchService {
 
   start(): void {
     if (this.timer) return;
+    this.stopped = false;
     this.timer = setInterval(() => void this.processDue(), this.opts.intervalMs ?? DEFAULT_INTERVAL_MS);
     this.timer.unref?.();
     void this.processDue();
   }
 
-  stop(): void {
-    if (!this.timer) return;
-    clearInterval(this.timer);
+  async stop(): Promise<void> {
+    this.stopped = true;
+    if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    if (!this.running) return;
+    await new Promise<void>((resolve) => this.stopWaiters.push(resolve));
   }
 
   wake(): void {
+    if (this.stopped) return;
     void this.processDue();
   }
 
   private async processDue(): Promise<void> {
-    if (this.running) return;
+    if (this.stopped || this.running) return;
     this.running = true;
     try {
       const maxConcurrent = Math.max(1, Math.trunc(this.opts.maxConcurrent ?? DEFAULT_MAX_CONCURRENT));
@@ -61,7 +67,14 @@ export class PostDispatchService {
         if (this.activeTopics.has(row.topic_id) || seenTopics.has(row.topic_id)) continue;
         if (row.status === 'dispatching' && !isStaleDispatching(row)) continue;
         const pendingForTopic = this.store.listPendingPostDispatchesForTopic(row.topic_id);
-        const latest = pendingForTopic.at(-1) ?? row;
+        const now = Date.now();
+        const recoveryCheckpoint = pendingForTopic.find(
+          (pending) =>
+            this.store.isCompactionRecoveryPost(pending.post_id) &&
+            (!pending.next_attempt_at || new Date(pending.next_attempt_at).getTime() <= now)
+        );
+        if (this.store.hasCompactionFence(row.topic_id) && !recoveryCheckpoint) continue;
+        const latest = recoveryCheckpoint ?? pendingForTopic.at(-1) ?? row;
         if (latest.status === 'dispatching' && !isStaleDispatching(latest)) continue;
         if (this.activeTopics.has(latest.topic_id) || seenTopics.has(latest.topic_id)) continue;
         selected.push(latest);
@@ -70,6 +83,7 @@ export class PostDispatchService {
       await Promise.all(selected.map((row) => this.dispatch(row)));
     } finally {
       this.running = false;
+      for (const resolve of this.stopWaiters.splice(0)) resolve();
     }
   }
 
@@ -79,6 +93,7 @@ export class PostDispatchService {
     try {
       const post = this.store.getPost(row.post_id);
       const topic = this.store.getTopic(row.topic_id);
+      if (this.store.hasCompactionFence(row.topic_id) && !this.store.isCompactionRecoveryPost(row.post_id)) return;
       if (!post || post.deleted_at) {
         this.store.markPostDispatchAbandoned(row.id, 'Post was deleted before dispatch.');
         return;
@@ -89,8 +104,9 @@ export class PostDispatchService {
       }
 
       const pendingForTopic = this.store.listPendingPostDispatchesForTopic(row.topic_id);
+      const dispatchingRecoveryCheckpoint = this.store.isCompactionRecoveryPost(row.post_id);
       for (const pending of pendingForTopic) {
-        if (pending.id !== row.id && pending.created_at <= row.created_at) {
+        if (!dispatchingRecoveryCheckpoint && pending.id !== row.id && pending.created_at <= row.created_at) {
           this.store.markPostDispatchSuperseded(pending.id);
         }
       }

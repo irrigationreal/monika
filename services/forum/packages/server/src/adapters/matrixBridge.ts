@@ -260,36 +260,28 @@ export class MatrixBridge {
       }
     }
 
-    // Create post in forum
-    const post = this.store.createPost({
-      topicId: topicRef.mapped_topic_id,
-      body: payload.body!,
-      authorId: identity.id,
-      parentPostId: null
+    const session = this.codex ? this.store.ensureSession({ topicId: topicRef.mapped_topic_id }) : null;
+    const post = this.store.createExternalPostWithDispatch({
+      post: {
+        topicId: topicRef.mapped_topic_id,
+        body: payload.body!,
+        authorId: identity.id,
+        parentPostId: null
+      },
+      externalRef: eventId
+        ? {
+            surfaceId: event.surfaceId,
+            surfaceKind: 'matrix',
+            externalId: eventId,
+            kind: 'post',
+            scope: threadId,
+            scopeKind: 'thread',
+            mappedTopicId: topicRef.mapped_topic_id
+          }
+        : null,
+      sessionId: session?.id ?? null
     });
-
-    // Create external ref for event -> post mapping
-    if (eventId) {
-      this.store.createExternalRef({
-        surfaceId: event.surfaceId,
-        surfaceKind: 'matrix',
-        externalId: eventId,
-        kind: 'post',
-        scope: threadId,
-        scopeKind: 'thread',
-        mappedTopicId: topicRef.mapped_topic_id,
-        mappedPostId: post.id
-      });
-    }
-
-    console.log(`[MatrixBridge] Created post ${post.id} from Matrix event ${eventId}`);
-
-    // Trigger robot response if available
-    if (this.codex) {
-      const session = this.store.ensureSession({ topicId: topicRef.mapped_topic_id });
-      this.store.createSessionMessage(session.id, 'user', payload.body!, 'public');
-      await this.codex.sendUserMessage(topicRef.mapped_topic_id, payload.body!, post.id);
-    }
+    console.log(`[MatrixBridge] Atomically queued durable post ${post.id} from Matrix event ${eventId}`);
   }
 
   /**

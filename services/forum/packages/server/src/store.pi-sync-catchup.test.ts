@@ -62,4 +62,22 @@ describe('Pi-linked catch-up filtering', () => {
       })
     ).toEqual([]);
   });
+
+  it('can exclude independently queued posts from a recovery checkpoint catch-up', () => {
+    const forum = store.createForum('Forum');
+    const author = store.createIdentity('User', 'human');
+    const created = store.createTopic({ forumId: forum.id, title: 'Recovery', body: 'Initial', authorId: author.id });
+    const session = store.ensureSession({ topicId: created.topic.id });
+    const queued = store.createPost({ topicId: created.topic.id, body: 'External while compacting', authorId: author.id });
+    store.createPostDispatch({ topicId: created.topic.id, sessionId: session.id, postId: queued.id });
+    const checkpoint = store.createPost({ topicId: created.topic.id, body: 'Recovery checkpoint', authorId: author.id });
+
+    expect(
+      store.listPostsBetween(created.topic.id, {
+        afterPostId: created.post.id,
+        beforePostId: checkpoint.id,
+        excludePendingDispatches: true,
+      })
+    ).toEqual([]);
+  });
 });

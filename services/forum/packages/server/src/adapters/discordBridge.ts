@@ -223,34 +223,26 @@ export class DiscordBridge {
         return;
       }
 
-      // Create post in forum
-      const post = this.store.createPost({
-        topicId: topicRef.mapped_topic_id,
-        body: payload.body,
-        authorId: identity.id,
-        parentPostId: null
+      const session = this.codex ? this.store.ensureSession({ topicId: topicRef.mapped_topic_id }) : null;
+      const post = this.store.createExternalPostWithDispatch({
+        post: {
+          topicId: topicRef.mapped_topic_id,
+          body: payload.body,
+          authorId: identity.id,
+          parentPostId: null
+        },
+        externalRef: {
+          surfaceId: event.surfaceId,
+          surfaceKind: 'discord',
+          externalId: payload.messageId!,
+          kind: 'post',
+          scope: threadId,
+          scopeKind: 'thread',
+          mappedTopicId: topicRef.mapped_topic_id
+        },
+        sessionId: session?.id ?? null
       });
-
-      // Create external ref for message -> post mapping
-      this.store.createExternalRef({
-        surfaceId: event.surfaceId,
-        surfaceKind: 'discord',
-        externalId: payload.messageId!,
-        kind: 'post',
-        scope: threadId,
-        scopeKind: 'thread',
-        mappedTopicId: topicRef.mapped_topic_id,
-        mappedPostId: post.id
-      });
-
-      console.log(`[DiscordBridge] Created post ${post.id} from Discord message ${payload.messageId}`);
-
-      // Trigger robot response if available
-      if (this.codex) {
-        const session = this.store.ensureSession({ topicId: topicRef.mapped_topic_id });
-        this.store.createSessionMessage(session.id, 'user', payload.body, 'public');
-        await this.codex.sendUserMessage(topicRef.mapped_topic_id, payload.body, post.id);
-      }
+      console.log(`[DiscordBridge] Atomically queued durable post ${post.id} from Discord message ${payload.messageId}`);
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
       console.error('[DiscordBridge] Failed to handle message:', err.message);

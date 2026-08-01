@@ -138,8 +138,8 @@ describe('Forum routes access controls', () => {
   });
 
   it('requires an admin identity for manual compaction', async () => {
-    const compact = vi.fn();
-    const app = await buildApp({ compact, get: vi.fn() });
+    const enqueue = vi.fn();
+    const app = await buildApp({ enqueue, get: vi.fn(), getState: vi.fn(), retryCheckpoint: vi.fn() });
     const forum = store.createForum('Forum', null, null, null, null, 'active', 'public');
     const human = store.createIdentityWithPassword('Human', 'human', 'pw-hash', 'human');
     store.createAuthSession('human-token', human.id);
@@ -154,7 +154,135 @@ describe('Forum routes access controls', () => {
     });
     expect(guest.statusCode).toBe(401);
     expect(member.statusCode).toBe(403);
-    expect(compact).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('accepts durable compaction jobs with 202 and exposes reload-safe topic state', async () => {
+    const forum = store.createForum('Forum', null, null, null, null, 'active', 'public');
+    const admin = store.createIdentity('Admin', 'admin');
+    store.createAuthSession('admin-token', admin.id);
+    const { topic } = store.createTopic({ forumId: forum.id, title: 'Topic', body: 'starter', authorId: admin.id });
+    const pending = {
+      id: 'op-pending',
+      topicId: topic.id,
+      sessionId: 'session-1',
+      initiatedBy: admin.id,
+      expectedLeafId: 'leaf-1',
+      customInstructions: null,
+      recoveryPrompt: 'recover',
+      status: 'pending',
+      eventId: null,
+      recoveryPostId: null,
+      errorMessage: null,
+      createdAt: new Date().toISOString(),
+      startedAt: null,
+      finishedAt: null,
+    };
+    const enqueue = vi.fn().mockResolvedValue(pending);
+    const getState = vi.fn().mockReturnValue({ active: pending, latest: pending, checkpointDispatch: null });
+    const app = await buildApp({ enqueue, getState, get: vi.fn(), retryCheckpoint: vi.fn() });
+
+    const accepted = await app.inject({
+      method: 'POST',
+      url: `/topics/${topic.id}/compactions`,
+      headers: { authorization: 'Bearer admin-token' },
+      payload: { operationId: pending.id, confirmation: 'COMPACT', customInstructions: null, recoveryPrompt: 'recover' },
+    });
+    expect(accepted.statusCode).toBe(202);
+    expect(accepted.headers.location).toBe(`/topics/${topic.id}/compactions/${pending.id}`);
+    expect(accepted.json()).toMatchObject({ id: pending.id, status: 'pending' });
+
+    const stateResponse = await app.inject({
+      method: 'GET',
+      url: `/topics/${topic.id}/compactions`,
+      headers: { authorization: 'Bearer admin-token' },
+    });
+    expect(stateResponse.statusCode).toBe(200);
+    expect(stateResponse.json()).toMatchObject({ active: { id: pending.id }, latest: { id: pending.id } });
+  });
+
+  it('blocks ordinary posts while a compaction job is pending', async () => {
+    const app = await buildApp();
+    const forum = store.createForum('Forum', null, null, null, null, 'active', 'public');
+    const admin = store.createIdentity('Admin', 'admin');
+    store.createAuthSession('admin-token', admin.id);
+    const { topic } = store.createTopic({ forumId: forum.id, title: 'Topic', body: 'starter', authorId: admin.id });
+    const session = store.ensureSession({ topicId: topic.id });
+    store.createCompactionOperation({
+      id: 'op-pending-post-gate',
+      topicId: topic.id,
+      sessionId: session.id,
+      initiatedBy: admin.id,
+      expectedLeafId: 'leaf-1',
+      recoveryPrompt: 'recover',
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/topics/${topic.id}/posts`,
+      headers: { authorization: 'Bearer admin-token' },
+      payload: { body: 'must wait' },
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.json().message).toContain('compaction is in progress');
+    const lock = await app.inject({
+      method: 'PATCH',
+      url: `/topics/${topic.id}/status`,
+      headers: { authorization: 'Bearer admin-token' },
+      payload: { status: 'locked' },
+    });
+    expect(lock.statusCode).toBe(409);
+    const remove = await app.inject({
+      method: 'DELETE',
+      url: `/topics/${topic.id}`,
+      headers: { authorization: 'Bearer admin-token' },
+    });
+    expect(remove.statusCode).toBe(409);
+  });
+
+  it('keeps posts fenced until a successful compaction checkpoint is dispatched', async () => {
+    const app = await buildApp();
+    const forum = store.createForum('Forum', null, null, null, null, 'active', 'public');
+    const admin = store.createIdentity('Admin', 'admin');
+    store.createAuthSession('admin-token', admin.id);
+    const { topic } = store.createTopic({ forumId: forum.id, title: 'Topic', body: 'starter', authorId: admin.id });
+    const session = store.ensureSession({ topicId: topic.id });
+    store.createCompactionOperation({
+      id: 'op-checkpoint-fence',
+      topicId: topic.id,
+      sessionId: session.id,
+      initiatedBy: admin.id,
+      expectedLeafId: 'leaf-1',
+      recoveryPrompt: 'recover',
+    });
+    store.claimCompactionOperation('op-checkpoint-fence');
+    const completed = store.finishCompactionSuccess('op-checkpoint-fence');
+
+    const blocked = await app.inject({
+      method: 'POST',
+      url: `/topics/${topic.id}/posts`,
+      headers: { authorization: 'Bearer admin-token' },
+      payload: { body: 'too soon' },
+    });
+    expect(blocked.statusCode).toBe(409);
+    const dispatch = store.getPostDispatchByPost(completed.recoveryPostId!);
+    store.updateTopicStatus(topic.id, 'locked');
+    db.prepare("update post_dispatches set status = 'abandoned' where id = ?").run(dispatch!.id);
+    const reopened = await app.inject({
+      method: 'PATCH',
+      url: `/topics/${topic.id}/status`,
+      headers: { authorization: 'Bearer admin-token' },
+      payload: { status: 'open' },
+    });
+    expect(reopened.statusCode).toBe(200);
+    db.prepare("update post_dispatches set status = 'dispatched' where id = ?").run(dispatch!.id);
+    const allowed = await app.inject({
+      method: 'POST',
+      url: `/topics/${topic.id}/posts`,
+      headers: { authorization: 'Bearer admin-token' },
+      payload: { body: 'after checkpoint acceptance', silent: true },
+    });
+    expect(allowed.statusCode).toBe(200);
   });
 
   it('blocks guests from creating topics and posts (401)', async () => {

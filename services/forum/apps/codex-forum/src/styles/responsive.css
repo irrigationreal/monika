@@ -165,6 +165,45 @@
     justify-content: center;
   }
 
+  .vb-compaction-modal-overlay {
+    align-items: flex-start;
+    padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right))
+      max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+  }
+
+  .vb-compaction-modal {
+    width: 100%;
+    max-height: 100%;
+  }
+
+  .vb-compaction-modal .vb-modal-textarea {
+    min-height: 96px;
+    font-size: 16px;
+  }
+
+  .vb-compaction-modal-actions {
+    flex-direction: column;
+  }
+
+  .vb-compaction-modal-actions .vb-btn,
+  .vb-compaction-modal .vb-modal-close {
+    min-height: 44px;
+  }
+
+  .vb-compaction-modal-actions .vb-btn {
+    width: 100%;
+  }
+
+  .vb-compaction-modal .vb-modal-close {
+    min-width: 44px;
+    padding: 8px;
+  }
+
+  .vb-compaction-status {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
   .vb-scroll-top {
     bottom: 15px;
     right: 15px;

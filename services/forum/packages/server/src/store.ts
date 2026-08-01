@@ -1329,7 +1329,12 @@ export class ForumStore {
    */
   listPostsBetween(
     topicId: string,
-    opts: { afterPostId?: string | null; beforePostId: string; excludePiSessionId?: string | null }
+    opts: {
+      afterPostId?: string | null;
+      beforePostId: string;
+      excludePiSessionId?: string | null;
+      excludePendingDispatches?: boolean;
+    }
   ): PostRow[] {
     const before = this.db
       .prepare('select rowid as rowid from posts where id = ? and topic_id = ?')
@@ -1351,6 +1356,10 @@ export class ForumStore {
            and (? is null or not exists (
              select 1 from pi_message_links l where l.post_id = p.id and l.pi_session_id = ?
            ))
+           and (? = 0 or not exists (
+             select 1 from post_dispatches d
+             where d.post_id = p.id and d.status in ('pending', 'dispatching', 'failed')
+           ))
          order by p.rowid asc`
       )
       .all(
@@ -1358,7 +1367,8 @@ export class ForumStore {
         afterRowid,
         before.rowid,
         opts.excludePiSessionId ?? null,
-        opts.excludePiSessionId ?? null
+        opts.excludePiSessionId ?? null,
+        opts.excludePendingDispatches ? 1 : 0
       ) as PostRow[];
   }
 
@@ -2274,18 +2284,104 @@ export class ForumStore {
     return row ? mapCompactionOperationRowToDomain(row) : null;
   }
 
-  hasRunningCompactionOperation(topicId: string): boolean {
+  hasActiveCompactionOperation(topicId: string): boolean {
     const row = this.db
-      .prepare("select 1 from compaction_operations where topic_id = ? and status = 'running' limit 1")
+      .prepare("select 1 from compaction_operations where topic_id = ? and status in ('pending', 'running') limit 1")
       .get(topicId) as unknown | undefined;
     return Boolean(row);
+  }
+
+  hasCompactionFence(topicId: string): boolean {
+    if (this.hasActiveCompactionOperation(topicId)) return true;
+    const row = this.db
+      .prepare(
+        `select 1 from compaction_operations c
+         join post_dispatches d on d.post_id = c.recovery_post_id
+         where c.topic_id = ? and c.status = 'succeeded'
+           and d.status in ('pending', 'dispatching', 'failed', 'superseded', 'abandoned')
+         limit 1`
+      )
+      .get(topicId) as unknown | undefined;
+    return Boolean(row);
+  }
+
+  countActiveCompactionOperations(): number {
+    const row = this.db
+      .prepare("select count(*) as count from compaction_operations where status in ('pending', 'running')")
+      .get() as { count: number } | undefined;
+    return row?.count ?? 0;
+  }
+
+  /** @deprecated Prefer hasActiveCompactionOperation so queued work is also fenced. */
+  hasRunningCompactionOperation(topicId: string): boolean {
+    return this.hasActiveCompactionOperation(topicId);
+  }
+
+  getActiveCompactionOperation(topicId: string): CompactionOperation | null {
+    const row = this.db
+      .prepare(
+        "select * from compaction_operations where topic_id = ? and status in ('pending', 'running') order by created_at desc limit 1"
+      )
+      .get(topicId) as CompactionOperationRow | undefined;
+    return row ? mapCompactionOperationRowToDomain(row) : null;
+  }
+
+  getLatestCompactionOperation(topicId: string): CompactionOperation | null {
+    const row = this.db
+      .prepare('select * from compaction_operations where topic_id = ? order by created_at desc limit 1')
+      .get(topicId) as CompactionOperationRow | undefined;
+    return row ? mapCompactionOperationRowToDomain(row) : null;
+  }
+
+  listPendingCompactionOperations(limit = 10): CompactionOperation[] {
+    return (
+      this.db
+        .prepare(
+          "select * from compaction_operations where status = 'pending' and (next_attempt_at is null or next_attempt_at <= ?) order by created_at asc limit ?"
+        )
+        .all(nowIso(), Math.max(1, Math.trunc(limit))) as CompactionOperationRow[]
+    ).map(mapCompactionOperationRowToDomain);
+  }
+
+  requeueRunningCompactionOperations(): number {
+    const result = this.db
+      .prepare("update compaction_operations set status = 'pending', started_at = null, next_attempt_at = null where status = 'running'")
+      .run();
+    return result.changes;
+  }
+
+  requeueCompactionOperation(id: string): boolean {
+    const result = this.db
+      .prepare("update compaction_operations set status = 'pending', started_at = null, next_attempt_at = null where id = ? and status = 'running'")
+      .run(id);
+    return result.changes === 1;
+  }
+
+  enqueueCompactionOperationIfIdle(input: CreateCompactionOperationInput): CompactionOperation | null {
+    return this.db.transaction(() => {
+      const existing = this.getCompactionOperation(input.id);
+      if (existing) return null;
+      const topic = this.getTopic(input.topicId);
+      const robotState = this.getRobotState(input.topicId);
+      const autoRun = this.getTopicAutoRun(input.topicId);
+      if (
+        topic?.status !== 'open' ||
+        robotState?.activity !== 'idle' ||
+        autoRun?.status === 'running' ||
+        this.countActionablePostDispatches(input.topicId) > 0 ||
+        this.hasCompactionFence(input.topicId)
+      ) {
+        return null;
+      }
+      return this.createCompactionOperation(input);
+    })();
   }
 
   startCompactionOperation(input: CreateCompactionOperationInput): CompactionOperation | null {
     return this.db.transaction(() => {
       const existing = this.getCompactionOperation(input.id);
       if (existing) return null;
-      if (this.hasRunningCompactionOperation(input.topicId)) return null;
+      if (this.hasActiveCompactionOperation(input.topicId)) return null;
       const now = nowIso();
       this.db
         .prepare(
@@ -2313,9 +2409,11 @@ export class ForumStore {
     const now = nowIso();
     const result = this.db
       .prepare(
-        `update compaction_operations set status = 'running', started_at = ? where id = ? and status = 'pending'`
+        `update compaction_operations set status = 'running', started_at = ?, attempt_count = attempt_count + 1,
+         next_attempt_at = null, error_message = null where id = ? and status = 'pending'
+         and (next_attempt_at is null or next_attempt_at <= ?)`
       )
-      .run(now, id);
+      .run(now, id, now);
     return result.changes === 1 ? this.getCompactionOperation(id) : null;
   }
 
@@ -2324,6 +2422,18 @@ export class ForumStore {
       .prepare('select leaf_entry_id from pi_session_heads where pi_session_id = ?')
       .get(piSessionId) as { leaf_entry_id: string | null } | undefined;
     return row?.leaf_entry_id ?? null;
+  }
+
+  requeueUncertainCompaction(id: string, message: string, retryAt: string): CompactionOperation {
+    const result = this.db
+      .prepare(
+        `update compaction_operations set status = 'pending', started_at = null, next_attempt_at = ?,
+         error_message = ? where id = ? and status = 'running'`
+      )
+      .run(retryAt, message.slice(0, 1000), id);
+    const operation = this.getCompactionOperation(id);
+    if (result.changes !== 1 || !operation) throw new Error('compaction operation could not be requeued');
+    return operation;
   }
 
   finishCompactionFailure(id: string, message: string): CompactionOperation {
@@ -2441,6 +2551,27 @@ export class ForumStore {
     return this.getPostDispatch(id) as PostDispatchRow;
   }
 
+  createExternalPostWithDispatch(input: {
+    post: CreatePostInput;
+    externalRef?: CreateExternalRefInput | null;
+    sessionId?: string | null;
+  }): PostRow {
+    return this.db.transaction(() => {
+      if (input.sessionId) this.createSessionMessage(input.sessionId, 'user', input.post.body, 'public');
+      const post = this.createPost(input.post);
+      if (input.externalRef) this.createExternalRef({ ...input.externalRef, mappedPostId: post.id });
+      if (input.sessionId) {
+        this.createPostDispatch({
+          topicId: post.topic_id,
+          postId: post.id,
+          sessionId: input.sessionId,
+          mode: 'auto',
+        });
+      }
+      return post;
+    })();
+  }
+
   getPostDispatch(id: string): PostDispatchRow | null {
     const row = this.db.prepare('select * from post_dispatches where id = ?').get(id) as PostDispatchRow | undefined;
     return row ?? null;
@@ -2452,6 +2583,13 @@ export class ForumStore {
     return row ?? null;
   }
 
+  isCompactionRecoveryPost(postId: string): boolean {
+    const row = this.db
+      .prepare("select 1 from compaction_operations where recovery_post_id = ? and status = 'succeeded' limit 1")
+      .get(postId) as unknown | undefined;
+    return Boolean(row);
+  }
+
   listDuePostDispatches(limit: number): PostDispatchRow[] {
     const now = nowIso();
     return this.db
@@ -2460,6 +2598,24 @@ export class ForumStore {
          join post_dispatch_generations g on g.topic_id = d.topic_id and g.generation = d.generation
          where d.status in ('pending', 'dispatching')
            and (d.next_attempt_at is null or d.next_attempt_at <= ?)
+           and (
+             exists (
+               select 1 from compaction_operations own
+               where own.recovery_post_id = d.post_id and own.status = 'succeeded'
+             )
+             or (
+               not exists (
+                 select 1 from compaction_operations active
+                 where active.topic_id = d.topic_id and active.status in ('pending', 'running')
+               )
+               and not exists (
+                 select 1 from compaction_operations completed
+                 join post_dispatches checkpoint on checkpoint.post_id = completed.recovery_post_id
+                 where completed.topic_id = d.topic_id and completed.status = 'succeeded'
+                   and checkpoint.status in ('pending', 'dispatching', 'failed', 'superseded', 'abandoned')
+               )
+             )
+           )
          order by d.created_at asc
          limit ?`
       )
@@ -2571,6 +2727,19 @@ export class ForumStore {
       )
       .run(status, opts?.retryAt ?? null, message.slice(0, 1000), now, id, claimToken);
     return this.getPostDispatch(id);
+  }
+
+  retryTerminalPostDispatch(id: string): PostDispatchRow | null {
+    const now = nowIso();
+    const result = this.db
+      .prepare(
+        `update post_dispatches set status = 'pending', claim_token = null, attempt_count = 0,
+         last_attempt_at = null, next_attempt_at = ?, error_message = null, updated_at = ?,
+         generation = (select generation from post_dispatch_generations where topic_id = post_dispatches.topic_id)
+         where id = ? and status in ('failed', 'superseded', 'abandoned')`
+      )
+      .run(now, now, id);
+    return result.changes === 1 ? this.getPostDispatch(id) : null;
   }
 
   reconcilePostDispatchGenerations(): number {

@@ -449,13 +449,30 @@ Pi later recovered through retry or compact-and-retry. A terminal event classifi
 a compatibility fallback for legacy events without structured classification.
 
 Admins can choose **Compact** beside **Handoff** while a topic is idle. The forum
-creates a durable compaction operation with a client-owned idempotency key and calls
-agentd with the expected canonical Pi leaf. Client key generation supports both HTTPS
-and the standalone HTTP deployment; it does not require the secure-context-only
-`crypto.randomUUID()` browser API. Agentd rejects busy or stale sessions and invokes
-Pi's public `AgentSession.compact()` API. Expected-leaf validation makes a lost HTTP
-response retry-safe: an existing compaction child proves that the operation already
-happened, so agentd does not compact twice.
+atomically records a pending compaction operation with a client-owned idempotency key
+and the latest forum-projected canonical Pi leaf, returns `202 Accepted` without first
+waiting on agentd, and lets a forum-owned worker cross that network boundary. The
+confirmation modal only remains open until that durable
+acceptance; afterward an in-topic status states that the browser may leave. New
+web posts, handoffs, robot/Director continuations, topic status/deletion, and
+an auto-compaction policy change remain fenced until the durable recovery checkpoint
+has been accepted by agentd. Discord/Matrix messages arriving meanwhile commit their
+forum post, external deduplication reference, session-message projection, and dispatch
+atomically. Those pending posts are excluded from the checkpoint's catch-up context,
+then dispatch exactly once behind it. `GET /api/topics/:topicId/compactions` rehydrates
+active/latest state after a
+reload. Client key generation supports both HTTPS and the standalone HTTP deployment;
+it does not require the secure-context-only `crypto.randomUUID()` browser API.
+
+The worker requeues pending and interrupted-running operations on startup. Agentd
+rejects busy or stale sessions and invokes Pi's public `AgentSession.compact()` API.
+Expected-leaf validation makes both lost HTTP responses and forum restarts retry-safe:
+an existing compaction child proves that the operation already happened, so agentd
+does not compact twice. Definite agentd 4xx rejections become terminal failures;
+network/5xx uncertainty remains a durably pending operation with a persisted retry
+time and is retried until canonical evidence resolves it. The forum then completes
+the previously interrupted projection instead of manufacturing a failure after an
+unknown response or leaving a permanent `running` row.
 
 Automatic compaction is a separate default-off, topic-persistent policy exposed in
 new-thread, full-reply, and quick-reply options. Only administrators may change the
@@ -484,17 +501,30 @@ turn-error path.
 
 After successful manual compaction, the forum atomically creates a user-attributed automated
 recovery-checkpoint post and queues it through the normal durable post dispatcher.
-The default prompt asks the assistant to restate goals, completed work, current work,
+Operation success therefore means **Pi compacted and the checkpoint was queued**; the
+checkpoint assistant turn has its own ordinary dispatch/live-trace lifecycle. The
+default prompt asks the assistant to restate goals, completed work, current work,
 remaining steps, blockers, and possibly lost details without doing further work. If
 compaction fails, the forum records a durable failure event and creates no recovery
 post. If later dispatch fails, the existing post-dispatch retry path retries only the
-checkpoint turn; it never repeats compaction.
+checkpoint turn; it never repeats compaction. After automatic retries are exhausted—or if an old checkpoint was superseded or
+abandoned—an admin-visible topic status exposes **Retry recovery checkpoint**, which
+idempotently resets only that durable dispatch. A lost retry response can be repeated
+without creating another checkpoint or repeating compaction.
 
-Forum endpoints:
+The compaction dialog is constrained to the dynamic viewport, scrolls its content
+between fixed header/actions, contains focus, restores the invoking control, prevents
+background scroll, and stacks full-width actions on narrow screens. Portrait and short
+landscape E2E coverage exercises the expanded advanced fields rather than only the
+short default confirmation state.
+
+Forum endpoints (admin only except operational-event visibility):
 
 - `GET /api/topics/:topicId/operational-events`
-- `POST /api/topics/:topicId/compactions` (admin only)
-- `GET /api/topics/:topicId/compactions/:operationId` (admin only)
+- `GET /api/topics/:topicId/compactions`
+- `POST /api/topics/:topicId/compactions` (`202 Accepted`, including idempotent repeats)
+- `GET /api/topics/:topicId/compactions/:operationId`
+- `POST /api/topics/:topicId/compactions/:operationId/retry-checkpoint`
 
 ## Pi session taxonomy configuration
 

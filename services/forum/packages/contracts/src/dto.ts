@@ -486,6 +486,17 @@ export interface CompactionOperationDto {
   finishedAt: string | null;
 }
 
+export interface CompactionCheckpointDispatchDto {
+  status: 'pending' | 'dispatching' | 'dispatched' | 'failed' | 'superseded' | 'abandoned';
+  errorMessage: string | null;
+}
+
+export interface TopicCompactionStateDto {
+  active: CompactionOperationDto | null;
+  latest: CompactionOperationDto | null;
+  checkpointDispatch: CompactionCheckpointDispatchDto | null;
+}
+
 /** Best available Pi context-usage snapshot for one canonical session. */
 export interface SessionContextDto {
   model: string | null;

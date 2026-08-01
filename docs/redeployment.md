@@ -42,7 +42,7 @@ The forum reports deploy safety in:
 
 `GET /api/healthz` is intentionally minimal and public (`{ "ok": true }`) so Docker and reverse-proxy health checks do not expose operational state.
 
-Forum deploy blockers include active robot turns, queued turns, non-idle robot states, and a currently running Pi session sync. Deploy on Finish also checks agentd, persists its intent across forum restart, and retains/retries that intent after the host script returns exit 75. The host script remains the final race-safe authority. On SIGTERM/Fastify close, the server stops the Pi sync timer, waits for an in-flight sync to finish, stops robot/ECHS timers and SSE subscriptions, closes Redis if enabled, and closes the forum SQLite database.
+Forum deploy blockers include active robot turns, queued turns, non-idle robot states, pending/running manual compactions, and a currently running Pi session sync. Deploy on Finish also checks agentd, persists its intent across forum restart, and retains/retries that intent after the host script returns exit 75. The host script remains the final race-safe authority. On SIGTERM/Fastify close, the server stops new post-dispatch and compaction claims, waits for an in-flight compaction and Pi sync to finish, stops robot/ECHS timers and SSE subscriptions, closes Redis if enabled, and closes the forum SQLite database. If the process instead crashes, startup requeues interrupted compactions and reconciles them through agentd's canonical expected-leaf proof.
 
 ## Host script
 

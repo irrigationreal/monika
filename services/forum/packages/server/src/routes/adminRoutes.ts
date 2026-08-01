@@ -712,6 +712,9 @@ export function registerAdminRoutes({
       throw app.httpErrors.notFound('destination forum not found');
     }
 
+    if (store.hasCompactionFence(topicId)) {
+      throw app.httpErrors.conflict('cannot move thread until compaction recovery is dispatched');
+    }
     const activeTurn = codex.listActiveTurns().find((turn) => turn.topicId === topicId);
     if (activeTurn) {
       throw app.httpErrors.conflict('cannot move thread while an assistant response is in progress');
