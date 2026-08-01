@@ -44,7 +44,9 @@ sessions, secrets and local Compose configuration remain included.
 
 Before WORM upload, every detected SQLite database plus WAL/SHM is copied from the
 snapshot into writable scratch and must return `PRAGMA quick_check = ok`. Every
-physical JSONL line must parse. The in-archive manifest records those results, the
+completed JSONL line must parse. A single malformed unterminated final line is
+recorded as a recoverable crash-consistent append tail rather than durable corruption;
+restore validation may truncate only that tail. The in-archive manifest records those results, the
 Monika Git revision/dirty state, deployed image digests and tool versions. GNU tar
 preserves numeric owners, modes, ACLs and xattrs where supported, streams through
 zstd and rclone crypt, and never writes a local full capsule.
@@ -69,7 +71,12 @@ SSE-B2 and compliance-retention defaults; rclone uploads send no per-upload rete
 or SSE headers so multipart uploads cannot silently drop them. Only then does Control
 update a verified marker. Each tier uses a separate bucket-scoped Control reader key;
 the mutable restic reader credential remains separate from those readers and from
-Stanza's three WORM write-only keys. There are no success notifications; failed
+Stanza's three WORM write-only keys. Control passes `--no-lock` for Restic metadata
+checks so this active reader remains genuinely read-only. After independent verification
+and both restore drills passed, WORM lifecycle cleanup was enabled: hide objects after
+15, 121, and 366 days for the six-hour, daily, and weekly tiers, delete hidden versions
+one day later, and cancel unfinished multipart uploads after seven days. Compliance
+Object Lock remains authoritative against premature deletion. There are no success notifications; failed
 units and stale tiers alert through the authenticated `shadowsea-alerts` ntfy route,
 with bounded retry for transient delivery failures. On Control, mutable active
 credentials live in `monika-backup-control/restic.env`; WORM reader variables live
