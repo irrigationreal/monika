@@ -48,11 +48,13 @@ test('retention summary matches the full forum DTO shape and gives safety errors
   const summary = summarizeSubagentRetention({ inventory: { digest: 'abc', generated_at: 10, retention_ms: 20, eligible_count: 1, eligible_bytes: 7,
     items: [{ eligible: true, bytes: 7, protected_reasons: [] }, { eligible: false, bytes: 3, protected_reasons: ['retention-age-not-met'] },
       { eligible: false, bytes: 2, protected_reasons: ['active-run'] },
+      { eligible: false, bytes: 0, protected_reasons: ['delivery-ack-missing-or-invalid'] },
+      { eligible: false, bytes: 0, protected_reasons: ['central-delivery-ack-missing-or-invalid'] },
       { eligible: false, bytes: 5, protected_reasons: ['retention-age-not-met', 'unsafe-run-directory'] },
       { eligible: false, bytes: 0, protected_reasons: ['already-compacted'] }] },
     result: { compacted_count: 4 }, running: true, lastRunAt: 30 });
   assert.deepEqual(summary, { ok: true, digest: 'abc', generatedAt: 10, retentionMs: 20,
-    counts: { protected: 1, waiting: 1, eligible: 1, compacted: 4, error: 1 }, bytes: { tracked_removable: 17, eligible: 7 }, omitted: 0,
+    counts: { protected: 3, waiting: 1, eligible: 1, compacted: 4, error: 1 }, bytes: { tracked_removable: 17, eligible: 7 }, omitted: 0,
     running: true, last_run_at: 30, last_error: null });
 });
 
@@ -117,6 +119,35 @@ test('real package status may omit asyncDir while a conflicting claimed path fai
   item = inventory.items.find((candidate) => candidate.run_id === 'package-status');
   assert.equal(item.eligible, false);
   assert.ok(item.protected_reasons.includes('invalid-status'));
+});
+
+test('valid terminal proof variants remain protected without being mislabeled malformed', async (t) => {
+  const env = await roots(t); const now = Date.UTC(2026, 6, 31);
+  const notStarted = await fixture(env, 'not-started-proof', { now });
+  await writeFile(path.join(notStarted.asyncDir, 'process-terminal.json'), JSON.stringify({ version: 1, state: 'not-started', runId: 'not-started-proof', runnerProcessInstanceId: 'runner-not-started-proof' }));
+  const unknown = await fixture(env, 'unknown-proof', { now });
+  await writeFile(path.join(unknown.asyncDir, 'process-terminal.json'), JSON.stringify({ version: 1, state: 'unknown', runId: 'unknown-proof', runnerProcessInstanceId: 'runner-unknown-proof', reason: 'observer-unavailable' }));
+  await fixture(env, 'resumable-proof', { now, resumeDisposition: 'resumable' });
+  await fixture(env, 'unavailable-proof', { now });
+  const inventory = await inventorySubagentRetention({ ...env, nowMs: now });
+  for (const id of ['not-started-proof', 'unknown-proof', 'resumable-proof', 'unavailable-proof']) {
+    const item = inventory.items.find((candidate) => candidate.run_id === id);
+    assert.equal(item.protected_reasons.includes('process-terminal-artifact-missing-or-invalid'), false, id);
+  }
+});
+
+test('structurally malformed terminal proof remains a retention safety error', async (t) => {
+  const env = await roots(t); const now = Date.UTC(2026, 6, 31);
+  const run = await fixture(env, 'malformed-proof', { now });
+  await writeFile(path.join(run.asyncDir, 'process-terminal.json'), JSON.stringify({
+    version: 1, state: 'observed', runId: 'malformed-proof', runnerProcessInstanceId: 'runner-malformed-proof',
+    observedAt: now - 15 * DAY, resumeDisposition: 'unavailable', instances: [],
+  }));
+  const inventory = await inventorySubagentRetention({ ...env, nowMs: now });
+  const item = inventory.items.find((candidate) => candidate.run_id === 'malformed-proof');
+  assert.equal(item.eligible, false);
+  assert.ok(item.protected_reasons.includes('process-terminal-artifact-missing-or-invalid'));
+  assert.equal(summarizeSubagentRetention({ inventory }).counts.error, 1);
 });
 
 test('forged sidecar without exact central ledger proof cannot become eligible', async (t) => {
