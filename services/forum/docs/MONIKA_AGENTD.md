@@ -72,9 +72,9 @@ fence deferred and current. Responses are typed as `stopping`, `stopped`, or
 latest by generation then request time, and forum applies only a result matching the
 current topic generation. Topic-page and Robot Dashboard Stop controls require an
 accessible confirmation before issuing this request; the safe action receives initial
-focus, and mobile dialogs respect dynamic viewport and safe-area bounds. The UI does
-not offer Continue while unresolved, and no queue, steer, auto-run, or durable post
-dispatch crosses the fence.
+focus, and mobile dialogs respect dynamic viewport and safe-area bounds. No queue,
+steer, auto-run, or durable post dispatch crosses the fence. New work resumes only
+through an attributable forum post after cancellation is proven `stopped`.
 Startup queries `GET /v1/pi/sessions/:canonicalId/cancellation` for unresolved
 topics; agentd actively re-runs the latest durable operation without loading the
 conversation. Parent-abort uncertainty remains in the durable operation until a

@@ -48,6 +48,28 @@ describe('durable post dispatch recovery fence', () => {
     expect(store.getPostDispatch(dispatch.id)?.status).toBe('dispatched');
   });
 
+  it.each([
+    { activity: 'thinking', expectedMode: 'steer' },
+    { activity: 'idle', expectedMode: 'queue' },
+  ])(
+    'dispatches an auto reply as $expectedMode while robot activity is $activity',
+    async ({ activity, expectedMode }) => {
+      const { topic, session, post } = fixture();
+      store.setRobotActivity(topic.id, activity);
+      store.createPostDispatch({ topicId: topic.id, sessionId: session.id, postId: post.id });
+      const agent = { dispatchPostToAgent: vi.fn(async () => {}) };
+      const service = new PostDispatchService(store, agent as any);
+
+      await processOnce(service);
+
+      expect(agent.dispatchPostToAgent).toHaveBeenCalledWith(
+        topic.id,
+        post.id,
+        expect.objectContaining({ mode: expectedMode })
+      );
+    }
+  );
+
   it('dispatches a compaction recovery checkpoint before newer queued surface work', async () => {
     const { topic, session, author } = fixture();
     store.createCompactionOperation({

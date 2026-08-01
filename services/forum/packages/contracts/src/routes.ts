@@ -1101,14 +1101,6 @@ export const apiRoutes: ApiRoute[] = [
     response: { schema: schemas.RobotStopResultDtoSchema }
   },
   {
-    method: 'post',
-    path: '/topics/{topicId}/robot/continue',
-    summary: 'Continue robot',
-    tags: ['robot'],
-    request: { params: stringParam('topicId') },
-    response: { schema: okMessageSchema }
-  },
-  {
     method: 'get',
     path: '/topics/{topicId}/session',
     summary: 'Get session by topic',

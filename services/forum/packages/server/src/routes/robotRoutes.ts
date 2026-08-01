@@ -393,40 +393,6 @@ export function registerRobotRoutes({
     return result;
   });
 
-  app.post('/topics/:topicId/robot/continue', async (request) => {
-    const user = requireScope(getCurrentUser(request), 'write');
-    const { topicId } = request.params as { topicId: string };
-    const topic = store.getTopic(topicId);
-    if (!topic) {
-      throw app.httpErrors.notFound('topic not found');
-    }
-    const forum = store.getForum(topic.forum_id);
-    if (!forum) {
-      throw app.httpErrors.notFound('forum not found');
-    }
-    const identity = store.getIdentity(user.identityId);
-    if (!canPostTopic(topic, forum, identity)) {
-      throw app.httpErrors.forbidden('Posting not allowed in this topic');
-    }
-    if (topic.status === 'locked' || topic.status === 'archived') {
-      throw app.httpErrors.forbidden('topic is locked or archived');
-    }
-    if (store.hasCompactionFence(topicId)) {
-      throw app.httpErrors.conflict('Robot work is unavailable until compaction recovery is dispatched');
-    }
-    const robotState = store.getRobotState(topicId);
-    if (robotState && ['stopping', 'uncertain'].includes(robotState.activity)) {
-      throw app.httpErrors.conflict('Cancellation is unresolved; retry Stop before continuing.');
-    }
-
-    const parentPostId = store.getLatestHumanPostId(topicId) ?? store.getLatestPostId(topicId);
-    const session = store.ensureSession({ topicId });
-    store.createSessionMessage(session.id, 'user', 'Continue.', 'internal');
-
-    await codex.sendUserMessage(topicId, 'Continue.', parentPostId, {});
-    return { ok: true, message: 'Continue sent.' };
-  });
-
   app.get('/topics/:topicId/state/stream', async (request, reply) => {
     const { topicId } = request.params as { topicId: string };
     requireTopicVisible(topicId, request);

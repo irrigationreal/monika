@@ -1624,10 +1624,6 @@ watch(isRobotBusy, (busy) => {
   if (!busy) showStopRobotConfirm.value = false;
 });
 
-async function continueRobot(): Promise<void> {
-  await state.continueRobot();
-}
-
 async function saveAutoRun(): Promise<void> {
   await state.updateAutoRun({
     enabled: autoRunEnabled.value,
@@ -3068,14 +3064,6 @@ onUnmounted(() => {
             @click="requestStopRobot"
           >
             Stop
-          </button>
-          <button
-            class="vb-small-btn"
-            type="button"
-            :disabled="isRobotBusy || robotControlPending"
-            @click="continueRobot"
-          >
-            Continue
           </button>
         </div>
       </div>

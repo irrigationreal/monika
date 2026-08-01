@@ -239,8 +239,9 @@ Forum and agentd requests are deadline-bounded; a timeout after the forum fence 
 shown as `uncertain`, not as an unfenced failure. Parent-abort uncertainty is part
 of the durable operation and cannot be erased by a child-only scan; reconciliation
 retries a loaded parent abort or proves that no loaded parent can launch more work.
-Continue remains unavailable until a later Stop reconciliation proves `stopped`.
-Ordinary posting-author Stop responses contain only stable state, operation/generation,
+Fresh posts remain fenced until a later Stop reconciliation proves `stopped`; once
+stopped, new work starts only from an attributable forum post. Ordinary posting-author
+Stop responses contain only stable state, operation/generation,
 and safe counts/message fields. Raw run records and errors remain behind the admin
 workload/dashboard boundary.
 Recovered native supervisor requests likewise remain replyable through supervisor
