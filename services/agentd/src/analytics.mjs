@@ -1,6 +1,14 @@
 import { deriveActiveBranchMetadata } from './session-export.mjs';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+export function analyticsBuildInfo(env = process.env) {
+  const rawCommit = typeof env.MONIKA_BUILD_COMMIT === 'string' ? env.MONIKA_BUILD_COMMIT.trim() : '';
+  const rawDate = typeof env.MONIKA_BUILD_DATE === 'string' ? env.MONIKA_BUILD_DATE.trim() : '';
+  const commit = /^[a-f0-9]{7,64}$/i.test(rawCommit) ? rawCommit.toLowerCase() : null;
+  const timestamp = rawDate && Number.isFinite(Date.parse(rawDate)) ? new Date(rawDate).toISOString() : null;
+  return { commit, created_at: timestamp };
+}
 const MAX_RANGE_MS = 366 * DAY_MS;
 const ERROR_CATEGORIES = Object.freeze([
   'authentication',
@@ -87,8 +95,9 @@ const SAFE_SUBAGENT_ACTIONS = new Set(['list', 'status', 'stop', 'resume', 'stee
 function commandFamily(command) {
   if (typeof command !== 'string') return null;
   const words = command.trim().split(/\s+/).map((word) => word.replace(/^['"]|['";|&]+$/g, ''));
-  const candidate = words.find((word) => SAFE_COMMAND_FAMILIES.has(word));
-  return candidate ?? null;
+  const candidates = words.filter((word) => SAFE_COMMAND_FAMILIES.has(word));
+  if (candidates.length > 1) return 'mixed';
+  return candidates[0] ?? null;
 }
 
 /** Return a bounded, non-sensitive operation label. Raw arguments are never returned. */
@@ -98,6 +107,10 @@ export function normalizeToolOperation(name, args = null) {
     : normalizedName === 'mcp__pi-subagents__subagent' ? 'subagent'
       : normalizedName;
   const values = record(args);
+  if (tool === 'relocate') {
+    if (!values || values.target === undefined) return 'relocate_status';
+    return typeof values.target === 'string' && values.target.trim() === 'local' ? 'relocate_local' : 'relocate_remote';
+  }
   const action = normalizeToken(values?.action ?? values?.operation ?? values?.op ?? values?.method);
   if (action && (tool === 'subagent' || tool === 'subagents')) {
     return `subagent_${SAFE_SUBAGENT_ACTIONS.has(action) ? action : 'other'}`;
@@ -124,6 +137,31 @@ function classifyError(value, fallback = 'unknown') {
   if (/cancelled|canceled|aborted|interrupted/.test(text)) return 'cancelled';
   if (/provider|overloaded|service unavailable|network|connection|econn|dns|socket|fetch failed|\b50[0234]\b/.test(text)) return 'provider';
   return ERROR_CATEGORIES.includes(fallback) ? fallback : 'unknown';
+}
+
+const TOOL_BACKENDS = new Set(['local', 'relocated_ssh', 'locked_ssh', 'unknown']);
+const TOOL_OUTCOMES = new Set(['success', 'no_match', 'invalid_input', 'not_found', 'dependency', 'transport', 'cancelled', 'timeout', 'tool_execution']);
+
+function toolBackend(details, operation) {
+  const value = normalizeToken(record(details)?.backend);
+  if (TOOL_BACKENDS.has(value)) return value;
+  if (operation === 'relocate_remote') return 'relocated_ssh';
+  if (operation === 'relocate_local') return 'local';
+  return 'unknown';
+}
+
+function toolOutcome(isError, details, content) {
+  const explicit = normalizeToken(record(details)?.outcome);
+  if (TOOL_OUTCOMES.has(explicit)) return explicit;
+  if (!isError) return 'success';
+  const category = classifyError(content, 'tool_execution');
+  if (category === 'validation') return 'invalid_input';
+  if (category === 'not_found') return 'not_found';
+  if (category === 'cancelled') return 'cancelled';
+  if (category === 'timeout') return 'timeout';
+  if (category === 'provider') return 'transport';
+  if (/not available|unavailable|command not found|dependency/i.test(String(content ?? ''))) return 'dependency';
+  return 'tool_execution';
 }
 
 function median(values) {
@@ -210,17 +248,19 @@ function summarizeModels(responses) {
 function summarizeTools(tools, minToolSamples) {
   const operations = new Map();
   for (const tool of tools) {
-    const operation = operations.get(tool.operation) ?? { operation: tool.operation, samples: 0, failures: 0 };
+    const key = `${tool.operation}:${tool.backend}`;
+    const operation = operations.get(key) ?? { operation: tool.operation, backend: tool.backend, samples: 0, failures: 0, outcomes: {} };
     operation.samples += 1;
     if (tool.failed) operation.failures += 1;
-    operations.set(tool.operation, operation);
+    operation.outcomes[tool.outcome] = (operation.outcomes[tool.outcome] ?? 0) + 1;
+    operations.set(key, operation);
   }
   const rows = [...operations.values()].map((operation) => ({
     ...operation,
     failure_rate: rate(operation.failures, operation.samples),
-  })).sort((a, b) => b.samples - a.samples || a.operation.localeCompare(b.operation));
+  })).sort((a, b) => b.samples - a.samples || a.operation.localeCompare(b.operation) || a.backend.localeCompare(b.backend));
   const qualifying = rows.filter((operation) => operation.samples >= minToolSamples)
-    .sort((a, b) => b.failure_rate - a.failure_rate || b.failures - a.failures || b.samples - a.samples || a.operation.localeCompare(b.operation));
+    .sort((a, b) => b.failure_rate - a.failure_rate || b.failures - a.failures || b.samples - a.samples || a.operation.localeCompare(b.operation) || a.backend.localeCompare(b.backend));
   const failures = tools.filter((tool) => tool.failed).length;
   return {
     paired: tools.length,
@@ -457,11 +497,15 @@ function observationsFromSession(session, query) {
     if (rawOutcome == null) {
       coverage.unknownToolOutcomes += 1;
     } else {
-      observations.push({ kind: 'tool', timestamp: call.timestamp, operation, failed: rawOutcome });
+      const content = typeof result.message.content === 'string'
+        ? result.message.content
+        : contentParts(result.message.content).map((part) => part.text ?? part.content ?? '').join(' ');
+      observations.push({
+        kind: 'tool', timestamp: call.timestamp, operation, failed: rawOutcome,
+        backend: toolBackend(result.message.details, operation),
+        outcome: toolOutcome(rawOutcome, result.message.details, content),
+      });
       if (rawOutcome) {
-        const content = typeof result.message.content === 'string'
-          ? result.message.content
-          : contentParts(result.message.content).map((part) => part.text ?? part.content ?? '').join(' ');
         observations.push({ kind: 'error', source: 'tool', operation, timestamp: call.timestamp, category: classifyError(content, 'tool_execution'), turnKey: call.turnKey });
       }
     }
@@ -524,6 +568,7 @@ export function aggregateAnalytics(sessions, queryInput) {
     to: query.to,
     bucket: query.bucket,
     min_tool_samples: query.minToolSamples,
+    build: analyticsBuildInfo(),
     coverage: {
       requested_sessions: query.requestedSessionCount ?? query.piSessionIds?.length ?? scannedSessions,
       unique_allowlisted_sessions: query.piSessionIds?.length ?? scannedSessions,

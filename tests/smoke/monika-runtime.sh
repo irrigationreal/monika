@@ -25,9 +25,12 @@ if [ -z "$IMAGE" ]; then
   exit 2
 fi
 
-# Deterministic locked-target checks use an injected fake transport; mandatory
-# image smoke never contacts an external SSH host.
-node --test "$SCRIPT_DIR/../ssh-lock.test.mjs"
+# Deterministic SSH checks use pure state/fake transports; mandatory image
+# smoke never contacts an external SSH host.
+node --test \
+  "$SCRIPT_DIR/../ssh-lock.test.mjs" \
+  "$SCRIPT_DIR/../ssh-relocate.test.mjs" \
+  "$SCRIPT_DIR/../ssh-search-transport.test.mjs"
 
 # The operator authority must never be interpreted as an install option or
 # allowed to collapse onto a shared top-level mount.
@@ -218,6 +221,7 @@ const typesSource = fs.readFileSync('/opt/pi-subagents/src/shared/types.ts', 'ut
 const preflightSource = fs.readFileSync('/opt/pi-subagents/src/api/preflight.ts', 'utf8');
 if (!fs.existsSync('/opt/pi-subagents/src/runs/shared/execution-target.ts')) throw new Error('Execution-target runtime missing');
 if (!fs.existsSync('/app/.pi/agent/extensions/ssh-lock.mjs')) throw new Error('Locked SSH helper missing');
+if (!fs.existsSync('/app/.pi/agent/extensions/ssh-relocate.mjs')) throw new Error('Relocate state-machine helper missing');
 if (!typesSource.includes('SUBAGENT_LIFECYCLE_ARTIFACT_VERSION = 4')) throw new Error('Lifecycle v4 missing');
 if (!preflightSource.includes('SUBAGENT_LAUNCH_CONTRACT_VERSION = 3')) throw new Error('Launch contract v3 missing');
 if (!asyncSource.includes('launch.json') || !asyncSource.includes('PI_SUBAGENTS_HOST_DRAINING')) throw new Error('Durable async launch/drain patch missing');
@@ -237,7 +241,8 @@ if (!/^[a-f0-9]{64}$/.test(process.env.PI_SUBAGENT_SSH_LOCK_CODE_DIGEST ?? '')) 
 const sha = (value) => createHash('sha256').update(value).digest('hex');
 const extensionSha = sha(fs.readFileSync('/app/.pi/agent/extensions/ssh.ts'));
 const helperSha = sha(fs.readFileSync('/app/.pi/agent/extensions/ssh-lock.mjs'));
-if (sha(`${extensionSha}\n${helperSha}\n`) !== process.env.PI_SUBAGENT_SSH_LOCK_CODE_DIGEST) throw new Error('SSH lock code attestation mismatch');
+const relocateHelperSha = sha(fs.readFileSync('/app/.pi/agent/extensions/ssh-relocate.mjs'));
+if (sha(`${extensionSha}\n${helperSha}\n${relocateHelperSha}\n`) !== process.env.PI_SUBAGENT_SSH_LOCK_CODE_DIGEST) throw new Error('SSH lock code attestation mismatch');
 if (JSON.stringify(settings.subagents?.defaultExtensions) !== '[]') throw new Error('subagents.defaultExtensions must disable ambient extensions');
 for (const profile of ['advisor', 'delegate']) {
   if (settings.subagents?.agentOverrides?.[profile]?.disabled !== true) throw new Error(`Upstream ${profile} profile must be disabled`);
@@ -348,6 +353,12 @@ if [ "$AGENT_BROWSER_VERSION" != "agent-browser 0.31.1" ]; then
   exit 1
 fi
 pass "agent-browser pin active: ${AGENT_BROWSER_VERSION}"
+
+RG_VERSION="$(docker exec "$CONTAINER_NAME" sh -lc 'rg --version | head -n 1')"
+FD_VERSION="$(docker exec "$CONTAINER_NAME" fd --version)"
+case "$RG_VERSION" in ripgrep\ *) ;; *) echo "Expected image-provisioned ripgrep, got: $RG_VERSION"; exit 1 ;; esac
+case "$FD_VERSION" in fd\ *|fdfind\ *) ;; *) echo "Expected image-provisioned fd, got: $FD_VERSION"; exit 1 ;; esac
+pass "search dependencies pre-provisioned: ${RG_VERSION}, ${FD_VERSION}"
 
 AGENTD_PORT="$AGENTD_PORT" node <<'NODE_SMOKE'
 const base = `http://127.0.0.1:${process.env.AGENTD_PORT}`;

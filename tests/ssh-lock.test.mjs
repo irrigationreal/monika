@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
@@ -9,8 +9,11 @@ import path from "node:path";
 import test from "node:test";
 import {
   ATOMIC_WRITE_SCRIPT,
+  LOCKED_MKDIR_SCRIPT,
   assertLockedDescriptorBinding,
   buildLockedSshArgv,
+  buildPositionalSshArgv,
+  buildPositionalSshInput,
   classifyTransientTransport,
   executionTargetBindingDigest,
   isContained,
@@ -69,6 +72,17 @@ test("strict ssh argv pins known_hosts and encodes untrusted args", () => {
   assert.equal(argv.at(-1), Buffer.from("; touch /tmp/no").toString("base64"));
 });
 
+test("positional transport keeps model values out of argv and remote shell source", () => {
+  const payloads = ["", "`touch /tmp/no`", "$(touch /tmp/no)", "$HOME", "quote'\"", "line1\nline2\n", "x".repeat(256 * 1024)];
+  const argv = buildPositionalSshArgv(["-o", "BatchMode=yes"], "stanza");
+  const stdin = buildPositionalSshInput("printf '%s\\n' \"$@\"", payloads);
+  const commandSource = argv.join(" ");
+  for (const payload of payloads.filter(Boolean)) assert.equal(commandSource.includes(payload), false);
+  assert.ok(stdin.length > 256 * 1024);
+  assert.ok(argv.includes("--"));
+  assert.ok(argv.every((arg) => Buffer.byteLength(arg) < 128 * 1024));
+});
+
 test("read retry is capped at two attempts and mutations have no retry wrapper", async () => {
   let attempts = 0;
   await assert.rejects(() => withBoundedReadRetry(async () => {
@@ -103,6 +117,20 @@ test("atomic write fails closed and cleans up when its parent directory is subst
   assert.notEqual(code, 0);
   assert.equal(existsSync(path.join(escape, "victim.txt")), false);
   assert.equal(existsSync(path.join(moved, "victim.txt")), false, "failed post-check removes the capability-bound write");
+});
+
+test("locked mkdir creates nested directories and rejects symlink ancestors", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "ssh-locked-mkdir-"));
+  const nested = path.join(root, "a", "b", "c");
+  let result = spawnSync("bash", ["-c", LOCKED_MKDIR_SCRIPT, "--", nested, root], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(existsSync(nested), true);
+
+  const outside = mkdtempSync(path.join(tmpdir(), "ssh-locked-outside-"));
+  symlinkSync(outside, path.join(root, "link"));
+  result = spawnSync("bash", ["-c", LOCKED_MKDIR_SCRIPT, "--", path.join(root, "link", "escaped"), root], { encoding: "utf8" });
+  assert.notEqual(result.status, 0);
+  assert.equal(existsSync(path.join(outside, "escaped")), false);
 });
 
 test("pending and failed lock states consume input before provider startup", () => {

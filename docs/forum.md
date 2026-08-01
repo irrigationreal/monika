@@ -302,6 +302,14 @@ message with visible text and positive usage; interim tool-call messages are
 excluded. Token footprint is the median summed usage for that population. Tool
 failure rates use paired tool results with explicit boolean outcomes, normalize
 only bounded operation labels, and require five samples for the headline.
+`relocate_status`, `relocate_remote`, and `relocate_local` are separate operations;
+compound shell calls with multiple recognized command occurrences are `bash:mixed`.
+The runtime response includes only an immutable image commit and creation timestamp
+(or explicit nulls for local/unversioned builds), so deployment boundaries can be
+selected without exposing host or registry metadata. Tool rows also expose allowlisted
+backend (`local`, `relocated_ssh`, `locked_ssh`, or `unknown`) and outcome counts (`success`, `no_match`, invalid input, not found,
+dependency, transport, cancellation, timeout, or generic execution). Older tool
+results without structured provenance remain `unknown` rather than being guessed.
 Errors use fixed categories and count distinct affected turns without returning
 raw errors. Parent-blocked p95 is the nearest-rank p95 of matched
 `subagent_wait` result-message elapsed time from 0 through 24 hours; it is an
@@ -315,6 +323,13 @@ forum posts in the selected range, separates human/admin from
 robot/persona/system authors, and removes forum envelopes, code, URLs, markup,
 and deterministic stopwords. Version 1 ranks repeated terms by a
 corpus-relative smoothed log-rate score and returns no excerpts.
+
+Tool-result history is not retroactively rewritten. Sessions created before the
+relocate reliability fix may contain successful SSH transitions recorded as
+theme-initialization errors and genuine textual `RELOCATE FAILED` results recorded
+as successes. Operation/backend/outcome dimensions make that contaminated cohort
+visible, but post-fix reliability should be evaluated from the new runtime deployment
+boundary rather than by reinterpreting canonical history.
 
 The agentd result cache is process-local and expires after 30 seconds by default.
 If agentd is unavailable, the forum returns vocabulary with an explicit runtime

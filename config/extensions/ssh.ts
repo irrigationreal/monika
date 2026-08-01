@@ -15,7 +15,7 @@
  * Docs: ~/.pi/agent/extensions/SSH.md
  */
 
-import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
@@ -24,9 +24,12 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 // @ts-ignore no declaration file is needed in the Pi extension loader.
 import {
 	ATOMIC_WRITE_SCRIPT,
+	LOCKED_MKDIR_SCRIPT,
 	STARTUP_PROBE_SCRIPT,
 	appendEffectsRecord,
 	assertLockedDescriptorBinding,
+	buildPositionalSshArgv,
+	buildPositionalSshInput,
 	effectsRecord,
 	loadLockedDescriptor,
 	lockedInputDecision,
@@ -34,11 +37,25 @@ import {
 	parseCompletionTrailer,
 	redactLockedError,
 	runLockedSsh,
+	runSshArgv,
 	withBoundedReadRetry,
 } from "./ssh-lock.mjs";
+// Runtime-owned plain ESM helpers keep relocate parsing, locking, and state
+// transitions testable without loading Pi or contacting a real SSH host.
+// @ts-ignore no declaration file is needed in the Pi extension loader.
+import {
+	createAsyncReadWriteLock,
+	executeRelocateRequest,
+	parseRelocateTarget,
+	REMOTE_ATOMIC_WRITE_SCRIPT,
+	REMOTE_FIND_SCRIPT,
+	REMOTE_GREP_SCRIPT,
+	updateSshUiBestEffort,
+} from "./ssh-relocate.mjs";
 import {
 	type BashOperations,
 	createBashTool,
+	createLocalBashOperations,
 	createEditTool,
 	createFindTool,
 	createGrepTool,
@@ -57,6 +74,21 @@ const DEFAULT_FIND_LIMIT = 1000;
 const DEFAULT_GREP_LIMIT = 100;
 const DEFAULT_MAX_BYTES = 50 * 1024;
 const GREP_MAX_LINE_LENGTH = 500;
+const REMOTE_SEARCH_TIMEOUT_MS = 30_000;
+const REMOTE_SEARCH_MAX_BYTES = 4 * 1024 * 1024;
+const REMOTE_AGENTS_MAX_BYTES = 256 * 1024;
+const SSH_CONTROL_TIMEOUT_MS = 30_000;
+const SSH_SEARCH_INPUT_MAX_BYTES = 32 * 1024;
+
+function sshFailureOutcome(error: unknown): string {
+	const message = error instanceof Error ? error.message : String(error);
+	if (/timed? out|timeout/i.test(message)) return "timeout";
+	if (/aborted|cancelled|canceled/i.test(message)) return "cancelled";
+	if (/invalid|too long|exceeds.*limit/i.test(message)) return "invalid_input";
+	if (/not available|unavailable|command not found|dependency/i.test(message)) return "dependency";
+	if (/ssh|connection|transport|socket|resolve hostname/i.test(message)) return "transport";
+	return "tool_execution";
+}
 
 function getCliFlagValue(name: string): string | undefined {
 	const longName = `--${name}`;
@@ -110,23 +142,31 @@ function truncateLine(line: string, maxChars = GREP_MAX_LINE_LENGTH): { text: st
 	return { text: `${line.slice(0, maxChars)}... [truncated]`, wasTruncated: true };
 }
 
-function sshExec(remote: string, command: string, options?: string[]): Promise<Buffer> {
-	return new Promise((resolve, reject) => {
-		const sshOpts = options ?? SSH_OPTIONS;
-		const child = spawn("ssh", [...sshOpts, remote, command], { stdio: ["ignore", "pipe", "pipe"] });
-		const chunks: Buffer[] = [];
-		const errChunks: Buffer[] = [];
-		child.stdout.on("data", (data) => chunks.push(data));
-		child.stderr.on("data", (data) => errChunks.push(data));
-		child.on("error", reject);
-		child.on("close", (code) => {
-			if (code !== 0) {
-				reject(new Error(`SSH failed (${code}): ${Buffer.concat(errChunks).toString()}`));
-			} else {
-				resolve(Buffer.concat(chunks));
-			}
-		});
-	});
+/** Run fixed reviewed shell source with every variable value passed positionally. */
+async function sshExecScript(
+	remote: string,
+	script: string,
+	args: Array<string | number> = [],
+	options: { sshOptions?: string[]; signal?: AbortSignal; timeoutMs?: number; stdin?: string | Buffer; onData?: (chunk: Buffer) => void } = {},
+): Promise<Buffer> {
+	try {
+		const result = await runSshArgv(
+			buildPositionalSshArgv(options.sshOptions ?? SSH_OPTIONS, remote),
+			{
+				signal: options.signal,
+				timeoutMs: options.timeoutMs,
+				stdin: buildPositionalSshInput(script, args, options.stdin),
+				onData: options.onData,
+			},
+		);
+		return result.stdout;
+	} catch (error: any) {
+		const stderr = Buffer.isBuffer(error?.stderr) ? error.stderr.toString("utf8") : "";
+		if (error?.timedOut) throw new Error(`SSH command timed out after ${options.timeoutMs ?? 0}ms`);
+		if (error?.outputLimitExceeded) throw new Error("SSH command exceeded the output byte limit");
+		if (error?.aborted) throw new Error("SSH command aborted");
+		throw new Error(`SSH failed (${error?.code ?? "unknown"}): ${stderr}`);
+	}
 }
 
 /** SSH options for relocate validation — accepts new host keys automatically. */
@@ -140,34 +180,53 @@ const RELOCATE_SSH_OPTIONS = [
  * Validate an SSH connection before switching. Returns a structured result
  * so the caller can report specific failure reasons.
  */
-async function validateSshTarget(remote: string, remoteCwd?: string): Promise<{
+async function validateSshTarget(remote: string, remoteCwd?: string, signal?: AbortSignal): Promise<{
 	success: boolean;
 	remoteCwd: string;
 	hostname?: string;
 	error?: string;
-	errorKind?: "host_key" | "auth" | "refused" | "timeout" | "path" | "unknown";
+	errorKind?: "host_key" | "auth" | "refused" | "timeout" | "path" | "dependency" | "unknown";
 }> {
 	try {
 		// Test basic connectivity
-		const echoResult = await sshExec(remote, "echo __relocate_ok__", RELOCATE_SSH_OPTIONS);
+		const controlOptions = { sshOptions: RELOCATE_SSH_OPTIONS, signal, timeoutMs: SSH_CONTROL_TIMEOUT_MS };
+		const echoResult = await sshExecScript(remote, "printf '%s\\n' __relocate_ok__\n", [], controlOptions);
 		if (!echoResult.toString().includes("__relocate_ok__")) {
 			return { success: false, remoteCwd: "", error: "Unexpected response from host", errorKind: "unknown" };
 		}
 
-		// Get remote cwd
-		const cwd = await resolveRemoteCwd(remote, remoteCwd, RELOCATE_SSH_OPTIONS);
+		// Get remote cwd. Connectivity has already succeeded, so failure while
+		// resolving an explicitly requested cwd is a path error, not an unknown
+		// transport error.
+		let cwd: string;
+		try {
+			cwd = await resolveRemoteCwd(remote, remoteCwd, RELOCATE_SSH_OPTIONS, signal);
+		} catch (error: any) {
+			if (remoteCwd) {
+				return { success: false, remoteCwd, error: `Remote path does not exist or is not accessible: ${remoteCwd}`, errorKind: "path" };
+			}
+			throw error;
+		}
 
 		// Verify cwd exists
 		try {
-			await sshExec(remote, `test -d ${JSON.stringify(cwd)}`, RELOCATE_SSH_OPTIONS);
+			await sshExecScript(remote, "test -d \"$1\"\n", [cwd], controlOptions);
 		} catch {
 			return { success: false, remoteCwd: cwd, error: `Remote path does not exist: ${cwd}`, errorKind: "path" };
+		}
+
+		// Relocated find/grep depend on a pre-provisioned ripgrep. Fail during
+		// relocation rather than attempting first-use downloads or local fallback.
+		try {
+			await sshExecScript(remote, "command -v rg >/dev/null\nrg --version | head -n 1\n", [], controlOptions);
+		} catch {
+			return { success: false, remoteCwd: cwd, error: "Required remote dependency rg is unavailable. Install ripgrep on the target and retry.", errorKind: "dependency" };
 		}
 
 		// Get hostname for display
 		let hostname: string | undefined;
 		try {
-			hostname = (await sshExec(remote, "hostname", RELOCATE_SSH_OPTIONS)).toString().trim();
+			hostname = (await sshExecScript(remote, "hostname\n", [], controlOptions)).toString().trim();
 		} catch { /* non-fatal */ }
 
 		return { success: true, remoteCwd: cwd, hostname };
@@ -193,38 +252,28 @@ async function validateSshTarget(remote: string, remoteCwd?: string): Promise<{
 }
 
 function parseSshArg(arg: string): { remote: string; remoteCwd?: string } {
-	const match = arg.match(/^([^:]+):(.+)$/);
-	if (match) {
-		return { remote: match[1], remoteCwd: match[2] };
+	const parsed = parseRelocateTarget(arg);
+	if (parsed.kind !== "remote") {
+		throw new Error("SSH startup target must name a remote host.");
 	}
-	return { remote: arg };
+	return { remote: parsed.remote, remoteCwd: parsed.remoteCwd };
 }
 
-function shellQuote(value: string): string {
-	return `'${value.replace(/'/g, `'"'"'`)}'`;
+async function resolveRemoteCwd(remote: string, remoteCwd: string | undefined, options?: string[], signal?: AbortSignal): Promise<string> {
+	const controlOptions = { sshOptions: options, signal, timeoutMs: SSH_CONTROL_TIMEOUT_MS };
+	if (!remoteCwd) return (await sshExecScript(remote, "pwd -P\n", [], controlOptions)).toString().trim();
+	return (await sshExecScript(remote, "set -eu\ntarget=\"$1\"\ncase \"$target\" in '~') target=\"$HOME\" ;; '~/'*) target=\"$HOME/${target#~/}\" ;; esac\ncd -- \"$target\"\npwd -P\n", [remoteCwd], controlOptions)).toString().trim();
 }
 
-function quoteRemotePathForCd(value: string): string {
-	const match = value.match(/^(~[^/]*)(?:\/(.*))?$/);
-	if (!match) return shellQuote(value);
-	const home = match[1];
-	const rest = match[2];
-	return rest ? `${home}/${shellQuote(rest)}` : home;
-}
-
-async function resolveRemoteCwd(remote: string, remoteCwd: string | undefined, options?: string[]): Promise<string> {
-	if (!remoteCwd) return (await sshExec(remote, "pwd", options)).toString().trim();
-	return (await sshExec(remote, `cd ${quoteRemotePathForCd(remoteCwd)} && pwd -P`, options)).toString().trim();
-}
-
-function createRemoteReadOps(remote: string, remoteCwd: string, localCwd: string): ReadOperations {
+function createRemoteReadOps(remote: string, remoteCwd: string, localCwd: string, signal?: AbortSignal): ReadOperations {
 	const toRemote = (p: string) => resolveRemotePath(remoteCwd, localCwd, p);
+	const options = { signal, timeoutMs: SSH_CONTROL_TIMEOUT_MS };
 	return {
-		readFile: (p) => sshExec(remote, `cat ${JSON.stringify(toRemote(p))}`),
-		access: (p) => sshExec(remote, `test -r ${JSON.stringify(toRemote(p))}`).then(() => {}),
+		readFile: (p) => sshExecScript(remote, "cat -- \"$1\"\n", [toRemote(p)], options),
+		access: (p) => sshExecScript(remote, "test -r \"$1\"\n", [toRemote(p)], options).then(() => {}),
 		detectImageMimeType: async (p) => {
 			try {
-				const r = await sshExec(remote, `file --mime-type -b ${JSON.stringify(toRemote(p))}`);
+				const r = await sshExecScript(remote, "file --mime-type -b -- \"$1\"\n", [toRemote(p)], options);
 				const m = r.toString().trim();
 				return ["image/jpeg", "image/png", "image/gif", "image/webp"].includes(m) ? m : null;
 			} catch {
@@ -234,57 +283,49 @@ function createRemoteReadOps(remote: string, remoteCwd: string, localCwd: string
 	};
 }
 
-function createRemoteWriteOps(remote: string, remoteCwd: string, localCwd: string): WriteOperations {
+function createRemoteWriteOps(remote: string, remoteCwd: string, localCwd: string, signal?: AbortSignal): WriteOperations {
 	const toRemote = (p: string) => resolveRemotePath(remoteCwd, localCwd, p);
+	const options = { signal, timeoutMs: SSH_CONTROL_TIMEOUT_MS };
 	return {
 		writeFile: async (p, content) => {
-			const b64 = Buffer.from(content).toString("base64");
-			await sshExec(remote, `echo ${JSON.stringify(b64)} | base64 -d > ${JSON.stringify(toRemote(p))}`);
+			// File content travels over stdin, never argv. This avoids Linux's
+			// per-argument E2BIG ceiling when edit retransmits a complete file.
+			const data = Buffer.from(content);
+			const b64 = data.toString("base64");
+			const digest = createHash("sha256").update(data).digest("hex");
+			await sshExecScript(remote, REMOTE_ATOMIC_WRITE_SCRIPT, [toRemote(p), digest], { ...options, stdin: b64 });
 		},
-		mkdir: (dir) => sshExec(remote, `mkdir -p ${JSON.stringify(toRemote(dir))}`).then(() => {}),
+		mkdir: (dir) => sshExecScript(remote, "mkdir -p -- \"$1\"\n", [toRemote(dir)], options).then(() => {}),
 	};
 }
 
-function createRemoteEditOps(remote: string, remoteCwd: string, localCwd: string): EditOperations {
-	const r = createRemoteReadOps(remote, remoteCwd, localCwd);
-	const w = createRemoteWriteOps(remote, remoteCwd, localCwd);
+function createRemoteEditOps(remote: string, remoteCwd: string, localCwd: string, signal?: AbortSignal): EditOperations {
+	const r = createRemoteReadOps(remote, remoteCwd, localCwd, signal);
+	const w = createRemoteWriteOps(remote, remoteCwd, localCwd, signal);
 	return { readFile: r.readFile, access: r.access, writeFile: w.writeFile };
 }
 
 function createRemoteBashOps(remote: string, remoteCwd: string, localCwd: string): BashOperations {
 	const toRemote = (p: string) => resolveRemotePath(remoteCwd, localCwd, p);
 	return {
-		exec: (command, cwd, { onData, signal, timeout }) =>
-			new Promise((resolve, reject) => {
-				// SSH non-interactive commands do not source .bashrc, so host-side
-				// environment needed by tools (notably GNUPGHOME for git commit signing)
-				// must be set explicitly. Keep this minimal to avoid surprising remotes.
-				const envPrelude = `if [ -z "$GNUPGHOME" ] && [ -d "$HOME/.config/gnupg" ]; then export GNUPGHOME="$HOME/.config/gnupg"; fi`;
-				const cmd = `cd ${JSON.stringify(toRemote(cwd))} && ${envPrelude} && ${command}`;
-				const child = spawn("ssh", [...SSH_OPTIONS, remote, cmd], { stdio: ["ignore", "pipe", "pipe"] });
-				let timedOut = false;
-				const timer = timeout
-					? setTimeout(() => {
-							timedOut = true;
-							child.kill();
-						}, timeout * 1000)
-					: undefined;
-				child.stdout.on("data", onData);
-				child.stderr.on("data", onData);
-				child.on("error", (e) => {
-					if (timer) clearTimeout(timer);
-					reject(e);
+		exec: async (command, cwd, { onData, signal, timeout }) => {
+			// Bash input is intentionally shell source, but transporting it as a
+			// positional value prevents the SSH login shell from evaluating it.
+			const script = `set +e\ncd -- "$1" || exit 70\nif [ -z "$GNUPGHOME" ] && [ -d "$HOME/.config/gnupg" ]; then export GNUPGHOME="$HOME/.config/gnupg"; fi\ntmp=$(mktemp); trap 'rm -f -- "$tmp"' EXIT HUP INT TERM\ncat > "$tmp"\nbash -l "$tmp"\nexit $?\n`;
+			try {
+				await sshExecScript(remote, script, [toRemote(cwd)], {
+					signal,
+					timeoutMs: timeout ? timeout * 1000 : undefined,
+					stdin: command,
+					onData,
 				});
-				const onAbort = () => child.kill();
-				signal?.addEventListener("abort", onAbort, { once: true });
-				child.on("close", (code) => {
-					if (timer) clearTimeout(timer);
-					signal?.removeEventListener("abort", onAbort);
-					if (signal?.aborted) reject(new Error("aborted"));
-					else if (timedOut) reject(new Error(`timeout:${timeout}`));
-					else resolve({ exitCode: code });
-				});
-			}),
+				return { exitCode: 0 };
+			} catch (error: any) {
+				const match = error.message.match(/^SSH failed \((\d+)\):/);
+				if (match) return { exitCode: Number(match[1]) };
+				throw error;
+			}
+		},
 	};
 }
 
@@ -298,7 +339,7 @@ function isPathWithin(parent: string, candidate: string): boolean {
 }
 
 function resolveRemotePath(remoteCwd: string, localCwd: string, inputPath: string | undefined): string {
-	const rawPath = inputPath?.trim() || ".";
+	const rawPath = inputPath === undefined || inputPath === "" ? "." : inputPath;
 	const normalizedRemoteCwd = normalizePosixPath(remoteCwd);
 	const normalizedLocalCwd = normalizePosixPath(localCwd);
 	if (rawPath === ".") return normalizedRemoteCwd;
@@ -319,19 +360,21 @@ async function remoteLs(
 	localCwd: string,
 	path: string | undefined,
 	limit: number | undefined,
+	signal?: AbortSignal,
 ): Promise<{ content: Array<{ type: "text"; text: string }>; details?: Record<string, unknown> }> {
 	const resolvedPath = resolveRemotePath(remoteCwd, localCwd, path);
+	const deadline = Date.now() + SSH_CONTROL_TIMEOUT_MS;
 	try {
-		await sshExec(remote, `test -e ${JSON.stringify(resolvedPath)}`);
+		await sshExecScript(remote, "test -e \"$1\"\n", [resolvedPath], boundedOptions(deadline, signal));
 	} catch {
 		throw new Error(`Path not found: ${resolvedPath}`);
 	}
 	try {
-		await sshExec(remote, `test -d ${JSON.stringify(resolvedPath)}`);
+		await sshExecScript(remote, "test -d \"$1\"\n", [resolvedPath], boundedOptions(deadline, signal));
 	} catch {
 		throw new Error(`Not a directory: ${resolvedPath}`);
 	}
-	const rawEntries = (await sshExec(remote, `LC_ALL=C ls -A -p ${JSON.stringify(resolvedPath)}`))
+	const rawEntries = (await sshExecScript(remote, "LC_ALL=C ls -A -p -- \"$1\"\n", [resolvedPath], boundedOptions(deadline, signal)))
 		.toString()
 		.trim();
 	const entries = rawEntries.length ? rawEntries.split("\n") : [];
@@ -361,12 +404,10 @@ async function remoteLs(
 	return { content: [{ type: "text", text: output }], details: Object.keys(details).length ? details : undefined };
 }
 
-async function ensureRemoteCommand(remote: string, command: string): Promise<void> {
-	try {
-		await sshExec(remote, `command -v ${command}`);
-	} catch {
-		throw new Error(`${command} is not available on the remote host`);
-	}
+function boundedOptions(deadline: number, signal?: AbortSignal): { signal?: AbortSignal; timeoutMs: number } {
+	const remaining = deadline - Date.now();
+	if (remaining <= 0) throw new Error(`SSH command timed out after ${REMOTE_SEARCH_TIMEOUT_MS}ms`);
+	return { signal, timeoutMs: remaining };
 }
 
 function joinRemotePath(base: string, childPath: string): string {
@@ -381,47 +422,157 @@ async function remoteFind(
 	pattern: string,
 	searchDir: string | undefined,
 	limit: number | undefined,
+	signal?: AbortSignal,
 ): Promise<{ content: Array<{ type: "text"; text: string }>; details?: Record<string, unknown> }> {
+	if (Buffer.byteLength(pattern, "utf8") > SSH_SEARCH_INPUT_MAX_BYTES) throw new Error("Find pattern exceeds the SSH search input limit");
 	const searchPath = resolveRemotePath(remoteCwd, localCwd, searchDir);
+	const deadline = Date.now() + REMOTE_SEARCH_TIMEOUT_MS;
 	try {
-		await sshExec(remote, `test -e ${JSON.stringify(searchPath)}`);
+		await sshExecScript(remote, "test -e \"$1\"\n", [searchPath], boundedOptions(deadline, signal));
 	} catch {
 		throw new Error(`Path not found: ${searchPath}`);
 	}
 	try {
-		await sshExec(remote, `test -d ${JSON.stringify(searchPath)}`);
+		await sshExecScript(remote, "test -d \"$1\"\n", [searchPath], boundedOptions(deadline, signal));
 	} catch {
 		throw new Error(`Not a directory: ${searchPath}`);
 	}
-	await ensureRemoteCommand(remote, "rg");
-	const rgCmd = `cd ${JSON.stringify(searchPath)} && rg --files --hidden -g ${JSON.stringify(pattern)}`;
-	const wrappedCmd = `bash -lc ${JSON.stringify(`${rgCmd}; code=$?; if [ $code -eq 1 ]; then exit 0; else exit $code; fi`)}`;
-	const rawOutput = (await sshExec(remote, wrappedCmd)).toString().trim();
+	const effectiveLimit = Math.max(1, limit ?? DEFAULT_FIND_LIMIT);
+	const producerLimit = effectiveLimit + 1;
+	const rawBuffer = await sshExecScript(
+		remote,
+		REMOTE_FIND_SCRIPT,
+		[searchPath, pattern, producerLimit, REMOTE_SEARCH_MAX_BYTES, ""],
+		boundedOptions(deadline, signal),
+	);
+	const producerLimitReached = rawBuffer.length >= REMOTE_SEARCH_MAX_BYTES;
+	const rawOutput = rawBuffer.toString().trim();
 	if (!rawOutput) {
-		return { content: [{ type: "text", text: "No files found matching pattern" }] };
+		return { content: [{ type: "text", text: "No files found matching pattern" }], details: { outcome: "no_match", backend: "relocated_ssh" } };
 	}
 	const entries = rawOutput.split("\n").filter((line) => line.trim().length > 0);
 	entries.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
-	const effectiveLimit = limit ?? DEFAULT_FIND_LIMIT;
-	const resultLimitReached = entries.length >= effectiveLimit;
+	const resultLimitReached = entries.length > effectiveLimit;
 	const limitedEntries = entries.slice(0, effectiveLimit);
 	let output = limitedEntries.join("\n");
-	const details: Record<string, unknown> = {};
+	const details: Record<string, unknown> = { outcome: "success", backend: "relocated_ssh" };
 	const notices: string[] = [];
 	if (resultLimitReached) {
 		notices.push(`${effectiveLimit} results limit reached. Use limit=${effectiveLimit * 2} for more, or refine pattern`);
 		details.resultLimitReached = effectiveLimit;
 	}
+	if (producerLimitReached) {
+		notices.push("Remote producer byte limit reached; results are incomplete");
+		details.incomplete = true;
+	}
 	const truncation = truncateToBytes(output, DEFAULT_MAX_BYTES);
 	if (truncation.truncated) {
 		output = truncation.text;
 		notices.push(`${DEFAULT_MAX_BYTES / 1024}KB limit reached`);
-		details.truncation = { truncated: true };
+		details.truncation = { truncated: true, producerBounded: true };
 	}
-	if (notices.length > 0) {
-		output += `\n\n[${notices.join(". ")}]`;
+	if (notices.length > 0) output += `\n\n[${notices.join(". ")}]`;
+	return { content: [{ type: "text", text: output }], details };
+}
+
+function formatGrepJson(
+	rawBuffer: Buffer,
+	searchPath: string,
+	isDirectory: boolean,
+	effectiveLimit: number,
+	contextValue: number,
+	producerLimitReached: boolean,
+	backend: "relocated_ssh" | "locked_ssh",
+): { content: Array<{ type: "text"; text: string }>; details?: Record<string, unknown>; isError?: boolean } {
+	const effectiveBase = isDirectory ? searchPath : path.posix.dirname(searchPath);
+	const outputLines: string[] = [];
+	const pendingContext: string[] = [];
+	let matchCount = 0;
+	let matchLimitReached = false;
+	let linesTruncated = false;
+	let malformedEvent = false;
+	const renderEvent = (event: any, match: boolean): string | null => {
+		const eventPath = event.data?.path?.text;
+		const lineNumber = event.data?.line_number;
+		const text = event.data?.lines?.text;
+		if (typeof eventPath !== "string" || typeof lineNumber !== "number" || typeof text !== "string") return null;
+		const absolutePath = joinRemotePath(effectiveBase, eventPath);
+		let displayPath = path.posix.basename(searchPath);
+		if (isDirectory) {
+			const relative = path.posix.relative(searchPath, absolutePath);
+			if (relative && !relative.startsWith("..")) displayPath = relative;
+		}
+		const clean = text.replace(/\r/g, "").replace(/\n$/, "").replace(/\n/g, " ↩ ");
+		const truncated = truncateLine(clean, GREP_MAX_LINE_LENGTH);
+		if (truncated.wasTruncated) linesTruncated = true;
+		return match
+			? `${displayPath}:${lineNumber}: ${truncated.text}`
+			: `${displayPath}-${lineNumber}- ${truncated.text}`;
+	};
+	for (const line of rawBuffer.toString("utf8").split("\n")) {
+		if (!line.trim()) continue;
+		let event: any;
+		try {
+			event = JSON.parse(line);
+		} catch {
+			malformedEvent = true;
+			continue;
+		}
+		if (event.type === "context") {
+			const rendered = renderEvent(event, false);
+			if (!rendered) continue;
+			if (matchCount === 0) {
+				pendingContext.push(rendered);
+				while (pendingContext.length > contextValue) pendingContext.shift();
+			} else {
+				outputLines.push(rendered);
+			}
+			continue;
+		}
+		if (event.type !== "match") continue;
+		if (matchCount >= effectiveLimit) {
+			matchLimitReached = true;
+			break;
+		}
+		const rendered = renderEvent(event, true);
+		if (!rendered) continue;
+		matchCount += 1;
+		if (matchCount === 1) outputLines.push(...pendingContext);
+		outputLines.push(rendered);
 	}
-	return { content: [{ type: "text", text: output }], details: Object.keys(details).length ? details : undefined };
+	if (matchCount === 0) {
+		if (producerLimitReached || malformedEvent) {
+			return {
+				content: [{ type: "text", text: "Remote grep output was truncated before a complete match could be decoded." }],
+				isError: true,
+				details: { outcome: "tool_execution", backend, incomplete: true },
+			} as any;
+		}
+		return { content: [{ type: "text", text: "No matches found" }], details: { outcome: "no_match", backend } };
+	}
+	let output = outputLines.join("\n");
+	const details: Record<string, unknown> = { outcome: "success", backend };
+	const notices: string[] = [];
+	if (matchLimitReached) {
+		notices.push(`${effectiveLimit} matches limit reached. Use limit=${effectiveLimit * 2} for more, or refine pattern`);
+		details.matchLimitReached = effectiveLimit;
+	}
+	if (producerLimitReached || malformedEvent) {
+		notices.push("Remote producer byte limit reached; results are incomplete");
+		details.incomplete = true;
+	}
+	const truncation = truncateToBytes(output, DEFAULT_MAX_BYTES);
+	if (truncation.truncated) {
+		output = truncation.text;
+		notices.push(`${DEFAULT_MAX_BYTES / 1024}KB limit reached`);
+		details.truncation = { truncated: true, producerBounded: true };
+	}
+	if (linesTruncated) {
+		notices.push(`Some lines truncated to ${GREP_MAX_LINE_LENGTH} chars. Use read tool to see full lines`);
+		details.linesTruncated = true;
+	}
+	if (notices.length > 0) output += `\n\n[${notices.join(". ")}]`;
+	return { content: [{ type: "text", text: output }], details };
 }
 
 async function remoteGrep(
@@ -437,125 +588,38 @@ async function remoteGrep(
 		context?: number;
 		limit?: number;
 	},
+	signal?: AbortSignal,
 ): Promise<{ content: Array<{ type: "text"; text: string }>; details?: Record<string, unknown> }> {
+	if (Buffer.byteLength(params.pattern, "utf8") > SSH_SEARCH_INPUT_MAX_BYTES) throw new Error("Grep pattern exceeds the SSH search input limit");
+	if (params.glob && Buffer.byteLength(params.glob, "utf8") > SSH_SEARCH_INPUT_MAX_BYTES) throw new Error("Grep glob exceeds the SSH search input limit");
 	const searchPath = resolveRemotePath(remoteCwd, localCwd, params.path);
+	const deadline = Date.now() + REMOTE_SEARCH_TIMEOUT_MS;
 	let isDirectory = false;
 	try {
-		await sshExec(remote, `test -d ${JSON.stringify(searchPath)}`);
+		await sshExecScript(remote, "test -d \"$1\"\n", [searchPath], boundedOptions(deadline, signal));
 		isDirectory = true;
 	} catch {
 		try {
-			await sshExec(remote, `test -e ${JSON.stringify(searchPath)}`);
+			await sshExecScript(remote, "test -e \"$1\"\n", [searchPath], boundedOptions(deadline, signal));
 		} catch {
 			throw new Error(`Path not found: ${searchPath}`);
 		}
 	}
-	await ensureRemoteCommand(remote, "rg");
-	const args: string[] = ["rg", "--json", "--line-number", "--color=never", "--hidden"];
-	if (params.ignoreCase) args.push("--ignore-case");
-	if (params.literal) args.push("--fixed-strings");
-	if (params.glob) {
-		args.push("--glob", params.glob);
-	}
-	args.push(params.pattern, searchPath);
-	const rgCmd = args.map((arg) => JSON.stringify(arg)).join(" ");
-	const wrappedCmd = `bash -lc ${JSON.stringify(`${rgCmd}; code=$?; if [ $code -eq 1 ]; then exit 0; else exit $code; fi`)}`;
-	const rawOutput = (await sshExec(remote, wrappedCmd)).toString();
 	const effectiveLimit = Math.max(1, params.limit ?? DEFAULT_GREP_LIMIT);
 	const contextValue = params.context && params.context > 0 ? params.context : 0;
-	const matches: Array<{ filePath: string; lineNumber: number }> = [];
-	let matchLimitReached = false;
-	for (const line of rawOutput.split("\n")) {
-		if (!line.trim()) continue;
-		let event: any;
-		try {
-			event = JSON.parse(line);
-		} catch {
-			continue;
-		}
-		if (event.type === "match") {
-			const filePath = event.data?.path?.text;
-			const lineNumber = event.data?.line_number;
-			if (filePath && typeof lineNumber === "number") {
-				if (matches.length < effectiveLimit) {
-					matches.push({ filePath, lineNumber });
-				} else {
-					matchLimitReached = true;
-				}
-			}
-		}
-	}
-	if (matches.length === 0) {
-		return { content: [{ type: "text", text: "No matches found" }] };
-	}
-	const formatPath = (filePath: string) => {
-		if (isDirectory) {
-			const relative = path.posix.relative(searchPath, filePath);
-			if (relative && !relative.startsWith("..")) {
-				return relative;
-			}
-		}
-		return path.posix.basename(filePath);
-	};
-	const fileCache = new Map<string, string[]>();
-	const getFileLines = async (filePath: string) => {
-		let lines = fileCache.get(filePath);
-		if (!lines) {
-			try {
-				const content = (await sshExec(remote, `cat ${JSON.stringify(filePath)}`)).toString("utf-8");
-				lines = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
-			} catch {
-				lines = [];
-			}
-			fileCache.set(filePath, lines);
-		}
-		return lines;
-	};
-	const outputLines: string[] = [];
-	let linesTruncated = false;
-	for (const match of matches) {
-		const absolutePath = joinRemotePath(isDirectory ? searchPath : path.posix.dirname(searchPath), match.filePath);
-		const relativePath = formatPath(absolutePath);
-		const lines = await getFileLines(absolutePath);
-		if (!lines.length) {
-			outputLines.push(`${relativePath}:${match.lineNumber}: (unable to read file)`);
-			continue;
-		}
-		const start = contextValue > 0 ? Math.max(1, match.lineNumber - contextValue) : match.lineNumber;
-		const end = contextValue > 0 ? Math.min(lines.length, match.lineNumber + contextValue) : match.lineNumber;
-		for (let current = start; current <= end; current += 1) {
-			const lineText = lines[current - 1] ?? "";
-			const sanitized = lineText.replace(/\r/g, "");
-			const { text: truncatedText, wasTruncated } = truncateLine(sanitized, GREP_MAX_LINE_LENGTH);
-			if (wasTruncated) linesTruncated = true;
-			if (current === match.lineNumber) {
-				outputLines.push(`${relativePath}:${current}: ${truncatedText}`);
-			} else {
-				outputLines.push(`${relativePath}-${current}- ${truncatedText}`);
-			}
-		}
-	}
-	let output = outputLines.join("\n");
-	const details: Record<string, unknown> = {};
-	const notices: string[] = [];
-	if (matchLimitReached) {
-		notices.push(`${effectiveLimit} matches limit reached. Use limit=${effectiveLimit * 2} for more, or refine pattern`);
-		details.matchLimitReached = effectiveLimit;
-	}
-	const truncation = truncateToBytes(output, DEFAULT_MAX_BYTES);
-	if (truncation.truncated) {
-		output = truncation.text;
-		notices.push(`${DEFAULT_MAX_BYTES / 1024}KB limit reached`);
-		details.truncation = { truncated: true };
-	}
-	if (linesTruncated) {
-		notices.push(`Some lines truncated to ${GREP_MAX_LINE_LENGTH} chars. Use read tool to see full lines`);
-		details.linesTruncated = true;
-	}
-	if (notices.length > 0) {
-		output += `\n\n[${notices.join(". ")}]`;
-	}
-	return { content: [{ type: "text", text: output }], details: Object.keys(details).length ? details : undefined };
+	const rawBuffer = await sshExecScript(remote, REMOTE_GREP_SCRIPT, [
+		params.ignoreCase ? 1 : 0,
+		params.literal ? 1 : 0,
+		params.glob ?? "",
+		params.pattern,
+		searchPath,
+		contextValue,
+		effectiveLimit + 1,
+		REMOTE_SEARCH_MAX_BYTES,
+		"",
+	], boundedOptions(deadline, signal));
+	return formatGrepJson(rawBuffer, searchPath, isDirectory, effectiveLimit, contextValue, rawBuffer.length >= REMOTE_SEARCH_MAX_BYTES, "relocated_ssh");
+
 }
 
 type LockedState = "locked-pending" | "locked-verified" | "locked-failed";
@@ -581,9 +645,18 @@ function registerLockedSsh(pi: ExtensionAPI, descriptorPath: string): void {
 	const blockedResult = () => ({
 		content: [{ type: "text" as const, text: JSON.stringify({ error: "ssh_lock_not_verified", state, detail: failure }) }],
 		isError: true,
+		details: { backend: "locked_ssh", outcome: "dependency" },
 	});
+	const lockedFailureResult = (error: unknown) => {
+		const redacted = redactLockedError(error);
+		return {
+			content: [{ type: "text" as const, text: JSON.stringify(redacted) }],
+			isError: true,
+			details: { backend: "locked_ssh", outcome: sshFailureOutcome(redacted.error) },
+		};
+	};
 	const remotePath = (input: string | undefined): string => {
-		const raw = input?.trim() || ".";
+		const raw = input === undefined || input === "" ? "." : input;
 		if (raw === ".") return descriptor.cwd;
 		if (path.posix.isAbsolute(raw)) {
 			const local = normalizePosixPath(fallbackCwd);
@@ -593,8 +666,9 @@ function registerLockedSsh(pi: ExtensionAPI, descriptorPath: string): void {
 		}
 		return path.posix.join(descriptor.cwd, raw);
 	};
-	const runRead = (script: string, args: string[]) => withBoundedReadRetry(() => runLockedSsh(descriptor, script, args));
-	const pathGuard = `set -eu\np="$1"; root="$2"\ncase "$p" in /*) ;; *) exit 64;; esac\ncp=$(readlink -f -- "$p"); cr=$(readlink -f -- "$root")\ncase "$cp" in "$cr"|"$cr/"*) ;; *) exit 65;; esac\n`;
+	const runRead = (script: string, args: string[], options: Record<string, unknown> = {}) =>
+		withBoundedReadRetry(() => runLockedSsh(descriptor, script, args, { timeoutMs: SSH_CONTROL_TIMEOUT_MS, ...options }));
+	const pathGuard = `set -eu\np="$1"; root="$2"\ncase "$p" in /*) ;; *) exit 64;; esac\ncr=$(readlink -f -- "$root")\nexec {targetfd}<"$p" || exit 64; cp="/proc/$$/fd/$targetfd"; resolved=$(readlink -f -- "$cp")\ncase "$resolved" in "$cr"|"$cr/"*) ;; *) exit 65;; esac\n`;
 	const readOps: ReadOperations = {
 		readFile: async (p) => (await runRead(`${pathGuard}cat -- "$cp"\n`, [remotePath(p), descriptor.allowedRoot])).stdout,
 		access: async (p) => { await runRead(`${pathGuard}test -r "$cp"\n`, [remotePath(p), descriptor.allowedRoot]); },
@@ -610,7 +684,7 @@ function registerLockedSsh(pi: ExtensionAPI, descriptorPath: string): void {
 		const id = mutationId();
 		appendEffectsRecord(evidencePath, effectsRecord("intent", "write", id));
 		const data = Buffer.isBuffer(content) ? content : Buffer.from(content);
-		const digest = (await import("node:crypto")).createHash("sha256").update(data).digest("hex");
+		const digest = createHash("sha256").update(data).digest("hex");
 		try {
 			await runLockedSsh(descriptor, ATOMIC_WRITE_SCRIPT, [remotePath(p), descriptor.allowedRoot, digest], { stdin: data.toString("base64") });
 			appendEffectsRecord(evidencePath, effectsRecord("settled", "write", id, "confirmed"));
@@ -624,9 +698,11 @@ function registerLockedSsh(pi: ExtensionAPI, descriptorPath: string): void {
 		mkdir: async (dir) => {
 			const id = mutationId();
 			appendEffectsRecord(evidencePath, effectsRecord("intent", "mkdir", id));
-			const script = `set -eu\np="$1"; root="$2"\ncr=$(readlink -f -- "$root"); planned=$(realpath -m -- "$p")\ncase "$planned" in "$cr"|"$cr/"*) ;; *) exit 65;; esac\nmkdir -p -- "$planned"\ncp=$(readlink -f -- "$planned"); case "$cp" in "$cr"|"$cr/"*) ;; *) exit 66;; esac\n`;
+			// Walk one component at a time through held directory capabilities.
+			// A racing symlink can make the operation fail, but cannot redirect a
+			// later mkdir outside allowedRoot.
 			try {
-				await runLockedSsh(descriptor, script, [remotePath(dir), descriptor.allowedRoot]);
+				await runLockedSsh(descriptor, LOCKED_MKDIR_SCRIPT, [remotePath(dir), descriptor.allowedRoot]);
 				appendEffectsRecord(evidencePath, effectsRecord("settled", "mkdir", id, "confirmed"));
 			} catch (error) {
 				appendEffectsRecord(evidencePath, effectsRecord("settled", "mkdir", id, "unknown"));
@@ -640,9 +716,9 @@ function registerLockedSsh(pi: ExtensionAPI, descriptorPath: string): void {
 			const id = mutationId();
 			const token = mutationId().replaceAll("-", "");
 			appendEffectsRecord(evidencePath, effectsRecord("intent", "bash", id));
-			const script = `set +e\ncd -- "$1" || exit 70\nbash -lc "$2"\ncode=$?\nprintf '\\n__MONIKA_SSH_COMPLETE_${token}__:%s\\n' "$code"\nexit 0\n`;
+			const script = `set +e\ncd -- "$1" || exit 70\ntmp=$(mktemp); trap 'rm -f -- "$tmp"' EXIT HUP INT TERM\ncat > "$tmp"\nbash -l "$tmp"\ncode=$?\nprintf '\\n__MONIKA_SSH_COMPLETE_${token}__:%s\\n' "$code"\nexit 0\n`;
 			try {
-				const result = await runLockedSsh(descriptor, script, [remotePath(cwd), command], { signal, timeoutMs: timeout ? timeout * 1000 : undefined });
+				const result = await runLockedSsh(descriptor, script, [remotePath(cwd)], { signal, timeoutMs: timeout ? timeout * 1000 : undefined, stdin: command });
 				const parsed = parseCompletionTrailer(result.stdout.toString("utf8"), token);
 				if (parsed.completion !== "known") throw Object.assign(new Error("ssh_transport_ambiguous"), parsed);
 				if (parsed.output) onData(Buffer.from(parsed.output));
@@ -663,46 +739,97 @@ function registerLockedSsh(pi: ExtensionAPI, descriptorPath: string): void {
 	const localFind = createFindTool(fallbackCwd);
 	const localGrep = createGrepTool(fallbackCwd);
 	const localBash = createBashTool(fallbackCwd);
-	pi.registerTool({ ...localRead, execute: (id, params, signal, onUpdate) => state === "locked-verified" ? createReadTool(fallbackCwd, readOps).execute(id, params, signal, onUpdate) : Promise.resolve(blockedResult()) });
-	pi.registerTool({ ...localWrite, execute: (id, params, signal, onUpdate) => state === "locked-verified" ? createWriteTool(fallbackCwd, writeOps).execute(id, params, signal, onUpdate) : Promise.resolve(blockedResult()) });
-	pi.registerTool({ ...localEdit, execute: (id, params, signal, onUpdate) => state === "locked-verified" ? createEditTool(fallbackCwd, editOps).execute(id, params, signal, onUpdate) : Promise.resolve(blockedResult()) });
-	pi.registerTool({ ...localBash, execute: (id, params, signal, onUpdate) => state === "locked-verified" ? createBashTool(fallbackCwd, bashOps).execute(id, params, signal, onUpdate) : Promise.resolve(blockedResult()) });
-	pi.registerTool({ ...localLs, async execute(_id, params) {
+	const withLockedBackend = async (promise: Promise<any>) => {
+		try {
+			const result = await promise;
+			if (!result || typeof result !== "object") return result;
+			const prior = result.details && typeof result.details === "object" ? result.details : {};
+			return { ...result, details: { backend: "locked_ssh", outcome: result.isError ? "tool_execution" : "success", ...prior } };
+		} catch (error) {
+			return {
+				content: [{ type: "text" as const, text: error instanceof Error ? error.message : String(error) }],
+				isError: true,
+				details: { backend: "locked_ssh", outcome: sshFailureOutcome(error) },
+			};
+		}
+	};
+	pi.registerTool({ ...localRead, execute: (id, params, signal, onUpdate) => state === "locked-verified" ? withLockedBackend(createReadTool(fallbackCwd, readOps).execute(id, params, signal, onUpdate)) : Promise.resolve(blockedResult()) });
+	pi.registerTool({ ...localWrite, execute: (id, params, signal, onUpdate) => state === "locked-verified" ? withLockedBackend(createWriteTool(fallbackCwd, writeOps).execute(id, params, signal, onUpdate)) : Promise.resolve(blockedResult()) });
+	pi.registerTool({ ...localEdit, execute: (id, params, signal, onUpdate) => state === "locked-verified" ? withLockedBackend(createEditTool(fallbackCwd, editOps).execute(id, params, signal, onUpdate)) : Promise.resolve(blockedResult()) });
+	pi.registerTool({ ...localBash, execute: (id, params, signal, onUpdate) => state === "locked-verified" ? withLockedBackend(createBashTool(fallbackCwd, bashOps).execute(id, params, signal, onUpdate)) : Promise.resolve(blockedResult()) });
+	pi.registerTool({ ...localLs, async execute(_id, params, signal) {
 		if (state !== "locked-verified") return blockedResult();
 		const typed = params as { path?: string; limit?: number };
 		try {
-			const result = await runRead(`${pathGuard}LC_ALL=C ls -A -p -- "$cp"\n`, [remotePath(typed.path), descriptor.allowedRoot]);
+			const result = await runRead(`${pathGuard}LC_ALL=C ls -A -p -- "$cp"\n`, [remotePath(typed.path), descriptor.allowedRoot], { signal, timeoutMs: SSH_CONTROL_TIMEOUT_MS });
 			const entries = result.stdout.toString().trim().split("\n").filter(Boolean).sort((a: string, b: string) => a.localeCompare(b)).slice(0, typed.limit ?? DEFAULT_LS_LIMIT);
-			return { content: [{ type: "text" as const, text: entries.join("\n") || "(empty directory)" }] };
-		} catch (error) { return { ...blockedResult(), content: [{ type: "text" as const, text: JSON.stringify(redactLockedError(error)) }] }; }
+			return { content: [{ type: "text" as const, text: entries.join("\n") || "(empty directory)" }], details: { backend: "locked_ssh", outcome: "success" } };
+		} catch (error) { return lockedFailureResult(error); }
 	} });
-	pi.registerTool({ ...localFind, async execute(_id, params) {
+	pi.registerTool({ ...localFind, async execute(_id, params, signal) {
 		if (state !== "locked-verified") return blockedResult();
 		const typed = params as { pattern: string; path?: string; limit?: number };
-		const script = `${pathGuard}cd -- "$cp"\nset +e\nout=$(rg --files --hidden -g "$3"); code=$?\n[ "$code" -eq 0 ] || [ "$code" -eq 1 ] || exit "$code"\nprintf '%s\\n' "$out" | head -n "$4"\n`;
-		try { const result = await runRead(script, [remotePath(typed.path), descriptor.allowedRoot, typed.pattern, String(typed.limit ?? DEFAULT_FIND_LIMIT)]); return { content: [{ type: "text" as const, text: result.stdout.toString().trim() || "No files found matching pattern" }] }; }
-		catch (error) { return { ...blockedResult(), content: [{ type: "text" as const, text: JSON.stringify(redactLockedError(error)) }] }; }
+		if (Buffer.byteLength(typed.pattern, "utf8") > SSH_SEARCH_INPUT_MAX_BYTES) return lockedFailureResult(new Error("Find pattern exceeds the SSH search input limit"));
+		const effectiveLimit = Math.max(1, typed.limit ?? DEFAULT_FIND_LIMIT);
+		try {
+			const result = await runRead(
+				REMOTE_FIND_SCRIPT,
+				[remotePath(typed.path), typed.pattern, String(effectiveLimit + 1), String(REMOTE_SEARCH_MAX_BYTES), descriptor.allowedRoot],
+				{ signal, timeoutMs: REMOTE_SEARCH_TIMEOUT_MS },
+			);
+			const entries = result.stdout.toString().trim().split("\n").filter(Boolean);
+			const limited = entries.slice(0, effectiveLimit);
+			const output = limited.join("\n");
+			return {
+				content: [{ type: "text" as const, text: output || "No files found matching pattern" }],
+				details: { backend: "locked_ssh", outcome: output ? "success" : "no_match", ...(entries.length > effectiveLimit ? { resultLimitReached: effectiveLimit } : {}) },
+			};
+		} catch (error) { return lockedFailureResult(error); }
 	} });
-	pi.registerTool({ ...localGrep, async execute(_id, params) {
+	pi.registerTool({ ...localGrep, async execute(_id, params, signal) {
 		if (state !== "locked-verified") return blockedResult();
-		const typed = params as { pattern: string; path?: string; limit?: number };
-		const script = `${pathGuard}set +e\nout=$(rg --line-number --color never -- "$3" "$cp"); code=$?\n[ "$code" -eq 0 ] || [ "$code" -eq 1 ] || exit "$code"\nprintf '%s\\n' "$out" | head -n "$4"\n`;
-		try { const result = await runRead(script, [remotePath(typed.path), descriptor.allowedRoot, typed.pattern, String(typed.limit ?? DEFAULT_GREP_LIMIT)]); return { content: [{ type: "text" as const, text: result.stdout.toString().trim() || "No matches found" }] }; }
-		catch (error) { return { ...blockedResult(), content: [{ type: "text" as const, text: JSON.stringify(redactLockedError(error)) }] }; }
+		const typed = params as { pattern: string; path?: string; glob?: string; ignoreCase?: boolean; literal?: boolean; context?: number; limit?: number };
+		if (Buffer.byteLength(typed.pattern, "utf8") > SSH_SEARCH_INPUT_MAX_BYTES || (typed.glob && Buffer.byteLength(typed.glob, "utf8") > SSH_SEARCH_INPUT_MAX_BYTES)) {
+			return lockedFailureResult(new Error("Grep pattern or glob exceeds the SSH search input limit"));
+		}
+		const effectiveLimit = Math.max(1, typed.limit ?? DEFAULT_GREP_LIMIT);
+		const searchPath = remotePath(typed.path);
+		try {
+			const kind = await runRead(
+				`${pathGuard}if [ -d "$cp" ]; then printf d; else printf f; fi\n`,
+				[searchPath, descriptor.allowedRoot],
+				{ signal, timeoutMs: REMOTE_SEARCH_TIMEOUT_MS },
+			);
+			const isDirectory = kind.stdout.toString() === "d";
+			const result = await runRead(REMOTE_GREP_SCRIPT, [
+				typed.ignoreCase ? "1" : "0", typed.literal ? "1" : "0", typed.glob ?? "", typed.pattern,
+				searchPath, String(Math.max(0, typed.context ?? 0)), String(effectiveLimit + 1),
+				String(REMOTE_SEARCH_MAX_BYTES), descriptor.allowedRoot,
+			], { signal, timeoutMs: REMOTE_SEARCH_TIMEOUT_MS });
+			return formatGrepJson(
+				result.stdout,
+				searchPath,
+				isDirectory,
+				effectiveLimit,
+				Math.max(0, typed.context ?? 0),
+				result.stdout.length >= REMOTE_SEARCH_MAX_BYTES,
+				"locked_ssh",
+			);
+		} catch (error) { return lockedFailureResult(error); }
 	} });
 
 	pi.on("session_start", async (_event, ctx) => {
 		if (state === "locked-failed") return;
 		try {
-			const result = await runLockedSsh(descriptor, STARTUP_PROBE_SCRIPT, [descriptor.cwd, descriptor.allowedRoot]);
+			const result = await runLockedSsh(descriptor, STARTUP_PROBE_SCRIPT, [descriptor.cwd, descriptor.allowedRoot], { timeoutMs: SSH_CONTROL_TIMEOUT_MS });
 			const [hostname, cwd, allowedRoot, ...extra] = result.stdout.toString("utf8").trimEnd().split("\n");
 			if (extra.length || hostname !== descriptor.hostname || cwd !== descriptor.cwd || allowedRoot !== descriptor.allowedRoot || !isPathWithin(allowedRoot, cwd)) throw new Error("locked_probe_mismatch");
 			state = "locked-verified";
-			ctx.ui.setStatus("ssh", ctx.ui.theme.fg("accent", `SSH locked: ${descriptor.name}`));
+			updateSshUiBestEffort(ctx, { statusText: `SSH locked: ${descriptor.name}` });
 		} catch (error) {
 			state = "locked-failed";
 			failure = redactLockedError(error).error;
-			ctx.ui.setStatus("ssh", ctx.ui.theme.fg("error", `SSH locked failed: ${descriptor.name}`));
+			updateSshUiBestEffort(ctx, { statusText: `SSH locked failed: ${descriptor.name}`, tone: "error" });
 		}
 	});
 	pi.on("input", async () => lockedInputDecision(state));
@@ -738,6 +865,7 @@ export default function (pi: ExtensionAPI) {
 	const localGrep = createGrepTool(toolMetadataCwd);
 	const localLs = createLsTool(toolMetadataCwd);
 	const localBash = createBashTool(toolMetadataCwd);
+	const localBashOperations = createLocalBashOperations();
 
 	// Resolved lazily on session_start (CLI flags not available during factory)
 	let resolvedSsh: { remote: string; remoteCwd: string } | null = null;
@@ -746,6 +874,7 @@ export default function (pi: ExtensionAPI) {
 	let sshError: Error | null = null;
 	let remoteHost: string | null = null;
 	let remoteAgentsContent: string | null = null;
+	const routingLock = createAsyncReadWriteLock();
 
 	const getSsh = () => resolvedSsh;
 	const requireSsh = () => {
@@ -759,10 +888,29 @@ export default function (pi: ExtensionAPI) {
 	const mapRemotePath = (ssh: { remoteCwd: string }, localRoot: string, p: string | undefined) => resolveRemotePath(ssh.remoteCwd, localRoot, p);
 	const setDebugStatus = (ctx: any, message: string) => {
 		if (!sshDebug) return;
-		ctx.ui.setStatus("ssh-debug", ctx.ui.theme.fg("accent", message));
+		updateSshUiBestEffort(ctx, { statusKey: "ssh-debug", statusText: message });
+	};
+	const registerRoutedTool = (tool: any) => {
+		const execute = tool.execute.bind(tool);
+		tool.execute = (...args: any[]) => routingLock.withRead(async () => {
+			const backend = resolvedSsh ? "relocated_ssh" : "local";
+			try {
+				const result = await execute(...args);
+				if (!result || typeof result !== "object") return result;
+				const prior = result.details && typeof result.details === "object" ? result.details : {};
+				return { ...result, details: { backend, outcome: result.isError ? "tool_execution" : "success", ...prior } };
+			} catch (error) {
+				return {
+					content: [{ type: "text" as const, text: error instanceof Error ? error.message : String(error) }],
+					isError: true,
+					details: { backend, outcome: sshFailureOutcome(error) },
+				};
+			}
+		});
+		pi.registerTool(tool);
 	};
 
-	pi.registerTool({
+	registerRoutedTool({
 		...localRead,
 		async execute(id, params, signal, onUpdate, ctx) {
 			const ssh = requireSsh();
@@ -775,7 +923,7 @@ export default function (pi: ExtensionAPI) {
 			if (ssh) {
 				const sessionCwd = getSessionCwd(ctx);
 				const tool = createReadTool(sessionCwd, {
-					operations: createRemoteReadOps(ssh.remote, ssh.remoteCwd, sessionCwd),
+					operations: createRemoteReadOps(ssh.remote, ssh.remoteCwd, sessionCwd, signal),
 				});
 				return tool.execute(id, params, signal, onUpdate);
 			}
@@ -783,7 +931,7 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerTool({
+	registerRoutedTool({
 		...localWrite,
 		async execute(id, params, signal, onUpdate, ctx) {
 			const ssh = requireSsh();
@@ -796,7 +944,7 @@ export default function (pi: ExtensionAPI) {
 			if (ssh) {
 				const sessionCwd = getSessionCwd(ctx);
 				const tool = createWriteTool(sessionCwd, {
-					operations: createRemoteWriteOps(ssh.remote, ssh.remoteCwd, sessionCwd),
+					operations: createRemoteWriteOps(ssh.remote, ssh.remoteCwd, sessionCwd, signal),
 				});
 				return tool.execute(id, params, signal, onUpdate);
 			}
@@ -804,7 +952,7 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerTool({
+	registerRoutedTool({
 		...localEdit,
 		async execute(id, params, signal, onUpdate, ctx) {
 			const ssh = requireSsh();
@@ -817,7 +965,7 @@ export default function (pi: ExtensionAPI) {
 			if (ssh) {
 				const sessionCwd = getSessionCwd(ctx);
 				const tool = createEditTool(sessionCwd, {
-					operations: createRemoteEditOps(ssh.remote, ssh.remoteCwd, sessionCwd),
+					operations: createRemoteEditOps(ssh.remote, ssh.remoteCwd, sessionCwd, signal),
 				});
 				return tool.execute(id, params, signal, onUpdate);
 			}
@@ -825,7 +973,7 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerTool({
+	registerRoutedTool({
 		...localFind,
 		async execute(id, params, _signal, _onUpdate, ctx) {
 			const ssh = requireSsh();
@@ -840,13 +988,13 @@ export default function (pi: ExtensionAPI) {
 				setDebugStatus(ctx, `SSH ${ssh ? "remote" : "local"} find: ${targetPath} :: ${pattern}`);
 			}
 			if (ssh) {
-				return remoteFind(ssh.remote, ssh.remoteCwd, getSessionCwd(ctx), pattern, searchPath, limit);
+				return remoteFind(ssh.remote, ssh.remoteCwd, getSessionCwd(ctx), pattern, searchPath, limit, _signal);
 			}
 			return createFindTool(getSessionCwd(ctx)).execute(id, params, _signal, _onUpdate);
 		},
 	});
 
-	pi.registerTool({
+	registerRoutedTool({
 		...localGrep,
 		async execute(id, params, _signal, _onUpdate, ctx) {
 			const ssh = requireSsh();
@@ -865,15 +1013,15 @@ export default function (pi: ExtensionAPI) {
 				setDebugStatus(ctx, `SSH ${ssh ? "remote" : "local"} grep: ${targetPath} :: ${typed.pattern}`);
 			}
 			if (ssh) {
-				return remoteGrep(ssh.remote, ssh.remoteCwd, getSessionCwd(ctx), typed);
+				return remoteGrep(ssh.remote, ssh.remoteCwd, getSessionCwd(ctx), typed, _signal);
 			}
 			return createGrepTool(getSessionCwd(ctx)).execute(id, params, _signal, _onUpdate);
 		},
 	});
 
-	pi.registerTool({
+	registerRoutedTool({
 		...localLs,
-		async execute(id, params, _signal, _onUpdate, ctx) {
+		async execute(id, params, signal, _onUpdate, ctx) {
 			const ssh = requireSsh();
 			const { path, limit } = params as { path?: string; limit?: number };
 			if (sshDebug && ctx) {
@@ -882,13 +1030,13 @@ export default function (pi: ExtensionAPI) {
 				setDebugStatus(ctx, `SSH ${ssh ? "remote" : "local"} ls: ${targetPath}`);
 			}
 			if (ssh) {
-				return remoteLs(ssh.remote, ssh.remoteCwd, getSessionCwd(ctx), path, limit);
+				return remoteLs(ssh.remote, ssh.remoteCwd, getSessionCwd(ctx), path, limit, signal);
 			}
 			return createLsTool(getSessionCwd(ctx)).execute(id, params, _signal, _onUpdate);
 		},
 	});
 
-	pi.registerTool({
+	registerRoutedTool({
 		...localBash,
 		async execute(id, params, signal, onUpdate, ctx) {
 			const ssh = requireSsh();
@@ -912,113 +1060,44 @@ export default function (pi: ExtensionAPI) {
 	// ── Relocate tool ──────────────────────────────────────────────────────
 	// Switches the execution context mid-session. All tools (bash, read, write,
 	// edit, grep, find, ls) will route to the new target after a successful
-	// relocate. Validates connectivity BEFORE switching — if validation fails,
-	// the current context is preserved and a detailed error is returned.
+	// Relocation is an explicit state machine. Status inspections share the
+	// routing read lock; transitions are exclusive with all routed tools.
 	const relocateSchema = Type.Object({
-		target: Type.Optional(Type.String({ description: 'SSH target: "user@host", "user@host:/path", or "local" to return to container-local execution. Omit to check current status.' })),
+		target: Type.Optional(Type.String({ description: 'SSH target: "user@host", an SSH config alias, "user@host:/absolute/path", bracketed IPv6, or "local". Omit to inspect status.' })),
 	});
+	const getRelocateState = () => ({ resolvedSsh, sshRequired, sshError, remoteHost, remoteAgentsContent });
+	const commitRelocateState = (next: any) => {
+		resolvedSsh = next.resolvedSsh;
+		sshRequired = next.sshRequired;
+		sshError = next.sshError;
+		remoteHost = next.remoteHost;
+		remoteAgentsContent = next.remoteAgentsContent;
+	};
+	const loadRemoteAgents = async (remote: string, cwd: string, signal?: AbortSignal) => {
+		const agentsPath = `${cwd}/AGENTS.md`;
+		const options = { sshOptions: RELOCATE_SSH_OPTIONS, signal, timeoutMs: SSH_CONTROL_TIMEOUT_MS };
+		await sshExecScript(remote, "test -f \"$1\" -a -r \"$1\"\n", [agentsPath], options);
+		const content = await sshExecScript(remote, "head -c \"$2\" -- \"$1\"\n", [agentsPath, REMOTE_AGENTS_MAX_BYTES + 1], options);
+		if (content.length > REMOTE_AGENTS_MAX_BYTES) throw new Error(`Remote AGENTS.md exceeds ${REMOTE_AGENTS_MAX_BYTES} bytes`);
+		return content.toString("utf8");
+	};
 
 	pi.registerTool({
 		name: "relocate",
-		description: "Switch execution context to a different host via SSH. All tools (bash, read, write, edit, grep, find, ls) will route to the new target after a successful relocate. Call with no target to check current context.",
+		description: "Inspect or switch execution context via SSH. Remote transitions validate connectivity and required search dependencies before atomically routing read/write/edit/bash/grep/find/ls. Omit target for status; use local to return to container execution.",
 		label: "Relocate",
 		parameters: relocateSchema,
-		async execute(_id, params, _signal, _onUpdate, ctx) {
-			const { target } = params as { target?: string };
-
-			// ── Status check (no target) ──
-			if (!target) {
-				if (resolvedSsh) {
-					return {
-						content: [{ type: "text" as const, text: `Current context: ${resolvedSsh.remote}:${resolvedSsh.remoteCwd}${remoteHost ? ` (hostname: ${remoteHost})` : ""}\nAll tools are routing to this target via SSH.` }],
-					};
-				}
-				return {
-					content: [{ type: "text" as const, text: "Current context: local (container-local execution).\nAll tools operate on the container filesystem." }],
-				};
-			}
-
-			// ── Return to local ──
-			if (target === "local") {
-				const wasRemote = resolvedSsh;
-				resolvedSsh = null;
-				sshRequired = false;
-				sshError = null;
-				remoteHost = null;
-				remoteAgentsContent = null;
-				if (ctx) {
-					ctx.ui.setStatus("ssh", "");
-					ctx.ui.notify("Relocated to local execution", "info");
-				}
-				return {
-					content: [{ type: "text" as const, text: `Relocated to local execution (container).${wasRemote ? ` Disconnected from ${wasRemote.remote}.` : ""}` }],
-				};
-			}
-
-			// ── Parse target ──
-			const parsed = parseSshArg(target);
-
-			// ── Validate BEFORE switching ──
-			const validation = await validateSshTarget(parsed.remote, parsed.remoteCwd);
-
-			if (!validation.success) {
-				// DO NOT change state. Return error with diagnosis.
-				const current = resolvedSsh ? `${resolvedSsh.remote}:${resolvedSsh.remoteCwd}` : "local";
-				const lines = [
-					`RELOCATE FAILED — staying on current context (${current}).`,
-					`Target: ${target}`,
-					`Error: ${validation.error}`,
-				];
-				if (validation.errorKind === "auth") {
-					lines.push("", "To fix: ensure the SSH public key is in the target's ~/.ssh/authorized_keys or /etc/ssh/authorized_keys.d/.");
-				} else if (validation.errorKind === "host_key") {
-					lines.push("", "To fix: verify the host's identity, then remove the old key from known_hosts and retry.");
-				} else if (validation.errorKind === "refused") {
-					lines.push("", "To fix: check that sshd is running on the target (systemctl status sshd).");
-				} else if (validation.errorKind === "path") {
-					lines.push("", "To fix: use a different path, e.g.: relocate user@host:/home/user");
-				}
-				if (ctx) {
-					ctx.ui.setStatus("ssh", ctx.ui.theme.fg("error", `SSH: FAILED ${target}`));
-					ctx.ui.notify(`Relocate failed: ${validation.error}`, "error");
-				}
-				return { content: [{ type: "text" as const, text: lines.join("\n") }] };
-			}
-
-			// ── Switch context ──
-			const previousContext = resolvedSsh ? `${resolvedSsh.remote}:${resolvedSsh.remoteCwd}` : "local";
-			resolvedSsh = { remote: parsed.remote, remoteCwd: validation.remoteCwd };
-			sshRequired = true;
-			sshError = null;
-			remoteHost = validation.hostname ?? null;
-
-			// Read remote AGENTS.md if available
-			remoteAgentsContent = null;
-			try {
-				const agentsPath = `${validation.remoteCwd}/AGENTS.md`;
-				await sshExec(parsed.remote, `test -r ${JSON.stringify(agentsPath)}`, RELOCATE_SSH_OPTIONS);
-				const content = (await sshExec(parsed.remote, `cat ${JSON.stringify(agentsPath)}`, RELOCATE_SSH_OPTIONS)).toString("utf-8");
-				if (content.trim().length > 0) {
-					remoteAgentsContent = content;
-				}
-			} catch { /* no AGENTS.md, that's fine */ }
-
-			// Update UI
-			if (ctx) {
-				ctx.ui.setStatus("ssh", ctx.ui.theme.fg("accent", `SSH: ${resolvedSsh.remote}:${resolvedSsh.remoteCwd}`));
-				ctx.ui.notify(`Relocated to ${resolvedSsh.remote}:${resolvedSsh.remoteCwd}`, "info");
-			}
-
-			// Build result
-			const lines = [
-				`Relocated: ${previousContext} → ${resolvedSsh.remote}:${resolvedSsh.remoteCwd}`,
-				`Hostname: ${validation.hostname ?? "unknown"}`,
-				`All tools (bash, read, write, edit, grep, find, ls) now operate on ${resolvedSsh.remote}.`,
-			];
-			if (remoteAgentsContent) {
-				lines.push("", "Remote AGENTS.md found and loaded into context.");
-			}
-			return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+		async execute(_id, params, signal, _onUpdate, ctx) {
+			const request = parseRelocateTarget((params as { target?: string }).target);
+			const run = () => executeRelocateRequest({
+				request,
+				getState: getRelocateState,
+				commitState: commitRelocateState,
+				validateTarget: (remote: string, cwd?: string) => validateSshTarget(remote, cwd, signal),
+				loadRemoteAgents: (remote: string, cwd: string) => loadRemoteAgents(remote, cwd, signal),
+				updateUi: (value: any) => updateSshUiBestEffort(ctx, value),
+			});
+			return request.kind === "status" ? routingLock.withRead(run) : routingLock.withWrite(run);
 		},
 	});
 
@@ -1032,53 +1111,58 @@ export default function (pi: ExtensionAPI) {
 		if (arg) {
 			try {
 				const parsed = parseSshArg(arg);
-				const remote = parsed.remote;
-				const remoteCwd = await resolveRemoteCwd(remote, parsed.remoteCwd);
-				await sshExec(remote, `test -d ${JSON.stringify(remoteCwd)}`);
+				const validation = await validateSshTarget(parsed.remote, parsed.remoteCwd);
+				if (!validation.success) throw new Error(validation.error ?? "SSH validation failed");
 				if (sshVerify) {
-					await sshExec(remote, `test -d ${JSON.stringify(sshVerify)}`);
-					const listing = (await sshExec(remote, `ls -a ${JSON.stringify(sshVerify)}`)).toString().trim();
-					ctx.ui.notify(
-						`SSH verify: ${sshVerify}\n${listing || "(empty directory)"}`,
-						"info",
-					);
+					await sshExecScript(parsed.remote, "test -d \"$1\"\n", [sshVerify]);
+					const listing = (await sshExecScript(parsed.remote, "LC_ALL=C ls -a -- \"$1\"\n", [sshVerify])).toString().trim();
+					updateSshUiBestEffort(ctx, { notification: `SSH verify: ${sshVerify}\n${listing || "(empty directory)"}` });
 				}
-				resolvedSsh = { remote, remoteCwd };
+				resolvedSsh = { remote: parsed.remote, remoteCwd: validation.remoteCwd };
 				sshError = null;
-				remoteAgentsContent = null;
+				remoteHost = validation.hostname ?? null;
 				try {
-					await sshExec(remote, `test -r ${JSON.stringify(`${remoteCwd}/AGENTS.md`)}`);
-					remoteAgentsContent = (await sshExec(remote, `cat ${JSON.stringify(`${remoteCwd}/AGENTS.md`)}`)).toString("utf-8");
-					if (remoteAgentsContent.trim().length === 0) {
-						remoteAgentsContent = null;
-					}
+					remoteAgentsContent = (await loadRemoteAgents(parsed.remote, validation.remoteCwd)).trim() || null;
 				} catch {
 					remoteAgentsContent = null;
 				}
 				if (sshDebug) {
-					remoteHost = (await sshExec(remote, "hostname")).toString().trim();
-					ctx.ui.setStatus("ssh-debug", ctx.ui.theme.fg("accent", `SSH debug: ${remoteHost}`));
-					ctx.ui.notify(`SSH debug: connected to ${remoteHost} (${resolvedSsh.remote}:${resolvedSsh.remoteCwd})`, "info");
+					updateSshUiBestEffort(ctx, {
+						statusKey: "ssh-debug",
+						statusText: `SSH debug: ${remoteHost ?? "unknown"}`,
+						notification: `SSH debug: connected to ${remoteHost ?? "unknown"} (${resolvedSsh.remote}:${resolvedSsh.remoteCwd})`,
+					});
 				}
-				ctx.ui.setStatus("ssh", ctx.ui.theme.fg("accent", `SSH: ${resolvedSsh.remote}:${resolvedSsh.remoteCwd}`));
-				ctx.ui.notify(`SSH mode: ${resolvedSsh.remote}:${resolvedSsh.remoteCwd}`, "info");
+				updateSshUiBestEffort(ctx, {
+					statusText: `SSH: ${resolvedSsh.remote}:${resolvedSsh.remoteCwd}`,
+					notification: `SSH mode: ${resolvedSsh.remote}:${resolvedSsh.remoteCwd}`,
+				});
 			} catch (error) {
 				sshError = error instanceof Error ? error : new Error(String(error));
-				if (sshDebug) {
-					ctx.ui.setStatus("ssh-debug", ctx.ui.theme.fg("error", "SSH debug: failed"));
-				}
-				ctx.ui.setStatus("ssh", ctx.ui.theme.fg("error", "SSH: failed"));
-				ctx.ui.notify(`SSH requested but failed: ${sshError.message}`, "error");
+				if (sshDebug) updateSshUiBestEffort(ctx, { statusKey: "ssh-debug", statusText: "SSH debug: failed", tone: "error" });
+				updateSshUiBestEffort(ctx, {
+					statusText: "SSH: unavailable",
+					tone: "error",
+					notification: `SSH requested but failed: ${sshError.message}`,
+					notificationLevel: "error",
+				});
 			}
 		}
 
 	});
 
-	// Handle user ! commands via SSH
+	// Handle every user ! command through the same routing fence as registered
+	// tools, including commands selected while the current context is local.
 	pi.on("user_bash", (_event) => {
-		const ssh = requireSsh();
-		if (!ssh) return; // No SSH, use local execution
-		return { operations: createRemoteBashOps(ssh.remote, ssh.remoteCwd, (_event as { cwd?: string }).cwd ?? fallbackCwd) };
+		const localCwd = (_event as { cwd?: string }).cwd ?? fallbackCwd;
+		const operations: BashOperations = {
+			exec: (...args) => routingLock.withRead(async () => {
+				const current = requireSsh();
+				if (current) return createRemoteBashOps(current.remote, current.remoteCwd, localCwd).exec(...args);
+				return localBashOperations.exec(...args);
+			}),
+		};
+		return { operations };
 	});
 
 	pi.on("context", async (event) => {

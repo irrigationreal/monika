@@ -27,10 +27,12 @@ if [[ "$PI_SUBAGENT_OPERATOR_ROOT" == "/" || "$(dirname -- "$PI_SUBAGENT_OPERATO
 fi
 ssh_lock_extension="$PI_CODING_AGENT_DIR/extensions/ssh.ts"
 ssh_lock_helper="$PI_CODING_AGENT_DIR/extensions/ssh-lock.mjs"
-if [[ -f "$ssh_lock_extension" && -f "$ssh_lock_helper" ]]; then
+ssh_relocate_helper="$PI_CODING_AGENT_DIR/extensions/ssh-relocate.mjs"
+if [[ -f "$ssh_lock_extension" && -f "$ssh_lock_helper" && -f "$ssh_relocate_helper" ]]; then
   ssh_lock_extension_sha="$(sha256sum "$ssh_lock_extension" | awk '{print $1}')"
   ssh_lock_helper_sha="$(sha256sum "$ssh_lock_helper" | awk '{print $1}')"
-  actual_ssh_lock_digest="$(printf '%s\n%s\n' "$ssh_lock_extension_sha" "$ssh_lock_helper_sha" | sha256sum | awk '{print $1}')"
+  ssh_relocate_helper_sha="$(sha256sum "$ssh_relocate_helper" | awk '{print $1}')"
+  actual_ssh_lock_digest="$(printf '%s\n%s\n%s\n' "$ssh_lock_extension_sha" "$ssh_lock_helper_sha" "$ssh_relocate_helper_sha" | sha256sum | awk '{print $1}')"
   if [[ -n "${PI_SUBAGENT_SSH_LOCK_CODE_DIGEST:-}" && "$PI_SUBAGENT_SSH_LOCK_CODE_DIGEST" != "$actual_ssh_lock_digest" ]]; then
     die "bundled SSH lock code does not match the image attestation"
   fi

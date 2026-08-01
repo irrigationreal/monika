@@ -56,7 +56,9 @@ const modelChartSummary = computed(() => {
   return `${integer(total)} completed assistant responses across ${String(modelChartSeries.value.length)} model vendors.`;
 });
 const toolChartData = computed<AnalyticsChartDatum[]>(() =>
-  toolRows.value.slice(0, 12).map((row) => ({ label: row.operation, failureRate: row.failureRate * 100 }))
+  toolRows.value
+    .slice(0, 12)
+    .map((row) => ({ label: `${row.operation} (${row.backend})`, failureRate: row.failureRate * 100 }))
 );
 const toolChartSeries: AnalyticsChartSeries[] = [
   { key: 'failureRate', label: 'Failure rate (%)', color: '#f7768e', variant: 'hatched' },
@@ -90,6 +92,14 @@ function integer(value: number | null | undefined): string {
 }
 function percent(value: number | null | undefined): string {
   return value === null || value === undefined ? 'Unavailable' : `${(value * 100).toFixed(1)}%`;
+}
+function outcomeSummary(outcomes: Record<string, number>): string {
+  return (
+    Object.entries(outcomes)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([outcome, count]) => `${outcome}: ${integer(count)}`)
+      .join(', ') || 'None recorded'
+  );
 }
 function duration(value: number | null | undefined): string {
   if (value === null || value === undefined) return 'Unavailable';
@@ -144,6 +154,10 @@ onMounted(() => void refresh());
     </header>
 
     <div v-if="error" class="vb-login-error" role="alert">{{ error }}</div>
+    <p v-if="metrics" class="analytics-build">
+      Runtime build: <code>{{ metrics.build.commit ?? 'unknown' }}</code>
+      <span v-if="metrics.build.createdAt"> · {{ metrics.build.createdAt }}</span>
+    </p>
     <div v-if="analytics && !analytics.runtime.available" class="analytics-warning" role="status">
       Canonical Pi analytics are unavailable: {{ analytics.runtime.warning ?? 'agentd did not return metrics' }}. Forum
       vocabulary remains available.
@@ -241,6 +255,10 @@ onMounted(() => void refresh());
 
       <article class="analytics-panel">
         <h2>Tool reliability</h2>
+        <p>
+          Normalized operations, execution backends, and bounded outcomes only. Historical rows without structured
+          provenance remain unknown.
+        </p>
         <AnalyticsBreakdownBarChart
           :data="toolChartData"
           :series="toolChartSeries"
@@ -257,20 +275,24 @@ onMounted(() => void refresh());
             <thead>
               <tr>
                 <th scope="col">Operation</th>
+                <th scope="col">Backend</th>
                 <th scope="col">Calls</th>
                 <th scope="col">Failures</th>
                 <th scope="col">Rate</th>
+                <th scope="col">Outcomes</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="row in toolRows" :key="row.operation">
+              <tr v-for="row in toolRows" :key="`${row.operation}:${row.backend}`">
                 <td>{{ row.operation }}</td>
+                <td>{{ row.backend }}</td>
                 <td>{{ integer(row.calls) }}</td>
                 <td>{{ integer(row.failures) }}</td>
                 <td>{{ percent(row.failureRate) }}</td>
+                <td>{{ outcomeSummary(row.outcomes) }}</td>
               </tr>
               <tr v-if="!toolRows.length">
-                <td colspan="4">No paired tool calls.</td>
+                <td colspan="6">No paired tool calls.</td>
               </tr>
             </tbody>
           </table>

@@ -5,6 +5,7 @@ import {
   aggregateAnalytics,
   AnalyticsQueryError,
   AnalyticsTtlCache,
+  analyticsBuildInfo,
   analyticsErrorCategories,
   normalizeToolOperation,
   validateAnalyticsQuery,
@@ -38,7 +39,7 @@ function fixtureSession() {
         { type: 'toolCall', id: 'call-private-1', name: 'Read', arguments: { path: '/private/a' } },
         { type: 'toolCall', id: 'call-private-2', name: 'subagent', arguments: { action: 'wait', runId: 'run-private' } },
       ], stopReason: 'stop', usage: { totalTokens: 50 }, provider: 'Anthropic', model: 'Claude-Analytics' } },
-      { type: 'message', id: 'result-1', parentId: 'calls', timestamp: at(2, '01:00:01.000'), message: { role: 'toolResult', toolCallId: 'call-private-1', toolName: 'Read', isError: true, content: 'Timed out opening /private/a: raw secret' } },
+      { type: 'message', id: 'result-1', parentId: 'calls', timestamp: at(2, '01:00:01.000'), message: { role: 'toolResult', toolCallId: 'call-private-1', toolName: 'Read', isError: true, content: 'Timed out opening /private/a: raw secret', details: { backend: 'relocated_ssh', outcome: 'timeout', privatePath: '/private/a' } } },
       { type: 'message', id: 'result-2', parentId: 'result-1', timestamp: at(2, '01:00:09.500'), message: { role: 'toolResult', toolCallId: 'call-private-2', toolName: 'subagent', isError: false, content: 'run-private finished' } },
       { type: 'message', id: 'provider-error', parentId: 'result-2', timestamp: at(2, '02:00:00.000'), message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: '401 invalid API key secret-value', provider: 'Anthropic', model: 'Claude-Analytics' } },
       { type: 'custom', id: 'lifecycle', parentId: 'provider-error', timestamp: at(2, '03:00:00.000'), customType: 'monika.subagent.run', data: { version: 1, runId: 'run-private', completedAt: at(2, '03:00:00.000'), outcome: 'failed', profile: 'Tracer', mode: 'Async', asyncDir: '/private/runtime' } },
@@ -47,6 +48,17 @@ function fixtureSession() {
     ],
   };
 }
+
+test('reports only validated immutable build identity', () => {
+  assert.deepEqual(analyticsBuildInfo({ MONIKA_BUILD_COMMIT: 'ABCDEF1234567', MONIKA_BUILD_DATE: '2026-08-01T10:00:00Z' }), {
+    commit: 'abcdef1234567',
+    created_at: '2026-08-01T10:00:00.000Z',
+  });
+  assert.deepEqual(analyticsBuildInfo({ MONIKA_BUILD_COMMIT: 'latest/private', MONIKA_BUILD_DATE: 'not-a-date' }), {
+    commit: null,
+    created_at: null,
+  });
+});
 
 test('validates and canonicalizes analytics queries', () => {
   const validated = validateAnalyticsQuery(query({ pi_session_ids: [' one ', 'one', 'two'], min_tool_samples: undefined }));
@@ -75,6 +87,10 @@ test('normalizes tool operations without exposing arguments', () => {
   assert.equal(normalizeToolOperation('mcp__pi-subagents__subagent_wait'), 'subagent_wait');
   assert.equal(normalizeToolOperation('mcp__pi-subagents__subagent', { action: 'WAIT' }), 'subagent_wait');
   assert.equal(normalizeToolOperation('bash', { command: 'cd /secret && pnpm test' }), 'bash:pnpm');
+  assert.equal(normalizeToolOperation('bash', { command: 'rg one .; rg two .' }), 'bash:mixed');
+  assert.equal(normalizeToolOperation('relocate', {}), 'relocate_status');
+  assert.equal(normalizeToolOperation('relocate', { target: 'local' }), 'relocate_local');
+  assert.equal(normalizeToolOperation('relocate', { target: 'private-host:/private/path' }), 'relocate_remote');
   assert.equal(normalizeToolOperation('bash', { command: '/private/secret-command --token shh' }), 'bash:other');
   assert.equal(normalizeToolOperation('odd tool!', { command: 'cat /secret' }), 'odd_tool');
 });
@@ -83,6 +99,7 @@ test('aggregates only the active branch and emits privacy-safe canonical metrics
   const result = aggregateAnalytics([fixtureSession()], query());
 
   assert.equal(result.schema_version, 1);
+  assert.deepEqual(result.build, analyticsBuildInfo());
   assert.deepEqual(result.coverage, {
     requested_sessions: 1,
     unique_allowlisted_sessions: 1,
@@ -111,7 +128,7 @@ test('aggregates only the active branch and emits privacy-safe canonical metrics
   assert.equal(result.totals.tool_operations.failures, 1);
   assert.equal(result.totals.tool_operations.failure_rate, 0.5);
   assert.deepEqual(result.totals.tool_operations.worst_qualifying_operation, {
-    operation: 'read', samples: 1, failures: 1, failure_rate: 1,
+    operation: 'read', backend: 'relocated_ssh', samples: 1, failures: 1, outcomes: { timeout: 1 }, failure_rate: 1,
   });
   assert.deepEqual(result.totals.subagent_wait, { samples: 1, p95_elapsed_ms: 9500 });
 

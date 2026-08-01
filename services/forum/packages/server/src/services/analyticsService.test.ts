@@ -5,13 +5,24 @@ import { AnalyticsService, mapAgentdAnalytics } from './analyticsService';
 import type { ForumAnalyticsReadModel } from '@irrigationreal/codex-forum-core';
 
 const raw = {
+  build: { commit: 'abcdef1234567', created_at: '2026-08-01T10:00:00.000Z' },
   coverage: { sessions_scanned: 2, ignored: 'not-a-number' },
   usage: {
     successful_responses: 3,
     median_tokens: 120,
     by_model: [{ vendor: 'OpenAI', model: 'gpt-5', responses: 3, total_tokens: 360, median_tokens: 120 }],
   },
-  tools: { worst: { operation: 'bash:pnpm test', calls: 5, failures: 2, failure_rate: 0.4 }, rows: [] },
+  tools: {
+    worst: {
+      operation: 'bash:pnpm test',
+      backend: 'unknown',
+      calls: 5,
+      failures: 2,
+      failure_rate: 0.4,
+      outcomes: { success: 3, tool_execution: 2 },
+    },
+    rows: [],
+  },
   errors: { top: { source: 'provider', category: 'rate_limit', affected_turns: 2 }, rows: [] },
   waiting: { count: 2, p95_ms: 5000, excluded: 1 },
   delegation: {
@@ -27,8 +38,13 @@ const raw = {
 describe('AnalyticsService', () => {
   it('maps the aggregate-only agentd contract without exposing unknown raw fields', () => {
     const mapped = mapAgentdAnalytics({ ...raw, privatePrompt: 'never expose this' });
+    expect(mapped.build).toEqual({ commit: 'abcdef1234567', createdAt: '2026-08-01T10:00:00.000Z' });
     expect(mapped.usage.medianTokens).toBe(120);
-    expect(mapped.tools.worst?.operation).toBe('bash:pnpm test');
+    expect(mapped.tools.worst).toMatchObject({
+      operation: 'bash:pnpm test',
+      backend: 'unknown',
+      outcomes: { success: 3, tool_execution: 2 },
+    });
     expect(mapped.errors.top?.category).toBe('rate_limit');
     expect(mapped.waiting.p95Ms).toBe(5000);
     expect(mapped.delegation.unsuccessfulRate).toBe(0.2);

@@ -15,9 +15,12 @@ LABEL org.opencontainers.image.revision=$MONIKA_BUILD_COMMIT
 LABEL org.opencontainers.image.source=$MONIKA_BUILD_SOURCE
 LABEL org.opencontainers.image.created=$MONIKA_BUILD_DATE
 
+ENV MONIKA_BUILD_COMMIT=$MONIKA_BUILD_COMMIT \
+    MONIKA_BUILD_DATE=$MONIKA_BUILD_DATE
+
 # System deps — base + Chromium headless requirements
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates git curl bash openssh-client \
+    ca-certificates git curl bash openssh-client ripgrep fd-find \
     libxcb-shm0 libx11-xcb1 libx11-6 libxcb1 libxext6 libxrandr2 \
     libxcomposite1 libxcursor1 libxdamage1 libxfixes3 libxi6 \
     libgtk-3-0 libpangocairo-1.0-0 libpango-1.0-0 libatk1.0-0 \
@@ -26,6 +29,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libnspr4 libatk-bridge2.0-0 libdrm2 libxkbcommon0 libatspi2.0-0 \
     libcups2 libxshmfence1 libgbm1 \
     fonts-noto-color-emoji fonts-noto-cjk fonts-freefont-ttf \
+    && ln -s /usr/bin/fdfind /usr/local/bin/fd \
+    && rg --version | head -n 1 \
+    && fd --version \
     && rm -rf /var/lib/apt/lists/*
 
 # Node.js 22.x (matches stanza's system node)
@@ -66,7 +72,7 @@ RUN npm install -g --min-release-age=0 @earendil-works/pi-coding-agent@0.82.1
 ENV PI_SUBAGENT_SESSION_ROOT=/app/.pi/agent/sessions/subagent \
     PI_SUBAGENT_RUNTIME_ROOT=/data/pi-subagents \
     PI_SUBAGENT_OPERATOR_ROOT=/data/pi-subagent-operator-state \
-    PI_SUBAGENT_SSH_LOCK_CODE_DIGEST=d96004cbd0cd4010c6b5d7e42ff5441998d748f57e9bd155f6ed97eba0ccfcc0
+    PI_SUBAGENT_SSH_LOCK_CODE_DIGEST=0587ccb12f824a44705128a17befa2fd66d1115ab28c7ad473b810249cb438fe
 
 # pi-subagents — install the exact reviewed git object because npm's dependency
 # cooldown currently excludes the equivalent 0.37.2 artifact. The installer
