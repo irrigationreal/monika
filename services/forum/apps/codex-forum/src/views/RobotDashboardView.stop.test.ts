@@ -3,6 +3,7 @@ import { ref } from 'vue';
 import { flushPromises, shallowMount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import ConfirmationDialog from '../components/ConfirmationDialog.vue';
 import RobotDashboardView from './RobotDashboardView.vue';
 
 const mocks = vi.hoisted(() => ({
@@ -50,9 +51,37 @@ describe('Robot Dashboard Stop', () => {
     const continueButton = buttons.find((button) => button.text() === 'Continue');
     expect(stop?.attributes('disabled')).toBeUndefined();
     expect(continueButton?.attributes('disabled')).toBeDefined();
-    await stop?.trigger('click'); await flushPromises();
+    await stop?.trigger('click');
+    expect(mocks.interruptRobot).not.toHaveBeenCalled();
+    const confirmation = wrapper.findComponent(ConfirmationDialog);
+    expect(confirmation.props('open')).toBe(true);
+    confirmation.vm.$emit('confirm');
+    await flushPromises();
+    expect(mocks.interruptRobot).toHaveBeenCalledTimes(1);
     expect(mocks.interruptRobot).toHaveBeenCalledWith('topic-1');
     expect(wrapper.text()).toContain('Stop remains uncertain.');
+    wrapper.unmount();
+  });
+
+  it('keeps polling separate from confirmation and revalidates a stale target', async () => {
+    const wrapper = shallowMount(RobotDashboardView, { global: { stubs: { RouterLink: true } } });
+    await flushPromises();
+    const stop = wrapper.findAll('button').find((button) => button.text() === 'Stop');
+    await stop?.trigger('click');
+
+    let resolveRefresh!: (value: { jobs: never[]; queue: never[] }) => void;
+    mocks.getRobotDashboard.mockReturnValueOnce(new Promise((resolve) => { resolveRefresh = resolve; }));
+    const refresh = wrapper.findAll('button').find((button) => button.text() === 'Refresh');
+    await refresh?.trigger('click');
+    const confirmation = wrapper.findComponent(ConfirmationDialog);
+    expect(confirmation.props('pending')).toBe(false);
+
+    resolveRefresh({ jobs: [], queue: [] });
+    await flushPromises();
+    confirmation.vm.$emit('confirm');
+    await flushPromises();
+    expect(mocks.interruptRobot).not.toHaveBeenCalled();
+    expect(confirmation.props('open')).toBe(false);
     wrapper.unmount();
   });
 });

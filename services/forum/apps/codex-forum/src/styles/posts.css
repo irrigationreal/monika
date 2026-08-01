@@ -2396,13 +2396,33 @@
   letter-spacing: 0.01em;
 }
 
-.vb-compaction-modal-overlay {
+.vb-compaction-modal-overlay,
+.vb-confirmation-modal-overlay {
   box-sizing: border-box;
   height: 100vh;
   height: 100dvh;
   padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right))
     max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
   overscroll-behavior: contain;
+}
+.vb-confirmation-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(520px, 100%);
+  max-width: 520px;
+  max-height: 100%;
+  min-height: 0;
+}
+.vb-confirmation-modal .vb-modal-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.vb-confirmation-modal-actions {
+  flex: 0 0 auto;
+  padding: 12px;
+  background: var(--bg-surface-alt);
+  border-top: 1px solid var(--border-default);
 }
 .vb-compaction-modal {
   display: flex;

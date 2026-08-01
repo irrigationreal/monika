@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { api, type AdminDeployStatus, type RobotDashboardDto, type RobotJobDto, type RobotStopResultDto } from '../lib/apiClient';
+import ConfirmationDialog from '../components/ConfirmationDialog.vue';
 import { useForumState } from '../composables/useForumState';
+import { api, type AdminDeployStatus, type RobotDashboardDto, type RobotJobDto, type RobotStopResultDto } from '../lib/apiClient';
 
 const router = useRouter();
 const state = useForumState();
@@ -19,9 +20,11 @@ const robotApi = api as typeof api & {
 const dashboard = ref<RobotDashboardDto | null>(null);
 const deployStatus = ref<AdminDeployStatus | null>(null);
 const loading = ref(false);
+const refreshing = ref(false);
 const error = ref<string | null>(null);
 const lastRefreshedAt = ref<string | null>(null);
 const stopResults = ref<Record<string, RobotStopResultDto>>({});
+const stopConfirmationTopicId = ref<string | null>(null);
 let refreshTimer: ReturnType<typeof setInterval> | null = null;
 
 const jobs = computed(() => dashboard.value?.jobs ?? []);
@@ -89,7 +92,7 @@ function activityClass(activity: RobotJobDto['activity']): string {
 }
 
 async function refresh(): Promise<void> {
-  loading.value = true;
+  refreshing.value = true;
   error.value = null;
   try {
     const [dash, deploy] = await Promise.all([robotApi.getRobotDashboard(), robotApi.getDeployStatus()]);
@@ -99,12 +102,31 @@ async function refresh(): Promise<void> {
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Failed to load robot dashboard.';
   } finally {
-    loading.value = false;
+    refreshing.value = false;
   }
 }
 
 async function openTopic(topicId: string): Promise<void> {
   await router.push({ name: 'topic.view', params: { topicId } });
+}
+
+function canStopTopic(topicId: string): boolean {
+  return !loading.value && (
+    jobs.value.some((job) => job.topicId === topicId) ||
+    queue.value.some((item) => item.topicId === topicId)
+  );
+}
+
+function requestStopTopic(topicId: string): void {
+  if (!canStopTopic(topicId)) return;
+  stopConfirmationTopicId.value = topicId;
+}
+
+async function confirmStopTopic(): Promise<void> {
+  const topicId = stopConfirmationTopicId.value;
+  stopConfirmationTopicId.value = null;
+  if (!topicId || !canStopTopic(topicId)) return;
+  await interruptTopic(topicId);
 }
 
 async function interruptTopic(topicId: string): Promise<void> {
@@ -206,6 +228,17 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
+  <ConfirmationDialog
+    :open="stopConfirmationTopicId !== null"
+    title="Stop robot?"
+    message="This will stop the current response and cancel queued or delegated work for this session. Partial output will remain visible, but work already performed cannot be undone."
+    confirm-label="Stop robot"
+    cancel-label="Keep running"
+    :pending="loading"
+    @confirm="confirmStopTopic"
+    @cancel="stopConfirmationTopicId = null"
+  />
+
   <section class="vb-section vb-fade-in">
     <div class="vb-table-header vb-dashboard-header">
       <div class="vb-dashboard-title">
@@ -213,7 +246,7 @@ onBeforeUnmount(() => {
         <span class="vb-dashboard-subtitle">Admin only</span>
       </div>
       <div class="vb-dashboard-actions">
-        <button class="vb-small-btn" type="button" :disabled="loading" @click="refresh">Refresh</button>
+        <button class="vb-small-btn" type="button" :disabled="loading || refreshing" @click="refresh">Refresh</button>
         <router-link class="vb-small-btn" to="/admin">Admin Panel</router-link>
       </div>
     </div>
@@ -348,7 +381,7 @@ onBeforeUnmount(() => {
           <div class="vb-job-actions">Actions</div>
         </div>
 
-        <div v-if="loading && jobs.length === 0" class="vb-empty-state">
+        <div v-if="refreshing && jobs.length === 0" class="vb-empty-state">
           <div class="vb-spinner vb-spinner-dark" style="width: 24px; height: 24px;"></div>
           <div class="vb-empty-state-text" style="margin-top: 12px;">Loading…</div>
         </div>
@@ -395,7 +428,7 @@ onBeforeUnmount(() => {
 
             <div class="vb-job-actions">
               <button class="vb-btn vb-btn-compact" type="button" :disabled="loading" @click="openTopic(job.topicId)">Open</button>
-              <button class="vb-btn vb-btn-danger vb-btn-compact" type="button" :disabled="loading" @click="interruptTopic(job.topicId)">Stop</button>
+              <button class="vb-btn vb-btn-danger vb-btn-compact" type="button" :disabled="loading" @click="requestStopTopic(job.topicId)">Stop</button>
               <button class="vb-btn vb-btn-compact" type="button" :disabled="loading || job.activity === 'stopping' || job.activity === 'uncertain'" @click="continueTopic(job.topicId)">Continue</button>
               <span v-if="stopResults[job.topicId]" class="vb-job-meta">{{ stopResults[job.topicId]?.message }}</span>
             </div>
@@ -497,7 +530,7 @@ onBeforeUnmount(() => {
             </div>
             <div class="vb-queue-actions">
               <button class="vb-btn vb-btn-compact" type="button" :disabled="loading" @click="openTopic(item.topicId)">Open</button>
-              <button class="vb-btn vb-btn-danger vb-btn-compact" type="button" :disabled="loading" @click="interruptTopic(item.topicId)">Interrupt</button>
+              <button class="vb-btn vb-btn-danger vb-btn-compact" type="button" :disabled="loading" @click="requestStopTopic(item.topicId)">Interrupt</button>
             </div>
           </div>
         </div>
