@@ -39,7 +39,7 @@ function normalizeAutoRunReasoning(value: string | null): string | null {
 }
 
 function mapPublicRobotActivity(activity: string | null | undefined): 'idle' | 'thinking' {
-  if (!activity || activity === 'idle' || activity === 'error') return 'idle';
+  if (!activity || activity === 'idle' || activity === 'stopped' || activity === 'error') return 'idle';
   return 'thinking';
 }
 
@@ -329,6 +329,10 @@ export function registerRobotRoutes({
     if (store.hasCompactionFence(topicId)) {
       throw app.httpErrors.conflict('Robot work is unavailable until compaction recovery is dispatched');
     }
+    const robotState = store.getRobotState(topicId);
+    if (robotState && ['stopping', 'uncertain'].includes(robotState.activity)) {
+      throw app.httpErrors.conflict('Cancellation is unresolved; robot dispatch is fenced until Stop succeeds.');
+    }
 
     const body = request.body as { steerMessage?: string | null };
     const result = await autoRunDirector.runManual({
@@ -360,11 +364,7 @@ export function registerRobotRoutes({
       throw app.httpErrors.conflict('Robot control is unavailable until compaction recovery is dispatched');
     }
 
-    const result = await codex.interruptTopic(topicId);
-    if (!result.ok) {
-      throw app.httpErrors.badRequest(result.message);
-    }
-    return result;
+    return codex.interruptTopic(topicId);
   });
 
   app.post('/topics/:topicId/robot/close', async (request) => {
@@ -413,6 +413,10 @@ export function registerRobotRoutes({
     }
     if (store.hasCompactionFence(topicId)) {
       throw app.httpErrors.conflict('Robot work is unavailable until compaction recovery is dispatched');
+    }
+    const robotState = store.getRobotState(topicId);
+    if (robotState && ['stopping', 'uncertain'].includes(robotState.activity)) {
+      throw app.httpErrors.conflict('Cancellation is unresolved; retry Stop before continuing.');
     }
 
     const parentPostId = store.getLatestHumanPostId(topicId) ?? store.getLatestPostId(topicId);

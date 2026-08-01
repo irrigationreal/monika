@@ -217,6 +217,8 @@ if (runtime.version !== 1 || typeof runtime.id !== 'string' || !Number.isFinite(
 const asyncSource = fs.readFileSync('/opt/pi-subagents/src/runs/background/async-execution.ts', 'utf8');
 const runnerSource = fs.readFileSync('/opt/pi-subagents/src/runs/background/subagent-runner.ts', 'utf8');
 const watcherSource = fs.readFileSync('/opt/pi-subagents/src/runs/background/result-watcher.ts', 'utf8');
+const asyncPolicySource = fs.readFileSync('/opt/pi-subagents/src/runs/background/top-level-async.ts', 'utf8');
+const foregroundSource = fs.readFileSync('/opt/pi-subagents/src/runs/foreground/execution.ts', 'utf8');
 const typesSource = fs.readFileSync('/opt/pi-subagents/src/shared/types.ts', 'utf8');
 const preflightSource = fs.readFileSync('/opt/pi-subagents/src/api/preflight.ts', 'utf8');
 if (!fs.existsSync('/opt/pi-subagents/src/runs/shared/execution-target.ts')) throw new Error('Execution-target runtime missing');
@@ -227,6 +229,9 @@ if (!preflightSource.includes('SUBAGENT_LAUNCH_CONTRACT_VERSION = 3')) throw new
 if (!asyncSource.includes('launch.json') || !asyncSource.includes('PI_SUBAGENTS_HOST_DRAINING')) throw new Error('Durable async launch/drain patch missing');
 if (!runnerSource.includes('Optional subagent artifact write failed')) throw new Error('Resilient artifact finalization patch missing');
 if (!watcherSource.includes('PI_SUBAGENTS_HOST_DRAINING')) throw new Error('Completion drain barrier patch missing');
+if (!watcherSource.includes('host-cancellation.json')) throw new Error('Host-cancelled result wake suppression missing');
+if (!asyncPolicySource.includes('PI_SUBAGENTS_FORCE_ASYNC')) throw new Error('Agentd nested force-async policy missing');
+if (!foregroundSource.includes('!childExited && !detached && proc.kill("SIGKILL")')) throw new Error('Foreground hard-kill exit check missing');
 const reviewed = JSON.parse(fs.readFileSync('/opt/pi-subagents/REVIEWED_SOURCE.json', 'utf8'));
 if (reviewed.version !== '0.37.2') throw new Error(`Unexpected pi-subagents version: ${reviewed.version}`);
 if (reviewed.gitHead !== '8063333661476ca48afbca826dc4aab8707c72d3') throw new Error(`Unexpected pi-subagents gitHead: ${reviewed.gitHead}`);

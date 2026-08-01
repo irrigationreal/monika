@@ -1,5 +1,5 @@
 diff --git a/package.json b/package.json
-index 665db5b..6b2b8fb 100644
+index 665db5bc269b97a787910f0556df5735ea6c72cb..6b2b8fb7d66dc868a4f52f725b821ce8341dad48 100644
 --- a/package.json
 +++ b/package.json
 @@ -44,9 +44,9 @@
@@ -16,7 +16,7 @@ index 665db5b..6b2b8fb 100644
    },
    "pi": {
 diff --git a/src/agents/agents.ts b/src/agents/agents.ts
-index 16019bd..ef55e45 100644
+index 16019bd02861d8fae6f8259034d57ea333f1a9e4..ef55e451287d74efcc693d76ce635282759e2a97 100644
 --- a/src/agents/agents.ts
 +++ b/src/agents/agents.ts
 @@ -20,6 +20,7 @@ export { buildRuntimeName, frontmatterNameForConfig, parsePackageName } from "./
@@ -36,7 +36,7 @@ index 16019bd..ef55e45 100644
  	phase?: string;
  	label?: string;
 diff --git a/src/agents/chain-serializer.ts b/src/agents/chain-serializer.ts
-index 5b8b8e8..29a4281 100644
+index 5b8b8e8697d50d100e88f6cd4c4ca97f46cece3d..29a4281662d7aa76564abc6992a8ba3797878b3f 100644
 --- a/src/agents/chain-serializer.ts
 +++ b/src/agents/chain-serializer.ts
 @@ -4,6 +4,7 @@ import { parseFrontmatter } from "./frontmatter.ts";
@@ -98,7 +98,7 @@ index 5b8b8e8..29a4281 100644
  		else if (step.output) lines.push(`output: ${step.output}`);
  		if (step.phase) lines.push(`phase: ${step.phase}`);
 diff --git a/src/api/preflight.ts b/src/api/preflight.ts
-index fe48585..a3b9fe9 100644
+index fe485856b3a0663c48d3adcbda12f478e52ea37d..a3b9fe906457688fcc79610411a0d192deecf300 100644
 --- a/src/api/preflight.ts
 +++ b/src/api/preflight.ts
 @@ -21,8 +21,9 @@ import { agentDefinitionDigest, AGENT_DEFINITION_PROJECTION_VERSION, launchBindi
@@ -180,7 +180,7 @@ index fe48585..a3b9fe9 100644
  			...(outputPath ? { outputPath } : {}),
  			outputMode: input.outputMode ?? "inline",
 diff --git a/src/extension/fanout-child.ts b/src/extension/fanout-child.ts
-index 0da9904..83bab49 100644
+index 0da9904892541bbcad9fe91b80fed7f5fe928725..83bab4910134a875ddcf3efc70a87a35c89147df 100644
 --- a/src/extension/fanout-child.ts
 +++ b/src/extension/fanout-child.ts
 @@ -15,6 +15,13 @@ import { loadConfig } from "./config.ts";
@@ -198,7 +198,7 @@ index 0da9904..83bab49 100644
  		const baseName = path.basename(parentSessionFile, ".jsonl");
  		const sessionsDir = path.dirname(parentSessionFile);
 diff --git a/src/extension/index.ts b/src/extension/index.ts
-index eff8c2d..b97d1d7 100644
+index eff8c2dd2a1d2c6d39dd81b4b912309c5c45035f..b97d1d7007b2ca3b91ce514457957de94dd194a6 100644
 --- a/src/extension/index.ts
 +++ b/src/extension/index.ts
 @@ -84,6 +84,13 @@ export { loadConfig } from "./config.ts";
@@ -251,7 +251,7 @@ index eff8c2d..b97d1d7 100644
  
  	pi.on("session_shutdown", () => {
 diff --git a/src/extension/rpc.ts b/src/extension/rpc.ts
-index 622ecdd..59ab93f 100644
+index 622ecdd528dd97cb89994ed0432b4463617c91d6..59ab93f1bd5832a5fb616d7faef1de90b5030e10 100644
 --- a/src/extension/rpc.ts
 +++ b/src/extension/rpc.ts
 @@ -180,6 +180,7 @@ function pingData(ctx: ExtensionContext | null) {
@@ -263,7 +263,7 @@ index 622ecdd..59ab93f 100644
  			nonRecoveringSteer: true,
  			interrupt: true,
 diff --git a/src/extension/schemas.ts b/src/extension/schemas.ts
-index 019eaaa..882ca6e 100644
+index 019eaaa55de92f4fe7ad1f692964d4290fca30bb..882ca6e18b91504c834841ce05147fbfa28b8b31 100644
 --- a/src/extension/schemas.ts
 +++ b/src/extension/schemas.ts
 @@ -107,9 +107,28 @@ const ToolBudgetOverride = Type.Object({
@@ -330,7 +330,7 @@ index 019eaaa..882ca6e 100644
  	// Management action (when present, tool operates in management mode)
  	action: Type.Optional(Type.String({
 diff --git a/src/intercom/native-supervisor-channel.ts b/src/intercom/native-supervisor-channel.ts
-index 4757eeb..b61fd1f 100644
+index 4757eeb96b47fadb24db1185ffb800c88268e746..b61fd1f96bb1475c936e86a4631edc75d22bb4bf 100644
 --- a/src/intercom/native-supervisor-channel.ts
 +++ b/src/intercom/native-supervisor-channel.ts
 @@ -47,6 +47,7 @@ interface SupervisorRequest {
@@ -434,7 +434,7 @@ index 4757eeb..b61fd1f 100644
  			poll();
  			poller = setInterval(poll, CHANNEL_POLL_MS);
 diff --git a/src/runs/background/async-execution.ts b/src/runs/background/async-execution.ts
-index 34213ec..b38ce23 100644
+index 34213ec726de4e45ccdbee671fb994135d9b3f92..b38ce23d23de5aefa7308ea8446c88909f81e165 100644
 --- a/src/runs/background/async-execution.ts
 +++ b/src/runs/background/async-execution.ts
 @@ -58,6 +58,7 @@ import type { SessionLeaseRequest } from "../shared/session-lease.ts";
@@ -687,7 +687,7 @@ index 34213ec..b38ce23 100644
  	}
  
 diff --git a/src/runs/background/async-resume.ts b/src/runs/background/async-resume.ts
-index 595d013..80273d1 100644
+index 595d013a0151508f1c91135575c09d1e63fb98e9..80273d1059d34d7ca4311ff058cf45cd2b0f399c 100644
 --- a/src/runs/background/async-resume.ts
 +++ b/src/runs/background/async-resume.ts
 @@ -1,11 +1,12 @@
@@ -854,7 +854,7 @@ index 595d013..80273d1 100644
  		...(recoveryDescriptor ? { recoveryDescriptor } : {}),
  	};
 diff --git a/src/runs/background/async-status.ts b/src/runs/background/async-status.ts
-index 4e259cf..310f687 100644
+index 4e259cfbbd112c8c7eb9ed1b04d829fc7c823bc1..310f687bebabc5cbf3797ed686c1c02eff232151 100644
 --- a/src/runs/background/async-status.ts
 +++ b/src/runs/background/async-status.ts
 @@ -11,10 +11,13 @@ import { flatToLogicalStepIndex, normalizeParallelGroups } from "./parallel-grou
@@ -923,8 +923,77 @@ index 4e259cf..310f687 100644
  }
  
  export function formatAsyncRunList(runs: AsyncRunSummary[], heading = "Active async runs"): string {
+diff --git a/src/runs/background/control-channel.ts b/src/runs/background/control-channel.ts
+index 14062eed24bc91fa5e7ddb67f30180d2936101a2..98351a6bb085914f4ad2033824cc07f87ecb0c66 100644
+--- a/src/runs/background/control-channel.ts
++++ b/src/runs/background/control-channel.ts
+@@ -51,6 +51,13 @@ export interface StopRequest {
+ 	ts?: number;
+ 	source?: string;
+ 	reason?: string;
++	operationId?: string;
++	cancellationGeneration?: number;
++	runId?: string;
++	runKey?: string;
++	runSessionId?: string | null;
++	parentSessionId?: string;
++	parentSessionPath?: string | null;
+ }
+ 
+ export interface SteerRequest {
+@@ -438,16 +445,27 @@ export function consumeTimeoutRequest(
+ 
+ export function consumeStopRequest(
+ 	asyncDir: string,
+-	fsImpl: Pick<typeof fs, "existsSync" | "rmSync"> = fs,
++	fsImpl: Pick<typeof fs, "existsSync" | "rmSync" | "readFileSync"> = fs,
++	expected?: { runId: string; runKey: string; sessionId?: string | null },
+ ): boolean {
+ 	const requestPath = stopRequestPath(asyncDir);
+ 	if (!fsImpl.existsSync(requestPath)) return false;
++	let accepted = true;
+ 	try {
+-		fsImpl.rmSync(requestPath, { force: true, recursive: true });
+-	} catch {
+-		// Already removed by a concurrent check — still counts as consumed.
+-	}
+-	return true;
++		const value = JSON.parse(fsImpl.readFileSync(requestPath, "utf8")) as Record<string, unknown>;
++		if (value.source === "agentd-cancellation") {
++			const allowed = new Set(["type", "source", "operationId", "cancellationGeneration", "runId", "runKey", "runSessionId", "parentSessionId", "parentSessionPath", "reason", "ts"]);
++			accepted = Boolean(expected) && Object.keys(value).every((key) => allowed.has(key))
++				&& value.type === "stop" && value.runId === expected?.runId && value.runKey === expected?.runKey
++				&& (value.runSessionId === null || value.runSessionId === expected?.sessionId)
++				&& typeof value.parentSessionId === "string" && typeof value.reason === "string"
++				&& typeof value.operationId === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value.operationId)
++				&& Number.isSafeInteger(value.cancellationGeneration) && (value.cancellationGeneration as number) >= 0
++				&& Number.isFinite(value.ts);
++		}
++	} catch { accepted = false; }
++	try { fsImpl.rmSync(requestPath, { force: true, recursive: true }); } catch { /* already consumed */ }
++	return accepted;
+ }
+ 
+ /**
+@@ -518,6 +536,7 @@ export function watchAsyncControlInbox(
+ 		onInterrupt: () => void;
+ 		onTimeout?: () => void;
+ 		onStop?: () => void;
++		stopIdentity?: { runId: string; runKey: string; sessionId?: string | null };
+ 		onSteer?: (request: SteerRequest) => void;
+ 		onSteerCapability?: (capability: SteerCapability) => void;
+ 		onSteerAck?: (ack: SteerAck) => void;
+@@ -539,7 +558,7 @@ export function watchAsyncControlInbox(
+ 	const check = (): void => {
+ 		if (disposed) return;
+ 		try {
+-			if (consumeStopRequest(asyncDir, fsImpl)) opts.onStop?.();
++			if (consumeStopRequest(asyncDir, fsImpl, opts.stopIdentity)) opts.onStop?.();
+ 			if (consumeTimeoutRequest(asyncDir, fsImpl)) opts.onTimeout?.();
+ 			if (consumeInterruptRequest(asyncDir, fsImpl)) opts.onInterrupt();
+ 			for (const request of consumeSteerRequests(asyncDir, fsImpl)) opts.onSteer?.(request);
 diff --git a/src/runs/background/notify.ts b/src/runs/background/notify.ts
-index 1582ccd..eac578c 100644
+index 1582ccddcfabc98969c4a607c56fb2f35f6447f4..eac578cfbfadeae4beb6342fa31857db6c7d19f5 100644
 --- a/src/runs/background/notify.ts
 +++ b/src/runs/background/notify.ts
 @@ -145,6 +145,7 @@ export function formatGroupedCompletion(details: SubagentNotifyDetails[]): strin
@@ -955,10 +1024,46 @@ index 1582ccd..eac578c 100644
  			triggerTurn: result.triggerTurn !== false,
  			resolve,
 diff --git a/src/runs/background/result-watcher.ts b/src/runs/background/result-watcher.ts
-index 86e8350..9e6a690 100644
+index 86e8350db0d1012adf7f64bf722cf492b7259f28..f974e60bea06a4492ab54b6ec1fb9ae7691776af 100644
 --- a/src/runs/background/result-watcher.ts
 +++ b/src/runs/background/result-watcher.ts
-@@ -134,6 +134,10 @@ export function createResultWatcher(
+@@ -65,6 +65,35 @@ type ResultFileData = CompletionNotification & {
+ 	parallelHandoff?: ParallelHandoffReference;
+ };
+ 
++function hostCancelledResult(data: ResultFileData, runId: string): boolean {
++	if (process.env.PI_SUBAGENTS_HOST_ACK_RESULTS !== "1" || typeof data.asyncDir !== "string" || !path.isAbsolute(data.asyncDir)) return false;
++	const rootValue = process.env.PI_SUBAGENT_RUNTIME_ROOT;
++	if (!rootValue || !path.isAbsolute(rootValue)) return false;
++	const marker = path.join(data.asyncDir, "host-cancellation.json");
++	try {
++		const root = fs.realpathSync(rootValue);
++		const asyncDir = fs.realpathSync(data.asyncDir);
++		const relative = path.relative(root, asyncDir);
++		if (relative === "" || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return false;
++		const dirStat = fs.lstatSync(data.asyncDir);
++		const stat = fs.lstatSync(marker);
++		if (!dirStat.isDirectory() || dirStat.isSymbolicLink() || !stat.isFile() || stat.isSymbolicLink()) return false;
++		const value = JSON.parse(fs.readFileSync(marker, "utf-8")) as Record<string, unknown>;
++		const relativeDir = path.relative(root, asyncDir).split(path.sep).filter(Boolean);
++		const expectedRunKey = relativeDir.length === 2 && relativeDir[0] === "async-subagent-runs" && relativeDir[1] === runId
++			? `top:${runId}`
++			: relativeDir.length === 3 && relativeDir[0] === "nested-subagent-runs" && relativeDir[2] === runId
++				? `nested:${relativeDir[1]}:${runId}` : null;
++		const allowed = new Set(["version", "kind", "operationId", "generation", "runId", "runKey", "runSessionId", "parentSessionId", "parentSessionPath", "requestedAt", "reason"]);
++		return expectedRunKey !== null && Object.keys(value).every((key) => allowed.has(key))
++			&& value.version === 1 && value.kind === "host-cancellation" && value.runId === runId && value.runKey === expectedRunKey
++			&& (value.runSessionId === null || value.runSessionId === data.sessionId)
++			&& typeof value.parentSessionId === "string" && typeof value.reason === "string"
++			&& typeof value.operationId === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value.operationId)
++			&& Number.isSafeInteger(value.generation) && (value.generation as number) >= 0 && Number.isFinite(value.requestedAt);
++	} catch { return false; }
++}
++
+ function sanitizeNestedResultChildren(value: unknown, resultPath: string, label: string): NestedRunSummary[] | undefined {
+ 	if (value === undefined) return undefined;
+ 	if (!Array.isArray(value)) {
+@@ -134,6 +163,10 @@ export function createResultWatcher(
  	const handleResult = async (file: string, triggerTurn: boolean) => {
  		const resultPath = path.join(resultsDir, file);
  		if (processing.has(file) || !fsApi.existsSync(resultPath)) return;
@@ -969,7 +1074,17 @@ index 86e8350..9e6a690 100644
  		processing.add(file);
  		try {
  			const data = JSON.parse(fsApi.readFileSync(resultPath, "utf-8")) as ResultFileData;
-@@ -160,6 +164,7 @@ export function createResultWatcher(
+@@ -142,6 +175,9 @@ export function createResultWatcher(
+ 			if (!ownsSession(data.sessionId, epoch)) return;
+ 
+ 			const runId = data.runId ?? data.id ?? file.replace(/\.json$/i, "");
++			// Agentd owns cancelled result custody. Retain the bytes, but never turn a
++			// correlated host-cancelled result into a new parent model turn.
++			if (hostCancelledResult(data, runId)) return;
+ 			const hasExplicitNestedChildren = data.nestedChildren !== undefined;
+ 			let nestedChildren = compactNestedResultChildren(sanitizeNestedResultChildren(data.nestedChildren, resultPath, "nestedChildren"));
+ 			if (!nestedChildren?.length && !hasExplicitNestedChildren) {
+@@ -160,6 +196,7 @@ export function createResultWatcher(
  				state.completionSeen.delete(completionKey);
  			} else if (lastSeenAt !== undefined) {
  				if (!ownsSession(data.sessionId, epoch) || !fsApi.existsSync(resultPath)) return;
@@ -977,7 +1092,7 @@ index 86e8350..9e6a690 100644
  				try {
  					fsApi.unlinkSync(resultPath);
  				} catch (error) {
-@@ -203,6 +208,14 @@ export function createResultWatcher(
+@@ -203,6 +240,14 @@ export function createResultWatcher(
  				};
  			}), nestedChildren);
  
@@ -992,7 +1107,7 @@ index 86e8350..9e6a690 100644
  			const intercomTarget = data.intercomTarget?.trim();
  			let intercomDelivered = false;
  			if (deliverIntercomResults && intercomTarget && triggerTurn) {
-@@ -273,6 +286,7 @@ export function createResultWatcher(
+@@ -273,6 +318,7 @@ export function createResultWatcher(
  				console.error(`Completion observer failed for '${resultPath}':`, error);
  			}
  			if (!ownsSession(data.sessionId, epoch) || !fsApi.existsSync(resultPath)) return;
@@ -1000,7 +1115,7 @@ index 86e8350..9e6a690 100644
  			try {
  				fsApi.unlinkSync(resultPath);
  			} catch (error) {
-@@ -292,7 +306,7 @@ export function createResultWatcher(
+@@ -292,7 +338,7 @@ export function createResultWatcher(
  		const triggerTurn = pendingTriggerTurn.get(file) !== false;
  		pendingTriggerTurn.delete(file);
  		void handleResult(file, triggerTurn);
@@ -1010,7 +1125,7 @@ index 86e8350..9e6a690 100644
  	const primeExistingResults = (options: { triggerTurn?: boolean } = {}) => {
  		try {
 diff --git a/src/runs/background/scheduled-runs.ts b/src/runs/background/scheduled-runs.ts
-index 1572598..831be94 100644
+index 1572598f4863ffe2499db3964e1a0f10e5f2a4bb..831be94696fbef91bf78fc8449860a4619985f99 100644
 --- a/src/runs/background/scheduled-runs.ts
 +++ b/src/runs/background/scheduled-runs.ts
 @@ -14,6 +14,7 @@ import {
@@ -1094,7 +1209,7 @@ index 1572598..831be94 100644
  
  export class ScheduledRunManager {
 diff --git a/src/runs/background/subagent-runner.ts b/src/runs/background/subagent-runner.ts
-index 6efb0bd..c94a8d6 100644
+index 6efb0bd1638bb4a608ad87db570ee490541fe154..a7dd82c0c17ad09d6b8b612d7f783c13c785e054 100644
 --- a/src/runs/background/subagent-runner.ts
 +++ b/src/runs/background/subagent-runner.ts
 @@ -107,6 +107,7 @@ import { resolveWatchdogConfig } from "../../watchdog/settings.ts";
@@ -1282,7 +1397,24 @@ index 6efb0bd..c94a8d6 100644
  		runId: id,
  		...(config.sessionId ? { sessionId: config.sessionId } : {}),
  		mode: config.resultMode ?? (flatSteps.length > 1 ? "chain" : "single"),
-@@ -3269,6 +3292,7 @@ async function runSubagent(
+@@ -2725,10 +2748,16 @@ async function runSubagent(
+ 	// Portable control inbox: the parent drops control request files here when
+ 	// it cannot deliver OS signals (e.g. ENOSYS on Windows) or when steering a
+ 	// live child. Interrupts still route into the same graceful interruptRunner().
++	const asyncParent = path.dirname(path.resolve(asyncDir));
++	const runnerRunKey = path.basename(asyncDir) === id && path.basename(asyncParent) === "async-subagent-runs"
++		? `top:${id}`
++		: path.basename(asyncDir) === id && path.basename(path.dirname(asyncParent)) === "nested-subagent-runs"
++			? `nested:${path.basename(asyncParent)}:${id}` : `invalid:${id}`;
+ 	const disposeControlInbox = watchAsyncControlInbox(asyncDir, {
+ 		onInterrupt: interruptRunner,
+ 		onTimeout: timeoutRunner,
+ 		onStop: stopRunner,
++		stopIdentity: { runId: id, runKey: runnerRunKey, sessionId: config.sessionId },
+ 		onSteer: (request) => {
+ 			const targetStep = request.targetIndex !== undefined ? statusPayload.steps[request.targetIndex] : undefined;
+ 			if (targetStep?.status === "pending") {
+@@ -3269,6 +3298,7 @@ async function runSubagent(
  					break;
  				}
  				try {
@@ -1290,7 +1422,7 @@ index 6efb0bd..c94a8d6 100644
  					worktreeSetup = createWorktrees(cwd, `${id}-s${stepIndex}`, group.parallel.length, {
  						agents: group.parallel.map((task) => task.agent),
  						setupHook: config.worktreeSetupHook
-@@ -3489,6 +3513,8 @@ async function runSubagent(
+@@ -3489,6 +3519,8 @@ async function runSubagent(
  				for (const pr of parallelResults) {
  					results.push({
  						agent: pr.agent,
@@ -1299,7 +1431,7 @@ index 6efb0bd..c94a8d6 100644
  						context: pr.context,
  						agentContract: pr.agentContract,
  						launchContractDigest: pr.launchContractDigest,
-@@ -3665,6 +3691,8 @@ async function runSubagent(
+@@ -3665,6 +3697,8 @@ async function runSubagent(
  			const childStopped = singleResult.stopped === true;
  			results.push({
  				agent: singleResult.agent,
@@ -1308,7 +1440,7 @@ index 6efb0bd..c94a8d6 100644
  				context: singleResult.context,
  				agentContract: singleResult.agentContract,
  				launchContractDigest: singleResult.launchContractDigest,
-@@ -3922,6 +3950,19 @@ async function runSubagent(
+@@ -3922,6 +3956,19 @@ async function runSubagent(
  			statusPayload.error = `Step failed: ${failedStep.agent}`;
  		}
  	}
@@ -1328,7 +1460,7 @@ index 6efb0bd..c94a8d6 100644
  	writeStatusPayload();
  	appendJsonl(
  		eventsPath,
-@@ -3958,6 +3999,11 @@ async function runSubagent(
+@@ -3958,6 +4005,11 @@ async function runSubagent(
  	try {
  		writeAtomicJson(resultPath, {
  			lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
@@ -1340,8 +1472,21 @@ index 6efb0bd..c94a8d6 100644
  			id,
  			agent: agentName,
  			mode: resultMode,
+diff --git a/src/runs/background/top-level-async.ts b/src/runs/background/top-level-async.ts
+index 08a7e77ad917db4c4d105ea38d8ebc51526038b7..0c9c885d1150566c19d4d88dea7a0290520242b6 100644
+--- a/src/runs/background/top-level-async.ts
++++ b/src/runs/background/top-level-async.ts
+@@ -9,6 +9,7 @@ export function applyForceTopLevelAsyncOverride<T extends AsyncOverrideParams>(
+ 	depth: number,
+ 	forceTopLevelAsync: boolean,
+ ): T {
+-	if (params.foregroundOnly || !(depth === 0 && forceTopLevelAsync)) return params;
++	const hostForcesEveryDepth = process.env.PI_SUBAGENTS_FORCE_ASYNC === "1";
++	if (!hostForcesEveryDepth && (params.foregroundOnly || !(depth === 0 && forceTopLevelAsync))) return params;
+ 	return { ...params, async: true, clarify: false };
+ }
 diff --git a/src/runs/foreground/chain-execution.ts b/src/runs/foreground/chain-execution.ts
-index b288c75..c527178 100644
+index b288c75f8652d5fb6968b4fb7d0d62f29161f7f4..c527178fc5e8fe3e57e8688f6f9e8a51c5d68775 100644
 --- a/src/runs/foreground/chain-execution.ts
 +++ b/src/runs/foreground/chain-execution.ts
 @@ -73,6 +73,7 @@ import { injectSingleOutputInstruction, validateFileOnlyOutputMode } from "../sh
@@ -1377,7 +1522,7 @@ index b288c75..c527178 100644
  				capabilityCeiling: params.capabilityCeiling,
  				context: params.contextForAgent?.(seqStep.agent),
 diff --git a/src/runs/foreground/execution.ts b/src/runs/foreground/execution.ts
-index 66158ba..a096d9c 100644
+index 66158ba6419dba544ee3227ac0810cfd4488eccd..86c467420ec2f19e0a236795567b9f0ac6a61a16 100644
 --- a/src/runs/foreground/execution.ts
 +++ b/src/runs/foreground/execution.ts
 @@ -79,6 +79,7 @@ import { attachContractProjections, isAgentContractV1 } from "../shared/agent-co
@@ -1424,7 +1569,19 @@ index 66158ba..a096d9c 100644
  		...(options.agentContract ? { agentContract: options.agentContract } : {}),
  		launchContractDigest,
  		exitCode: 0,
-@@ -1200,6 +1207,7 @@ async function runSingleAttempt(
+@@ -1016,7 +1023,10 @@ async function runSingleAttempt(
+ 			const kill = () => {
+ 				if (processClosed || detached) return;
+ 				proc.kill("SIGTERM");
+-				setTimeout(() => !proc.killed && proc.kill("SIGKILL"), 3000);
++				// ChildProcess.killed only means a signal was sent. Stop escalation on
++				// this exact ChildProcess exit event; stdio close can lag, and signaling
++				// after exit risks a reused numeric PID on some platforms.
++				setTimeout(() => !childExited && !detached && proc.kill("SIGKILL"), 3000);
+ 			};
+ 			if (options.signal.aborted) kill();
+ 			else {
+@@ -1200,6 +1210,7 @@ async function runSingleAttempt(
  	}
  		artifactOutputByResult.set(result, fullOutput);
  		acceptanceOutputByResult.set(result, acceptanceOutput);
@@ -1432,7 +1589,7 @@ index 66158ba..a096d9c 100644
  	result.outputMode = options.outputMode ?? "inline";
  	result.finalOutput = options.outputMode === "file-only" && result.savedOutputPath && result.outputReference
  		? result.outputReference.message
-@@ -1232,10 +1240,24 @@ export async function runSync(
+@@ -1232,10 +1243,24 @@ export async function runSync(
  	task: string,
  	options: RunSyncOptions,
  ): Promise<SingleResult> {
@@ -1461,7 +1618,7 @@ index 66158ba..a096d9c 100644
  	const agent = agents.find((a) => a.name === agentName);
  	if (!agent) {
  		return withRunContext({
-@@ -1360,6 +1382,8 @@ export async function runSync(
+@@ -1360,6 +1385,8 @@ export async function runSync(
  			error: target.error,
  			agentContract: target.agentContract,
  			launchContractDigest: target.launchContractDigest,
@@ -1471,7 +1628,7 @@ index 66158ba..a096d9c 100644
  			acceptance: target.acceptance,
  			capabilityCeiling: target.capabilityCeiling,
 diff --git a/src/runs/foreground/subagent-executor.ts b/src/runs/foreground/subagent-executor.ts
-index b2bb70d..ea0cef0 100644
+index b2bb70dc39fea4e741f43f35175f59157f705aa6..ea0cef0b7aa6e3a280f7f2952a6928be7684f1a8 100644
 --- a/src/runs/foreground/subagent-executor.ts
 +++ b/src/runs/foreground/subagent-executor.ts
 @@ -49,6 +49,7 @@ import { formatSpawnBudget, getSpawnBudgetSnapshot, grantSpawnBudget, preflightS
@@ -1670,7 +1827,7 @@ index b2bb70d..ea0cef0 100644
  			if (!shouldForkAgent(contextPolicy, agentName)) return undefined;
  			prepareForkThinking(agentName, idx, modelOverride);
 diff --git a/src/runs/shared/dynamic-fanout.ts b/src/runs/shared/dynamic-fanout.ts
-index c6e163b..dadf302 100644
+index c6e163be03afb99a0cea1edf181c6e78f13de90b..dadf30216ef0296b59b89d017da9d421324c4462 100644
 --- a/src/runs/shared/dynamic-fanout.ts
 +++ b/src/runs/shared/dynamic-fanout.ts
 @@ -46,12 +46,13 @@ const DYNAMIC_STEP_KEYS = new Set(["expand", "parallel", "collect", "concurrency
@@ -1690,7 +1847,7 @@ index c6e163b..dadf302 100644
  
 diff --git a/src/runs/shared/execution-target.ts b/src/runs/shared/execution-target.ts
 new file mode 100644
-index 0000000..1790b52
+index 0000000000000000000000000000000000000000..1790b52b386a29528c568c44b6695ff38c6e3bf9
 --- /dev/null
 +++ b/src/runs/shared/execution-target.ts
 @@ -0,0 +1,213 @@
@@ -1908,7 +2065,7 @@ index 0000000..1790b52
 +	if (targets.some((target) => target?.kind === "ssh")) throw new Error("worktree:true is not supported for SSH execution targets; no worktree was created.");
 +}
 diff --git a/src/runs/shared/parallel-utils.ts b/src/runs/shared/parallel-utils.ts
-index 9a0d8a6..a170fdd 100644
+index 9a0d8a60884aae0047370e5870743bbc7ba3afbb..a170fdd26ec00265961409cf2c1e4059a14d2356 100644
 --- a/src/runs/shared/parallel-utils.ts
 +++ b/src/runs/shared/parallel-utils.ts
 @@ -1,4 +1,5 @@
@@ -1918,7 +2075,7 @@ index 9a0d8a6..a170fdd 100644
  	parentSessionId?: string;
  	agent: string;
 diff --git a/src/runs/shared/pi-args.ts b/src/runs/shared/pi-args.ts
-index fafe66d..848e730 100644
+index fafe66da1eda54ffe7a32f4b08644e77630bde90..848e730954712082cd53771f59dd9b770b5bda4b 100644
 --- a/src/runs/shared/pi-args.ts
 +++ b/src/runs/shared/pi-args.ts
 @@ -14,6 +14,7 @@ import { CHILD_WATCHDOG_CONFIG_ENV, encodeChildWatchdogConfig, type ChildWatchdo
@@ -1977,7 +2134,7 @@ index fafe66d..848e730 100644
  	if (piPackageRoot) env[PI_CODING_AGENT_PACKAGE_ROOT_ENV] = piPackageRoot;
  	let toolDiagnosticPath: string | undefined;
 diff --git a/src/shared/fork-context.ts b/src/shared/fork-context.ts
-index b43f170..b3bfe58 100644
+index b43f170073ec23237c623cecc957a12049720424..b3bfe586088db3b0c1f75909e1c1c8a8fba95057 100644
 --- a/src/shared/fork-context.ts
 +++ b/src/shared/fork-context.ts
 @@ -36,6 +36,8 @@ interface ForkableSessionManager {
@@ -2007,7 +2164,7 @@ index b43f170..b3bfe58 100644
  			const sessionFile = sourceManager.createBranchedSession(leafId);
  			if (!sessionFile) {
 diff --git a/src/shared/launch-contract.ts b/src/shared/launch-contract.ts
-index 3dd5741..0bbd9b9 100644
+index 3dd5741a525a56d7dd52bb0b30d3c3ed337fd99e..0bbd9b9ca5834606f9e50d0e24c559aa1c54dd61 100644
 --- a/src/shared/launch-contract.ts
 +++ b/src/shared/launch-contract.ts
 @@ -1,9 +1,10 @@
@@ -2041,7 +2198,7 @@ index 3dd5741..0bbd9b9 100644
  		// The ordered candidate set already contains each attempted model; keeping only
  		// this set makes retries correlate to the same preflight binding.
 diff --git a/src/shared/settings.ts b/src/shared/settings.ts
-index b13363e..c7bf496 100644
+index b13363e67383f4ca8864d3fcda289ba7722f9acc..c7bf4966e4286bcad5ae0eef9c1ff0aac974ba90 100644
 --- a/src/shared/settings.ts
 +++ b/src/shared/settings.ts
 @@ -5,6 +5,7 @@
@@ -2069,7 +2226,7 @@ index b13363e..c7bf496 100644
  	phase?: string;
  	label?: string;
 diff --git a/src/shared/types.ts b/src/shared/types.ts
-index 30a3087..d7fde16 100644
+index 30a3087b025943e734d7d497a8efc55ec27b2f30..d7fde163d767fe4cf4286c7b812058019aa1d76d 100644
 --- a/src/shared/types.ts
 +++ b/src/shared/types.ts
 @@ -10,6 +10,7 @@ import type { FSWatcher } from "node:fs";
@@ -2176,7 +2333,7 @@ index 30a3087..d7fde16 100644
  export const ASYNC_DIR = path.join(TEMP_ROOT_DIR, "async-subagent-runs");
  export const CHAIN_RUNS_DIR = path.join(TEMP_ROOT_DIR, "chain-runs");
 diff --git a/src/tui/fleet-status.ts b/src/tui/fleet-status.ts
-index 7b9c65e..6ecd6ed 100644
+index 7b9c65e5177362c09ec97533ec446c871d356267..6ecd6eda91b229f362530a1ced54d81d72e27a17 100644
 --- a/src/tui/fleet-status.ts
 +++ b/src/tui/fleet-status.ts
 @@ -108,9 +108,11 @@ export function collectFleetStatusEntries(state: SubagentState): FleetStatusEntr
@@ -2193,7 +2350,7 @@ index 7b9c65e..6ecd6ed 100644
  				startedAt: step.startedAt ?? startedAt,
  				tokens: step.tokens?.total ?? (steps.length === 1 ? job.totalTokens?.total ?? 0 : 0),
 diff --git a/test/integration/fork-context-execution.test.ts b/test/integration/fork-context-execution.test.ts
-index ebd0f07..7d04310 100644
+index ebd0f0717c015516fa0c6f18edb61d423d5e99ff..e90e49bfc6bba5e004a2f1a20e640dcfd3b71bd9 100644
 --- a/test/integration/fork-context-execution.test.ts
 +++ b/test/integration/fork-context-execution.test.ts
 @@ -206,8 +206,9 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
@@ -2233,7 +2390,32 @@ index ebd0f07..7d04310 100644
  	}
  
  	function writeAgent(projectRoot: string, name: string, model: string): void {
-@@ -1152,9 +1155,10 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
+@@ -330,6 +333,24 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
+ 		assert.ok((args.at(-1) ?? "").startsWith("Task: parallel task\n\n## Acceptance Contract"));
+ 	});
+ 
++	it("hard-kills a foreground child that ignores abort SIGTERM until its exit event", { timeout: 10_000 }, async () => {
++		mockPi.reset();
++		mockPi.onCall({ delay: 60_000, ignoreSigterm: true, output: "too late" });
++		const { manager } = makeSessionManagerRecorder();
++		const executor = makeExecutor();
++		const controller = new AbortController();
++		const startedAt = Date.now();
++		const pending = executor.execute("foreground-hard-kill", { agent: "echo", task: "stop" }, controller.signal, undefined, makeCtx(manager));
++		while (mockPi.callCount() === 0 && Date.now() - startedAt < 2_000) {
++			await new Promise((resolve) => setTimeout(resolve, 10));
++		}
++		assert.equal(mockPi.callCount(), 1, "foreground child should spawn before abort");
++		controller.abort();
++		const result = await pending;
++		assert.notEqual(result.details?.results?.[0]?.exitCode, 0);
++		assert.ok(Date.now() - startedAt < 7_000, "abort should settle after the SIGKILL grace period");
++	});
++
+ 	it("uses agent defaultContext fork when launch context is omitted", async () => {
+ 		const parentSessionFile = path.join(tempDir, "parent.jsonl");
+ 		const { manager, openedPaths, branchedLeafIds } = makeForkingSessionManagerRecorder({ sessionFile: parentSessionFile, leafId: "leaf-current" });
+@@ -1152,9 +1173,10 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
  	});
  
  	it("creates one forked session for single mode", async () => {
@@ -2245,7 +2427,7 @@ index ebd0f07..7d04310 100644
  		});
  		const executor = makeExecutor();
  
-@@ -1175,12 +1179,15 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
+@@ -1175,12 +1197,15 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
  		assert.notEqual(args[sessionIndex + 1], path.join(tempDir, "parent.jsonl"));
  		assert.ok(args[sessionIndex + 1]);
  		assert.equal(fs.existsSync(args[sessionIndex + 1]!), true);
@@ -2262,7 +2444,7 @@ index ebd0f07..7d04310 100644
  		});
  		const executor = makeExecutor();
  
-@@ -1204,6 +1211,8 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
+@@ -1204,6 +1229,8 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
  		const sessionArgs = readSessionArgsFromCalls();
  		assert.equal(sessionArgs.length, 2);
  		assert.equal(new Set(sessionArgs).size, 2);
@@ -2272,10 +2454,10 @@ index ebd0f07..7d04310 100644
  			assert.notEqual(childSessionFile, path.join(tempDir, "parent-parallel.jsonl"));
  			assert.equal(fs.existsSync(childSessionFile), true);
 diff --git a/test/integration/result-watcher.test.ts b/test/integration/result-watcher.test.ts
-index e91cf0a..74667f3 100644
+index e91cf0ace0649d18d2d3a1edb8528df993769847..d7f6441ba421f7b53827e7dc91f6506a95f19d83 100644
 --- a/test/integration/result-watcher.test.ts
 +++ b/test/integration/result-watcher.test.ts
-@@ -29,6 +29,49 @@ function createState(): SubagentState {
+@@ -29,6 +29,81 @@ function createState(): SubagentState {
  }
  
  describe("result watcher", () => {
@@ -2322,12 +2504,69 @@ index e91cf0a..74667f3 100644
 +		}
 +	});
 +
++	it("retains a safely correlated host-cancelled result without notifying or waking the parent", async () => {
++		const previousAck = process.env.PI_SUBAGENTS_HOST_ACK_RESULTS;
++		const previousRoot = process.env.PI_SUBAGENT_RUNTIME_ROOT;
++		process.env.PI_SUBAGENTS_HOST_ACK_RESULTS = "1";
++		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-host-cancel-"));
++		process.env.PI_SUBAGENT_RUNTIME_ROOT = root;
++		try {
++			const resultsDir = path.join(root, "results"); const asyncDir = path.join(root, "async-subagent-runs", "cancelled");
++			fs.mkdirSync(resultsDir); fs.mkdirSync(asyncDir, { recursive: true });
++			fs.writeFileSync(path.join(asyncDir, "host-cancellation.json"), JSON.stringify({
++				version: 1, kind: "host-cancellation", runId: "cancelled", runKey: "top:cancelled", runSessionId: "session-1",
++				parentSessionId: "session-1", parentSessionPath: null, operationId: "op-1", generation: 3, requestedAt: 1, reason: "forum-stop",
++			}));
++			const resultPath = path.join(resultsDir, "cancelled.json");
++			fs.writeFileSync(resultPath, JSON.stringify({ id: "cancelled", runId: "cancelled", sessionId: "session-1", asyncDir, success: false, state: "stopped", summary: "stopped" }));
++			let notifierCalls = 0; const queuedTimers: Array<() => void> = [];
++			const state = createState(); state.currentSessionId = "session-1";
++			const watcher = createResultWatcher({ events: { on: () => () => {}, emit: () => {} } }, state, resultsDir, 60_000, {
++				notifier: { deliver: async () => { notifierCalls++; return true; } },
++				timers: { setTimeout: ((callback: () => void) => { queuedTimers.push(callback); return callback; }) as typeof setTimeout,
++					clearTimeout: (() => {}) as typeof clearTimeout, setInterval: (() => 0) as unknown as typeof setInterval, clearInterval: (() => {}) as typeof clearInterval },
++			});
++			try { watcher.primeExistingResults({ triggerTurn: true }); queuedTimers.splice(0).forEach((callback) => callback()); await Promise.resolve(); }
++			finally { watcher.stopResultWatcher(); }
++			assert.equal(notifierCalls, 0); assert.equal(fs.existsSync(resultPath), true);
++		} finally {
++			fs.rmSync(root, { recursive: true, force: true });
++			if (previousAck === undefined) delete process.env.PI_SUBAGENTS_HOST_ACK_RESULTS; else process.env.PI_SUBAGENTS_HOST_ACK_RESULTS = previousAck;
++			if (previousRoot === undefined) delete process.env.PI_SUBAGENT_RUNTIME_ROOT; else process.env.PI_SUBAGENT_RUNTIME_ROOT = previousRoot;
++		}
++	});
++
  	it("processes deferred session-scoped results after session identity is restored", async () => {
  		const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-session-"));
  		try {
+diff --git a/test/integration/top-level-async.test.ts b/test/integration/top-level-async.test.ts
+index fdadb1b33abf2a2ca682880befbe271c3915d337..a2d695161d431616cae8ac5c436b87528f9dd41c 100644
+--- a/test/integration/top-level-async.test.ts
++++ b/test/integration/top-level-async.test.ts
+@@ -35,6 +35,20 @@ describe("force top-level async helper", { skip: !available ? "pi packages not a
+ 		assert.equal(next, params);
+ 	});
+ 
++	it("forces nested calls only inside an agentd-owned host", () => {
++		const previous = process.env.PI_SUBAGENTS_FORCE_ASYNC;
++		process.env.PI_SUBAGENTS_FORCE_ASYNC = "1";
++		try {
++			const next = mod!.applyForceTopLevelAsyncOverride({ async: false, clarify: true }, 2, false);
++			assert.deepEqual(next, { async: true, clarify: false });
++			const formerlyForegroundOnly = mod!.applyForceTopLevelAsyncOverride({ async: false, clarify: true, foregroundOnly: true }, 1, false);
++			assert.deepEqual(formerlyForegroundOnly, { async: true, clarify: false, foregroundOnly: true });
++		} finally {
++			if (previous === undefined) delete process.env.PI_SUBAGENTS_FORCE_ASYNC;
++			else process.env.PI_SUBAGENTS_FORCE_ASYNC = previous;
++		}
++	});
++
+ 	it("leaves top-level calls unchanged when the feature is off", () => {
+ 		const params = { async: false, clarify: true };
+ 		const next = mod!.applyForceTopLevelAsyncOverride(params, 0, false);
 diff --git a/test/support/isolated-test-runner.mjs b/test/support/isolated-test-runner.mjs
 new file mode 100644
-index 0000000..81a9265
+index 0000000000000000000000000000000000000000..81a92658995728b5545095917072ed91dde69c35
 --- /dev/null
 +++ b/test/support/isolated-test-runner.mjs
 @@ -0,0 +1,38 @@
@@ -2370,7 +2609,7 @@ index 0000000..81a9265
 +	rmSync(root, { recursive: true, force: true });
 +}
 diff --git a/test/unit/async-recovery-descriptor.test.ts b/test/unit/async-recovery-descriptor.test.ts
-index 35fc917..07b2790 100644
+index 35fc917c06b0fe9697db867e20780ab69e6208d0..07b2790ca396035bf76544cc1b88982b6de63cd6 100644
 --- a/test/unit/async-recovery-descriptor.test.ts
 +++ b/test/unit/async-recovery-descriptor.test.ts
 @@ -27,6 +27,20 @@ describe("async recovery descriptor", () => {
@@ -2395,7 +2634,7 @@ index 35fc917..07b2790 100644
  			fs.rmSync(root, { recursive: true, force: true });
  		}
 diff --git a/test/unit/async-resume.test.ts b/test/unit/async-resume.test.ts
-index 7d57683..c2bec7a 100644
+index 7d57683ba43b558239a75a6b4f2dfca55adfb07b..c2bec7af2c020aa0c1975dc386f92a7016086743 100644
 --- a/test/unit/async-resume.test.ts
 +++ b/test/unit/async-resume.test.ts
 @@ -41,6 +41,24 @@ describe("async resume lookup", () => {
@@ -2424,7 +2663,7 @@ index 7d57683..c2bec7a 100644
  		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-resume-ceiling-"));
  		try {
 diff --git a/test/unit/chain-serializer.test.ts b/test/unit/chain-serializer.test.ts
-index c9e4ec4..8181e51 100644
+index c9e4ec4680e9183632f76f0044a4b1ff52f47aad..8181e51318d22c083d172d874ff6e107f163bf52 100644
 --- a/test/unit/chain-serializer.test.ts
 +++ b/test/unit/chain-serializer.test.ts
 @@ -64,6 +64,25 @@ Review the diff
@@ -2453,9 +2692,34 @@ index c9e4ec4..8181e51 100644
  	it("rejects invalid markdown chain toolBudget", () => {
  		assert.throws(
  			() => parseChain(`---
+diff --git a/test/unit/control-channel.test.ts b/test/unit/control-channel.test.ts
+index 5e14d6591bf330f2700cdbe5a6aec5d0e25bec17..d62d2da82a616a6bb03665b6653d84e93360e341 100644
+--- a/test/unit/control-channel.test.ts
++++ b/test/unit/control-channel.test.ts
+@@ -52,6 +52,20 @@ describe("control channel: request file", () => {
+ 		}
+ 	});
+ 
++	it("rejects stale or mismatched agentd stop controls against runner identity", () => {
++		const asyncDir = tmpAsyncDir("pi-control-host-stop-");
++		try {
++			const base = { source: "agentd-cancellation", operationId: "op-1", cancellationGeneration: 2,
++				runId: "run-1", runKey: "top:run-1", runSessionId: "session-1", parentSessionId: "session-1",
++				parentSessionPath: null, reason: "forum-stop", ts: 1234 };
++			requestAsyncStop(asyncDir, base);
++			assert.equal(consumeStopRequest(asyncDir, fs, { runId: "other", runKey: "top:other", sessionId: "session-1" }), false);
++			assert.equal(fs.existsSync(stopRequestPath(asyncDir)), false);
++			requestAsyncStop(asyncDir, base);
++			assert.equal(consumeStopRequest(asyncDir, fs, { runId: "run-1", runKey: "top:run-1", sessionId: "session-1" }), true);
++		} finally { cleanup(asyncDir); }
++	});
++
+ 	it("writes and consumes a stop request", () => {
+ 		const asyncDir = tmpAsyncDir("pi-control-stop-");
+ 		try {
 diff --git a/test/unit/execution-target.test.ts b/test/unit/execution-target.test.ts
 new file mode 100644
-index 0000000..2341f60
+index 0000000000000000000000000000000000000000..2341f60bf08efd5d211def514044cab3075e8222
 --- /dev/null
 +++ b/test/unit/execution-target.test.ts
 @@ -0,0 +1,99 @@
@@ -2559,7 +2823,7 @@ index 0000000..2341f60
 +  });
 +});
 diff --git a/test/unit/fork-context.test.ts b/test/unit/fork-context.test.ts
-index 69b3685..bb54c64 100644
+index 69b3685a8e70eeaac84506273feda5d300a87ae8..bb54c6402264d5164111c1b11e247953d8de6633 100644
 --- a/test/unit/fork-context.test.ts
 +++ b/test/unit/fork-context.test.ts
 @@ -129,11 +129,12 @@ describe("createForkContextResolver", () => {
@@ -2599,7 +2863,7 @@ index 69b3685..bb54c64 100644
  			fs.rmSync(tempDir, { recursive: true, force: true });
  		}
 diff --git a/test/unit/native-supervisor-channel.test.ts b/test/unit/native-supervisor-channel.test.ts
-index 0805e2a..5121d4c 100644
+index 0805e2a8e9b72f95180ed98301099784915bab52..5121d4c1f62a3c5a4ddd45282246f7e80ac32a33 100644
 --- a/test/unit/native-supervisor-channel.test.ts
 +++ b/test/unit/native-supervisor-channel.test.ts
 @@ -48,7 +48,7 @@ function makeState(sessionId: string | null, ctx: unknown): SubagentState {
@@ -2671,7 +2935,7 @@ index 0805e2a..5121d4c 100644
  		const currentSessionId = `session-${randomUUID()}`;
  		const staleEmptyChannel = makeEmptyChannel(`run-${randomUUID()}`);
 diff --git a/test/unit/notify.test.ts b/test/unit/notify.test.ts
-index 916128b..75c2480 100644
+index 916128babcfbb3eae11d1bc6d9959df6a2603b24..75c248067b13e82808a4422344bffb55e656a8f4 100644
 --- a/test/unit/notify.test.ts
 +++ b/test/unit/notify.test.ts
 @@ -129,8 +129,9 @@ describe("registerSubagentNotify", () => {
@@ -2739,7 +3003,7 @@ index 916128b..75c2480 100644
  
  	it("ignores successes from other sessions instead of grouping them", () => {
 diff --git a/test/unit/package-manifest.test.ts b/test/unit/package-manifest.test.ts
-index 9c1f0d8..4bd0a03 100644
+index 9c1f0d8ece480b7500fcbc6c5b3d4ea1574b664d..4bd0a03a6bd7525a1420746c8b47d00bf83f80cb 100644
 --- a/test/unit/package-manifest.test.ts
 +++ b/test/unit/package-manifest.test.ts
 @@ -71,7 +71,7 @@ test("published extension APIs use supported package entrypoints", async () => {
@@ -2752,7 +3016,7 @@ index 9c1f0d8..4bd0a03 100644
  });
  
 diff --git a/test/unit/pi-args.test.ts b/test/unit/pi-args.test.ts
-index be218b9..f1f9131 100644
+index be218b9d076d4f1f82620638282a9dca628037fc..f1f91312dd8e73703a668022b14f1d9ef4b7788e 100644
 --- a/test/unit/pi-args.test.ts
 +++ b/test/unit/pi-args.test.ts
 @@ -406,6 +406,30 @@ describe("buildPiArgs system prompt mode wiring", () => {
@@ -2787,7 +3051,7 @@ index be218b9..f1f9131 100644
  		const { args, env } = buildPiArgs({
  			baseArgs: ["-p"],
 diff --git a/test/unit/preflight.test.ts b/test/unit/preflight.test.ts
-index 2c577b6..a83c547 100644
+index 2c577b6c1770b8b2b5e41e5d375e84fe3a08414d..a83c5472a54c3c3b304e8694494a22a05275342d 100644
 --- a/test/unit/preflight.test.ts
 +++ b/test/unit/preflight.test.ts
 @@ -111,6 +111,8 @@ Project prompt.
@@ -2800,7 +3064,7 @@ index 2c577b6..a83c547 100644
  			assert.equal(result.contract.agent.definitionProjectionVersion, 1);
  			assert.match(result.contract.agent.definitionDigest, /^[a-f0-9]{64}$/);
 diff --git a/test/unit/scheduled-runs.test.ts b/test/unit/scheduled-runs.test.ts
-index a4c9ae4..0ff129f 100644
+index a4c9ae4137418f559b3f5d117111704f196b7be3..0ff129fa509adf5c9cccf0e96c97011bdcc76122 100644
 --- a/test/unit/scheduled-runs.test.ts
 +++ b/test/unit/scheduled-runs.test.ts
 @@ -227,6 +227,18 @@ describe("ScheduledRunManager create/list/status/cancel", () => {
@@ -2823,7 +3087,7 @@ index a4c9ae4..0ff129f 100644
  		const harness = freshHarness();
  		// tasks + chain is genuinely ambiguous (both are execution arrays)
 diff --git a/test/unit/schemas.test.ts b/test/unit/schemas.test.ts
-index baee740..d8b1da5 100644
+index baee7401e5f43979dea127d706fa2430871b8459..d8b1da5444698c9d97244dbda156970bdf6c68d7 100644
 --- a/test/unit/schemas.test.ts
 +++ b/test/unit/schemas.test.ts
 @@ -174,6 +174,25 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
@@ -2862,7 +3126,7 @@ index baee740..d8b1da5 100644
  		assert.equal(serialized.includes('"$defs"'), false);
  		assert.equal(serialized.split("Optional acceptance policy.").length - 1, 1);
 diff --git a/test/unit/temp-paths.test.ts b/test/unit/temp-paths.test.ts
-index 113c46f..931fa88 100644
+index 113c46fffda4d477e92c9cd799e19f888006c619..931fa887b26340bf8e3173b60ca52cd4e7b4b79a 100644
 --- a/test/unit/temp-paths.test.ts
 +++ b/test/unit/temp-paths.test.ts
 @@ -58,7 +58,9 @@ describe("shared temp paths", () => {

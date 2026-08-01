@@ -101,7 +101,7 @@ export class WebSurfaceEventConsumer {
     }
 
     const replyRobotState = this.store.getRobotState(topicId);
-    const shouldSteerReply = replyRobotState && replyRobotState.activity !== 'idle';
+    const shouldSteerReply = replyRobotState && !['idle', 'stopped'].includes(replyRobotState.activity);
     if (shouldSteerReply) {
       await this.codex.steerUserMessage(topicId, post.body, post.id, {
         model: metadata?.model ?? null,
@@ -159,7 +159,7 @@ export class WebSurfaceEventConsumer {
     }
 
     const topicRobotState = this.store.getRobotState(topicId);
-    const shouldSteer = topicRobotState && topicRobotState.activity !== 'idle';
+    const shouldSteer = topicRobotState && !['idle', 'stopped'].includes(topicRobotState.activity);
     if (shouldSteer) {
       await this.codex.steerUserMessage(topicId, post.body, post.id, {
         model: metadata?.model ?? null,

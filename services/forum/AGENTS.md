@@ -120,12 +120,28 @@ agentd can validate scoped identity, delivery proof, resumability, leases, and s
 paths.
 Deploy on Finish must retain its durable request after exit 75.
 
-Forum startup reconciliation is passive: call `getConversation` only, reattach
-already-loaded conversations, and clear stale links for missing ones. Never call
-`openTopicConversation`, bind a newly loaded Pi runtime, consume recovered results,
-or dispatch a turn merely because forum/agentd restarted. Reconcile durable post
-dispatch generations before starting `PostDispatchService`; interrupt advances the
-topic generation and cancels older queued work.
+Stop Robot is a canonical-session cancellation barrier, not a fire-and-forget
+interrupt. The forum fences dispatch first and must preserve agentd's typed
+`stopping`/`stopped`/`uncertain` result, including for unloaded parents. Do not
+enable Continue while unresolved or collapse SSH effects uncertainty into local
+termination. A successful Stop remains durable as `stopped` across hydration and
+reconnect, and fresh dispatch clears that boundary. Interrupted live traces freeze
+buffered text even when no tool boundary has committed a segment. Public Stop
+responses expose safe counts/state/message only; raw run diagnostics remain admin-only.
+Scheduled subagent runs are disabled and are
+not covered by the current cancellation descendant model.
+
+Forum startup conversation reconciliation is passive: call `getConversation` only,
+reattach already-loaded conversations, and clear stale links for missing ones.
+Durable cancellation reconciliation is the exception: query the canonical Pi session
+so agentd actively re-runs its latest operation without loading the conversation.
+Never call `openTopicConversation`, bind a newly loaded Pi runtime, consume recovered
+results, or dispatch a turn merely because forum/agentd restarted. Preserve
+`stopping`/`uncertain` until that canonical reconciliation proves `stopped`. Reconcile
+durable post dispatch generations before starting `PostDispatchService`; the first
+interrupt advances the topic generation and cancels older queued work, while an
+unresolved retry reuses the current generation/operation. Apply cancellation results
+only when their generation still matches the topic.
 
 Key files:
 

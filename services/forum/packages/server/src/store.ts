@@ -2366,7 +2366,7 @@ export class ForumStore {
       const autoRun = this.getTopicAutoRun(input.topicId);
       if (
         topic?.status !== 'open' ||
-        robotState?.activity !== 'idle' ||
+        (robotState?.activity !== 'idle' && robotState?.activity !== 'stopped') ||
         autoRun?.status === 'running' ||
         this.countActionablePostDispatches(input.topicId) > 0 ||
         this.hasCompactionFence(input.topicId)
@@ -2668,10 +2668,15 @@ export class ForumStore {
     return Boolean(row);
   }
 
-  isTopicDispatchGenerationCurrent(topicId: string, generation: number): boolean {
+  getTopicDispatchGeneration(topicId: string): number {
+    this.ensurePostDispatchGeneration(topicId);
     const row = this.db.prepare('select generation from post_dispatch_generations where topic_id = ?').get(topicId) as
-      { generation: number } | undefined;
-    return (row?.generation ?? 0) === generation;
+      { generation: number };
+    return row.generation;
+  }
+
+  isTopicDispatchGenerationCurrent(topicId: string, generation: number): boolean {
+    return this.getTopicDispatchGeneration(topicId) === generation;
   }
 
   markPostDispatchDispatched(id: string, claimToken: string): PostDispatchRow | null {
@@ -2822,7 +2827,7 @@ export class ForumStore {
     if (!existing) {
       return null;
     }
-    const currentPlanIdExpr = activity === 'idle' ? 'null' : 'current_plan_id';
+    const currentPlanIdExpr = activity === 'idle' || activity === 'stopped' ? 'null' : 'current_plan_id';
     this.db
       .prepare(
         `update robot_state set activity = ?, current_plan_id = ${currentPlanIdExpr}, last_updated_at = ? where topic_id = ?`
@@ -2833,8 +2838,10 @@ export class ForumStore {
 
   resetRobotActivities(activity = 'idle'): number {
     const now = nowIso();
-    const currentPlanIdExpr = activity === 'idle' ? 'null' : 'current_plan_id';
-    const whereClause = activity === 'idle' ? 'activity != ? or current_plan_id is not null' : 'activity != ?';
+    const currentPlanIdExpr = activity === 'idle' || activity === 'stopped' ? 'null' : 'current_plan_id';
+    const whereClause = activity === 'idle'
+      ? "(activity != ? or current_plan_id is not null) and activity not in ('stopping', 'stopped', 'uncertain')"
+      : 'activity != ?';
     const result = this.db
       .prepare(
         `update robot_state set activity = ?, current_plan_id = ${currentPlanIdExpr}, last_updated_at = ? where ${whereClause}`
@@ -3228,7 +3235,7 @@ export class ForumStore {
 
   upsertRobotState(input: UpdateRobotStateInput): RobotStateRow {
     const now = nowIso();
-    const currentPlanId = input.activity === 'idle' ? null : (input.currentPlanId ?? null);
+    const currentPlanId = input.activity === 'idle' || input.activity === 'stopped' ? null : (input.currentPlanId ?? null);
     const existing = this.getRobotState(input.topicId);
     if (existing) {
       this.db
@@ -3278,6 +3285,12 @@ export class ForumStore {
     const row = this.db.prepare('select * from pi_session_links where topic_id = ? limit 1').get(topicId) as
       PiSessionLinkRow | undefined;
     return row ?? null;
+  }
+
+  listPiSessionLinksWithUnresolvedCancellation(): PiSessionLinkRow[] {
+    return this.db.prepare(
+      "select l.* from pi_session_links l join robot_state r on r.topic_id = l.topic_id where r.activity in ('stopping', 'uncertain')"
+    ).all() as PiSessionLinkRow[];
   }
 
   getPiSessionLinkByPiSessionId(piSessionId: string): PiSessionLinkRow | null {

@@ -204,6 +204,32 @@ describe('Robot routes access controls', () => {
     expect(authorInterrupt.statusCode).toBe(200);
   });
 
+  it('refuses Continue while cancellation is unresolved', async () => {
+    const app = await buildApp();
+    const forum = store.createForum('Forum', null, null, null, null, 'active', 'public');
+    const author = store.createIdentityWithPassword('Author', 'author', 'pw-hash', 'human');
+    store.createAuthSession('author-token', author.id);
+    const { topic } = store.createTopic({ forumId: forum.id, title: 'Topic', body: 'starter', authorId: author.id });
+    const session = store.ensureSession({ topicId: topic.id });
+    store.upsertRobotState({ topicId: topic.id, sessionId: session.id, activity: 'uncertain' });
+    const response = await app.inject({ method: 'POST', url: `/topics/${topic.id}/robot/continue`, headers: { authorization: 'Bearer author-token' } });
+    expect(response.statusCode).toBe(409);
+    expect(response.json().message).toMatch(/Cancellation is unresolved/);
+  });
+
+  it('refuses manual auto-run dispatch while cancellation is unresolved', async () => {
+    const app = await buildApp();
+    const forum = store.createForum('Forum', null, null, null, null, 'active', 'public');
+    const admin = store.createIdentityWithPassword('Admin', 'admin', 'pw-hash', 'admin');
+    store.createAuthSession('admin-token', admin.id);
+    const { topic } = store.createTopic({ forumId: forum.id, title: 'Topic', body: 'starter', authorId: admin.id });
+    const session = store.ensureSession({ topicId: topic.id });
+    store.upsertRobotState({ topicId: topic.id, sessionId: session.id, activity: 'stopping' });
+    const response = await app.inject({ method: 'POST', url: `/topics/${topic.id}/auto-run/run`, headers: { authorization: 'Bearer admin-token' }, payload: {} });
+    expect(response.statusCode).toBe(409);
+    expect(response.json().message).toMatch(/dispatch is fenced/);
+  });
+
   it('restricts session inspector and externals to admins', async () => {
     const app = await buildApp();
     const forum = store.createForum('Forum', null, null, null, null, 'active', 'public');

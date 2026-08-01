@@ -19,7 +19,7 @@ async function roots(t) {
   await mkdir(runsRoot, { recursive: true }); await mkdir(resultsRoot); await mkdir(sessionRoot); await mkdir(operatorRoot);
   return { root, lifecycleRoot, runsRoot, resultsRoot, sessionRoot, operatorRoot };
 }
-async function fixture(env, id, { now, age = 15 * DAY, resumeDisposition = 'unavailable', ack = true, pending = false, nestedRoot = null, symlinkFile = false } = {}) {
+async function fixture(env, id, { now, age = 15 * DAY, resumeDisposition = 'unavailable', ack = true, pending = false, nestedRoot = null, symlinkFile = false, launchRunnerProcessInstanceId = null } = {}) {
   const at = now - age;
   const asyncDir = nestedRoot ? path.join(env.lifecycleRoot, 'nested-subagent-runs', nestedRoot, id) : path.join(env.runsRoot, id);
   const sessionDir = path.join(env.sessionRoot, `${nestedRoot ?? 'top'}-${id}`); await mkdir(asyncDir, { recursive: true }); await mkdir(sessionDir);
@@ -29,6 +29,10 @@ async function fixture(env, id, { now, age = 15 * DAY, resumeDisposition = 'unav
   // containing scan directory rather than a redundant asyncDir property.
   await writeFile(path.join(asyncDir, 'status.json'), JSON.stringify({ lifecycleArtifactVersion: 3, runId: id, sessionId: `session-${id}`, sessionDir, state: 'complete', processTerminal: terminal, lastUpdate: at }));
   await writeFile(path.join(asyncDir, 'process-terminal.json'), JSON.stringify(terminal));
+  if (launchRunnerProcessInstanceId) {
+    await writeFile(path.join(asyncDir, 'launch.json'), JSON.stringify({ runId: id, sessionId: `session-${id}`, asyncDir,
+      state: 'spawned', runnerProcessInstanceId: launchRunnerProcessInstanceId, registeredAt: at }));
+  }
   await writeFile(path.join(asyncDir, 'events.jsonl'), 'verbose events\n'); await writeFile(path.join(asyncDir, 'output-0.log'), 'verbose output\n');
   const runKey = nestedRoot ? `nested:${nestedRoot}:${id}` : `top:${id}`;
   if (ack) {
@@ -148,6 +152,28 @@ test('structurally malformed terminal proof remains a retention safety error', a
   assert.equal(item.eligible, false);
   assert.ok(item.protected_reasons.includes('process-terminal-artifact-missing-or-invalid'));
   assert.equal(summarizeSubagentRetention({ inventory }).counts.error, 1);
+});
+
+test('retention accepts legacy observed proof but rejects proof stale against a current launch instance', async (t) => {
+  const env = await roots(t); const now = Date.UTC(2026, 6, 31);
+  await fixture(env, 'legacy', { now });
+  await fixture(env, 'stale', { now, launchRunnerProcessInstanceId: 'runner-current' });
+  const inventory = await inventorySubagentRetention({ ...env, nowMs: now });
+  assert.equal(inventory.items.find((item) => item.run_id === 'legacy').eligible, true);
+  const stale = inventory.items.find((item) => item.run_id === 'stale');
+  assert.equal(stale.eligible, false);
+  assert.ok(stale.protected_reasons.includes('execution-not-settled'));
+  assert.ok(stale.protected_reasons.includes('resumability-or-terminal-proof-protected'));
+});
+
+test('present malformed launch blocks retention despite otherwise eligible legacy proof', async (t) => {
+  const env = await roots(t); const now = Date.UTC(2026, 6, 31);
+  const run = await fixture(env, 'malformed-launch', { now });
+  await writeFile(path.join(run.asyncDir, 'launch.json'), '{malformed');
+  const inventory = await inventorySubagentRetention({ ...env, nowMs: now });
+  const item = inventory.items.find((candidate) => candidate.run_id === 'malformed-launch');
+  assert.equal(item.eligible, false);
+  assert.ok(item.protected_reasons.includes('execution-not-settled'));
 });
 
 test('forged sidecar without exact central ledger proof cannot become eligible', async (t) => {

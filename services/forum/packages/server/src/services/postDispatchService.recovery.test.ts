@@ -120,6 +120,17 @@ describe('durable post dispatch recovery fence', () => {
     expect(agent.dispatchPostToAgent).not.toHaveBeenCalled();
   });
 
+  it.each(['stopping', 'uncertain'])('keeps human post dispatch pending and does not cross the robot boundary while %s', async (activity) => {
+    const { topic, session, post } = fixture();
+    const dispatch = store.createPostDispatch({ topicId: topic.id, sessionId: session.id, postId: post.id });
+    store.setRobotActivity(topic.id, activity);
+    const agent = { dispatchPostToAgent: vi.fn(async () => {}) };
+    const service = new PostDispatchService(store, agent as any);
+    await processOnce(service);
+    expect(agent.dispatchPostToAgent).not.toHaveBeenCalled();
+    expect(store.getPostDispatch(dispatch.id)?.status).toBe('pending');
+  });
+
   it('never runs a stale generation after restart reconciliation', async () => {
     const { topic, session, post } = fixture();
     const dispatch = store.createPostDispatch({ topicId: topic.id, sessionId: session.id, postId: post.id });
@@ -245,6 +256,71 @@ describe('durable post dispatch recovery fence', () => {
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
+  });
+
+  it('concurrent unresolved Stop retries reuse one generation and keep posts deferred until proven stopped', async () => {
+    const { topic, session, author } = fixture();
+    store.setSessionAgentThread(session.id, 'echs', 'conversation-1');
+    const bridge = new EchsBridge(store, { emit: vi.fn(), subscribe: vi.fn() } as any, {
+      model: 'model', workDir: '/tmp', echs: { baseUrl: 'http://agentd.invalid' },
+    });
+    vi.spyOn(bridge as any, 'emitState').mockImplementation(() => {});
+    const advance = vi.spyOn(store, 'advanceTopicDispatchGeneration');
+    let release!: () => void;
+    const paused = new Promise<void>((resolve) => { release = resolve; });
+    const entered = Promise.withResolvers<void>();
+    const cancel = vi.spyOn((bridge as any).client, 'interruptConversation').mockImplementation(async (_id: string, generation: number, operationId: string) => {
+      entered.resolve(); await paused;
+      return { ok: true, operation_id: operationId, generation, state: 'stopped', targets: 0,
+        unresolved_count: 0, effects_unknown_count: 0, error_count: 0, message: 'stopped' };
+    });
+
+    const first = bridge.interruptTopic(topic.id);
+    await entered.promise;
+    const post = store.createPost({ topicId: topic.id, authorId: author.id, body: 'posted behind unresolved fence' });
+    const deferred = store.createPostDispatch({ topicId: topic.id, sessionId: session.id, postId: post.id });
+    const retry = bridge.interruptTopic(topic.id);
+    expect(deferred.generation).toBe(1);
+    expect(advance).toHaveBeenCalledTimes(1);
+    release();
+    const [firstResult, retryResult] = await Promise.all([first, retry]);
+    expect(firstResult.operationId).toBe(retryResult.operationId);
+    expect(firstResult).toMatchObject({ unresolvedCount: 0, effectsUnknownCount: 0, errorCount: 0 });
+    expect(firstResult).not.toHaveProperty('unresolved');
+    expect(firstResult).not.toHaveProperty('errors');
+    expect(cancel.mock.calls.map((call) => call[1])).toEqual([1, 1]);
+    expect(store.getRobotState(topic.id)?.activity).toBe('stopped');
+    expect(store.getPostDispatch(deferred.id)?.status).toBe('pending');
+
+    const agent = { dispatchPostToAgent: vi.fn(async () => {}) };
+    const service = new PostDispatchService(store, agent as any);
+    await processOnce(service);
+    expect(agent.dispatchPostToAgent).toHaveBeenCalledWith(topic.id, post.id, expect.objectContaining({ generation: 1 }));
+  });
+
+  it('an older Stop response cannot overwrite a newer topic generation', async () => {
+    const { topic, session } = fixture();
+    store.setSessionAgentThread(session.id, 'echs', 'conversation-1');
+    const bridge = new EchsBridge(store, { emit: vi.fn(), subscribe: vi.fn() } as any, {
+      model: 'model', workDir: '/tmp', echs: { baseUrl: 'http://agentd.invalid' },
+    });
+    vi.spyOn(bridge as any, 'emitState').mockImplementation(() => {});
+    let release!: () => void;
+    const paused = new Promise<void>((resolve) => { release = resolve; });
+    const entered = Promise.withResolvers<void>();
+    vi.spyOn((bridge as any).client, 'interruptConversation').mockImplementation(async (_id: string, generation: number, operationId: string) => {
+      entered.resolve(); await paused;
+      return { ok: true, operation_id: operationId, generation, state: 'stopped', targets: 0,
+        unresolved_count: 0, effects_unknown_count: 0, error_count: 0, message: 'stopped' };
+    });
+    const older = bridge.interruptTopic(topic.id);
+    await entered.promise;
+    store.advanceTopicDispatchGeneration(topic.id, 'newer stop');
+    store.setRobotActivity(topic.id, 'uncertain');
+    release();
+    await older;
+    expect(store.getTopicDispatchGeneration(topic.id)).toBe(2);
+    expect(store.getRobotState(topic.id)?.activity).toBe('uncertain');
   });
 
   it('a delayed accepted dispatch cannot restore thinking after interrupt', async () => {

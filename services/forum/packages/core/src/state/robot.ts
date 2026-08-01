@@ -1,6 +1,6 @@
 import type { PlanId, ToolRunId, SessionId, TopicId } from '../domain/ids';
 
-export type RobotActivity = 'idle' | 'thinking' | 'running_tools' | 'waiting' | 'error';
+export type RobotActivity = 'idle' | 'thinking' | 'running_tools' | 'waiting' | 'stopping' | 'stopped' | 'uncertain' | 'error';
 export type ArtifactVisibility = 'public' | 'internal' | 'private';
 
 export interface PlanArtifact {

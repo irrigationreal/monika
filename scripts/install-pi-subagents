@@ -43,12 +43,13 @@ readonly tui_fleet_status_sha256='91d369a9f94da17c77d04b1b85e3301d03db119b7c790c
 readonly async_recovery_descriptor_test_sha256='a9af381c6620ae9850588c890b14cf57ba5f8c50df56c5be94a73121b87dd6e1'
 readonly async_resume_test_sha256='453608365665f51b543088411b5cc417a38d517ff958a532653d2acc2d4a3b8a'
 readonly chain_serializer_test_sha256='aa05d7f2bc784d8cab83fc2e5e5eb72befacfa515fe4fc1ab1e2d2cefff9a8c7'
+readonly control_channel_test_sha256='27761e1e817fa9c6cf44c7c112e60648df3f3c6a069c189ca7a72f905ad264ff'
 readonly package_manifest_test_sha256='b46fb55c48c0a06a668043f410eae2d4507bbc034490ec612360429b228616b3'
 readonly pi_args_test_sha256='f8844fe71a7ca7f2337fb42e15e178641f7c0abeca79a1171beb1e4c6c48f188'
 readonly preflight_test_sha256='9dc214bef34e0fd87611b0cfa88d678fc609bd6fe611073d94294bb2c27378cf'
 readonly scheduled_runs_test_sha256='93e2a1f802616b96d1add13f7ededb19a16e0bfd4890f192185f1db7f4558ec3'
 readonly schemas_test_sha256='862ce9232e80d9984feb0c471da0ddcf340226e014d2735723587f55789bc320'
-readonly patch_sha256='6f4368d3aab94b035cd94fa2b27d548bd6c57a514d091ca52f0d638eac3c8035'
+readonly patch_sha256='03594026b03d1d7e5e7ffb9b2b18893b6360036f854e7e81f6cbfe3458487929'
 
 if [ "$#" -ne 2 ]; then
   echo "usage: $0 <destination> <patch>" >&2
@@ -102,6 +103,7 @@ printf '%s  %s\n' \
   "$async_recovery_descriptor_test_sha256" "$destination/test/unit/async-recovery-descriptor.test.ts" \
   "$async_resume_test_sha256" "$destination/test/unit/async-resume.test.ts" \
   "$chain_serializer_test_sha256" "$destination/test/unit/chain-serializer.test.ts" \
+  "$control_channel_test_sha256" "$destination/test/unit/control-channel.test.ts" \
   "$package_manifest_test_sha256" "$destination/test/unit/package-manifest.test.ts" \
   "$pi_args_test_sha256" "$destination/test/unit/pi-args.test.ts" \
   "$preflight_test_sha256" "$destination/test/unit/preflight.test.ts" \
@@ -133,7 +135,7 @@ git -C "$destination" diff --check
 if [ "${PI_SUBAGENTS_VERIFY_TESTS:-0}" = 1 ]; then
   (cd "$destination" && npm ci --ignore-scripts && \
     node test/support/isolated-test-runner.mjs unit \
-      async-recovery-descriptor.test.ts async-resume.test.ts chain-serializer.test.ts \
+      async-recovery-descriptor.test.ts async-resume.test.ts chain-serializer.test.ts control-channel.test.ts \
       execution-target.test.ts package-manifest.test.ts pi-args.test.ts preflight.test.ts \
       scheduled-runs.test.ts schemas.test.ts && \
     node test/support/isolated-test-runner.mjs integration \

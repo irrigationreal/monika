@@ -21,6 +21,7 @@ import type {
   RegistrationModeDto,
   RobotPersonaDto,
   RobotStateDto,
+  RobotStopResultDto,
   SessionContextDto,
   SessionDto,
   SessionInspectorDto,
@@ -32,6 +33,21 @@ import type { ReasoningStep } from '../lib/reasoning';
 
 export type TraceSegment =
   { kind: 'reasoning'; text: string } | { kind: 'assistant_text'; text: string } | { kind: 'tool'; toolRunId: string };
+
+export function freezeInterruptedTextSegments(segments: TraceSegment[], reasoning: string, assistant: string): TraceSegment[] {
+  const frozen = [...segments];
+  if (reasoning) frozen.push({ kind: 'reasoning', text: reasoning });
+  if (assistant) frozen.push({ kind: 'assistant_text', text: assistant });
+  return frozen;
+}
+
+export function isDurableStopBoundary(activity: RobotStateDto['activity'] | null | undefined): boolean {
+  return activity === 'stopped';
+}
+
+export function isInitiatingTopicCurrent(initiatingTopicId: string, currentTopicId: string | null): boolean {
+  return initiatingTopicId === currentTopicId;
+}
 
 const forums = ref<ForumDto[]>([]);
 const archivedForums = ref<ForumDto[]>([]);
@@ -52,6 +68,7 @@ const topicAutoRun = ref<TopicAutoRunDto | null>(null);
 const autoRunLoading = ref(false);
 const autoRunError = ref<string | null>(null);
 const robotControlPending = ref(false);
+const robotStopResult = ref<RobotStopResultDto | null>(null);
 const reasoningDraft = ref('');
 const assistantDraft = ref('');
 const reasoningSteps = ref<ReasoningStep[]>([]);
@@ -161,6 +178,7 @@ function clearCompletedAssistantTurnTrace(): void {
   pendingAssistantDelta = '';
   pendingReasoningDelta = '';
   interruptedTrace.value = false;
+  robotStopResult.value = null;
   activePlanId = null;
   liveTurnStartedAt = null;
   resetRobotActivity();
@@ -189,6 +207,27 @@ function flushPendingDeltas(): void {
     window.cancelAnimationFrame(flushHandle);
     flushHandle = null;
   }
+}
+
+function freezeCurrentInterruptedTrace(): void {
+  flushPendingDeltas();
+  committedSegments.value = freezeInterruptedTextSegments(
+    committedSegments.value,
+    reasoningDraft.value,
+    assistantDraft.value,
+  );
+  assistantDraft.value = '';
+  reasoningDraft.value = '';
+  pendingAssistantDelta = '';
+  pendingReasoningDelta = '';
+  activePlanId = null;
+  interruptedTrace.value = true;
+}
+
+function hasCurrentTrace(): boolean {
+  return interruptedTrace.value || committedSegments.value.length > 0 || Boolean(
+    reasoningDraft.value || assistantDraft.value || pendingReasoningDelta || pendingAssistantDelta,
+  );
 }
 
 function syncToolActivity(toolRuns: RobotStateDto['recentToolRuns']): void {
@@ -311,7 +350,7 @@ export function useForumState() {
   const allModelOptions = computed(() => modelItems.value.map((item) => item.id));
 
   const latestToolRun = computed(() => robotState.value?.recentToolRuns[0] ?? null);
-  const isRobotBusy = computed(() => Boolean(robotState.value && robotState.value.activity !== 'idle'));
+  const isRobotBusy = computed(() => Boolean(robotState.value && !['idle', 'stopped'].includes(robotState.value.activity)));
 
   const isLoggedIn = computed(() => currentUser.value !== null);
   const isAdmin = computed(() => currentUser.value?.kind === 'admin');
@@ -729,10 +768,16 @@ export function useForumState() {
     const { reconstructTrace = true } = opts;
     const nextState = await api.getRobotState(topicId, { include: ['plan', 'toolRuns'] });
     if (!isActiveTopic(topicId)) return;
+    const durableStop = isDurableStopBoundary(nextState?.activity);
+    const preserveInterruptedTrace = durableStop && hasCurrentTrace();
+    // Stop HTTP completion and reconnect hydration can return a durable stopped
+    // state with no live plan. Freeze local buffered text before any state reset
+    // so that sparse durable projection cannot erase the interrupted trace.
+    if (preserveInterruptedTrace) freezeCurrentInterruptedTrace();
     robotState.value = nextState;
     sessionContext.value = retainSessionContext(sessionContext.value, nextState?.context);
     activePlanId = nextState?.currentPlan?.id ?? null;
-    resetRobotActivity();
+    if (!preserveInterruptedTrace) resetRobotActivity();
     if (nextState) {
       syncToolActivity(nextState.recentToolRuns);
     }
@@ -740,12 +785,13 @@ export function useForumState() {
     // so a page refresh shows the trace built so far. Completion reloads opt
     // out because assistant_message is authoritative and stale idle state may
     // still carry the just-finished plan/tool data.
-    if (reconstructTrace && shouldReconstructTraceFromState(nextState)) {
+    if (!preserveInterruptedTrace && reconstructTrace && shouldReconstructTraceFromState(nextState)) {
       reconstructSegmentsFromState(nextState);
-    } else {
+    } else if (!preserveInterruptedTrace) {
       reasoningDraft.value = '';
       assistantDraft.value = '';
     }
+    if (durableStop) freezeCurrentInterruptedTrace();
     syncReasoningActivity();
   }
 
@@ -849,14 +895,21 @@ export function useForumState() {
   }
 
   async function interruptRobot(): Promise<void> {
-    if (!selectedTopicId.value) return;
+    const topicId = selectedTopicId.value;
+    if (!topicId) return;
     robotControlPending.value = true;
     error.value = null;
     try {
-      await api.interruptRobot(selectedTopicId.value);
-      await loadState(selectedTopicId.value);
+      const result = await api.interruptRobot(topicId);
+      // Navigation can finish while Stop is in flight. Never surface a result
+      // from another topic in the newly selected topic's controls.
+      if (!isInitiatingTopicCurrent(topicId, selectedTopicId.value)) return;
+      robotStopResult.value = result;
+      await loadState(topicId);
     } catch (err) {
-      error.value = err instanceof Error ? err.message : 'Failed to interrupt robot.';
+      if (isInitiatingTopicCurrent(topicId, selectedTopicId.value)) {
+        error.value = err instanceof Error ? err.message : 'Failed to interrupt robot.';
+      }
     } finally {
       robotControlPending.value = false;
     }
@@ -911,11 +964,15 @@ export function useForumState() {
     });
     stream.addEventListener('state', (event: MessageEvent<string>) => {
       const payload = JSON.parse(event.data) as RobotStateDto;
+      const durableStop = isDurableStopBoundary(payload.activity);
+      const preserveInterruptedTrace = durableStop && hasCurrentTrace();
+      if (preserveInterruptedTrace) freezeCurrentInterruptedTrace();
       robotState.value = payload;
       const nextPlanId = payload.currentPlan?.id ?? null;
       // The server clears currentPlan at the start of a new turn. Use that as a boundary so
-      // we don't concatenate two different turns into one "reasoningDraft" blob.
-      if (activePlanId !== null && nextPlanId === null) {
+      // we don't concatenate two different turns into one "reasoningDraft" blob. A durable
+      // stopped boundary is different: its absent plan must not clear the trace being frozen.
+      if (!preserveInterruptedTrace && activePlanId !== null && nextPlanId === null) {
         reasoningDraft.value = '';
         assistantDraft.value = '';
         resetRobotActivity();
@@ -927,12 +984,14 @@ export function useForumState() {
       // If we have tool runs from the server but no committed segments yet
       // (reconnect/refresh mid-turn), reconstruct from server state.
       if (
+        !preserveInterruptedTrace &&
         committedSegments.value.length === 0 &&
         payload.recentToolRuns.length > 0 &&
         shouldReconstructTraceFromState(payload)
       ) {
         reconstructSegmentsFromState(payload);
       }
+      if (durableStop) freezeCurrentInterruptedTrace();
       syncReasoningActivity();
     });
     stream.addEventListener('tool_started', (event: MessageEvent<string>) => {
@@ -966,15 +1025,11 @@ export function useForumState() {
     });
     stream.addEventListener('assistant_reset', (event: MessageEvent<string>) => {
       const payload = JSON.parse(event.data) as { reason?: string };
-      if (payload.reason === 'interrupted' && committedSegments.value.length > 0) {
-        // Keep committed segments visible as a frozen "stopped" trace.
-        // Don't clear segments — just stop accumulating new content.
-        assistantDraft.value = '';
-        reasoningDraft.value = '';
-        pendingAssistantDelta = '';
-        pendingReasoningDelta = '';
-        activePlanId = null;
-        interruptedTrace.value = true;
+      flushPendingDeltas();
+      if (payload.reason === 'interrupted') {
+        // The same idempotent freeze path handles SSE delivery, direct HTTP
+        // completion, hydration, and a reconnect that missed the reset event.
+        freezeCurrentInterruptedTrace();
       } else {
         // New turn: clear everything for a fresh start.
         assistantDraft.value = '';
@@ -984,6 +1039,7 @@ export function useForumState() {
         activePlanId = null;
         liveTurnStartedAt = Date.now();
         interruptedTrace.value = false;
+        robotStopResult.value = null;
         resetRobotActivity();
       }
     });
@@ -1081,10 +1137,12 @@ export function useForumState() {
     const loadId = ++topicLoadCounter;
     const hydrateState = options?.hydrateState ?? true;
     topicHydrationEnabled = hydrateState;
+    robotStopResult.value = null;
     selectedTopic.value = topic;
     currentPage.value = 1;
     assistantDraft.value = '';
     reasoningDraft.value = '';
+    interruptedTrace.value = false;
     activePlanId = null;
     liveTurnStartedAt = null;
     resetRobotActivity();
@@ -1143,8 +1201,10 @@ export function useForumState() {
     topicAutoRun.value = null;
     autoRunError.value = null;
     autoRunLoading.value = false;
+    robotStopResult.value = null;
     assistantDraft.value = '';
     reasoningDraft.value = '';
+    interruptedTrace.value = false;
     activePlanId = null;
     liveTurnStartedAt = null;
     resetRobotActivity();
@@ -1232,10 +1292,8 @@ export function useForumState() {
         attachmentsPending?: boolean;
         silent?: boolean;
       } = { body };
-      if (options?.autoCompactEnabled !== undefined || options?.autoCompactRevision !== undefined) {
-        payload.autoCompactEnabled = options.autoCompactEnabled;
-        payload.autoCompactRevision = options.autoCompactRevision;
-      }
+      if (options?.autoCompactEnabled !== undefined) payload.autoCompactEnabled = options.autoCompactEnabled;
+      if (options?.autoCompactRevision !== undefined) payload.autoCompactRevision = options.autoCompactRevision;
       if (options?.attachmentsPending) {
         payload.attachmentsPending = true;
       }
@@ -1509,7 +1567,11 @@ export function useForumState() {
         since = undefined;
         break;
     }
-    const res = await api.listTopics(selectedForumId.value, { since, page: 1, pageSize: desiredTopicsPageSize() });
+    const res = await api.listTopics(selectedForumId.value, {
+      ...(since ? { since } : {}),
+      page: 1,
+      pageSize: desiredTopicsPageSize(),
+    });
     topics.value = sortTopicsByActivity(res.items);
   }
 
@@ -1568,6 +1630,7 @@ export function useForumState() {
     sessionInfo,
     sessionInspector,
     robotControlPending,
+    robotStopResult,
     loading,
     error,
     currentPage,

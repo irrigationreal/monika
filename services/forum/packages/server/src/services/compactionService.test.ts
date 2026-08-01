@@ -231,6 +231,18 @@ describe('CompactionService', () => {
     expect(store.getCompactionOperation('op-locked')).toBeNull();
   });
 
+  it('accepts a stopped cancellation boundary as idle in the durable enqueue transaction', async () => {
+    const { topic, admin } = seed(store, db, 'stopped');
+    const subject = service({
+      getTopicCompactionLeaf: vi.fn().mockResolvedValue('leaf-1'),
+      compactTopicConversation: vi.fn(),
+    });
+
+    await expect(
+      subject.enqueue({ operationId: 'op-stopped', topicId: topic.id, initiatedBy: admin.id, recoveryPrompt: 'recover' })
+    ).resolves.toMatchObject({ id: 'op-stopped', status: 'pending' });
+  });
+
   it('rejects non-idle topics before creating an operation', async () => {
     const { topic, admin } = seed(store, db, 'thinking');
     const subject = service({

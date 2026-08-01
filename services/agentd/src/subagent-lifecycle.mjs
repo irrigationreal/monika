@@ -10,11 +10,12 @@ const MAX_PUBLIC_RUNS = 64;
 function record(value) { return value && typeof value === 'object' && !Array.isArray(value) ? value : null; }
 function string(value) { return typeof value === 'string' && value.trim() ? value.trim() : null; }
 function runId(value) { const data = record(value); return string(data?.runId ?? data?.id ?? data?.asyncId); }
-function validObservedProcessTerminal(value, expectedRunId = null) {
+function validObservedProcessTerminal(value, expectedRunId = null, expectedRunnerProcessInstanceId = null) {
   const proof = record(value);
   if (!proof || proof.version !== 1 || proof.state !== 'observed'
     || !string(proof.runId) || (expectedRunId && proof.runId !== expectedRunId)
     || !string(proof.runnerProcessInstanceId)
+    || (expectedRunnerProcessInstanceId && proof.runnerProcessInstanceId !== expectedRunnerProcessInstanceId)
     || typeof proof.observedAt !== 'number' || !Number.isFinite(proof.observedAt)
     || !Array.isArray(proof.instances)) return false;
   return proof.instances.some((instance) => record(instance)?.kind === 'runner'
@@ -43,7 +44,17 @@ function isWithin(root, candidate) {
   const relative = path.relative(path.resolve(root), path.resolve(candidate));
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
-async function readJson(file) { try { return JSON.parse(await fs.readFile(file, 'utf8')); } catch (error) { if (error?.code === 'ENOENT') return null; throw error; } }
+async function readJson(file) {
+  try { return JSON.parse((await exactFileBytes(file)).bytes.toString('utf8')); }
+  catch (error) { if (error?.code === 'ENOENT') return null; throw error; }
+}
+async function readOptionalJsonArtifact(file) {
+  try { return { present: true, value: JSON.parse((await exactFileBytes(file)).bytes.toString('utf8')), error: null }; }
+  catch (error) {
+    if (error?.code === 'ENOENT') return { present: false, value: null, error: null };
+    return { present: true, value: null, error };
+  }
+}
 async function syncDirectory(dir) {
   const handle = await fs.open(dir, fsConstants.O_RDONLY | (fsConstants.O_DIRECTORY ?? 0));
   try { await handle.sync(); } finally { await handle.close(); }
@@ -399,6 +410,13 @@ export async function findLifecycleRunIdentities(lifecycleRoot, requestedRunId) 
   return matches;
 }
 function timestampMs(value) { if (typeof value === 'number' && Number.isFinite(value)) return value; const parsed = Date.parse(value ?? ''); return Number.isFinite(parsed) ? parsed : null; }
+function validLaunchArtifact(value, { lifecycleRoot, asyncDir } = {}) {
+  const launch = record(value); const id = runId(launch); const sessionId = string(launch?.sessionId);
+  const launchDir = string(launch?.asyncDir); const runnerProcessInstanceId = string(launch?.runnerProcessInstanceId);
+  if (!launch || !id || !sessionId || !launchDir || !path.isAbsolute(launchDir) || path.resolve(launchDir) !== path.resolve(asyncDir)
+    || !runnerProcessInstanceId || !lifecycleRunIdentity(lifecycleRoot, asyncDir, id)) return null;
+  return { ...launch, runId: id, sessionId, asyncDir: path.resolve(launchDir), runnerProcessInstanceId };
+}
 async function readRuntimeInstance(runtimeInstanceFile) {
   if (!runtimeInstanceFile) return null;
   const data = await readJson(runtimeInstanceFile).catch(() => null);
@@ -434,20 +452,33 @@ function auditedEffectsResolution(value, id, operatorAudit) {
 }
 async function classifyRunDirectory(asyncDir, { lifecycleRoot = path.dirname(asyncDir), runtime = null, processInspector = processAlive,
   resultsRoot = null, operatorRoot = null, operatorAudit = [] } = {}) {
-  const statusRaw = await readJson(path.join(asyncDir, 'status.json')).catch(() => null);
-  const launch = await readJson(path.join(asyncDir, 'launch.json')).catch(() => null);
-  const id = runId(statusRaw) ?? runId(launch) ?? path.basename(asyncDir);
-  const status = statusRaw ? validateLifecycleArtifact(statusRaw, { runId: id, asyncDir }) : null;
+  let statusRaw = null; let statusReadFailed = false;
+  try { statusRaw = await readJson(path.join(asyncDir, 'status.json')); }
+  catch { statusReadFailed = true; }
+  const launchArtifact = await readOptionalJsonArtifact(path.join(asyncDir, 'launch.json'));
+  const launchRaw = launchArtifact.value;
+  const launch = validLaunchArtifact(launchRaw, { lifecycleRoot, asyncDir });
+  // launch.json is the canonical process instance and parent mapping. A
+  // malformed status must not substitute a stale run identity for it. Legacy
+  // unbound terminal proof is compatible only when launch.json is truly absent;
+  // a present but unreadable or malformed launch remains blocking uncertainty.
+  const id = launch?.runId ?? runId(statusRaw) ?? path.basename(asyncDir);
+  const status = statusRaw ? validateLifecycleArtifact(statusRaw, { runId: id, sessionId: launch?.sessionId, asyncDir }) : null;
   const identity = lifecycleRunIdentity(lifecycleRoot, asyncDir, id);
-  if (!identity || (!status && !launch)) return { run_id: id, run_key: identity?.runKey ?? null, state: 'unknown',
+  if (!identity || statusReadFailed || (statusRaw !== null && !status) || (launchArtifact.present && !launch) || (!status && !launch)) return { run_id: id, run_key: identity?.runKey ?? null,
+    scope: identity?.scope ?? null, root_run_id: identity?.rootRunId ?? null, state: 'unknown',
     lifecycle_artifact_version: null, execution_state: 'uncertain', outcome_state: 'unknown', effects_state: 'unknown',
     delivery_state: null, execution_target: null, blocking: true,
-    reason: identity ? 'malformed-lifecycle-artifact' : 'invalid-lifecycle-location', async_dir: asyncDir, processTerminal: null };
+    reason: identity ? 'malformed-lifecycle-artifact' : 'invalid-lifecycle-location',
+    parent_session_id: string(statusRaw?.sessionId ?? launch?.sessionId),
+    parent_session_path: string(launch?.parentSessionPath ?? launch?.sessionPath ?? statusRaw?.parentSessionPath ?? statusRaw?.sessionPath),
+    runner_process_instance_id: launch?.runnerProcessInstanceId ?? null,
+    async_dir: asyncDir, processTerminal: null };
   let proof = await readJson(path.join(asyncDir, 'process-terminal.json')).catch(() => null);
   if (!proof) proof = status?.processTerminal ?? null;
   const operatorResolution = await readJson(path.join(asyncDir, 'operator-resolution.json')).catch(() => null);
   const effectsResolution = await readJson(path.join(asyncDir, 'effects-resolution.json')).catch(() => null);
-  const expectedInstanceId = string(proof?.runnerProcessInstanceId) ?? string(launch?.runnerProcessInstanceId);
+  const expectedInstanceId = launch?.runnerProcessInstanceId ?? null;
   const operatorQuarantined = operatorResolution?.version === 1 && operatorResolution.action === 'quarantine'
     && operatorResolution.runId === id && string(operatorResolution.runnerProcessInstanceId) === expectedInstanceId;
   const auditedEffects = auditedEffectsResolution(effectsResolution, id, operatorAudit);
@@ -457,8 +488,9 @@ async function classifyRunDirectory(asyncDir, { lifecycleRoot = path.dirname(asy
   const launchRuntimeId = string(launch?.runtimeInstanceId);
   let executionState = 'uncertain'; let blocking = true; let reason = null;
   if (operatorQuarantined) { executionState = 'quarantined'; blocking = false; reason = `operator-quarantine:${string(operatorResolution.reason) ?? 'no-reason'}`; }
-  else if (proof?.version === 1 && proof?.state === 'not-started' && proof?.runId === id) { executionState = 'interrupted'; blocking = false; reason = 'runner-not-started'; }
-  else if (validObservedProcessTerminal(proof, id)) { executionState = 'terminal'; blocking = false; }
+  else if (expectedInstanceId && proof?.version === 1 && proof?.state === 'not-started' && proof?.runId === id
+    && proof?.runnerProcessInstanceId === expectedInstanceId) { executionState = 'interrupted'; blocking = false; reason = 'runner-not-started'; }
+  else if (validObservedProcessTerminal(proof, id, expectedInstanceId)) { executionState = 'terminal'; blocking = false; }
   else {
     const updated = timestampMs(status?.updatedAt ?? launch?.updatedAt ?? launch?.registeredAt);
     if (runtime && launchRuntimeId && launchRuntimeId !== runtime.id) { executionState = 'interrupted'; blocking = false; reason = 'prior-runtime-instance'; }
@@ -495,8 +527,9 @@ async function classifyRunDirectory(asyncDir, { lifecycleRoot = path.dirname(asy
     state: status?.state ?? safeState(launch?.state), lifecycle_artifact_version: status?.lifecycleArtifactVersion ?? null,
     execution_state: executionState, outcome_state: outcomeState, effects_state: effectsState, delivery_state: deliveryState,
     effects_resolution: operatorEffectsState ? auditedEffects : null, execution_target: status?.executionTarget ?? null,
-    blocking, reason, parent_session_id: status?.sessionId ?? string(launch?.sessionId),
-    parent_session_path: string(statusRaw?.parentSessionPath ?? statusRaw?.sessionPath ?? launch?.parentSessionPath ?? launch?.sessionPath) ?? status?.sessionId ?? string(launch?.sessionId),
+    blocking, reason, parent_session_id: launch?.sessionId ?? status?.sessionId,
+    parent_session_path: string(launch?.parentSessionPath ?? launch?.sessionPath ?? statusRaw?.parentSessionPath ?? statusRaw?.sessionPath) ?? launch?.sessionId ?? status?.sessionId,
+    runner_process_instance_id: launch?.runnerProcessInstanceId ?? null,
     async_dir: asyncDir, mode: status?.mode ?? string(launch?.mode), profile, pid: runnerPid,
     started_at: status?.startedAt ?? launch?.registeredAt ?? null, updated_at: status?.updatedAt ?? launch?.updatedAt ?? null,
     processTerminal: proof, runtime_instance_id: launchRuntimeId, origin: null };
@@ -509,12 +542,30 @@ export async function scanLifecycleSnapshot({ lifecycleRoot, runtimeInstanceFile
   for (const dir of await lifecycleEntries(resolvedRoot)) {
     if (!isWithin(resolvedRoot, dir)) continue;
     try { runs.push(await classifyRunDirectory(dir, { lifecycleRoot: resolvedRoot, runtime, processInspector, resultsRoot, operatorRoot, operatorAudit })); }
-    catch (error) { runs.push({ run_id: path.basename(dir), run_key: null, state: 'unknown', lifecycle_artifact_version: null,
-      execution_state: 'uncertain', outcome_state: 'unknown', effects_state: 'unknown', delivery_state: null,
-      execution_target: null, blocking: true, reason: `lifecycle-read-failed:${error?.code ?? error?.message ?? 'error'}`, async_dir: dir }); }
+    catch (error) {
+      const id = path.basename(dir); const identity = lifecycleRunIdentity(resolvedRoot, dir, id);
+      // Recover only canonical correlation fields. A malformed/read-failed
+      // artifact cannot prove execution state, but its known scoped path and
+      // parent mapping must not disappear from cancellation selection.
+      let raw = null;
+      try { raw = validLaunchArtifact(await readJson(path.join(dir, 'launch.json')), { lifecycleRoot: resolvedRoot, asyncDir: dir }); } catch { /* keep fail-closed */ }
+      if (!raw) {
+        try { const candidate = await readJson(path.join(dir, 'status.json')); if (record(candidate)) raw = candidate; } catch { /* keep fail-closed */ }
+      }
+      const recoveredId = runId(raw) ?? id;
+      const recoveredIdentity = lifecycleRunIdentity(resolvedRoot, dir, recoveredId) ?? identity;
+      runs.push({ run_id: recoveredId, run_key: recoveredIdentity?.runKey ?? null, scope: recoveredIdentity?.scope ?? null,
+        root_run_id: recoveredIdentity?.rootRunId ?? null, state: 'unknown', lifecycle_artifact_version: null,
+        execution_state: 'uncertain', outcome_state: 'unknown', effects_state: 'unknown', delivery_state: null,
+        execution_target: null, blocking: true, reason: `lifecycle-read-failed:${error?.code ?? error?.message ?? 'error'}`,
+        parent_session_id: string(raw?.sessionId),
+        parent_session_path: string(raw?.parentSessionPath ?? raw?.sessionPath),
+        runner_process_instance_id: string(raw?.runnerProcessInstanceId), async_dir: dir });
+    }
   }
   const byRawId = new Map(); for (const run of runs) { const list = byRawId.get(run.run_id) ?? []; list.push(run); byRawId.set(run.run_id, list); }
-  for (const list of byRawId.values()) if (list.length > 1) for (const run of list) { run.blocking = true; run.execution_state = 'uncertain'; run.reason = 'ambiguous-run-identity'; }
+  // Scoped run keys are authoritative internally. Raw-ID APIs still reject
+  // collisions by omitting ambiguous entries from byId below.
   runs.sort((a, b) => (b.started_at ?? 0) - (a.started_at ?? 0));
   const mapped = (run) => ({ ...run, runId: run.run_id, runKey: run.run_key, active: run.blocking, asyncDir: run.async_dir, updatedAt: run.updated_at, deliveryState: run.delivery_state, executionState: run.execution_state });
   const byKey = new Map(runs.filter((run) => run.run_key).map((run) => [run.run_key, mapped(run)]));

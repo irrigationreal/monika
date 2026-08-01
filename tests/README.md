@@ -59,14 +59,19 @@ delivery resolution, durable origin and pre-spawn launch capture,
 event-independent convergence of stale loaded leases, strict process-terminal
 proof, container-epoch legacy migration, same-runtime PID/start-identity survival
 and death, fail-closed traversal, audited quarantine, grouped completion
-attribution, public v1 stop RPC use, runtime-root isolation, scoped nested result
-paths, delivery acknowledgements, stale-inventory rejection, and conservative
+attribution, canonical-session Stop Robot cancellation for loaded/unloaded parents,
+scoped top-level/nested fixed-point discovery, idempotent operation recovery,
+symlink-safe control markers, preserved effects uncertainty, explicit scheduled-run
+non-support, runtime-root isolation, scoped nested result paths, delivery
+acknowledgements, stale-inventory rejection, and conservative
 14-day compaction that protects resumable/unproven history. The reviewed
 pi-subagents patch wraps its unit,
 integration, and E2E scripts in a fresh HOME, temp runtime/results/session root,
 and runtime-instance path, so package tests cannot touch deployment state. Forum
 tests cover loaded-only startup reattachment, dispatch-generation
-retry/cancellation fencing, and dashboard blocker/delivery/history grouping.
+retry/cancellation fencing, bounded uncertain stop results, canonical unloaded-parent
+stop, no-Continue gating, text-only interrupted-trace freezing, and dashboard
+blocker/delivery/history grouping.
 
 ## Stateful-memory tests
 

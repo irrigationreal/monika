@@ -93,6 +93,7 @@ import type {
   RobotQueueItemDto,
   RobotSettingsDto,
   RobotStateDto,
+  RobotStopResultDto,
   RobotSubagentRunDto,
   SearchResultsDto,
   SessionDto,
@@ -182,7 +183,7 @@ export const AccessRuleActionSchema = z.enum(AccessRuleActionValues);
 export const AccessRuleEffectSchema = z.enum(AccessRuleEffectValues);
 export const PlanVisibilitySchema = z.enum(['public', 'internal', 'private']);
 export const ToolRunVisibilitySchema = z.enum(['public', 'internal', 'private']);
-export const RobotActivitySchema = z.enum(['idle', 'thinking', 'running_tools', 'waiting', 'error']);
+export const RobotActivitySchema = z.enum(['idle', 'thinking', 'running_tools', 'waiting', 'stopping', 'stopped', 'uncertain', 'error']);
 export const RobotAutomationWorkerSchema = z.enum(['echs']);
 export const RobotAutomationRunModeSchema = z.enum(['manual', 'interval']);
 export const TopicAutoRunStatusSchema = z.enum(['idle', 'running', 'stopped', 'error']);
@@ -674,6 +675,18 @@ export const RobotStateDtoSchema: z.ZodType<RobotStateDto> = z.object({
   currentPlan: PlanDtoSchema.nullable().optional(),
   context: SessionContextDtoSchema.nullable().optional(),
   recentToolRuns: z.array(ToolRunDtoSchema)
+});
+
+export const RobotStopResultDtoSchema: z.ZodType<RobotStopResultDto> = z.object({
+  ok: z.boolean(),
+  operationId: z.string(),
+  generation: z.number().int().nonnegative(),
+  state: z.enum(['stopping', 'stopped', 'uncertain']),
+  targets: z.number().int().nonnegative(),
+  unresolvedCount: z.number().int().nonnegative(),
+  effectsUnknownCount: z.number().int().nonnegative(),
+  errorCount: z.number().int().nonnegative(),
+  message: z.string(),
 });
 
 export const RobotJobDtoSchema: z.ZodType<RobotJobDto> = z.object({

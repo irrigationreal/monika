@@ -172,7 +172,7 @@ export function registerAdminRoutes({
     // states since they are "concluded" from a deploy-safety standpoint.
     const blockingRobotStates = store
       .listRobotStates()
-      .filter((state) => state.activity !== 'idle' && state.activity !== 'error');
+      .filter((state) => !['idle', 'stopped', 'error'].includes(state.activity));
     if (blockingRobotStates.length > 0) {
       blockers.push({ code: 'non_idle_robot_states', count: blockingRobotStates.length });
     }
@@ -1487,7 +1487,7 @@ export function registerAdminRoutes({
 
     const robotStates = store
       .listRobotStates()
-      .filter((s) => s.activity !== 'idle')
+      .filter((s) => !['idle', 'stopped'].includes(s.activity))
       .sort((a, b) => new Date(b.last_updated_at).getTime() - new Date(a.last_updated_at).getTime());
 
     const jobs = await Promise.all(

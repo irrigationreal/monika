@@ -102,6 +102,12 @@ export class PostDispatchService {
         this.store.markPostDispatchAbandoned(row.id, 'Topic is no longer dispatchable.');
         return;
       }
+      const cancellationActivity = this.store.getRobotState(row.topic_id)?.activity;
+      if (cancellationActivity === 'stopping' || cancellationActivity === 'uncertain') {
+        // Human content remains durable and pending; do not claim or cross the
+        // robot boundary until canonical cancellation is resolved.
+        return;
+      }
 
       const pendingForTopic = this.store.listPendingPostDispatchesForTopic(row.topic_id);
       const dispatchingRecoveryCheckpoint = this.store.isCompactionRecoveryPost(row.post_id);
@@ -115,7 +121,7 @@ export class PostDispatchService {
       claimToken = claimed?.claim_token ?? null;
       if (!claimed || !claimToken || !this.store.isPostDispatchClaimCurrent(row.id, claimToken)) return;
       const robotState = this.store.getRobotState(row.topic_id);
-      const mode = row.mode === 'steer' || (row.mode === 'auto' && robotState && robotState.activity !== 'idle' && robotState.activity !== 'error')
+      const mode = row.mode === 'steer' || (row.mode === 'auto' && robotState && !['idle', 'stopped', 'error'].includes(robotState.activity))
         ? 'steer'
         : 'queue';
 

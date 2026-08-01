@@ -904,7 +904,7 @@ export function registerForumRoutes({
         }
         const state = store.getRobotState(topicId);
         if (
-          (state && state.activity !== 'idle') ||
+          (state && !['idle', 'stopped'].includes(state.activity)) ||
           store.countActionablePostDispatches(topicId) > 0 ||
           store.hasCompactionFence(topicId)
         ) {
