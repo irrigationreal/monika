@@ -37,6 +37,6 @@ const emit = defineEmits<{
 }
 
 .vb-auto-compact-option .vb-form-hint {
-  margin-left: 1.5rem;
+  margin-left: 22px;
 }
 </style>
