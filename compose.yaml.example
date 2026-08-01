@@ -79,9 +79,9 @@ services:
       - no-new-privileges:true
     command: ["tunnel", "run", "--token-file", "/run/secrets/cloudflared-token"]
     volumes:
-      # Keep the tunnel credential outside runtime/secrets, which is mounted
-      # into the agent-capable Monika container.
-      - ./runtime/ingress/cloudflared-vmonika.token:/run/secrets/cloudflared-token:ro
+      # Keep the connector credential outside MONIKA_WORKSPACE: the entire
+      # repository parent is mounted into the agent-capable application.
+      - ${MONIKA_CLOUDFLARED_TOKEN_FILE:-/persist/keys/cloudflared-vmonika.token}:/run/secrets/cloudflared-token:ro
     networks:
       - ingress
     depends_on:

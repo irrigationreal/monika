@@ -48,17 +48,17 @@ unprivileged UID, has a read-only root filesystem and no Linux capabilities, and
 reads only this credential:
 
 ```text
-runtime/ingress/cloudflared-vmonika.token
+/persist/keys/cloudflared-vmonika.token
 ```
 
-Install the token outside `runtime/secrets`—that directory is intentionally mounted
-into the agent-capable Monika container. The ingress-only directory is backed up but
-is not mounted into either application container:
+The connector token must stay outside `MONIKA_WORKSPACE`. The entire repository
+parent is mounted at `/workspace` inside both application containers, so storing the
+token anywhere below `/home/monika/repos` would expose it to agent tools. Install it
+in Shadowsea's root-controlled key custody:
 
 ```bash
-sudo install -d -o root -g root -m 0700 runtime/ingress
 sudo install -o 65532 -g 65532 -m 0400 /path/to/connector-token \
-  runtime/ingress/cloudflared-vmonika.token
+  /persist/keys/cloudflared-vmonika.token
 ```
 
 The remotely managed tunnel stores ingress configuration at Cloudflare. Its
@@ -134,10 +134,12 @@ that `127.0.0.1:7724` has no external route.
 
 ## Recovery
 
-The connector token and ignored `.env` deployment settings are part of the runtime
-capsule and off-host Monika backups. On a recovered Stanza host, verify `.env`,
-restore or rotate the connector token, start Monika/forum normally, then start
-ingress explicitly:
+The ignored `.env` deployment settings are part of the runtime capsule and off-host
+Monika backups. The connector token deliberately is not: it lives outside the
+application-visible workspace under `/persist/keys` and must come from separate
+root credential custody or be rotated in Cloudflare. On a recovered Stanza host,
+verify `.env`, restore or rotate the connector token, start Monika/forum normally,
+then start ingress explicitly:
 
 ```bash
 docker compose up -d monika forum
