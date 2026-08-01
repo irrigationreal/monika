@@ -826,6 +826,7 @@ export const AdminAnalyticsDtoSchema: z.ZodType<AdminAnalyticsDto> = z.object({
     warning: optionalNullableString,
     metrics: z
       .object({
+        generatedAt: z.string().nullable(),
         build: z.object({ commit: z.string().nullable(), createdAt: z.string().nullable() }),
         coverage: z.record(z.number()),
         usage: z.object({
@@ -865,6 +866,10 @@ export const AdminAnalyticsDtoSchema: z.ZodType<AdminAnalyticsDto> = z.object({
         modelUsageOverTime: z.array(
           z.object({
             bucket: z.string(),
+            bucketEnd: z.string(),
+            observedFrom: z.string(),
+            observedTo: z.string(),
+            isPartial: z.boolean(),
             vendor: z.string(),
             responses: z.number(),
             totalTokens: z.number(),

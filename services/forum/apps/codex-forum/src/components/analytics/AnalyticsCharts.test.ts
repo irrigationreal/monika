@@ -1,9 +1,9 @@
 import { nextTick } from 'vue';
 
-import { render, screen } from '@testing-library/vue';
+import { fireEvent, render, screen } from '@testing-library/vue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import AnalyticsBreakdownBarChart from './AnalyticsBreakdownBarChart.vue';
+import AnalyticsRankedBarChart from './AnalyticsRankedBarChart.vue';
 import AnalyticsTimeSeriesChart from './AnalyticsTimeSeriesChart.vue';
 
 class ChartResizeObserver {
@@ -40,42 +40,51 @@ beforeEach(() => vi.stubGlobal('ResizeObserver', ChartResizeObserver));
 afterEach(() => vi.unstubAllGlobals());
 
 describe('analytics chart components', () => {
-  it('gives a model-family time series an explicit accessible name and summary', async () => {
+  it('gives a model-vendor time series an explicit accessible name and summary', async () => {
     const view = render(AnalyticsTimeSeriesChart, {
       props: {
         data,
         series,
-        ariaLabel: 'Model requests over time',
+        label: 'Model requests over time',
         summary: 'Opus and GPT request counts for each day.',
       },
     });
     await nextTick();
 
-    const chart = screen.getByRole('img', { name: 'Model requests over time' });
+    const chart = screen.getByRole('button', { name: /Model requests over time/ });
     const descriptionId = chart.getAttribute('aria-describedby');
     expect(descriptionId).toBeTruthy();
     const description = descriptionId ? view.container.querySelector(`#${descriptionId}`)?.textContent : null;
     expect(description).toBe('Opus and GPT request counts for each day.');
-    expect(view.container.querySelectorAll('.vb-dither-chart-area')).toHaveLength(2);
-    expect(view.container.querySelector('.vb-dither-chart')?.getAttribute('data-animation')).toBe('off');
-    expect(view.container.querySelector('.vb-dither-chart')?.getAttribute('data-sparkles')).toBe('off');
-    expect(view.container.querySelector('.vb-dither-chart')?.getAttribute('data-bloom')).toBe('off');
+    expect(view.container.querySelectorAll('.analytics-chart-line')).toHaveLength(2);
+    expect(view.container.querySelectorAll('.analytics-chart-point')).toHaveLength(4);
+    chart.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    await nextTick();
+    expect(descriptionId ? view.container.querySelector(`#${descriptionId}`)?.textContent : null).toContain(
+      'Opus family: 5'
+    );
+    await fireEvent.pointerDown(chart, { clientX: 10, pointerType: 'touch' });
+    expect(descriptionId ? view.container.querySelector(`#${descriptionId}`)?.textContent : null).toContain(
+      'Opus family: 5'
+    );
   });
 
-  it('renders grouped breakdown bars from the same reusable series contract', async () => {
-    const view = render(AnalyticsBreakdownBarChart, {
+  it('renders horizontal ranked bars with focusable exact details', async () => {
+    render(AnalyticsRankedBarChart, {
       props: {
-        data,
-        series,
-        ariaLabel: 'Requests by model family',
-        summary: 'Two model-family bars are shown for each day.',
+        data: [
+          { key: 'read:local', label: 'read · local', value: 20, valueLabel: '20.0%', detail: '2 failures from 10 calls.' },
+          { key: 'write:local', label: 'write · local', value: 0, valueLabel: '0.0%', detail: '0 failures from 12 calls.' },
+        ],
+        label: 'Tool reliability',
+        summary: 'Qualifying operations ranked by failure rate.',
       },
     });
+    const bar = screen.getByRole('button', { name: /read.*2 failures from 10 calls/ });
+    bar.focus();
     await nextTick();
-
-    expect(screen.getByRole('img', { name: 'Requests by model family' })).toBeTruthy();
-    expect(view.container.querySelectorAll('.vb-dither-chart-bar')).toHaveLength(4);
-    expect(view.container.querySelectorAll('pattern')).toHaveLength(2);
+    expect(screen.getByRole('status').textContent).toContain('2 failures from 10 calls');
+    expect(document.querySelectorAll('.analytics-ranked-fill')[1]?.getAttribute('style')).toContain('width: 0%');
   });
 
   it('keeps the required summary and a visual empty state when no rows are available', () => {
@@ -83,13 +92,13 @@ describe('analytics chart components', () => {
       props: {
         data: [],
         series,
-        ariaLabel: 'Empty model request history',
+        label: 'Empty model request history',
         summary: 'No request records are available for the selected period.',
       },
     });
 
-    expect(screen.getByRole('img', { name: 'Empty model request history' })).toBeTruthy();
-    expect(screen.getByText('No request records are available for the selected period.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Empty model request history/ })).toBeNull();
+    expect(screen.getAllByText('No request records are available for the selected period.').length).toBeGreaterThan(0);
     expect(screen.getByText('No chart data.')).toBeTruthy();
   });
 });

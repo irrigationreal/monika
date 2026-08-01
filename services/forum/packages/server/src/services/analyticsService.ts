@@ -58,6 +58,7 @@ function errorCluster(value: unknown): AnalyticsErrorClusterDto | null {
 
 export function mapAgentdAnalytics(rawValue: unknown): AnalyticsRuntimeMetricsDto {
   const raw = record(rawValue) ?? {};
+  const generatedAt = nullableString(field(raw, 'generatedAt', 'generated_at'));
   const buildRaw = record(raw['build']);
   const build = {
     commit: nullableString(field(buildRaw, 'commit', 'commit')),
@@ -136,8 +137,13 @@ export function mapAgentdAnalytics(rawValue: unknown): AnalyticsRuntimeMetricsDt
       );
       return vendorNames.map((vendorName) => {
         const vendor = rows.get(vendorName);
+        const bucket = string(bucketRow['start']);
         return {
-          bucket: string(bucketRow['start']),
+          bucket,
+          bucketEnd: string(bucketRow['end'], bucket),
+          observedFrom: string(bucketRow['observed_from'], bucket),
+          observedTo: string(bucketRow['observed_to'], string(bucketRow['end'], bucket)),
+          isPartial: bucketRow['is_partial'] === true,
           vendor: vendorName,
           responses: number(vendor?.['response_count']),
           totalTokens: number(vendor?.['total_tokens']),
@@ -153,6 +159,7 @@ export function mapAgentdAnalytics(rawValue: unknown): AnalyticsRuntimeMetricsDt
     const unsuccessful = number(lifecycle?.['unsuccessful']);
     const worst = toolOperations?.['worst_qualifying_operation'];
     return {
+      generatedAt,
       build,
       coverage,
       usage: {
@@ -222,9 +229,17 @@ export function mapAgentdAnalytics(rawValue: unknown): AnalyticsRuntimeMetricsDt
   ).flatMap((value) => {
     const row = record(value);
     if (!row) return [];
+    const bucket = string(field(row, 'bucket', 'bucket'));
     return [
       {
-        bucket: string(field(row, 'bucket', 'bucket')),
+        bucket,
+        bucketEnd: string(field(row, 'bucketEnd', 'bucket_end'), bucket),
+        observedFrom: string(field(row, 'observedFrom', 'observed_from'), bucket),
+        observedTo: string(
+          field(row, 'observedTo', 'observed_to'),
+          string(field(row, 'bucketEnd', 'bucket_end'), bucket)
+        ),
+        isPartial: field(row, 'isPartial', 'is_partial') === true,
         vendor: string(field(row, 'vendor', 'vendor')),
         responses: number(field(row, 'responses', 'responses')),
         totalTokens: number(field(row, 'totalTokens', 'total_tokens')),
@@ -240,6 +255,7 @@ export function mapAgentdAnalytics(rawValue: unknown): AnalyticsRuntimeMetricsDt
   const worst = tool(field(tools, 'worst', 'worst'));
   const top = errorCluster(field(errors, 'top', 'top'));
   return {
+    generatedAt,
     build,
     coverage,
     usage: {

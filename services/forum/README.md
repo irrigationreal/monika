@@ -115,7 +115,10 @@ Administrators can open `/admin/analytics` to inspect privacy-safe canonical Pi 
 error clusters, parent-observed subagent wait time, delegation outcomes, model-vendor usage, and forum-native
 distinctive vocabulary. The forum authorizes and scopes the request, then asks agentd for aggregate runtime metrics over
 allowlisted linked Pi sessions. Forum SQLite is used only for vocabulary derived from visible post bodies; no analytics
-tables, memstore access, or model calls are added. See `../../docs/forum.md` for formulas and privacy boundaries.
+tables, memstore access, or model calls are added. Filters are bookmarkable, calendar buckets disclose partial periods,
+charts support pointer/keyboard/touch inspection, and complete aggregates remain available through sortable paginated
+semantic tables. Coverage and freshness are shown explicitly. See `../../docs/forum.md` for formulas, UX states, and
+privacy boundaries.
 
 ## API + integrations
 

@@ -347,7 +347,23 @@ active, uncertain, malformed, or unproven-success lifecycle records. Historical
 delegation coverage is bounded by lifecycle-artifact retention.
 
 Model-vendor usage uses the same successful-response population and UTC day or
-Monday-based week buckets. Distinctive vocabulary uses non-deleted, non-silent
+Monday-based week buckets. Analytics presets begin at UTC midnight so a 30-day
+daily view has exactly 30 calendar buckets; the current day and any clipped week
+remain explicitly marked as partial. Agentd schema version 2 preserves each
+bucket's aligned calendar start/end separately from its observed `[from,to)`
+interval and records the aggregate generation time, which remains stable across
+process-local cache hits.
+
+The admin page persists `range`, `bucket`, and optional `forum` in the URL. Draft
+controls do not relabel displayed data until Apply succeeds; superseded requests
+are aborted and generation-fenced. Initial loading, fatal failure, stale refresh,
+runtime-degraded, and genuinely empty states remain distinct. Long aggregate
+tables are sortable, client-paginated semantic disclosures. Charts are
+supplementary, use width-aware concise labels and redundant line/pattern styles,
+and expose the same bucket or operation detail through hover, keyboard focus, and
+touch. Coverage warnings and methodology remain available beside the metrics.
+
+Distinctive vocabulary uses non-deleted, non-silent
 forum posts in the selected range, separates human/admin from
 robot/persona/system authors, and removes forum envelopes, code, URLs, markup,
 and deterministic stopwords. Version 1 ranks repeated terms by a
@@ -361,7 +377,9 @@ visible, but post-fix reliability should be evaluated from the new runtime deplo
 boundary rather than by reinterpreting canonical history.
 
 The agentd result cache is process-local and expires after 30 seconds by default.
-If agentd is unavailable, the forum returns vocabulary with an explicit runtime
+The UI distinguishes the forum response timestamp, runtime aggregate generation
+timestamp, runtime build timestamp, and requested observation window rather than
+presenting them as one freshness signal. If agentd is unavailable, the forum returns vocabulary with an explicit runtime
 unavailable state rather than manufacturing zero operational metrics. Responses
 contain no prompts, commands, paths, raw errors, session/tool/run IDs, or post
 text.

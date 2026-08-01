@@ -1090,12 +1090,17 @@ export interface AnalyticsDelegationBreakdownDto {
 
 export interface AnalyticsModelUsagePointDto {
   bucket: string;
+  bucketEnd: string;
+  observedFrom: string;
+  observedTo: string;
+  isPartial: boolean;
   vendor: string;
   responses: number;
   totalTokens: number;
 }
 
 export interface AnalyticsRuntimeMetricsDto {
+  generatedAt: string | null;
   build: { commit: string | null; createdAt: string | null };
   coverage: Record<string, number>;
   usage: {

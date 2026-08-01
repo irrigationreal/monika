@@ -64,8 +64,11 @@ scoped top-level/nested fixed-point discovery, idempotent operation recovery,
 symlink-safe control markers, preserved effects uncertainty, explicit scheduled-run
 non-support, runtime-root isolation, scoped nested result paths, delivery
 acknowledgements, stale-inventory rejection, and conservative
-14-day compaction that protects resumable/unproven history. The reviewed
-pi-subagents patch wraps its unit,
+14-day compaction that protects resumable/unproven history. Analytics coverage
+includes calendar-aligned partial day/week buckets, privacy-safe schema mapping,
+URL filter normalization, stale-request fencing, responsive keyboard-inspectable
+charts, and sortable client pagination without a model provider or live session.
+The reviewed pi-subagents patch wraps its unit,
 integration, and E2E scripts in a fresh HOME, temp runtime/results/session root,
 and runtime-instance path, so package tests cannot touch deployment state. Forum
 tests cover loaded-only startup reattachment, dispatch-generation

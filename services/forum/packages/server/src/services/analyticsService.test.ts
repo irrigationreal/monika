@@ -5,6 +5,7 @@ import { AnalyticsService, mapAgentdAnalytics } from './analyticsService';
 import type { ForumAnalyticsReadModel } from '@irrigationreal/codex-forum-core';
 
 const raw = {
+  generated_at: '2026-08-01T10:01:00.000Z',
   build: { commit: 'abcdef1234567', created_at: '2026-08-01T10:00:00.000Z' },
   coverage: { sessions_scanned: 2, ignored: 'not-a-number' },
   usage: {
@@ -38,6 +39,7 @@ const raw = {
 describe('AnalyticsService', () => {
   it('maps the aggregate-only agentd contract without exposing unknown raw fields', () => {
     const mapped = mapAgentdAnalytics({ ...raw, privatePrompt: 'never expose this' });
+    expect(mapped.generatedAt).toBe('2026-08-01T10:01:00.000Z');
     expect(mapped.build).toEqual({ commit: 'abcdef1234567', createdAt: '2026-08-01T10:00:00.000Z' });
     expect(mapped.usage.medianTokens).toBe(120);
     expect(mapped.tools.worst).toMatchObject({
@@ -73,15 +75,44 @@ describe('AnalyticsService', () => {
       buckets: [
         {
           start: '2026-07-01T00:00:00.000Z',
+          end: '2026-07-02T00:00:00.000Z',
+          observed_from: '2026-07-01T12:00:00.000Z',
+          observed_to: '2026-07-02T00:00:00.000Z',
+          is_partial: true,
           model_vendors: [{ vendor: 'OpenAI', response_count: 1, total_tokens: 100 }],
         },
-        { start: '2026-07-02T00:00:00.000Z', model_vendors: [] },
+        {
+          start: '2026-07-02T00:00:00.000Z',
+          end: '2026-07-03T00:00:00.000Z',
+          observed_from: '2026-07-02T00:00:00.000Z',
+          observed_to: '2026-07-03T00:00:00.000Z',
+          is_partial: false,
+          model_vendors: [],
+        },
       ],
     });
     expect(mapped.waiting.excluded).toBe(2);
     expect(mapped.modelUsageOverTime).toEqual([
-      { bucket: '2026-07-01T00:00:00.000Z', vendor: 'OpenAI', responses: 1, totalTokens: 100 },
-      { bucket: '2026-07-02T00:00:00.000Z', vendor: 'OpenAI', responses: 0, totalTokens: 0 },
+      {
+        bucket: '2026-07-01T00:00:00.000Z',
+        bucketEnd: '2026-07-02T00:00:00.000Z',
+        observedFrom: '2026-07-01T12:00:00.000Z',
+        observedTo: '2026-07-02T00:00:00.000Z',
+        isPartial: true,
+        vendor: 'OpenAI',
+        responses: 1,
+        totalTokens: 100,
+      },
+      {
+        bucket: '2026-07-02T00:00:00.000Z',
+        bucketEnd: '2026-07-03T00:00:00.000Z',
+        observedFrom: '2026-07-02T00:00:00.000Z',
+        observedTo: '2026-07-03T00:00:00.000Z',
+        isPartial: false,
+        vendor: 'OpenAI',
+        responses: 0,
+        totalTokens: 0,
+      },
     ]);
   });
 
