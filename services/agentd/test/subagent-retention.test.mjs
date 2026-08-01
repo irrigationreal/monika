@@ -25,7 +25,9 @@ async function fixture(env, id, { now, age = 15 * DAY, resumeDisposition = 'unav
   const sessionDir = path.join(env.sessionRoot, `${nestedRoot ?? 'top'}-${id}`); await mkdir(asyncDir, { recursive: true }); await mkdir(sessionDir);
   await writeFile(path.join(sessionDir, 'session.jsonl'), 'session\n');
   const terminal = proof(id, at, resumeDisposition);
-  await writeFile(path.join(asyncDir, 'status.json'), JSON.stringify({ lifecycleArtifactVersion: 3, runId: id, sessionId: `session-${id}`, asyncDir, sessionDir, state: 'complete', processTerminal: terminal, lastUpdate: at }));
+  // Match real pi-subagents status artifacts: lifecycle location comes from the
+  // containing scan directory rather than a redundant asyncDir property.
+  await writeFile(path.join(asyncDir, 'status.json'), JSON.stringify({ lifecycleArtifactVersion: 3, runId: id, sessionId: `session-${id}`, sessionDir, state: 'complete', processTerminal: terminal, lastUpdate: at }));
   await writeFile(path.join(asyncDir, 'process-terminal.json'), JSON.stringify(terminal));
   await writeFile(path.join(asyncDir, 'events.jsonl'), 'verbose events\n'); await writeFile(path.join(asyncDir, 'output-0.log'), 'verbose output\n');
   const runKey = nestedRoot ? `nested:${nestedRoot}:${id}` : `top:${id}`;
@@ -97,6 +99,24 @@ test('inventory protects every class outside the narrow automatic tier', async (
   assert.ok(inventory.items.find((item) => item.run_key === 'top:young').protected_reasons.includes('retention-age-not-met'));
   assert.ok(inventory.items.find((item) => item.run_key === 'top:root-run').protected_reasons.includes('nested-descendants-present'));
   assert.ok(inventory.items.find((item) => item.run_key === 'nested:root-run:nested').protected_reasons.includes('not-unique-top-level'));
+});
+
+test('real package status may omit asyncDir while a conflicting claimed path fails closed', async (t) => {
+  const env = await roots(t); const now = Date.UTC(2026, 6, 31);
+  const run = await fixture(env, 'package-status', { now });
+  let inventory = await inventorySubagentRetention({ ...env, nowMs: now });
+  let item = inventory.items.find((candidate) => candidate.run_id === 'package-status');
+  assert.equal(item.eligible, true);
+  assert.equal(item.protected_reasons.includes('invalid-status'), false);
+
+  const statusFile = path.join(run.asyncDir, 'status.json');
+  const status = JSON.parse(await readFile(statusFile, 'utf8'));
+  status.asyncDir = path.join(env.runsRoot, 'different-run');
+  await writeFile(statusFile, JSON.stringify(status));
+  inventory = await inventorySubagentRetention({ ...env, nowMs: now });
+  item = inventory.items.find((candidate) => candidate.run_id === 'package-status');
+  assert.equal(item.eligible, false);
+  assert.ok(item.protected_reasons.includes('invalid-status'));
 });
 
 test('forged sidecar without exact central ledger proof cannot become eligible', async (t) => {

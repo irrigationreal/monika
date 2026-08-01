@@ -88,7 +88,10 @@ async function inspectRun(run, { lifecycleRoot, sessionRoot, resultsRoot, operat
   catch { protect('unreadable-run-directory'); return item; }
   const statusRaw = await readJson(path.join(run.async_dir, 'status.json')).catch(() => null);
   const status = validateLifecycleArtifact(statusRaw, { runId: run.run_id, asyncDir: run.async_dir });
-  if (!status || status.asyncDir !== path.resolve(run.async_dir) || statusRaw?.asyncDir !== path.resolve(run.async_dir)) protect('invalid-status');
+  // Package status artifacts do not carry asyncDir. The trusted scanner supplies
+  // the containing directory; if an artifact does carry asyncDir, validation
+  // still resolves and compares it to that exact scoped path.
+  if (!status || status.asyncDir !== path.resolve(run.async_dir)) protect('invalid-status');
   const proofRecord = await readJsonBytes(path.join(run.async_dir, 'process-terminal.json')).catch(() => null);
   const proof = proofRecord?.value ?? status?.processTerminal;
   if (proofRecord) item.process_terminal_sha256 = sha256(proofRecord.bytes);
