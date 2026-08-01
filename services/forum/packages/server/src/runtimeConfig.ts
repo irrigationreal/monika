@@ -66,13 +66,17 @@ function readStringEnv(name: string): string | null {
   return value || null;
 }
 
-function readTrustProxyEnv(name: string): boolean | string | number {
-  const value = process.env[name]?.trim();
+export function parseTrustProxyValue(raw: string | undefined): boolean | string | number {
+  const value = raw?.trim();
   if (!value || value === '0' || value.toLowerCase() === 'false') return false;
-  if (value === '1' || value.toLowerCase() === 'true') return true;
+  if (value.toLowerCase() === 'true') return true;
   const numeric = Number(value);
   if (Number.isInteger(numeric) && numeric >= 0) return numeric;
   return value;
+}
+
+function readTrustProxyEnv(name: string): boolean | string | number {
+  return parseTrustProxyValue(process.env[name]);
 }
 
 export const PORT: number = Number(process.env['CODEX_FORUM_PORT'] ?? 4310);
