@@ -56,11 +56,17 @@ function observedProof(runId = 'run-1', resumeDisposition) {
   };
 }
 
+async function writeLaunch(asyncDir, id, sessionId = `session-${id}`, overrides = {}) {
+  await writeFile(path.join(asyncDir, 'launch.json'), JSON.stringify({ lifecycleArtifactVersion: 1, runId: id, sessionId,
+    asyncDir, state: 'spawned', runnerProcessInstanceId: `runner-${id}`, registeredAt: 1, ...overrides }));
+}
+
 async function deliveryFixture(root, id) {
   const lifecycleRoot = path.join(root, 'lifecycle'); const runsRoot = path.join(lifecycleRoot, 'async-subagent-runs');
   const resultsRoot = path.join(lifecycleRoot, 'async-subagent-results'); const asyncDir = path.join(runsRoot, id);
   await mkdir(asyncDir, { recursive: true }); await mkdir(resultsRoot, { recursive: true });
   const proof = observedProof(id, 'unavailable');
+  await writeLaunch(asyncDir, id);
   await writeFile(path.join(asyncDir, 'status.json'), JSON.stringify({ lifecycleArtifactVersion: 3, runId: id, sessionId: `session-${id}`, asyncDir, state: 'complete', processTerminal: proof, lastUpdate: 2000 }));
   await writeFile(path.join(asyncDir, 'process-terminal.json'), JSON.stringify(proof));
   await writeFile(path.join(resultsRoot, `${id}.json`), '{"pending":true}\n');
@@ -240,6 +246,7 @@ test('restart reconciliation restores canonical mapping and trusts only matching
     version: 1, runId: 'run-1', sessionId: 'parent-session', asyncDir,
     origin: { turnId: 'turn-1', topicId: 'topic-1', postId: 'post-1' }, startedAt: 1,
   });
+  await writeLaunch(asyncDir, 'run-1', 'parent-session');
   await writeFile(path.join(asyncDir, 'status.json'), JSON.stringify({
     lifecycleArtifactVersion: 1, runId: 'run-1', sessionId: 'parent-session', asyncDir,
     state: 'completed', processTerminal: observedProof(), updatedAt: 2,
@@ -291,6 +298,7 @@ test('terminal lifecycle v4 with effects unknown is quiescent but deployment-uns
   const root = await mkdtemp(path.join(os.tmpdir(), 'agentd-subagent-effects-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const asyncDir = path.join(root, 'remote-unknown'); await mkdir(asyncDir);
+  await writeLaunch(asyncDir, 'remote-unknown', 'parent-session');
   await writeFile(path.join(asyncDir, 'status.json'), JSON.stringify({
     lifecycleArtifactVersion: 4, runId: 'remote-unknown', sessionId: 'parent-session', state: 'complete',
     execution_state: 'terminal', outcome_state: 'succeeded', effects_state: 'unknown', delivery_state: 'pending',
@@ -333,6 +341,7 @@ test('concurrent effects attestation retries do not remove each other\'s durable
   const root = await mkdtemp(path.join(os.tmpdir(), 'agentd-subagent-effects-concurrent-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const asyncDir = path.join(root, 'remote-concurrent'); await mkdir(asyncDir);
+  await writeLaunch(asyncDir, 'remote-concurrent', 'parent-session');
   await writeFile(path.join(asyncDir, 'status.json'), JSON.stringify({
     lifecycleArtifactVersion: 4, runId: 'remote-concurrent', sessionId: 'parent-session', state: 'complete',
     execution_state: 'terminal', outcome_state: 'failed', effects_state: 'unknown', delivery_state: 'pending',
@@ -354,6 +363,7 @@ test('effects attestation refuses active and legacy runs', async (t) => {
     ['legacy', 3, 'complete', observedProof('legacy')],
   ]) {
     const asyncDir = path.join(root, id); await mkdir(asyncDir);
+    await writeLaunch(asyncDir, id, 'parent-session');
     await writeFile(path.join(asyncDir, 'status.json'), JSON.stringify({
       lifecycleArtifactVersion: version, runId: id, sessionId: 'parent-session', state,
       ...(version >= 4 ? { execution_state: state === 'running' ? 'active' : 'terminal', outcome_state: 'unknown', effects_state: 'unknown', delivery_state: 'pending' } : {}),
@@ -377,6 +387,7 @@ test('global lifecycle scan keeps unloaded and unproven runs deployment-active',
     ['done', 'complete', observedProof('done')],
   ]) {
     const dir = path.join(root, id); await mkdir(dir);
+    await writeLaunch(dir, id);
     await writeFile(path.join(dir, 'status.json'), JSON.stringify({
       lifecycleArtifactVersion: 3, runId: id, sessionId: `session-${id}`, state,
       processTerminal: proof, lastUpdate: 1,
@@ -391,6 +402,7 @@ test('durable reconciliation clears a stale loaded lease without a completion ev
   const root = await mkdtemp(path.join(os.tmpdir(), 'agentd-subagent-converge-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const asyncDir = path.join(root, 'run-1'); await mkdir(asyncDir);
+  await writeLaunch(asyncDir, 'run-1', 'parent-session');
   await writeFile(path.join(asyncDir, 'status.json'), JSON.stringify({
     lifecycleArtifactVersion: 3, runId: 'run-1', sessionId: 'parent-session',
     state: 'complete', processTerminal: observedProof(), lastUpdate: 2,
@@ -458,6 +470,7 @@ test('delivery classification requires an identity-bound central acknowledgement
   ];
   for (const fixture of fixtures) {
     await mkdir(fixture.dir, { recursive: true });
+    await writeLaunch(fixture.dir, fixture.id, 'parent-session');
     await writeFile(path.join(fixture.dir, 'status.json'), JSON.stringify({ lifecycleArtifactVersion: 3, runId: fixture.id, sessionId: 'parent-session', asyncDir: fixture.dir, state: 'complete', processTerminal: observedProof(fixture.id), lastUpdate: 1 }));
     if (fixture.ack) {
       const result = path.join(resultsRoot, `${fixture.id}.json`); await writeFile(result, '{}');
@@ -473,18 +486,37 @@ test('delivery classification requires an identity-bound central acknowledgement
   assert.equal(prioritizeLifecycleRuns(snapshot.runs, 3)[0].run_key, 'nested:parent:nested-unproven');
 });
 
-test('scoped run-key collisions fail closed instead of overwriting raw IDs', async (t) => {
+test('scoped run-key collisions preserve proven scoped state while raw-ID lookup stays ambiguous', async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'agentd-subagent-collision-')); t.after(() => rm(root, { recursive: true, force: true }));
   for (const dir of [path.join(root, 'async-subagent-runs', 'same'), path.join(root, 'nested-subagent-runs', 'root', 'same')]) {
     await mkdir(dir, { recursive: true });
+    await writeLaunch(dir, 'same', 'parent');
     await writeFile(path.join(dir, 'status.json'), JSON.stringify({ lifecycleArtifactVersion: 3, runId: 'same', sessionId: 'parent', asyncDir: dir, state: 'complete', processTerminal: observedProof('same'), lastUpdate: 1 }));
   }
   const snapshot = await scanLifecycleSnapshot({ lifecycleRoot: root, runtimeInstanceFile: path.join(root, 'none') });
-  assert.equal(snapshot.active_count, 2); assert.equal(snapshot.uncertain_count, 2); assert.equal(snapshot.byId.has('same'), false);
+  assert.equal(snapshot.active_count, 0); assert.equal(snapshot.uncertain_count, 0); assert.equal(snapshot.byId.has('same'), false);
   assert.deepEqual(new Set(snapshot.runs.map((run) => run.run_key)), new Set(['top:same', 'nested:root:same']));
   assert.equal(snapshot.byKey.get('top:same').scope, 'top');
   assert.equal(snapshot.byKey.get('nested:root:same').root_run_id, 'root');
-  assert.ok(snapshot.runs.every((run) => run.reason === 'ambiguous-run-identity'));
+  assert.ok(snapshot.runs.every((run) => run.execution_state === 'terminal'));
+});
+
+test('scanner retains canonical correlation for malformed and later read-failed scoped records', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agentd-subagent-malformed-map-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const lifecycleRoot = path.join(root, 'lifecycle'); const resultsRoot = path.join(root, 'results'); await mkdir(resultsRoot);
+  const malformedDir = path.join(lifecycleRoot, 'async-subagent-runs', 'malformed');
+  await mkdir(malformedDir, { recursive: true });
+  await writeFile(path.join(malformedDir, 'status.json'), JSON.stringify({ runId: 'malformed', sessionId: 'parent', parentSessionPath: '/sessions/parent.jsonl', state: 42 }));
+  const failedDir = path.join(lifecycleRoot, 'async-subagent-runs', 'read-failed');
+  await mkdir(failedDir, { recursive: true });
+  await writeFile(path.join(failedDir, 'status.json'), JSON.stringify({ lifecycleArtifactVersion: 3, runId: 'read-failed', sessionId: 'parent', parentSessionPath: '/sessions/parent.jsonl', asyncDir: failedDir, state: 'complete', processTerminal: observedProof('read-failed'), lastUpdate: 1 }));
+  await symlink(path.join(root, 'missing-result'), path.join(resultsRoot, 'read-failed.json'));
+  const snapshot = await scanLifecycleSnapshot({ lifecycleRoot, resultsRoot, runtimeInstanceFile: path.join(root, 'none') });
+  for (const id of ['malformed', 'read-failed']) {
+    const run = snapshot.byKey.get(`top:${id}`);
+    assert.equal(run.parent_session_id, 'parent'); assert.equal(run.parent_session_path, '/sessions/parent.jsonl');
+    assert.equal(run.execution_state, 'uncertain'); assert.equal(run.blocking, true);
+  }
 });
 
 test('same-runtime dead runner reconciles interrupted while a matching live identity blocks', async (t) => {
@@ -494,11 +526,11 @@ test('same-runtime dead runner reconciles interrupted while a matching live iden
   await writeFile(runtimeFile, JSON.stringify({ version: 1, id: 'runtime-1', createdAt: 1 }));
   for (const id of ['dead', 'live']) {
     const asyncDir = path.join(root, id); await mkdir(asyncDir);
-    await writeFile(path.join(asyncDir, 'launch.json'), JSON.stringify({ runId: id, sessionId: 'parent', asyncDir, state: 'spawned', runtimeInstanceId: 'runtime-1', pid: 42, processStartTicks: id, registeredAt: 2 }));
+    await writeFile(path.join(asyncDir, 'launch.json'), JSON.stringify({ runId: id, sessionId: 'parent', asyncDir, state: 'spawned', runnerProcessInstanceId: `runner-${id}`, runtimeInstanceId: 'runtime-1', pid: 42, processStartTicks: id, registeredAt: 2 }));
     await writeFile(path.join(asyncDir, 'status.json'), JSON.stringify({ lifecycleArtifactVersion: 3, runId: id, sessionId: 'parent', state: 'running', pid: 42, lastUpdate: 3 }));
   }
   const launchOnly = path.join(root, 'launch-only-dead'); await mkdir(launchOnly);
-  await writeFile(path.join(launchOnly, 'launch.json'), JSON.stringify({ runId: 'launch-only-dead', sessionId: 'parent', asyncDir: launchOnly, state: 'spawned', runtimeInstanceId: 'runtime-1', pid: 42, processStartTicks: 'launch-only-dead', registeredAt: 2 }));
+  await writeFile(path.join(launchOnly, 'launch.json'), JSON.stringify({ runId: 'launch-only-dead', sessionId: 'parent', asyncDir: launchOnly, state: 'spawned', runnerProcessInstanceId: 'runner-launch-only-dead', runtimeInstanceId: 'runtime-1', pid: 42, processStartTicks: 'launch-only-dead', registeredAt: 2 }));
   const snapshot = await scanLifecycleSnapshot({
     lifecycleRoot: root, runtimeInstanceFile: runtimeFile,
     processInspector: async (_pid, launch) => launch.processStartTicks === 'live',
@@ -509,11 +541,52 @@ test('same-runtime dead runner reconciles interrupted while a matching live iden
   assert.equal(snapshot.runs.find((run) => run.run_id === 'live').execution_state, 'active');
 });
 
+test('present malformed launch cannot fall back to unbound legacy proof for a live process', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agentd-subagent-malformed-launch-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const id = 'malformed-current'; const asyncDir = path.join(root, id); await mkdir(asyncDir);
+  await writeFile(path.join(asyncDir, 'launch.json'), '{malformed');
+  await writeFile(path.join(asyncDir, 'status.json'), JSON.stringify({
+    lifecycleArtifactVersion: 3, runId: id, sessionId: 'parent', parentSessionPath: '/sessions/parent.jsonl',
+    asyncDir, state: 'complete', pid: process.pid, processTerminal: observedProof(id), lastUpdate: Date.now(),
+  }));
+  const snapshot = await scanLifecycleSnapshot({
+    lifecycleRoot: root, runtimeInstanceFile: path.join(root, 'none'),
+    processInspector: async (pid) => pid === process.pid,
+  });
+  assert.equal(snapshot.active_count, 1);
+  assert.equal(snapshot.uncertain_count, 1);
+  assert.equal(snapshot.runs[0].execution_state, 'uncertain');
+  assert.equal(snapshot.runs[0].blocking, true);
+  assert.equal(snapshot.runs[0].reason, 'malformed-lifecycle-artifact');
+  assert.equal(snapshot.runs[0].parent_session_id, 'parent');
+});
+
+test('stale terminal proofs cannot override a live current launch instance', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agentd-subagent-stale-proof-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  for (const state of ['observed', 'not-started']) {
+    const id = `stale-${state}`; const asyncDir = path.join(root, id); await mkdir(asyncDir);
+    await writeLaunch(asyncDir, id, 'parent', { runnerProcessInstanceId: `current-${id}`, pid: 42, processStartTicks: 'live' });
+    const proof = state === 'observed' ? observedProof(id) : {
+      version: 1, state: 'not-started', runId: id, runnerProcessInstanceId: `runner-${id}`,
+    };
+    await writeFile(path.join(asyncDir, 'status.json'), JSON.stringify({
+      lifecycleArtifactVersion: 3, runId: id, sessionId: 'parent', asyncDir, state: 'complete', pid: 42,
+      processTerminal: proof, lastUpdate: 2,
+    }));
+  }
+  const snapshot = await scanLifecycleSnapshot({ lifecycleRoot: root, runtimeInstanceFile: path.join(root, 'none'),
+    processInspector: async () => true });
+  assert.equal(snapshot.active_count, 2);
+  assert.ok(snapshot.runs.every((run) => run.blocking && run.execution_state === 'uncertain'));
+});
+
 test('pre-spawn launch records block and lifecycle traversal errors fail closed', async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'agentd-subagent-launch-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const asyncDir = path.join(root, 'run-launch'); await mkdir(asyncDir);
-  await writeFile(path.join(asyncDir, 'launch.json'), JSON.stringify({ runId: 'run-launch', sessionId: 'parent', asyncDir, state: 'registered', registeredAt: 1 }));
+  await writeFile(path.join(asyncDir, 'launch.json'), JSON.stringify({ runId: 'run-launch', sessionId: 'parent', asyncDir, state: 'registered', runnerProcessInstanceId: 'runner-run-launch', registeredAt: 1 }));
   const snapshot = await scanLifecycleSnapshot({ lifecycleRoot: root, runtimeInstanceFile: path.join(root, 'none') });
   assert.equal(snapshot.active_count, 1);
   assert.equal(snapshot.runs[0].reason, 'launch-not-yet-settled');
@@ -528,6 +601,7 @@ test('operator quarantine is identity-bound, audited, and refuses a live runner'
   const root = await mkdtemp(path.join(os.tmpdir(), 'agentd-subagent-quarantine-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const asyncDir = path.join(root, 'uncertain'); await mkdir(asyncDir);
+  await writeLaunch(asyncDir, 'uncertain', 'parent', { runnerProcessInstanceId: 'runner-1' });
   await writeFile(path.join(asyncDir, 'status.json'), JSON.stringify({
     lifecycleArtifactVersion: 3, runId: 'uncertain', sessionId: 'parent', state: 'failed',
     processTerminal: { version: 1, state: 'unknown', runId: 'uncertain', runnerProcessInstanceId: 'runner-1', reason: 'observer-unavailable' }, lastUpdate: 3,

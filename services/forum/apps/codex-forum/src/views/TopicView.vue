@@ -3052,6 +3052,13 @@ onUnmounted(() => {
         </div>
       </div>
       <div class="vb-robot-body">
+        <div v-if="state.robotStopResult.value" class="vb-state-row">
+          <strong>Stop {{ state.robotStopResult.value.state }}:</strong>
+          {{ state.robotStopResult.value.message }}
+          <span v-if="state.robotStopResult.value.effectsUnknownCount">
+            Remote effects remain unknown for {{ state.robotStopResult.value.effectsUnknownCount }} run(s).
+          </span>
+        </div>
         <div class="vb-state-row">
           <div><strong>Status:</strong> {{ state.robotState.value?.activity ?? 'idle' }}</div>
           <div v-if="state.robotState.value?.lastTurnError" class="vb-state-error">

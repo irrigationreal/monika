@@ -53,6 +53,38 @@ identity and combines the canonical runtime result with forum-native distinctive
 vocabulary. Runtime failure is represented as `runtime.available=false` while
 forum vocabulary remains available.
 
+## Stop Robot cancellation
+
+The forum advances its durable topic dispatch generation before calling agentd.
+It prefers `POST /v1/pi/sessions/:canonicalId/cancellation`, so an unloaded
+conversation after agentd restart is still stoppable. The request carries a stable
+operation ID and generation and has a 20-second retry budget (two identical bounded requests). A later
+operator retry while unresolved reuses the current generation and deterministic
+operation rather than advancing the fence again, leaving posts created behind that
+fence deferred and current. Responses are typed as `stopping`, `stopped`, or
+`uncertain`; a transport timeout is an uncertain-but-fenced outcome. Agentd chooses
+latest by generation then request time, and forum applies only a result matching the
+current topic generation. The UI does not offer Continue while unresolved, and no
+queue, steer, auto-run, or durable post dispatch crosses the fence.
+Startup queries `GET /v1/pi/sessions/:canonicalId/cancellation` for unresolved
+topics; agentd actively re-runs the latest durable operation without loading the
+conversation. Parent-abort uncertainty remains in the durable operation until a
+loaded abort retry succeeds or the parent is proven absent. Successful Stop persists
+forum robot activity as `stopped`, so hydration/reconnect can recover a missed reset;
+a fresh dispatch clears it. Posting-author responses expose only stable state,
+operation/generation, counts, and a safe message. Detailed run/error diagnostics
+remain available through the admin workload/dashboard.
+
+Agentd forces forum-owned delegation async at every nesting depth, discovers
+scoped top-level and nested work from the durable ledger, writes stop controls
+only beneath validated lifecycle directories, and re-scans to a bounded fixed
+point. Terminal pending results are marked before `stopped`; active controls are
+reasserted on reconciliation. Host-cancelled result files are retained without
+waking the model. SSH effects uncertainty survives cancellation. Scheduled runs
+remain disabled and unsupported rather than being implied descendants. Marker
+and control validation is same-UID coordination, not cryptographic authenticity
+or an OS sandbox; retain the documented container/user and loopback boundary.
+
 ## SSE event types
 
 The forum server's SSE stream (`/api/topics/:topicId/state/stream`) relays events

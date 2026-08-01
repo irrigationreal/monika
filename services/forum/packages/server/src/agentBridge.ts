@@ -1,6 +1,7 @@
 import { EchsBridge } from './echsBridge';
 
 import type { MessageTamperContext, MessageTamperLayer, MessageTamperPlugin } from '@irrigationreal/codex-forum-core';
+import type { RobotStopResultDto } from '@irrigationreal/codex-forum-contracts';
 
 import type { ForumStore } from './store';
 import type { EchsSubagentRetention, EchsSubagentWorkload } from './echsClient';
@@ -139,7 +140,7 @@ export class AgentBridge {
     return this.echs.dispatchPostToAgent(topicId, postId, options);
   }
 
-  async interruptTopic(topicId: string): Promise<{ ok: boolean; message: string }> {
+  async interruptTopic(topicId: string): Promise<RobotStopResultDto> {
     return this.echs.interruptTopic(topicId);
   }
 

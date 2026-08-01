@@ -35,6 +35,18 @@ export interface EchsConversationState {
   conversation: EchsConversationRecord;
 }
 
+export interface EchsCancellationResult {
+  ok: boolean;
+  operation_id: string;
+  generation: number;
+  state: 'stopping' | 'stopped' | 'uncertain';
+  targets: number;
+  unresolved_count: number;
+  effects_unknown_count: number;
+  error_count: number;
+  message: string;
+}
+
 export interface EchsSubagentRun {
   run_id: string;
   run_key?: string;
@@ -381,11 +393,40 @@ export class EchsClient {
     return out;
   }
 
-  async interruptConversation(conversationId: string, generation?: number): Promise<void> {
-    await this.request(`/v1/conversations/${conversationId}/interrupt`, {
-      method: 'POST',
-      body: generation === undefined ? {} : { generation },
+  async interruptConversation(conversationId: string, generation?: number, operationId?: string): Promise<EchsCancellationResult> {
+    return this.requestCancellation(`/v1/conversations/${conversationId}/interrupt`, {
+      ...(generation === undefined ? {} : { generation }),
+      ...(operationId === undefined ? {} : { operation_id: operationId }),
     });
+  }
+
+  async cancelPiSession(sessionId: string, input: { operationId: string; generation: number }): Promise<EchsCancellationResult> {
+    return this.requestCancellation(`/v1/pi/sessions/${encodeURIComponent(sessionId)}/cancellation`, {
+      operation_id: input.operationId, generation: input.generation,
+    });
+  }
+
+  async reconcilePiSessionCancellation(sessionId: string): Promise<EchsCancellationResult | null> {
+    try {
+      return (await this.request(`/v1/pi/sessions/${encodeURIComponent(sessionId)}/cancellation`, {
+        timeoutMs: 15_000,
+      })) as EchsCancellationResult;
+    } catch (error) {
+      if ((error as Error & { status?: number }).status === 404) return null;
+      throw error;
+    }
+  }
+
+  private async requestCancellation(path: string, body: Record<string, unknown>): Promise<EchsCancellationResult> {
+    let firstError: unknown;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        return (await this.request(path, { method: 'POST', body, timeoutMs: 10_000 })) as EchsCancellationResult;
+      } catch (error) {
+        firstError ??= error;
+      }
+    }
+    throw firstError;
   }
 
   async pauseConversation(conversationId: string): Promise<void> {
@@ -558,16 +599,16 @@ export class EchsClient {
     if (opts?.body) headers['Content-Type'] = 'application/json';
     const fetchInit: RequestInit = { method, headers };
     if (opts?.body) fetchInit.body = JSON.stringify(opts.body);
-    const controller = opts?.timeoutMs ? new AbortController() : null;
-    const timeout = controller ? setTimeout(() => controller.abort(), opts?.timeoutMs) : null;
-    if (controller) fetchInit.signal = controller.signal;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), opts?.timeoutMs ?? 30_000);
+    fetchInit.signal = controller.signal;
     let response: Response;
     let text: string;
     try {
       response = await fetch(`${this.baseUrl}${path.startsWith('/') ? path : `/${path}`}`, fetchInit);
       text = await response.text();
     } finally {
-      if (timeout) clearTimeout(timeout);
+      clearTimeout(timeout);
     }
     const data = text ? safeJsonParse(text) : null;
     if (!response.ok) {

@@ -103,7 +103,9 @@ session/runtime roots—including per-run branch directories for fork-context
 children—durable pre-spawn launch/process identity, machine-readable completion
 IDs and process-terminal proof, resilient optional artifact finalization, and
 agentd controls for auto-drain, recovered-result triggering, drain barriers, and
-host-acknowledged result cleanup.
+host-acknowledged result cleanup. In the agentd process only, every delegation
+leaf (including nested fanout) is forced through async lifecycle tracking; direct
+interactive Pi keeps the package's normal foreground behavior.
 
 The parent receives the package's `subagent`, `subagent_wait`, and
 `subagent_supervisor` tools, supporting foreground runs, parallel groups, chains,
@@ -160,6 +162,20 @@ remain pending for manual review. Dashboard sections separate deployment-safety
 blockers, pending delivery, collapsed terminal history, and a retention dry-run
 summary. Pending delivery is nonblocking, while effects-unknown remote mutations
 block safe deployment and automatic replay until reconciled or operator-attested.
+
+Stop Robot fences the forum dispatch generation first, then addresses the canonical
+Pi parent session even if its conversation is unloaded. Agentd durably records an
+idempotent operation, aborts a loaded parent, writes scoped stop controls only inside
+validated top-level/nested lifecycle directories, and re-scans to a bounded fixed
+point. `stopping`, durable `stopped`, and `uncertain` distinguish acceptance from
+proven local termination; `stopped` survives reconnect so a missed trace reset can
+be recovered and is cleared by fresh dispatch. Unresolved Stop retries reuse the
+current generation/operation, while out-of-order older results cannot change the
+current topic. Posting-author responses expose stable counts/state/message only;
+detailed run diagnostics remain administrative. Retained cancelled results never
+wake the parent, and SSH `effects_state=unknown` remains visible rather than implying
+rollback. Continue is disabled while stopping or uncertain. Package scheduled runs remain explicitly
+disabled/unsupported and are not claimed by this descendant-cancellation contract.
 The container creates the private persistent operator root
 `/data/pi-subagent-operator-state` before agentd starts. An override through
 `PI_SUBAGENT_OPERATOR_ROOT` must be an absolute dedicated path below a top-level

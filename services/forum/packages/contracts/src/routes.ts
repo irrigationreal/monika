@@ -1098,7 +1098,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Interrupt robot',
     tags: ['robot'],
     request: { params: stringParam('topicId') },
-    response: { schema: okMessageSchema }
+    response: { schema: schemas.RobotStopResultDtoSchema }
   },
   {
     method: 'post',

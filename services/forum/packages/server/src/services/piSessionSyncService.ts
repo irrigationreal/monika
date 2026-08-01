@@ -1063,7 +1063,7 @@ export class PiSessionSyncService {
   private isRobotIdle(topicId: string): boolean {
     const row = this.db.prepare('select activity from robot_state where topic_id = ? limit 1').get(topicId) as
       { activity: string } | undefined;
-    return !row || row.activity === 'idle';
+    return !row || row.activity === 'idle' || row.activity === 'stopped';
   }
 
   private upsertAnomaly(

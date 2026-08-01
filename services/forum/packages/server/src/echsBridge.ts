@@ -14,8 +14,9 @@ import type {
   MessageTamperPlugin,
   MessageTamperTrailEntry,
 } from '@irrigationreal/codex-forum-core';
+import type { RobotStopResultDto } from '@irrigationreal/codex-forum-contracts';
 
-import type { EchsConversationRecord, EchsEvent, EchsSubagentRetention, EchsSubagentWorkload } from './echsClient';
+import type { EchsCancellationResult, EchsConversationRecord, EchsEvent, EchsSubagentRetention, EchsSubagentWorkload } from './echsClient';
 import type { ForumStore } from './store';
 import type { StreamBusInterface } from './streamBus';
 
@@ -567,6 +568,7 @@ export class EchsBridge {
   private echs_queue_depth: number | null = null;
   private echs_active_threads: number | null = null;
   private activeTurnThreads = new Set<string>();
+  private locallyResetCancellationOperations = new Set<string>();
   private turnQueue: QueuedTurn[] = [];
   private drainingQueue = false;
   private inflightDispatches = 0;
@@ -913,6 +915,21 @@ export class EchsBridge {
    * runtime restart historical sessions stay unloaded until explicit new work.
    */
   async reconcileLoadedThreads(opts?: { sinceMs?: number }): Promise<{ reattached: number; missing: number }> {
+    // Reconcile durable canonical cancellation independently of whether agentd
+    // currently has the conversation loaded.
+    for (const link of this.store.listPiSessionLinksWithUnresolvedCancellation()) {
+      try {
+        const cancellation = await this.client.reconcilePiSessionCancellation(link.pi_session_id);
+        if (cancellation && this.store.isTopicDispatchGenerationCurrent(link.topic_id, cancellation.generation)) {
+          this.store.setRobotActivity(link.topic_id, cancellation.state);
+        }
+        this.emitState(link.topic_id);
+      } catch (error) {
+        console.warn(`[ECHS] cancellation reconcile failed topicId=${link.topic_id}:`, error instanceof Error ? error.message : error);
+        this.store.setRobotActivity(link.topic_id, 'uncertain');
+        this.emitState(link.topic_id);
+      }
+    }
     const sessions = this.store.listSessionsWithThreads({
       ...(opts?.sinceMs !== undefined ? { sinceMs: opts.sinceMs } : {}),
       backend: 'echs',
@@ -931,7 +948,8 @@ export class EchsBridge {
           `[ECHS] startup reconcile: conversation is not loaded for threadId=${threadId} topicId=${session.topic_id}; leaving canonical Pi session idle`
         );
         this.store.clearSessionAgentThread(session.id);
-        this.store.setRobotActivity(session.topic_id, 'idle');
+        const current = this.store.getRobotState(session.topic_id)?.activity;
+        if (!['stopping', 'stopped', 'uncertain'].includes(current ?? '')) this.store.setRobotActivity(session.topic_id, 'idle');
         this.emitState(session.topic_id);
         missing += 1;
         continue;
@@ -972,23 +990,34 @@ export class EchsBridge {
       }
       // If thread is running, keep robot state fresh.
       if (conversationActive) {
-        this.store.upsertRobotState({
-          topicId: session.topic_id,
-          sessionId: session.id,
-          activity: 'thinking',
-          model: this.config.model,
-          reasoningEffort: this.config.reasoningEffort ?? null,
-          currentPlanId: this.store.getRobotState(session.topic_id)?.current_plan_id ?? null,
-        });
+        const current = this.store.getRobotState(session.topic_id)?.activity;
+        if (!['stopping', 'stopped', 'uncertain'].includes(current ?? '')) {
+          this.store.upsertRobotState({
+            topicId: session.topic_id,
+            sessionId: session.id,
+            activity: 'thinking',
+            model: this.config.model,
+            reasoningEffort: this.config.reasoningEffort ?? null,
+            currentPlanId: this.store.getRobotState(session.topic_id)?.current_plan_id ?? null,
+          });
+        }
         this.emitState(session.topic_id);
       }
       if (!conversationActive) {
-        this.store.setRobotActivity(session.topic_id, 'idle');
+        const current = this.store.getRobotState(session.topic_id)?.activity;
+        if (!['stopping', 'stopped', 'uncertain'].includes(current ?? '')) this.store.setRobotActivity(session.topic_id, 'idle');
         this.emitState(session.topic_id);
       }
       reattached += 1;
     }
     return { reattached, missing };
+  }
+
+  private assertRobotDispatchAllowed(topicId: string): void {
+    const activity = this.store.getRobotState(topicId)?.activity;
+    if (activity === 'stopping' || activity === 'uncertain') {
+      throw new Error('Cancellation is unresolved; robot dispatch is fenced until Stop succeeds.');
+    }
   }
 
   async sendUserMessage(
@@ -997,13 +1026,14 @@ export class EchsBridge {
     parentPostId: string | null,
     options?: { model?: string | null; reasoningEffort?: string | null }
   ): Promise<void> {
+    this.assertRobotDispatchAllowed(topicId);
     const session = this.store.ensureSession({ topicId });
     const turn: QueuedTurn = {
       topicId,
       sessionId: session.id,
       body,
       parentPostId,
-      ...(options ? { options } : {}),
+      options: { ...(options ?? {}), dispatchId: randomUUID(), generation: this.store.getTopicDispatchGeneration(topicId) },
       queuedAt: new Date().toISOString(),
     };
     if (this.shouldQueueTurn()) {
@@ -1019,13 +1049,14 @@ export class EchsBridge {
     parentPostId: string | null,
     options?: { model?: string | null; reasoningEffort?: string | null }
   ): Promise<void> {
+    this.assertRobotDispatchAllowed(topicId);
     const session = this.store.ensureSession({ topicId });
     const turn: QueuedTurn = {
       topicId,
       sessionId: session.id,
       body,
       parentPostId,
-      options: { ...(options ?? {}), mode: 'steer' },
+      options: { ...(options ?? {}), mode: 'steer', dispatchId: randomUUID(), generation: this.store.getTopicDispatchGeneration(topicId) },
       queuedAt: new Date().toISOString(),
     };
     if (this.shouldQueueTurn()) {
@@ -1046,6 +1077,7 @@ export class EchsBridge {
       generation?: number;
     }
   ): Promise<void> {
+    this.assertRobotDispatchAllowed(topicId);
     const post = this.store.getPost(postId);
     if (!post || post.topic_id !== topicId) {
       throw new Error('post not found for dispatch');
@@ -1060,8 +1092,8 @@ export class EchsBridge {
         model: options?.model ?? null,
         reasoningEffort: options?.reasoningEffort ?? null,
         mode: options?.mode ?? 'queue',
-        dispatchId: options?.dispatchId,
-        generation: options?.generation,
+        dispatchId: options?.dispatchId ?? randomUUID(),
+        generation: options?.generation ?? this.store.getTopicDispatchGeneration(topicId),
       },
       queuedAt: new Date().toISOString(),
     };
@@ -1086,34 +1118,71 @@ export class EchsBridge {
     }
   }
 
-  async interruptTopic(topicId: string): Promise<{ ok: boolean; message: string }> {
+  async interruptTopic(topicId: string): Promise<RobotStopResultDto> {
     const session = this.store.getSessionByTopic(topicId);
     const threadId = session?.agent_thread_id ?? null;
+    const canonical = this.store.getPiSessionLinkByTopic(topicId)?.pi_session_id ?? null;
+    const priorActivity = this.store.getRobotState(topicId)?.activity ?? null;
+    const unresolvedRetry = priorActivity === 'stopping' || priorActivity === 'uncertain';
+    // A retry reuses the unresolved generation and deterministic operation.
+    // Advancing again would supersede posts durably created behind the fence.
+    const fence = unresolvedRetry
+      ? { generation: this.store.getTopicDispatchGeneration(topicId), cancelled: 0 }
+      : this.store.advanceTopicDispatchGeneration(topicId);
+    const operationId = `forum-stop-${fence.generation}-${createHash('sha256').update(topicId).digest('hex').slice(0, 32)}`;
     const queuedBefore = this.turnQueue.length;
     // Publish the durable cancellation fence before any await. A concurrently
     // delayed dispatch carries the older generation and agentd rejects it.
-    const fence = this.store.advanceTopicDispatchGeneration(topicId);
     this.turnQueue = this.turnQueue.filter((turn) => turn.topicId !== topicId);
     const localCancelled = queuedBefore - this.turnQueue.length;
-    if (!threadId) {
-      this.store.setRobotActivity(topicId, 'idle');
-      this.emitState(topicId);
-      return {
-        ok: true,
-        message: `Cancelled ${localCancelled} local and ${fence.cancelled} durable queued dispatch(es).`,
-      };
-    }
+    this.store.setRobotActivity(topicId, 'stopping');
+    this.emitState(topicId);
+    // Reset is emitted by the stop initiator before any terminal idle state, so
+    // clients flush/freeze buffered trace first. The echoed agentd event is
+    // deduplicated by operation id below.
+    this.locallyResetCancellationOperations.add(operationId);
+    this.bus.emit(topicId, { type: 'assistant_reset', data: { reason: 'interrupted', operationId } });
+    setTimeout(() => this.locallyResetCancellationOperations.delete(operationId), 60_000).unref?.();
+    let result: EchsCancellationResult;
     try {
-      await this.client.interruptConversation(threadId, fence.generation);
-      this.store.setRobotActivity(topicId, 'idle');
-      this.emitState(topicId);
-      return {
-        ok: true,
-        message: `Interrupt requested; cancelled ${localCancelled} local and ${fence.cancelled} durable queued dispatch(es).`,
-      };
+      if (canonical) result = await this.client.cancelPiSession(canonical, { operationId, generation: fence.generation });
+      else if (threadId) result = await this.client.interruptConversation(threadId, fence.generation, operationId);
+      else if (!priorActivity || ['idle', 'waiting', 'stopped'].includes(priorActivity)) {
+        result = { ok: true, operation_id: operationId, generation: fence.generation, state: 'stopped',
+          targets: 0, unresolved_count: 0, effects_unknown_count: 0, error_count: 0, message: 'Robot execution is stopped.' };
+      } else {
+        result = { ok: false, operation_id: operationId, generation: fence.generation, state: 'uncertain', targets: 0,
+          unresolved_count: 0, effects_unknown_count: 0, error_count: 1,
+          message: 'Termination is uncertain; retry or inspect the administrative workload.' };
+      }
     } catch (err) {
-      return { ok: false, message: err instanceof Error ? err.message : 'Interrupt failed.' };
+      // The forum fence is already durable. A deadline or transport failure is
+      // therefore an uncertain cancellation, never an all-or-nothing failure.
+      result = { ok: false, operation_id: operationId, generation: fence.generation, state: 'uncertain',
+        targets: 0, unresolved_count: 0, effects_unknown_count: 0, error_count: 1,
+        message: 'Termination is uncertain; retry or inspect the administrative workload.' };
     }
+    // Only the current generation may publish terminal projection state. An
+    // older out-of-order response is observational and cannot thaw the fence.
+    if (this.store.isTopicDispatchGenerationCurrent(topicId, result.generation)) {
+      this.store.setRobotActivity(topicId, result.state);
+      this.emitState(topicId);
+    }
+    return {
+      ok: result.ok,
+      operationId: result.operation_id,
+      generation: result.generation,
+      state: result.state,
+      targets: result.targets,
+      unresolvedCount: result.unresolved_count,
+      effectsUnknownCount: result.effects_unknown_count,
+      errorCount: result.error_count,
+      message: result.state === 'stopped'
+        ? `Stopped robot; cancelled ${localCancelled} local and ${fence.cancelled} durable queued dispatch(es).`
+        : result.state === 'stopping'
+          ? 'Stop accepted; waiting for local execution to become terminal.'
+          : 'Stop is fenced but local termination is uncertain; retry Stop or inspect the Robot Dashboard.',
+    };
   }
 
   private startHeartbeat(): void {
@@ -1204,7 +1273,8 @@ export class EchsBridge {
               console.warn(
                 `[ECHS] healthCheck: ECHS idle but bridge active threadId=${threadId} topicId=${ctx.topicId}, resyncing`
               );
-              this.store.setRobotActivity(ctx.topicId, 'idle');
+              const current = this.store.getRobotState(ctx.topicId)?.activity;
+              if (!['stopping', 'stopped', 'uncertain'].includes(current ?? '')) this.store.setRobotActivity(ctx.topicId, 'idle');
               ctx.currentTurnId = null;
               ctx.turnStartedAt = null;
               this.activeTurnThreads.delete(threadId);
@@ -1236,7 +1306,8 @@ export class EchsBridge {
     if (session) {
       this.store.clearSessionAgentThread(session.id);
     }
-    this.store.setRobotActivity(topicId, 'idle');
+    const current = this.store.getRobotState(topicId)?.activity;
+    if (!['stopping', 'stopped', 'uncertain'].includes(current ?? '')) this.store.setRobotActivity(topicId, 'idle');
     this.threadMap.delete(threadId);
     this.activeTurnThreads.delete(threadId);
     const sub = this.subscriptions.get(threadId);
@@ -1315,7 +1386,7 @@ export class EchsBridge {
           console.warn('Failed to dispatch queued turn:', err instanceof Error ? err.message : err);
           const state = this.store.getRobotState(next.topicId);
           if (state) {
-            this.store.setRobotActivity(next.topicId, 'idle');
+            if (!['stopping', 'stopped', 'uncertain'].includes(state.activity)) this.store.setRobotActivity(next.topicId, 'idle');
             this.emitState(next.topicId);
           }
         }
@@ -1362,7 +1433,7 @@ export class EchsBridge {
     reasoningEffort: string | null;
   }): boolean {
     if (
-      input.generation !== undefined &&
+      input.generation === undefined ||
       !this.store.isTopicDispatchGenerationCurrent(input.topicId, input.generation)
     ) {
       return false;
@@ -1384,6 +1455,10 @@ export class EchsBridge {
     this.inflightDispatches += 1;
     try {
       const { topicId, body, parentPostId, options } = turn;
+      const dispatchId = options?.dispatchId;
+      const generation = options?.generation;
+      if (!dispatchId || generation === undefined) throw new Error('forum dispatch identity and generation are required');
+      if (!this.store.isTopicDispatchGenerationCurrent(topicId, generation)) throw new Error('stale_dispatch_generation');
       const session = this.store.getSession(turn.sessionId) ?? this.store.ensureSession({ topicId });
       const piSessionLink = this.store.getPiSessionLinkByTopic(topicId);
       const model = options?.model ?? this.config.model;
@@ -1757,11 +1832,12 @@ export class EchsBridge {
       let enqueueMode = resolveEnqueueMode(threadId, isFirstMessage);
       let enqueueResult: Awaited<ReturnType<EchsClient['enqueueConversationMessage']>>;
       try {
+        this.assertRobotDispatchAllowed(topicId);
         enqueueResult = await this.client.enqueueConversationMessage(threadId, messageBody, {
           mode: enqueueMode,
-          messageId: options?.dispatchId ?? null,
-          dispatchId: options?.dispatchId,
-          generation: options?.generation,
+          messageId: dispatchId,
+          dispatchId,
+          generation,
           configure,
           attachments: triggerAttachments,
           provenance: parentPostId ? { origin: 'forum', topicId, postId: parentPostId } : undefined,
@@ -1769,10 +1845,7 @@ export class EchsBridge {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         if (message.includes('conversation not found') || message.includes('ECHS 404')) {
-          if (
-            options?.generation !== undefined &&
-            !this.store.isTopicDispatchGenerationCurrent(topicId, options.generation)
-          ) {
+          if (!this.store.isTopicDispatchGenerationCurrent(topicId, generation)) {
             throw new Error('stale_dispatch_generation');
           }
           console.warn(`[ECHS] conversation missing for topic ${topicId}; recreating thread`);
@@ -1784,11 +1857,12 @@ export class EchsBridge {
           this.threadMap.set(threadId, threadCtx);
           await this.ensureSubscribed(threadId, { replay: true });
           enqueueMode = resolveEnqueueMode(threadId, isFirstMessage);
+          this.assertRobotDispatchAllowed(topicId);
           enqueueResult = await this.client.enqueueConversationMessage(threadId, messageBody, {
             mode: enqueueMode,
-            messageId: options?.dispatchId ?? null,
-            dispatchId: options?.dispatchId,
-            generation: options?.generation,
+            messageId: dispatchId,
+            dispatchId,
+            generation,
             configure,
             attachments: triggerAttachments,
             provenance: parentPostId ? { origin: 'forum', topicId, postId: parentPostId } : undefined,
@@ -1812,7 +1886,7 @@ export class EchsBridge {
       if (!this.publishAcceptedDispatchState({
         topicId,
         sessionId: session.id,
-        generation: options?.generation,
+        generation,
         model,
         reasoningEffort,
       })) return;
@@ -2124,10 +2198,11 @@ export class EchsBridge {
         ctx.turnStartedAt = null;
         ctx.currentContinuation = null;
         void this.forceReasoningBackfill(threadId);
+        const currentActivity = this.store.getRobotState(ctx.topicId)?.activity;
         this.store.upsertRobotState({
           topicId: ctx.topicId,
           sessionId: ctx.sessionId,
-          activity: 'idle',
+          activity: ['stopping', 'stopped', 'uncertain'].includes(currentActivity ?? '') ? currentActivity! : 'idle',
           model: ctx.model,
           reasoningEffort: ctx.reasoningEffort,
           currentPlanId: ctx.planId,
@@ -2142,19 +2217,35 @@ export class EchsBridge {
         break;
       }
       case 'turn_interrupted': {
+        const interruptionData = event.data && typeof event.data === 'object' && !Array.isArray(event.data)
+          ? event.data as Record<string, unknown> : {};
+        const generation = interruptionData['generation'];
+        if (typeof generation !== 'number' || !Number.isSafeInteger(generation)
+          || !this.store.isTopicDispatchGenerationCurrent(ctx.topicId, generation)) {
+          break;
+        }
         ctx.currentTurnId = null;
         ctx.turnStartedAt = null;
         ctx.currentContinuation = null;
+        const cancellation = interruptionData['cancellation'];
+        const cancellationState = cancellation && typeof cancellation === 'object' && !Array.isArray(cancellation)
+          ? (cancellation as Record<string, unknown>)['state'] : null;
+        const interruptedActivity = cancellationState === 'stopping' || cancellationState === 'stopped' || cancellationState === 'uncertain'
+          ? cancellationState : 'uncertain';
+        const rawOperationId = interruptionData['operation_id'];
+        const operationId = typeof rawOperationId === 'string' ? rawOperationId : null;
+        if (!operationId || !this.locallyResetCancellationOperations.delete(operationId)) {
+          this.bus.emit(ctx.topicId, { type: 'assistant_reset', data: { reason: 'interrupted', operationId } });
+        }
         this.store.upsertRobotState({
           topicId: ctx.topicId,
           sessionId: ctx.sessionId,
-          activity: 'idle',
+          activity: interruptedActivity,
           model: ctx.model,
           reasoningEffort: ctx.reasoningEffort,
           currentPlanId: ctx.planId,
         });
         this.emitState(ctx.topicId);
-        this.bus.emit(ctx.topicId, { type: 'assistant_reset', data: { reason: 'interrupted' } });
         this.activeTurnThreads.delete(threadId);
         void this.processTurnQueue();
         break;

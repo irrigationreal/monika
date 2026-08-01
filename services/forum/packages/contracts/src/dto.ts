@@ -9,6 +9,7 @@ import type {
   MessageTemplateContext,
   MessageTemplateForumScope,
   MessageTemplateScope,
+  RobotActivity,
   RobotMode,
 } from '@irrigationreal/codex-forum-core';
 
@@ -516,7 +517,7 @@ export interface SessionContextDto {
 export interface RobotStateDto {
   topicId: string;
   sessionId: string;
-  activity: 'idle' | 'thinking' | 'running_tools' | 'waiting' | 'error';
+  activity: RobotActivity;
   model?: string | null;
   reasoningEffort?: string | null;
   lastUpdatedAt: string;
@@ -530,6 +531,18 @@ export interface RobotStateDto {
   /** Initial context snapshot. Live updates arrive independently over SSE. */
   context?: SessionContextDto | null;
   recentToolRuns: ToolRunDto[];
+}
+
+export interface RobotStopResultDto {
+  ok: boolean;
+  operationId: string;
+  generation: number;
+  state: 'stopping' | 'stopped' | 'uncertain';
+  targets: number;
+  unresolvedCount: number;
+  effectsUnknownCount: number;
+  errorCount: number;
+  message: string;
 }
 
 export interface RobotJobDto {

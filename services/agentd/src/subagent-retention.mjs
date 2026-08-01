@@ -66,9 +66,10 @@ function validProcessTerminalEvidence(proof, runId) {
       && instance.processInstanceId === proof.runnerProcessInstanceId
       && Number.isFinite(instance.closeObservedAt));
 }
-function observedUnavailable(proof, runId) {
-  return validProcessTerminalEvidence(proof, runId) && proof.state === 'observed' && proof.resumeDisposition === 'unavailable'
-    && proof.instances.some((instance) => instance?.kind === 'runner' && instance.processInstanceId === proof.runnerProcessInstanceId && Number.isFinite(instance.closeObservedAt));
+function observedUnavailable(proof, runId, expectedRunnerProcessInstanceId = null) {
+  return validProcessTerminalEvidence(proof, runId)
+    && proof.state === 'observed' && proof.resumeDisposition === 'unavailable'
+    && (!expectedRunnerProcessInstanceId || proof.runnerProcessInstanceId === expectedRunnerProcessInstanceId);
 }
 
 async function safeTree(root) {
@@ -110,7 +111,7 @@ async function inspectRun(run, { lifecycleRoot, sessionRoot, resultsRoot, operat
   const proof = proofRecord?.value ?? status?.processTerminal;
   if (proofRecord) item.process_terminal_sha256 = sha256(proofRecord.bytes);
   if (!proofRecord || !validProcessTerminalEvidence(proof, run.run_id)) protect('process-terminal-artifact-missing-or-invalid');
-  if (!observedUnavailable(proof, run.run_id)) protect('resumability-or-terminal-proof-protected');
+  if (!observedUnavailable(proof, run.run_id, run.runner_process_instance_id)) protect('resumability-or-terminal-proof-protected');
   const ackRecord = await readJsonBytes(path.join(run.async_dir, 'delivery-ack.json')).catch(() => null);
   const ack = ackRecord?.value ?? null;
   if (ackRecord) item.delivery_ack_sha256 = sha256(ackRecord.bytes);

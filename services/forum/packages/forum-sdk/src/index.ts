@@ -74,6 +74,7 @@ import type {
   RobotPersonaDto,
   RobotQueueItemDto,
   RobotStateDto,
+  RobotStopResultDto,
   SearchResultsDto,
   SessionDto,
   SessionInspectorDto,
@@ -158,6 +159,7 @@ export type {
   RobotQueueItemDto,
   RobotJobDto,
   RobotStateDto,
+  RobotStopResultDto,
   TamperConfigDto,
   TamperPluginDto,
   TamperTestResultDto,
@@ -423,22 +425,6 @@ function createApi({
   };
 }
 
-export type ForumSdkApi = ReturnType<typeof createApi> & {
-  getCompactionState(topicId: string): Promise<TopicCompactionStateDto>;
-  compactTopic(topicId: string, payload: CreateCompactionRequestDto): Promise<CompactionOperationDto>;
-  getCompaction(topicId: string, operationId: string): Promise<CompactionOperationDto>;
-  retryCompactionCheckpoint(topicId: string, operationId: string): Promise<TopicCompactionStateDto>;
-};
-
-export interface ForumSdk {
-  api: ForumSdkApi;
-  createStateStream: (topicId: string) => EventSource;
-  createNotificationStream: () => EventSource;
-  createChatStream: (roomId: string) => EventSource;
-  storage: TokenStorage;
-  baseUrl: string;
-}
-
 const normalizeBaseUrl = (baseUrl?: string): string => {
   if (!baseUrl) return '/api';
   const trimmed = baseUrl.trim();
@@ -453,7 +439,7 @@ const defaultEventSourceFactory = (url: string): EventSource => {
   return new EventSource(url);
 };
 
-export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
+export function createForumSdk(options?: ForumSdkOptions) {
   const baseUrl = normalizeBaseUrl(options?.baseUrl);
   const fetchImpl = options?.fetch ?? fetch;
   const storage = options?.storage ?? new BrowserTokenStorage();
@@ -904,7 +890,7 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
         body: JSON.stringify(input ?? {}),
       }),
     interruptRobot: (topicId: string) =>
-      json<{ ok: boolean; message?: string }>(`/topics/${topicId}/robot/interrupt`, { method: 'POST' }),
+      json<RobotStopResultDto>(`/topics/${topicId}/robot/interrupt`, { method: 'POST' }),
     continueRobot: (topicId: string) =>
       json<{ ok: boolean; message?: string }>(`/topics/${topicId}/robot/continue`, { method: 'POST' }),
     getSessionByTopic: (topicId: string) => json<SessionDto | null>(`/topics/${topicId}/session`),
@@ -1171,6 +1157,9 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
 
   return { api, createStateStream, createNotificationStream, createChatStream, storage, baseUrl };
 }
+
+export type ForumSdk = ReturnType<typeof createForumSdk>;
+export type ForumSdkApi = ForumSdk['api'];
 
 const defaultSdk = createForumSdk();
 

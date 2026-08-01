@@ -465,7 +465,7 @@ const forumDeploymentStatus = () => {
   if (activeCompactions > 0) blockers.push({ code: 'active_compactions', count: activeCompactions });
   const blockingRobotStates = store
     .listRobotStates()
-    .filter((state) => state.activity !== 'idle' && state.activity !== 'error');
+    .filter((state) => !['idle', 'stopped', 'error'].includes(state.activity));
   if (blockingRobotStates.length > 0) {
     blockers.push({ code: 'non_idle_robot_states', count: blockingRobotStates.length });
   }

@@ -1,17 +1,27 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { api, type AdminDeployStatus, type RobotDashboardDto, type RobotJobDto } from '../lib/apiClient';
+import { api, type AdminDeployStatus, type RobotDashboardDto, type RobotJobDto, type RobotStopResultDto } from '../lib/apiClient';
 import { useForumState } from '../composables/useForumState';
 
 const router = useRouter();
 const state = useForumState();
+const robotApi = api as typeof api & {
+  getRobotDashboard: () => Promise<RobotDashboardDto>;
+  getDeployStatus: () => Promise<AdminDeployStatus>;
+  interruptRobot: (topicId: string) => Promise<RobotStopResultDto>;
+  continueRobot: (topicId: string) => Promise<unknown>;
+  triggerDeploy: () => Promise<unknown>;
+  triggerDeployOnFinish: () => Promise<unknown>;
+  cancelDeployOnFinish: () => Promise<unknown>;
+};
 
 const dashboard = ref<RobotDashboardDto | null>(null);
 const deployStatus = ref<AdminDeployStatus | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
 const lastRefreshedAt = ref<string | null>(null);
+const stopResults = ref<Record<string, RobotStopResultDto>>({});
 let refreshTimer: ReturnType<typeof setInterval> | null = null;
 
 const jobs = computed(() => dashboard.value?.jobs ?? []);
@@ -45,6 +55,8 @@ function activityLabel(activity: RobotJobDto['activity']): string {
     case 'thinking': return 'Thinking';
     case 'running_tools': return 'Running tools';
     case 'waiting': return 'Queued';
+    case 'stopping': return 'Stopping';
+    case 'uncertain': return 'Termination uncertain';
     case 'error': return 'Error';
     case 'idle': return 'Idle';
     default: return activity;
@@ -69,6 +81,8 @@ function activityClass(activity: RobotJobDto['activity']): string {
     case 'thinking': return 'vb-status-pill--running';
     case 'running_tools': return 'vb-status-pill--running';
     case 'waiting': return 'vb-status-pill--waiting';
+    case 'stopping': return 'vb-status-pill--waiting';
+    case 'uncertain': return 'vb-status-pill--error';
     case 'error': return 'vb-status-pill--error';
     default: return 'vb-status-pill--done';
   }
@@ -78,7 +92,7 @@ async function refresh(): Promise<void> {
   loading.value = true;
   error.value = null;
   try {
-    const [dash, deploy] = await Promise.all([api.getRobotDashboard(), api.getDeployStatus()]);
+    const [dash, deploy] = await Promise.all([robotApi.getRobotDashboard(), robotApi.getDeployStatus()]);
     dashboard.value = dash;
     deployStatus.value = deploy;
     lastRefreshedAt.value = new Date().toISOString();
@@ -97,7 +111,8 @@ async function interruptTopic(topicId: string): Promise<void> {
   loading.value = true;
   error.value = null;
   try {
-    await api.interruptRobot(topicId);
+    const result = await robotApi.interruptRobot(topicId);
+    stopResults.value = { ...stopResults.value, [topicId]: result };
     await refresh();
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Failed to interrupt robot.';
@@ -110,7 +125,7 @@ async function continueTopic(topicId: string): Promise<void> {
   loading.value = true;
   error.value = null;
   try {
-    await api.continueRobot(topicId);
+    await robotApi.continueRobot(topicId);
     await refresh();
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Failed to continue robot.';
@@ -127,7 +142,7 @@ async function triggerDeploy(): Promise<void> {
   loading.value = true;
   error.value = null;
   try {
-    await api.triggerDeploy();
+    await robotApi.triggerDeploy();
     await refresh();
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Failed to start deploy.';
@@ -145,7 +160,7 @@ async function triggerDeployOnFinish(): Promise<void> {
   loading.value = true;
   error.value = null;
   try {
-    await api.triggerDeployOnFinish();
+    await robotApi.triggerDeployOnFinish();
     await refresh();
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Failed to schedule deploy.';
@@ -161,7 +176,7 @@ async function cancelDeployOnFinish(): Promise<void> {
   loading.value = true;
   error.value = null;
   try {
-    await api.cancelDeployOnFinish();
+    await robotApi.cancelDeployOnFinish();
     await refresh();
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Failed to cancel scheduled deploy.';
@@ -206,6 +221,10 @@ onBeforeUnmount(() => {
     <div v-if="error" class="vb-login-error" style="margin-bottom: 10px;">
       {{ error }}
     </div>
+    <div v-for="(result, topicId) in stopResults" :key="topicId" class="vb-panel" style="margin-bottom: 10px;">
+      <strong>Stop {{ result.state }}</strong> · {{ result.message }}
+      <span v-if="result.effectsUnknownCount"> Remote effects unknown: {{ result.effectsUnknownCount }}.</span>
+    </div>
 
     <div class="vb-dashboard-grid">
       <div class="vb-panel">
@@ -249,7 +268,7 @@ onBeforeUnmount(() => {
               <button
                 class="vb-btn"
                 type="button"
-                :disabled="loading || !deployStatus?.enabled || deployStatus?.running"
+                :disabled="loading || !deployStatus?.enabled || Boolean(deployStatus?.running)"
                 @click="triggerDeploy"
               >
                 {{ deployStatus?.running ? 'Deploying…' : 'Deploy' }}
@@ -257,7 +276,7 @@ onBeforeUnmount(() => {
               <button
                 class="vb-btn"
                 type="button"
-                :disabled="loading || !deployStatus?.enabled || deployStatus?.running || deployOnFinishPending"
+                :disabled="loading || !deployStatus?.enabled || Boolean(deployStatus?.running) || deployOnFinishPending"
                 @click="triggerDeployOnFinish"
               >
                 {{ deployOnFinishPending ? 'Deploy on Finish (Scheduled)…' : 'Deploy on Finish' }}
@@ -266,7 +285,7 @@ onBeforeUnmount(() => {
                 v-if="deployOnFinishPending"
                 class="vb-btn vb-btn-danger"
                 type="button"
-                :disabled="loading || deployStatus?.running"
+                :disabled="loading || Boolean(deployStatus?.running)"
                 @click="cancelDeployOnFinish"
               >
                 Cancel Deploy on Finish
@@ -355,8 +374,8 @@ onBeforeUnmount(() => {
                   <span v-if="job.forumName">in {{ job.forumName }}</span>
                   <span v-if="job.topicStatus">· {{ job.topicStatus }}</span>
                   <span v-if="job.threadLoaded === true">· loaded</span>
-                  <span v-else-if="job.threadLoaded === false">· not loaded</span>
-                  <span v-if="job.activeTurnId">· interruptable</span>
+                  <span v-else-if="job.threadLoaded === false">· not loaded; canonical stop available</span>
+                  <span v-if="job.activeTurnId">· interruptible</span>
                 </span>
               </div>
             </div>
@@ -376,8 +395,9 @@ onBeforeUnmount(() => {
 
             <div class="vb-job-actions">
               <button class="vb-btn vb-btn-compact" type="button" :disabled="loading" @click="openTopic(job.topicId)">Open</button>
-              <button class="vb-btn vb-btn-danger vb-btn-compact" type="button" :disabled="loading" @click="interruptTopic(job.topicId)">Interrupt</button>
-              <button class="vb-btn vb-btn-compact" type="button" :disabled="loading" @click="continueTopic(job.topicId)">Continue</button>
+              <button class="vb-btn vb-btn-danger vb-btn-compact" type="button" :disabled="loading" @click="interruptTopic(job.topicId)">Stop</button>
+              <button class="vb-btn vb-btn-compact" type="button" :disabled="loading || job.activity === 'stopping' || job.activity === 'uncertain'" @click="continueTopic(job.topicId)">Continue</button>
+              <span v-if="stopResults[job.topicId]" class="vb-job-meta">{{ stopResults[job.topicId]?.message }}</span>
             </div>
           </div>
         </div>

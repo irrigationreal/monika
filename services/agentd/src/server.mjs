@@ -46,6 +46,7 @@ import {
   applyAutoCompactionOverride,
   requestedAutoCompaction,
 } from "./session-config.mjs";
+import { createSubagentCancellationCoordinator } from "./subagent-cancellation.mjs";
 import {
   SubagentLifecycle,
   backgroundStatus,
@@ -108,6 +109,10 @@ const RUNTIME_INSTANCE_FILE =
 process.env.PI_SUBAGENTS_DISABLE_AUTO_DRAIN = "1";
 delete process.env.PI_SUBAGENTS_TRIGGER_RECOVERED_RESULTS;
 process.env.PI_SUBAGENTS_HOST_ACK_RESULTS = "1";
+// Agentd owns forum cancellation. Force every forum-owned leaf, including
+// nested fanout, through the durable async lifecycle; interactive Pi processes
+// do not inherit this agentd-local policy.
+process.env.PI_SUBAGENTS_FORCE_ASYNC = "1";
 process.env.PI_SUBAGENT_SESSION_ROOT = SUBAGENT_SESSION_ROOT;
 process.env.PI_SUBAGENT_RUNTIME_ROOT = SUBAGENT_RUNTIME_ROOT;
 const DEFAULT_CWD =
@@ -386,6 +391,62 @@ async function subagentSnapshot() {
     operatorRoot: SUBAGENT_OPERATOR_ROOT,
     runtimeInstanceFile: RUNTIME_INSTANCE_FILE,
   });
+}
+const subagentCancellation = createSubagentCancellationCoordinator({
+  lifecycleRoot: SUBAGENT_LIFECYCLE_ROOT,
+  operatorRoot: SUBAGENT_OPERATOR_ROOT,
+  scan: subagentSnapshot,
+});
+function cancellationPublic(result) {
+  const unresolvedCount = result.unresolved?.length ?? 0;
+  const effectsUnknownCount = result.effects_unknown?.length ?? 0;
+  const errorCount = result.errors?.length ?? 0;
+  return { ok: result.state === 'stopped', operation_id: result.operation_id, generation: result.generation,
+    state: result.state, targets: result.targets?.length ?? 0, unresolved_count: unresolvedCount,
+    effects_unknown_count: effectsUnknownCount, error_count: errorCount,
+    message: result.state === 'stopped' ? 'Robot execution is stopped.'
+      : result.state === 'stopping' ? 'Stop is still in progress.'
+        : 'Termination is uncertain; retry or inspect the administrative workload.' };
+}
+async function interruptSession(session, body = {}) {
+  const conv = loadedConversationForSession(session);
+  const operationId = typeof body.operation_id === 'string' && body.operation_id.trim() ? body.operation_id.trim() : randomUUID();
+  const manager = conv?.session?.sessionManager ?? SessionManager.open(session.path, undefined, session.cwd ?? DEFAULT_CWD);
+  const currentFence = readDispatchFence(manager.getBranch()).generation;
+  const generation = Number.isSafeInteger(body.generation) && body.generation >= 0 ? body.generation : currentFence + 1;
+  if (generation < currentFence) throw new Error('stale cancellation generation');
+  advanceDispatchFence(manager, generation);
+  let abortError = null;
+  if (conv) {
+    try {
+      await Promise.race([conv.session.abort(), new Promise((_, reject) => setTimeout(() => reject(new Error('parent abort timed out')), 10_000))]);
+    } catch (error) { abortError = error instanceof Error ? error.message : String(error); }
+  }
+  // Abort first so the subsequent fixed-point scan cannot close over an empty
+  // boundary while the parent is still able to register another child.
+  let cancellation = await subagentCancellation.request({ operationId, sessionId: session.id, sessionPath: session.path, generation, reason: 'forum-stop' });
+  if (abortError) cancellation = await subagentCancellation.markParentAbortUncertain(operationId, abortError);
+  if (conv) emit(conv, 'turn_interrupted', { thread_id: conv.id, operation_id: operationId, generation, cancellation: cancellationPublic(cancellation) });
+  return cancellation;
+}
+
+async function reconcileCancellationOperation(session, operation) {
+  if (operation.parent_abort_error) {
+    const conv = loadedConversationForSession(session);
+    if (conv) {
+      try {
+        await Promise.race([conv.session.abort(), new Promise((_, reject) => setTimeout(() => reject(new Error('parent abort timed out')), 10_000))]);
+      } catch (error) {
+        return subagentCancellation.markParentAbortUncertain(operation.operation_id, error instanceof Error ? error.message : String(error));
+      }
+    }
+    // A successfully aborted loaded parent, or the absence of any loaded parent
+    // in this runtime, proves it can no longer register descendants here.
+    await subagentCancellation.proveParentTerminated(operation.operation_id);
+  }
+  return subagentCancellation.request({ operationId: operation.operation_id,
+    sessionId: operation.parent_session_id, sessionPath: operation.parent_session_path,
+    generation: operation.generation, reason: operation.reason });
 }
 
 function loadedParentProtection() {
@@ -2213,6 +2274,33 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, exported);
     }
 
+    const piCancellationMatch = url.pathname.match(
+      /^\/v1\/pi\/sessions\/([^/]+)\/cancellation$/,
+    );
+    if (piCancellationMatch) {
+      const session = await findSession(decodeURIComponent(piCancellationMatch[1]));
+      if (!session) return notFound(res);
+      if (method === 'GET') {
+        const operationId = url.searchParams.get('operation_id');
+        // Cancellation status is an active reconciliation endpoint, not a stale
+        // record read. Re-run the durable operation so consumed controls and
+        // newly discovered pending results are fenced again.
+        const operation = operationId
+          ? await subagentCancellation.read(operationId)
+          : await subagentCancellation.latestForSession(session.id, session.path);
+        if (!operation || operation.parent_session_id !== session.id) return notFound(res);
+        const reconciled = await withSessionOperation(session.id, () => reconcileCancellationOperation(session, operation));
+        return json(res, reconciled.state === 'stopping' ? 202 : 200, cancellationPublic(reconciled));
+      }
+      if (method === 'POST') {
+        const body = await readBody(req);
+        try {
+          const result = await withSessionOperation(session.id, () => interruptSession(session, body));
+          return json(res, result.state === 'stopping' ? 202 : 200, cancellationPublic(result));
+        } catch (error) { return badRequest(res, error instanceof Error ? error.message : String(error)); }
+      }
+    }
+
     const piContextMatch = url.pathname.match(
       /^\/v1\/pi\/sessions\/([^/]+)\/context$/,
     );
@@ -2323,6 +2411,9 @@ const server = http.createServer(async (req, res) => {
           if (branch?.branch_conflict) throw new SessionBranchConflict(conv.piSessionId, branch);
           if (branch?.external_advance) throw new SessionExternalAdvance(conv.piSessionId, branch);
           const body = await readBody(req);
+          if (body.provenance?.origin === 'forum' && body.generation === undefined) {
+            return badRequest(res, 'forum dispatch generation is required');
+          }
           const messageId = body.message_id ?? randomUUID();
           const dispatchId = body.dispatch_id ?? messageId;
           let generation; let inspected;
@@ -2404,16 +2495,12 @@ const server = http.createServer(async (req, res) => {
       }
       if (method === 'POST' && tail === 'interrupt') {
         const body = await readBody(req);
-        return withSessionOperation(conv.piSessionId, async () => {
-          const currentFence = readDispatchFence(conv.session.sessionManager.getBranch()).generation;
-          const generation = body.generation ?? currentFence + 1;
-          try { advanceDispatchFence(conv.session.sessionManager, generation); }
-          catch (err) { return badRequest(res, err instanceof Error ? err.message : String(err)); }
-          await conv.session.abort();
-          const background = await conv.subagentLifecycle.requestStops();
-          emit(conv, 'turn_interrupted', { thread_id: conv.id, background, generation });
-          return json(res, 200, { ok: true, background, generation });
-        });
+        const session = await findSession(conv.piSessionId);
+        if (!session) return notFound(res);
+        try {
+          const result = await withSessionOperation(session.id, () => interruptSession(session, body));
+          return json(res, result.state === 'stopping' ? 202 : 200, cancellationPublic(result));
+        } catch (error) { return badRequest(res, error instanceof Error ? error.message : String(error)); }
       }
       if (method === 'POST' && tail === 'close') {
         const snapshot = await subagentSnapshot().catch(() => null);

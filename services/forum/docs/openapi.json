@@ -7248,6 +7248,9 @@
                         "thinking",
                         "running_tools",
                         "waiting",
+                        "stopping",
+                        "stopped",
+                        "uncertain",
                         "error"
                       ]
                     },
@@ -7822,12 +7825,51 @@
                     "ok": {
                       "type": "boolean"
                     },
+                    "operationId": {
+                      "type": "string"
+                    },
+                    "generation": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "stopping",
+                        "stopped",
+                        "uncertain"
+                      ]
+                    },
+                    "targets": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "unresolvedCount": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "effectsUnknownCount": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "errorCount": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
                     "message": {
                       "type": "string"
                     }
                   },
                   "required": [
-                    "ok"
+                    "ok",
+                    "operationId",
+                    "generation",
+                    "state",
+                    "targets",
+                    "unresolvedCount",
+                    "effectsUnknownCount",
+                    "errorCount",
+                    "message"
                   ]
                 }
               }
@@ -13176,6 +13218,9 @@
                               "thinking",
                               "running_tools",
                               "waiting",
+                              "stopping",
+                              "stopped",
+                              "uncertain",
                               "error"
                             ]
                           },

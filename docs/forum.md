@@ -116,6 +116,8 @@ Implemented endpoints:
 - `GET /v1/pi/sessions`
 - `GET /v1/pi/sessions/:id/export`
 - `GET /v1/pi/sessions/:id/context`
+- `POST /v1/pi/sessions/:id/cancellation` (durable canonical-session Stop Robot barrier; also works when unloaded)
+- `GET /v1/pi/sessions/:id/cancellation[?operation_id=...]` (actively re-runs the named or latest durable operation; it never merely returns a stale snapshot)
 - `GET /v1/pi/sessions/:id/ownership`
 - `POST /v1/pi/sessions/:id/ownership/claim`
 - `POST /v1/pi/sessions/:id/ownership/heartbeat`
@@ -212,11 +214,35 @@ Optional project artifacts are not supervisor state. The runner recreates their
 directory at final write and records failures without bypassing result/status/
 process-terminal finalization. Drain installs a package-level barrier: new async
 launches are rejected and completed result files remain durable without triggering
-an internal continuation until drain is cancelled. Interrupt/takeover still uses
-pi-subagents' public v1 stop RPC.
+an internal continuation until drain is cancelled. Stop Robot is stronger than request emission: forum
+advances its durable dispatch generation, then agentd records an idempotent
+canonical-session cancellation under the operator root, aborts a loaded parent,
+and writes package `control/stop.json` only after validating scoped lifecycle
+identity and non-symlink root containment. Terminal runs with pending result delivery
+receive the host-cancellation marker before Stop can report `stopped`; active controls
+are reasserted during same-operation reconciliation. It re-scans top-level and nested
+runs to a bounded fixed point so launch races are caught even when the parent
+conversation is unloaded. Scheduled package runs are disabled and explicitly outside
+this causal-descendant contract; an unexpected scheduled-scope record becomes
+uncertainty rather than a false cancellation claim. These controls are pragmatic
+same-UID coordination, not cryptographic authentication or an OS sandbox: another
+process with the runtime UID can alter them, so the standalone deployment must retain
+its container/user and loopback agentd boundary.
 
 Recovered package results never invoke the notifier, intercom transport, or
 `pi.sendMessage`; their files remain operational `delivery=pending` evidence.
+Likewise, a result correlated to agentd's durable host-cancellation marker is
+retained but cannot trigger a parent model continuation. Local execution and
+remote effects are separate: a stopped SSH runner may still report
+`effects_state=unknown`, which Stop never rewrites or describes as rollback.
+Forum and agentd requests are deadline-bounded; a timeout after the forum fence is
+shown as `uncertain`, not as an unfenced failure. Parent-abort uncertainty is part
+of the durable operation and cannot be erased by a child-only scan; reconciliation
+retries a loaded parent abort or proves that no loaded parent can launch more work.
+Continue remains unavailable until a later Stop reconciliation proves `stopped`.
+Ordinary posting-author Stop responses contain only stable state, operation/generation,
+and safe counts/message fields. Raw run records and errors remain behind the admin
+workload/dashboard boundary.
 Recovered native supervisor requests likewise remain replyable through supervisor
 tooling without becoming Pi messages. Requests created after that session's
 recovery cutoff still wake the live parent normally. The package's natural `subagent-notify` continuation
@@ -246,10 +272,13 @@ thread link cleared and remain idle/unloaded until a new human post explicitly
 opens the canonical Pi session. Durable post dispatch processing starts only after
 this reconciliation. Each topic dispatch carries a durable generation and stable dispatch ID through
 to agentd. Agentd persists acceptance before prompting, deduplicates lost-response
-retries, and persists interrupt fences under the session operation lock. Interrupt
-advances the forum generation before awaiting agentd and supersedes queued or
-claimed rows, so stale work cannot run after restart while current pending human
-posts retain normal retry.
+retries, and persists interrupt fences under the session operation lock. The first
+Stop advances the forum generation before awaiting agentd and supersedes older
+queued or claimed rows. A retry while `stopping`/`uncertain` reuses that generation
+and deterministic operation ID instead of advancing again, so posts created behind
+an unresolved fence remain deferred and current. Agentd selects latest cancellation
+by generation before request time, and forum applies a result only when its generation
+still matches the topic; out-of-order older responses cannot restore terminal state.
 
 Grouped notifications retain all contributing run origins. Live bridge projection
 and later sync share the canonical Pi message link, preventing duplicate completion
@@ -844,8 +873,8 @@ window without inventing removal animations for cards the browser never saw.
 When the user clicks Stop:
 
 1. `assistant_reset` fires with `reason: 'interrupted'`
-2. Client sets `interruptedTrace = true` and stops accumulating new content
-3. Committed segments are preserved (not cleared)
+2. Client flushes buffered deltas, freezes even a text-only draft tail, sets `interruptedTrace = true`, and stops accumulating new content
+3. Committed and newly frozen text segments are preserved (not cleared)
 4. The trace header changes to "■ Response stopped" / "STOPPED"
 5. The frozen trace remains visible until the next response starts
 
@@ -869,10 +898,13 @@ Falls back to a compact non-interleaved view when checkpoints are absent
 
 **Refresh resilience:** On page refresh or reconnect mid-response,
 `reconstructSegmentsFromState()` rebuilds committed segments from server state
-using the stored checkpoints and accumulated text. Reconstruction only runs while
+using the stored checkpoints and accumulated text. A successful Stop persists
+`activity = 'stopped'`; hydration or SSE state therefore freezes the reconstructed
+trace even if the client missed `assistant_reset`. Fresh accepted dispatch clears
+that boundary with the normal new-turn reset. Reconstruction only runs while
 `activity !== 'idle'` and there is current live content (`currentPlan` or live
 assistant text), including explicit initial state loads. Server state treats
-`activity = 'idle'` as an invariant that clears `current_plan_id`; queued/waiting
+`activity = 'idle'` or `stopped` as an invariant that clears `current_plan_id`; queued/waiting
 turns also start without inheriting the previous plan. This keeps stale completed
 plans from resurrecting the live panel or appearing at the start of the next live
 turn.

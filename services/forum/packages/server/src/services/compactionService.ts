@@ -106,7 +106,7 @@ export class CompactionService {
     const state = this.store.getRobotState(input.topicId);
     const autoRun = this.store.getTopicAutoRun(input.topicId);
     if (
-      state?.activity !== 'idle' ||
+      (state?.activity !== 'idle' && state?.activity !== 'stopped') ||
       autoRun?.status === 'running' ||
       this.store.countActionablePostDispatches(input.topicId) > 0 ||
       this.store.hasCompactionFence(input.topicId)
