@@ -4,9 +4,14 @@ import path from 'node:path';
 
 import { resultCustodyFiles, SUBAGENT_RETENTION_MS, scanLifecycleSnapshot, trustedDeliveryAcknowledgement, validateLifecycleArtifact } from './subagent-lifecycle.mjs';
 
+const RETENTION_ERROR_REASONS = new Set(['invalid-status', 'process-terminal-artifact-missing-or-invalid']);
+function retentionSafetyError(reason) {
+  return RETENTION_ERROR_REASONS.has(reason) || /^(?:unreadable-|unsafe-|symlink-)/.test(reason);
+}
+
 export function summarizeSubagentRetention({ inventory = null, result = null, error = null, running = false, lastRunAt = null } = {}) {
   const items = inventory?.items ?? [];
-  const errorItems = items.filter((item) => item.protected_reasons?.some((reason) => /(?:invalid|unreadable|unsafe|symlink)/.test(reason)));
+  const errorItems = items.filter((item) => item.protected_reasons?.some(retentionSafetyError));
   const compactedItems = items.filter((item) => item.protected_reasons?.includes('already-compacted'));
   const waitingItems = items.filter((item) => item.protected_reasons?.length === 1 && item.protected_reasons[0] === 'retention-age-not-met');
   const protectedCount = items.filter((item) => !item.eligible && !waitingItems.includes(item) && !errorItems.includes(item) && !compactedItems.includes(item)).length;
@@ -51,9 +56,18 @@ async function syncDirectory(dir) { const handle = await fs.open(dir, fsConstant
 function canonical(value) { if (Array.isArray(value)) return value.map(canonical); if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])])); return value; }
 function inventoryDigest(items) { return createHash('sha256').update(JSON.stringify(canonical(items))).digest('hex'); }
 function bulky(name) { return BULKY_FILES.has(name) || BULKY_PATTERNS.some((pattern) => pattern.test(name)); }
+function validProcessTerminalEvidence(proof, runId) {
+  if (proof?.version !== 1 || proof.runId !== runId || typeof proof.runnerProcessInstanceId !== 'string') return false;
+  if (proof.state === 'not-started') return true;
+  if (proof.state === 'unknown') return typeof proof.reason === 'string' && proof.reason.length > 0;
+  return proof.state === 'observed' && ['unavailable', 'resumable'].includes(proof.resumeDisposition)
+    && Number.isFinite(proof.observedAt) && Array.isArray(proof.instances)
+    && proof.instances.some((instance) => instance?.kind === 'runner'
+      && instance.processInstanceId === proof.runnerProcessInstanceId
+      && Number.isFinite(instance.closeObservedAt));
+}
 function observedUnavailable(proof, runId) {
-  return proof?.version === 1 && proof.state === 'observed' && proof.runId === runId && proof.resumeDisposition === 'unavailable'
-    && typeof proof.runnerProcessInstanceId === 'string' && Number.isFinite(proof.observedAt) && Array.isArray(proof.instances)
+  return validProcessTerminalEvidence(proof, runId) && proof.state === 'observed' && proof.resumeDisposition === 'unavailable'
     && proof.instances.some((instance) => instance?.kind === 'runner' && instance.processInstanceId === proof.runnerProcessInstanceId && Number.isFinite(instance.closeObservedAt));
 }
 
@@ -95,7 +109,7 @@ async function inspectRun(run, { lifecycleRoot, sessionRoot, resultsRoot, operat
   const proofRecord = await readJsonBytes(path.join(run.async_dir, 'process-terminal.json')).catch(() => null);
   const proof = proofRecord?.value ?? status?.processTerminal;
   if (proofRecord) item.process_terminal_sha256 = sha256(proofRecord.bytes);
-  else protect('process-terminal-artifact-missing-or-invalid');
+  if (!proofRecord || !validProcessTerminalEvidence(proof, run.run_id)) protect('process-terminal-artifact-missing-or-invalid');
   if (!observedUnavailable(proof, run.run_id)) protect('resumability-or-terminal-proof-protected');
   const ackRecord = await readJsonBytes(path.join(run.async_dir, 'delivery-ack.json')).catch(() => null);
   const ack = ackRecord?.value ?? null;

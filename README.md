@@ -167,6 +167,9 @@ custody/removal. Daily 14-day compaction applies only to explicit bulky
 lifecycle logs for proven-terminal, explicitly non-resumable runs with affirmative
 settlement proof. Every child session is preserved, and resumable, pending,
 malformed, nested, or uncertain records remain protected until explicit review.
+The retention summary counts expected unresolved legacy acknowledgement as
+protected state; only malformed, missing-proof, unreadable, unsafe, or symlink
+evidence is reported as an error.
 Sleep remains a separate stateful-memory workflow under `sessions/forks/`. See
 [`docs/forum.md`](docs/forum.md#subagents-and-background-completions) for the
 agentd/forum lifecycle.
