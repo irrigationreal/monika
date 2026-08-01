@@ -95,6 +95,9 @@ export class WebSurfaceEventIngestor implements SurfaceEventIngestor {
       robotMode?: string | null;
     } | undefined;
     const parentPostId = payload.parentPostId ?? payload.parentExternalId ?? null;
+    if (this.store.hasCompactionFence(topicId)) {
+      return { accepted: false, reason: 'compaction recovery in progress' };
+    }
 
     const post = this.store.createPost({
       topicId,

@@ -326,6 +326,9 @@ export function registerRobotRoutes({
     if (topic.status === 'locked' || topic.status === 'archived') {
       throw app.httpErrors.forbidden('topic is locked or archived');
     }
+    if (store.hasCompactionFence(topicId)) {
+      throw app.httpErrors.conflict('Robot work is unavailable until compaction recovery is dispatched');
+    }
 
     const body = request.body as { steerMessage?: string | null };
     const result = await autoRunDirector.runManual({
@@ -353,6 +356,9 @@ export function registerRobotRoutes({
     if (!canPostTopic(topic, forum, identity)) {
       throw app.httpErrors.forbidden('Posting not allowed in this topic');
     }
+    if (store.hasCompactionFence(topicId)) {
+      throw app.httpErrors.conflict('Robot control is unavailable until compaction recovery is dispatched');
+    }
 
     const result = await codex.interruptTopic(topicId);
     if (!result.ok) {
@@ -375,6 +381,9 @@ export function registerRobotRoutes({
     const identity = store.getIdentity(user.identityId);
     if (!canPostTopic(topic, forum, identity)) {
       throw app.httpErrors.forbidden('Posting not allowed in this topic');
+    }
+    if (store.hasCompactionFence(topicId)) {
+      throw app.httpErrors.conflict('Robot control is unavailable until compaction recovery is dispatched');
     }
 
     const result = await codex.closeTopic(topicId);
@@ -401,6 +410,9 @@ export function registerRobotRoutes({
     }
     if (topic.status === 'locked' || topic.status === 'archived') {
       throw app.httpErrors.forbidden('topic is locked or archived');
+    }
+    if (store.hasCompactionFence(topicId)) {
+      throw app.httpErrors.conflict('Robot work is unavailable until compaction recovery is dispatched');
     }
 
     const parentPostId = store.getLatestHumanPostId(topicId) ?? store.getLatestPostId(topicId);

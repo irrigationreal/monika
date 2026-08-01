@@ -201,6 +201,10 @@ For full deployment guidance, see `docs/DEPLOYMENT.md`.
 - The Admin Panel is available under `/admin`; logged-in users can access the Developer Portal under `/developers`, API
   docs under `/docs/api`, and chat under `/chat`.
 - The UI assumes forum-native auth, but the API supports API keys and impersonation tokens.
+- Manual **Compact and recover** is an admin-only durable job: the forum returns `202 Accepted`, resumes pending or
+  interrupted work after restart using the canonical expected-leaf guard, exposes active/latest state across reloads,
+  and creates the recovery checkpoint only after Pi compaction succeeds. A failed checkpoint dispatch can be retried
+  independently without repeating compaction. The mobile dialog is dynamic-viewport bounded and internally scrollable.
 - Canonical parent-session automatic compaction is a default-off, admin-controlled topic setting. The forum persists the
   policy and sends it to agentd; Pi performs native threshold and overflow-retry compaction. Automatic compaction
   creates maintenance events but never the manual recovery-checkpoint post. Direct Pi CLI and disposable child policies

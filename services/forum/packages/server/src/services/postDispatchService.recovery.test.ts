@@ -21,6 +21,11 @@ describe('durable post dispatch recovery fence', () => {
 
   afterEach(() => db.close());
 
+  async function processOnce(service: PostDispatchService): Promise<void> {
+    (service as any).stopped = false;
+    await (service as any).processDue();
+  }
+
   function fixture() {
     const forum = store.createForum('Forum');
     const author = store.createIdentity('Author', 'human');
@@ -37,10 +42,82 @@ describe('durable post dispatch recovery fence', () => {
     const agent = { dispatchPostToAgent: vi.fn(async () => {}) };
     const service = new PostDispatchService(store, agent as any);
 
-    await (service as any).processDue();
+    await processOnce(service);
 
     expect(agent.dispatchPostToAgent).toHaveBeenCalledOnce();
     expect(store.getPostDispatch(dispatch.id)?.status).toBe('dispatched');
+  });
+
+  it('dispatches a compaction recovery checkpoint before newer queued surface work', async () => {
+    const { topic, session, author } = fixture();
+    store.createCompactionOperation({
+      id: 'op-priority',
+      topicId: topic.id,
+      sessionId: session.id,
+      initiatedBy: author.id,
+      expectedLeafId: 'leaf-1',
+      recoveryPrompt: 'recover first',
+    });
+    const laterPost = store.createPost({ topicId: topic.id, authorId: author.id, body: 'surface work' });
+    const laterDispatch = store.createPostDispatch({ topicId: topic.id, sessionId: session.id, postId: laterPost.id });
+    const calls: string[] = [];
+    const agent = { dispatchPostToAgent: vi.fn(async (_topicId: string, postId: string) => { calls.push(postId); }) };
+    const service = new PostDispatchService(store, agent as any);
+
+    await processOnce(service);
+    expect(calls).toEqual([]);
+    expect(store.getPostDispatch(laterDispatch.id)?.status).toBe('pending');
+    store.claimCompactionOperation('op-priority');
+    const completed = store.finishCompactionSuccess('op-priority');
+    await processOnce(service);
+    expect(calls).toEqual([completed.recoveryPostId]);
+    expect(store.getPostDispatch(laterDispatch.id)?.status).toBe('pending');
+    await processOnce(service);
+    expect(calls).toEqual([completed.recoveryPostId, laterPost.id]);
+  });
+
+  it('fenced rows cannot fill the due window and starve another topic', async () => {
+    const blocked = fixture();
+    store.createCompactionOperation({
+      id: 'op-starvation',
+      topicId: blocked.topic.id,
+      sessionId: blocked.session.id,
+      initiatedBy: blocked.author.id,
+      expectedLeafId: 'leaf-1',
+      recoveryPrompt: 'recover',
+    });
+    for (let index = 0; index < 25; index += 1) {
+      const post = store.createPost({ topicId: blocked.topic.id, authorId: blocked.author.id, body: `blocked ${index}` });
+      store.createPostDispatch({ topicId: blocked.topic.id, sessionId: blocked.session.id, postId: post.id });
+    }
+    const ready = fixture();
+    const readyDispatch = store.createPostDispatch({ topicId: ready.topic.id, sessionId: ready.session.id, postId: ready.post.id });
+    const agent = { dispatchPostToAgent: vi.fn(async () => {}) };
+    const service = new PostDispatchService(store, agent as any);
+
+    await processOnce(service);
+    expect(agent.dispatchPostToAgent).toHaveBeenCalledWith(ready.topic.id, ready.post.id, expect.anything());
+    expect(store.getPostDispatch(readyDispatch.id)?.status).toBe('dispatched');
+  });
+
+  it('does not bypass recovery-checkpoint retry backoff through a newer due post', async () => {
+    const { topic, session, author } = fixture();
+    store.createCompactionOperation({
+      id: 'op-backoff', topicId: topic.id, sessionId: session.id, initiatedBy: author.id,
+      expectedLeafId: 'leaf-1', recoveryPrompt: 'recover',
+    });
+    store.claimCompactionOperation('op-backoff');
+    const completed = store.finishCompactionSuccess('op-backoff');
+    const checkpoint = store.getPostDispatchByPost(completed.recoveryPostId!);
+    db.prepare('update post_dispatches set next_attempt_at = ? where id = ?')
+      .run(new Date(Date.now() + 60_000).toISOString(), checkpoint!.id);
+    const later = store.createPost({ topicId: topic.id, authorId: author.id, body: 'later' });
+    store.createPostDispatch({ topicId: topic.id, sessionId: session.id, postId: later.id });
+    const agent = { dispatchPostToAgent: vi.fn(async () => {}) };
+    const service = new PostDispatchService(store, agent as any);
+
+    await processOnce(service);
+    expect(agent.dispatchPostToAgent).not.toHaveBeenCalled();
   });
 
   it('never runs a stale generation after restart reconciliation', async () => {
@@ -53,7 +130,7 @@ describe('durable post dispatch recovery fence', () => {
     const agent = { dispatchPostToAgent: vi.fn(async () => {}) };
     const service = new PostDispatchService(store, agent as any);
 
-    await (service as any).processDue();
+    await processOnce(service);
 
     expect(agent.dispatchPostToAgent).not.toHaveBeenCalled();
     expect(store.getPostDispatch(dispatch.id)?.status).toBe('superseded');
@@ -91,9 +168,9 @@ describe('durable post dispatch recovery fence', () => {
     const calls: any[] = [];
     const agent = { dispatchPostToAgent: vi.fn(async (...args: any[]) => { calls.push(args); if (calls.length === 1) throw new Error('lost response'); }) };
     const service = new PostDispatchService(store, agent as any);
-    await (service as any).processDue();
+    await processOnce(service);
     db.prepare("update post_dispatches set next_attempt_at = ? where id = ?").run(new Date(0).toISOString(), dispatch.id);
-    await (service as any).processDue();
+    await processOnce(service);
     expect(calls).toHaveLength(2);
     expect(calls.map((call) => call[2].dispatchId)).toEqual([dispatch.id, dispatch.id]);
     expect(calls.map((call) => call[2].generation)).toEqual([0, 0]);
@@ -108,12 +185,37 @@ describe('durable post dispatch recovery fence', () => {
     const entered = Promise.withResolvers<void>();
     const agent = { dispatchPostToAgent: vi.fn(async () => { entered.resolve(); await paused; }) };
     const service = new PostDispatchService(store, agent as any);
+    (service as any).stopped = false;
     const processing = (service as any).processDue();
     await entered.promise;
     store.advanceTopicDispatchGeneration(topic.id);
     release();
     await processing;
     expect(store.getPostDispatch(dispatch.id)?.status).toBe('superseded');
+  });
+
+  it('stop waits for active dispatch and prevents later wake calls from claiming work', async () => {
+    const { topic, session, post, author } = fixture();
+    store.createPostDispatch({ topicId: topic.id, sessionId: session.id, postId: post.id });
+    const entered = Promise.withResolvers<void>();
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => (release = resolve));
+    const agent = { dispatchPostToAgent: vi.fn(async () => { entered.resolve(); await blocked; }) };
+    const service = new PostDispatchService(store, agent as any, { intervalMs: 60_000 });
+    service.start();
+    await entered.promise;
+    let stopped = false;
+    const stopping = service.stop().then(() => { stopped = true; });
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+    release();
+    await stopping;
+
+    const later = store.createPost({ topicId: topic.id, authorId: author.id, body: 'later' });
+    store.createPostDispatch({ topicId: topic.id, sessionId: session.id, postId: later.id });
+    service.wake();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(agent.dispatchPostToAgent).toHaveBeenCalledTimes(1);
   });
 
   it('a deduplicated lost-response retry settles without manufacturing a thinking turn', async () => {

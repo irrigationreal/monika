@@ -329,6 +329,8 @@ export interface CompactionOperationRow {
   event_id: string | null;
   recovery_post_id: string | null;
   error_message: string | null;
+  attempt_count: number;
+  next_attempt_at: string | null;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;

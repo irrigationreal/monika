@@ -93,6 +93,12 @@ errors. The forum persists terminal failures as operational timeline events.
 
 Manual compaction uses `POST /v1/conversations/:id/compact` with an operation ID and
 expected Pi leaf ID. Agentd accepts it only while fully idle and calls Pi's public
-`AgentSession.compact()` API. The forum's admin-only workflow then creates and
-dispatches a user-attributed recovery-checkpoint post. See `docs/forum.md` for full
-persistence, visibility, and failure semantics.
+`AgentSession.compact()` API. The forum first returns a durable `202 Accepted`
+operation, then its background worker calls this synchronous agentd endpoint. On
+forum restart, interrupted operations are retried with the same expected leaf; agentd
+recognizes an existing canonical compaction child and does not compact twice.
+Network/5xx uncertainty stays pending with durable backoff, while definite 4xx
+rejections terminate the operation. Only
+after success does the forum create and durably dispatch the user-attributed recovery
+checkpoint. See the repository `docs/forum.md` for persistence, visibility, reload,
+and checkpoint-retry semantics.

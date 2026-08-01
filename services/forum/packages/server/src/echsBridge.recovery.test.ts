@@ -13,6 +13,7 @@ describe('passive ECHS startup reconciliation', () => {
     expect(request).toHaveBeenCalledWith('/v1/conversations/conversation-1/messages', {
       method: 'POST',
       body: { mode: 'queue', content: 'work', message_id: 'dispatch-1', dispatch_id: 'dispatch-1', generation: 7 },
+      timeoutMs: 30_000,
     });
     expect(result).toMatchObject({ messageId: 'dispatch-1', deduplicated: true });
   });

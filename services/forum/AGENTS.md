@@ -140,7 +140,10 @@ posts. Keep them out of post numbering, search, pagination counts, and Pi catch-
 context. Raw diagnostics follow the same authenticated trace-visibility boundary.
 Manual compaction must remain admin-only and idle-only, use the canonical Pi leaf
 as an optimistic concurrency guard, and create the recovery-checkpoint post only
-after Pi compaction succeeds. See `docs/forum.md` for the complete workflow.
+after Pi compaction succeeds. The forum must durably accept work before returning,
+execute it outside the request lifecycle, resume pending/interrupted work at startup,
+and keep checkpoint dispatch independently retryable. See `docs/forum.md` for the
+complete workflow.
 
 Key files:
 

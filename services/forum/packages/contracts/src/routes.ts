@@ -14,6 +14,7 @@ export type RouteRequest = {
 
 export type RouteResponse = {
   schema: z.ZodTypeAny;
+  statusCode?: number;
   contentType?: string;
   description?: string;
 };
@@ -827,12 +828,20 @@ export const apiRoutes: ApiRoute[] = [
     response: { schema: itemsSchema(schemas.TopicOperationalEventDtoSchema) }
   },
   {
+    method: 'get',
+    path: '/topics/{topicId}/compactions',
+    summary: 'Get active and latest durable compaction state',
+    tags: ['topics'],
+    request: { params: stringParam('topicId') },
+    response: { schema: schemas.TopicCompactionStateDtoSchema }
+  },
+  {
     method: 'post',
     path: '/topics/{topicId}/compactions',
-    summary: 'Compact a linked idle Pi conversation',
+    summary: 'Accept a durable compaction job for a linked idle Pi conversation',
     tags: ['topics'],
     request: { params: stringParam('topicId'), body: { schema: schemas.CreateCompactionRequestSchema } },
-    response: { schema: schemas.CompactionOperationDtoSchema }
+    response: { schema: schemas.CompactionOperationDtoSchema, statusCode: 202, description: 'Accepted' }
   },
   {
     method: 'get',
@@ -841,6 +850,14 @@ export const apiRoutes: ApiRoute[] = [
     tags: ['topics'],
     request: { params: z.object({ topicId: z.string(), operationId: z.string() }) },
     response: { schema: schemas.CompactionOperationDtoSchema }
+  },
+  {
+    method: 'post',
+    path: '/topics/{topicId}/compactions/{operationId}/retry-checkpoint',
+    summary: 'Retry a terminally failed recovery-checkpoint dispatch',
+    tags: ['topics'],
+    request: { params: z.object({ topicId: z.string(), operationId: z.string() }) },
+    response: { schema: schemas.TopicCompactionStateDtoSchema }
   },
 
   // Posts

@@ -29,6 +29,8 @@ import type {
   ChatRoomListDto,
   ChatTypingDto,
   CompactionOperationDto,
+  CompactionCheckpointDispatchDto,
+  TopicCompactionStateDto,
   CreateCompactionRequestDto,
   DiscordBridgeStatusDto,
   DiscordChannelMappingDto,
@@ -185,6 +187,8 @@ export type {
   TopicOperationalEventDto,
   CreateCompactionRequestDto,
   CompactionOperationDto,
+  CompactionCheckpointDispatchDto,
+  TopicCompactionStateDto,
   ForumApi,
 };
 
@@ -419,7 +423,12 @@ function createApi({
   };
 }
 
-export type ForumSdkApi = ReturnType<typeof createApi>;
+export type ForumSdkApi = ReturnType<typeof createApi> & {
+  getCompactionState(topicId: string): Promise<TopicCompactionStateDto>;
+  compactTopic(topicId: string, payload: CreateCompactionRequestDto): Promise<CompactionOperationDto>;
+  getCompaction(topicId: string, operationId: string): Promise<CompactionOperationDto>;
+  retryCompactionCheckpoint(topicId: string, operationId: string): Promise<TopicCompactionStateDto>;
+};
 
 export interface ForumSdk {
   api: ForumSdkApi;
@@ -817,10 +826,14 @@ export function createForumSdk(options?: ForumSdkOptions): ForumSdk {
     deleteTopic: (topicId: string) => json<{ ok: boolean }>(`/topics/${topicId}`, { method: 'DELETE' }),
     listOperationalEvents: (topicId: string) =>
       json<{ items: TopicOperationalEventDto[] }>(`/topics/${topicId}/operational-events`),
+    getCompactionState: (topicId: string) =>
+      json<TopicCompactionStateDto>(`/topics/${topicId}/compactions`),
     compactTopic: (topicId: string, payload: CreateCompactionRequestDto) =>
       json<CompactionOperationDto>(`/topics/${topicId}/compactions`, { method: 'POST', body: JSON.stringify(payload) }),
     getCompaction: (topicId: string, operationId: string) =>
-      json<CompactionOperationDto>(`/topics/${topicId}/compactions/${operationId}`),
+      json<CompactionOperationDto>(`/topics/${topicId}/compactions/${encodeURIComponent(operationId)}`),
+    retryCompactionCheckpoint: (topicId: string, operationId: string) =>
+      json<TopicCompactionStateDto>(`/topics/${topicId}/compactions/${encodeURIComponent(operationId)}/retry-checkpoint`, { method: 'POST' }),
     listPosts: (topicId: string, opts?: { page?: number; pageSize?: number; include?: string[] | string }) => {
       const params = new URLSearchParams();
       if (opts?.page) params.set('page', String(opts.page));

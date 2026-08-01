@@ -3098,11 +3098,223 @@
       }
     },
     "/topics/{topicId}/compactions": {
+      "get": {
+        "tags": [
+          "topics"
+        ],
+        "summary": "Get active and latest durable compaction state",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "topicId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "active": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "topicId": {
+                          "type": "string"
+                        },
+                        "sessionId": {
+                          "type": "string"
+                        },
+                        "initiatedBy": {
+                          "type": "string"
+                        },
+                        "expectedLeafId": {
+                          "type": "string"
+                        },
+                        "customInstructions": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "recoveryPrompt": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "pending",
+                            "running",
+                            "succeeded",
+                            "failed"
+                          ]
+                        },
+                        "eventId": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "recoveryPostId": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "errorMessage": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "createdAt": {
+                          "type": "string"
+                        },
+                        "startedAt": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "finishedAt": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "topicId",
+                        "sessionId",
+                        "initiatedBy",
+                        "expectedLeafId",
+                        "customInstructions",
+                        "recoveryPrompt",
+                        "status",
+                        "eventId",
+                        "recoveryPostId",
+                        "errorMessage",
+                        "createdAt",
+                        "startedAt",
+                        "finishedAt"
+                      ]
+                    },
+                    "latest": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "topicId": {
+                          "type": "string"
+                        },
+                        "sessionId": {
+                          "type": "string"
+                        },
+                        "initiatedBy": {
+                          "type": "string"
+                        },
+                        "expectedLeafId": {
+                          "type": "string"
+                        },
+                        "customInstructions": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "recoveryPrompt": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "pending",
+                            "running",
+                            "succeeded",
+                            "failed"
+                          ]
+                        },
+                        "eventId": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "recoveryPostId": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "errorMessage": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "createdAt": {
+                          "type": "string"
+                        },
+                        "startedAt": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "finishedAt": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "topicId",
+                        "sessionId",
+                        "initiatedBy",
+                        "expectedLeafId",
+                        "customInstructions",
+                        "recoveryPrompt",
+                        "status",
+                        "eventId",
+                        "recoveryPostId",
+                        "errorMessage",
+                        "createdAt",
+                        "startedAt",
+                        "finishedAt"
+                      ]
+                    },
+                    "checkpointDispatch": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "pending",
+                            "dispatching",
+                            "dispatched",
+                            "failed",
+                            "superseded",
+                            "abandoned"
+                          ]
+                        },
+                        "errorMessage": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "errorMessage"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "active",
+                    "latest",
+                    "checkpointDispatch"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
       "post": {
         "tags": [
           "topics"
         ],
-        "summary": "Compact a linked idle Pi conversation",
+        "summary": "Accept a durable compaction job for a linked idle Pi conversation",
         "parameters": [
           {
             "schema": {
@@ -3122,7 +3334,8 @@
                   "operationId": {
                     "type": "string",
                     "minLength": 1,
-                    "maxLength": 200
+                    "maxLength": 200,
+                    "pattern": "^[A-Za-z0-9._~-]+$"
                   },
                   "confirmation": {
                     "type": "string",
@@ -3152,8 +3365,8 @@
           }
         },
         "responses": {
-          "200": {
-            "description": "OK",
+          "202": {
+            "description": "Accepted",
             "content": {
               "application/json": {
                 "schema": {
@@ -3339,6 +3552,228 @@
                     "createdAt",
                     "startedAt",
                     "finishedAt"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/topics/{topicId}/compactions/{operationId}/retry-checkpoint": {
+      "post": {
+        "tags": [
+          "topics"
+        ],
+        "summary": "Retry a terminally failed recovery-checkpoint dispatch",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "topicId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "operationId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "active": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "topicId": {
+                          "type": "string"
+                        },
+                        "sessionId": {
+                          "type": "string"
+                        },
+                        "initiatedBy": {
+                          "type": "string"
+                        },
+                        "expectedLeafId": {
+                          "type": "string"
+                        },
+                        "customInstructions": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "recoveryPrompt": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "pending",
+                            "running",
+                            "succeeded",
+                            "failed"
+                          ]
+                        },
+                        "eventId": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "recoveryPostId": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "errorMessage": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "createdAt": {
+                          "type": "string"
+                        },
+                        "startedAt": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "finishedAt": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "topicId",
+                        "sessionId",
+                        "initiatedBy",
+                        "expectedLeafId",
+                        "customInstructions",
+                        "recoveryPrompt",
+                        "status",
+                        "eventId",
+                        "recoveryPostId",
+                        "errorMessage",
+                        "createdAt",
+                        "startedAt",
+                        "finishedAt"
+                      ]
+                    },
+                    "latest": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "topicId": {
+                          "type": "string"
+                        },
+                        "sessionId": {
+                          "type": "string"
+                        },
+                        "initiatedBy": {
+                          "type": "string"
+                        },
+                        "expectedLeafId": {
+                          "type": "string"
+                        },
+                        "customInstructions": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "recoveryPrompt": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "pending",
+                            "running",
+                            "succeeded",
+                            "failed"
+                          ]
+                        },
+                        "eventId": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "recoveryPostId": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "errorMessage": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "createdAt": {
+                          "type": "string"
+                        },
+                        "startedAt": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "finishedAt": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "topicId",
+                        "sessionId",
+                        "initiatedBy",
+                        "expectedLeafId",
+                        "customInstructions",
+                        "recoveryPrompt",
+                        "status",
+                        "eventId",
+                        "recoveryPostId",
+                        "errorMessage",
+                        "createdAt",
+                        "startedAt",
+                        "finishedAt"
+                      ]
+                    },
+                    "checkpointDispatch": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "pending",
+                            "dispatching",
+                            "dispatched",
+                            "failed",
+                            "superseded",
+                            "abandoned"
+                          ]
+                        },
+                        "errorMessage": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "errorMessage"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "active",
+                    "latest",
+                    "checkpointDispatch"
                   ]
                 }
               }
@@ -12823,6 +13258,9 @@
                         "uncertainCount": {
                           "type": "number"
                         },
+                        "effectsUnknownCount": {
+                          "type": "number"
+                        },
                         "runs": {
                           "type": "array",
                           "items": {
@@ -12844,9 +13282,61 @@
                                   "quarantined"
                                 ]
                               },
+                              "outcomeState": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "effectsState": {
+                                "type": "string",
+                                "nullable": true,
+                                "enum": [
+                                  "none",
+                                  "confirmed",
+                                  "unknown"
+                                ]
+                              },
                               "deliveryState": {
                                 "type": "string",
                                 "nullable": true
+                              },
+                              "executionTarget": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "local"
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "kind"
+                                    ]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "ssh"
+                                        ]
+                                      },
+                                      "name": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "kind",
+                                      "name"
+                                    ]
+                                  },
+                                  {
+                                    "nullable": true
+                                  }
+                                ]
                               },
                               "blocking": {
                                 "type": "boolean"
@@ -12912,9 +13402,61 @@
                                       "quarantined"
                                     ]
                                   },
+                                  "outcomeState": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "effectsState": {
+                                    "type": "string",
+                                    "nullable": true,
+                                    "enum": [
+                                      "none",
+                                      "confirmed",
+                                      "unknown"
+                                    ]
+                                  },
                                   "deliveryState": {
                                     "type": "string",
                                     "nullable": true
+                                  },
+                                  "executionTarget": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "enum": [
+                                              "local"
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "kind"
+                                        ]
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "enum": [
+                                              "ssh"
+                                            ]
+                                          },
+                                          "name": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "name"
+                                        ]
+                                      },
+                                      {
+                                        "nullable": true
+                                      }
+                                    ]
                                   },
                                   "blocking": {
                                     "type": "boolean"
@@ -12977,9 +13519,61 @@
                                       "quarantined"
                                     ]
                                   },
+                                  "outcomeState": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "effectsState": {
+                                    "type": "string",
+                                    "nullable": true,
+                                    "enum": [
+                                      "none",
+                                      "confirmed",
+                                      "unknown"
+                                    ]
+                                  },
                                   "deliveryState": {
                                     "type": "string",
                                     "nullable": true
+                                  },
+                                  "executionTarget": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "enum": [
+                                              "local"
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "kind"
+                                        ]
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "enum": [
+                                              "ssh"
+                                            ]
+                                          },
+                                          "name": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "name"
+                                        ]
+                                      },
+                                      {
+                                        "nullable": true
+                                      }
+                                    ]
                                   },
                                   "blocking": {
                                     "type": "boolean"
@@ -13042,9 +13636,61 @@
                                       "quarantined"
                                     ]
                                   },
+                                  "outcomeState": {
+                                    "type": "string",
+                                    "nullable": true
+                                  },
+                                  "effectsState": {
+                                    "type": "string",
+                                    "nullable": true,
+                                    "enum": [
+                                      "none",
+                                      "confirmed",
+                                      "unknown"
+                                    ]
+                                  },
                                   "deliveryState": {
                                     "type": "string",
                                     "nullable": true
+                                  },
+                                  "executionTarget": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "enum": [
+                                              "local"
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "kind"
+                                        ]
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "enum": [
+                                              "ssh"
+                                            ]
+                                          },
+                                          "name": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "name"
+                                        ]
+                                      },
+                                      {
+                                        "nullable": true
+                                      }
+                                    ]
                                   },
                                   "blocking": {
                                     "type": "boolean"
@@ -13108,11 +13754,79 @@
                         "error": {
                           "type": "string",
                           "nullable": true
+                        },
+                        "retention": {
+                          "type": "object",
+                          "properties": {
+                            "available": {
+                              "type": "boolean"
+                            },
+                            "generatedAt": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "retentionDays": {
+                              "type": "number"
+                            },
+                            "counts": {
+                              "type": "object",
+                              "properties": {
+                                "protected": {
+                                  "type": "number"
+                                },
+                                "waiting": {
+                                  "type": "number"
+                                },
+                                "eligible": {
+                                  "type": "number"
+                                },
+                                "compacted": {
+                                  "type": "number"
+                                },
+                                "error": {
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "protected",
+                                "waiting",
+                                "eligible",
+                                "compacted",
+                                "error"
+                              ]
+                            },
+                            "trackedRemovableBytes": {
+                              "type": "number"
+                            },
+                            "eligibleBytes": {
+                              "type": "number"
+                            },
+                            "omitted": {
+                              "type": "number"
+                            },
+                            "running": {
+                              "type": "boolean"
+                            },
+                            "lastError": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          },
+                          "required": [
+                            "available",
+                            "retentionDays",
+                            "counts",
+                            "trackedRemovableBytes",
+                            "eligibleBytes",
+                            "omitted",
+                            "running"
+                          ]
                         }
                       },
                       "required": [
                         "activeCount",
                         "uncertainCount",
+                        "effectsUnknownCount",
                         "runs",
                         "groups",
                         "omitted",

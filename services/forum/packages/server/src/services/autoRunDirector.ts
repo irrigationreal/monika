@@ -131,6 +131,7 @@ export class AutoRunDirector {
   }
 
   private async runDirector(opts: { topicId: string; triggerPostId: string | null; force?: boolean }): Promise<void> {
+    if (this.store.hasCompactionFence(opts.topicId)) return;
     const autoRun = this.store.getTopicAutoRun(opts.topicId);
     if (!autoRun) return;
     if (!autoRun.enabled && !opts.force) return;
@@ -214,6 +215,9 @@ export class AutoRunDirector {
       }
 
       if (decision.action == 'reply') {
+        if (this.store.hasCompactionFence(opts.topicId)) {
+          throw new Error('Conversation compaction recovery must finish before the Director can post');
+        }
         const reply = decision.reply?.trim();
         if (!reply) {
           throw new Error('Director reply action missing reply text');

@@ -3,6 +3,7 @@ import type {
   ChatCategoryDto,
   ChatMessageDto,
   ChatRoomDto,
+  CompactionCheckpointDispatchDto,
   CompactionOperationDto,
   ExternalRefDto,
   ForumDto,
@@ -19,6 +20,7 @@ import type {
   SessionMessageDto,
   ToolRunDto,
   TopicAutoRunDto,
+  TopicCompactionStateDto,
   TopicDto,
   TopicOperationalEventDto,
   UserFileDto,
@@ -36,6 +38,7 @@ import type {
 } from '@irrigationreal/codex-forum-core';
 
 import type { ChatCategoryRow, ChatMessageRow, ChatRoomRow } from '../db';
+import type { TopicCompactionState } from '../services/compactionService';
 import type {
   Attachment,
   ForumReadModel,
@@ -330,6 +333,19 @@ export function mapTopicOperationalEventToDto(
 
 export function mapCompactionOperationToDto(operation: CompactionOperation): CompactionOperationDto {
   return { ...operation };
+}
+
+export function mapTopicCompactionStateToDto(state: TopicCompactionState): TopicCompactionStateDto {
+  return {
+    active: state.active ? mapCompactionOperationToDto(state.active) : null,
+    latest: state.latest ? mapCompactionOperationToDto(state.latest) : null,
+    checkpointDispatch: state.checkpointDispatch
+      ? {
+          status: state.checkpointDispatch.status as CompactionCheckpointDispatchDto['status'],
+          errorMessage: state.checkpointDispatch.error_message,
+        }
+      : null,
+  };
 }
 
 export function mapRobotStateToDto(state: RobotState): RobotStateDto {

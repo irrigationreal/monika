@@ -2396,8 +2396,35 @@
   letter-spacing: 0.01em;
 }
 
+.vb-compaction-modal-overlay {
+  box-sizing: border-box;
+  height: 100vh;
+  height: 100dvh;
+  padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right))
+    max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+  overscroll-behavior: contain;
+}
 .vb-compaction-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(680px, 100%);
   max-width: 680px;
+  max-height: 100%;
+  min-height: 0;
+}
+.vb-compaction-modal .vb-modal-header {
+  flex: 0 0 auto;
+}
+.vb-compaction-modal .vb-modal-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.vb-compaction-modal-actions {
+  flex: 0 0 auto;
+  padding: 12px;
+  background: var(--bg-surface-alt);
+  border-top: 1px solid var(--border-default);
 }
 .vb-compaction-confirm {
   margin: 12px 0;
@@ -2414,4 +2441,12 @@
 .vb-compaction-error {
   margin-top: 12px;
   white-space: pre-wrap;
+}
+
+.vb-compaction-status {
+  margin: 10px 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }

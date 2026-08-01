@@ -1398,6 +1398,35 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    version: 38,
+    name: 'compaction-uncertain-retry',
+    up: (db) => {
+      if (!hasColumn(db, 'compaction_operations', 'attempt_count')) {
+        db.prepare('alter table compaction_operations add column attempt_count integer not null default 0').run();
+      }
+      if (!hasColumn(db, 'compaction_operations', 'next_attempt_at')) {
+        db.prepare('alter table compaction_operations add column next_attempt_at text').run();
+      }
+      db.exec(
+        'create index if not exists idx_compaction_operations_due on compaction_operations(status, next_attempt_at, created_at)'
+      );
+    },
+  },
+  {
+    version: 39,
+    name: 'external-ref-ingest-idempotency',
+    up: (db) => {
+      db.exec(`
+        delete from external_refs
+        where rowid not in (
+          select min(rowid) from external_refs group by surface_id, surface_kind, external_id
+        );
+        create unique index if not exists idx_external_refs_external_unique
+          on external_refs(surface_id, surface_kind, external_id);
+      `);
+    },
+  },
 ];
 
 export const SCHEMA_VERSION: number = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;

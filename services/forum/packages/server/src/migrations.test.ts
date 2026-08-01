@@ -71,6 +71,21 @@ describe('schema migrations', () => {
     expect(plan.some((step) => step.detail.includes('idx_posts_recent_created_at'))).toBe(true);
   });
 
+  it('deduplicates and uniquely constrains external event references', () => {
+    runMigrations(db, { targetVersion: 38 });
+    const insert = db.prepare(
+      `insert into external_refs (id, surface_id, surface_kind, external_id, kind)
+       values (?, 'surface-1', 'matrix', 'event-1', 'post')`
+    );
+    insert.run('ref-1');
+    insert.run('ref-2');
+
+    runMigrations(db);
+
+    expect(db.prepare('select id from external_refs').all()).toEqual([{ id: 'ref-1' }]);
+    expect(() => insert.run('ref-3')).toThrow();
+  });
+
   it('clears stale current plans from idle robot states', () => {
     runMigrations(db, { targetVersion: 30 });
     const store = new ForumStore(db);

@@ -57,6 +57,7 @@ import type {
   ChatRoomListDto,
   ChatTypingDto,
   CompactionOperationDto,
+  TopicCompactionStateDto,
   CreateCompactionRequestDto,
   DiscordBridgeStatusDto,
   DiscordChannelMappingDto,
@@ -608,7 +609,7 @@ export const TopicOperationalEventDtoSchema: z.ZodType<TopicOperationalEventDto>
 });
 
 export const CreateCompactionRequestSchema: z.ZodType<CreateCompactionRequestDto> = z.object({
-  operationId: z.string().min(1).max(200),
+  operationId: z.string().min(1).max(200).regex(/^[A-Za-z0-9._~-]+$/, 'operationId contains invalid characters'),
   confirmation: z.literal('COMPACT'),
   customInstructions: z.string().max(20_000).nullable(),
   recoveryPrompt: z.string().trim().min(1).max(100_000),
@@ -629,6 +630,17 @@ export const CompactionOperationDtoSchema: z.ZodType<CompactionOperationDto> = z
   createdAt: z.string(),
   startedAt: z.string().nullable(),
   finishedAt: z.string().nullable(),
+});
+
+export const TopicCompactionStateDtoSchema: z.ZodType<TopicCompactionStateDto> = z.object({
+  active: CompactionOperationDtoSchema.nullable(),
+  latest: CompactionOperationDtoSchema.nullable(),
+  checkpointDispatch: z
+    .object({
+      status: z.enum(['pending', 'dispatching', 'dispatched', 'failed', 'superseded', 'abandoned']),
+      errorMessage: z.string().nullable(),
+    })
+    .nullable(),
 });
 
 export const SessionContextDtoSchema = z.object({
@@ -1197,6 +1209,7 @@ export const CreateTopicRequestSchema: z.ZodType<CreateTopicRequest> = z.object(
   reasoningEffort: optionalNullableString,
   attachmentsPending: z.boolean().optional(),
   robotMode: RobotModeSchema.optional(),
+  autoCompactEnabled: z.boolean().optional(),
   silent: z.boolean().optional()
 });
 
@@ -1206,6 +1219,8 @@ export const CreatePostRequestSchema: z.ZodType<CreatePostRequest> = z.object({
   model: optionalNullableString,
   reasoningEffort: optionalNullableString,
   attachmentsPending: z.boolean().optional(),
+  autoCompactEnabled: z.boolean().optional(),
+  autoCompactRevision: z.number().int().nonnegative().optional(),
   silent: z.boolean().optional()
 });
 
