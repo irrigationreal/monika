@@ -94,10 +94,23 @@ nix-shell -p go gcc --run \
   'cd services/memstore && CGO_ENABLED=1 go test -tags fts5 ./...'
 ```
 
-## Locked SSH helper
+## SSH transport and relocation
 
-Run `node --test tests/ssh-lock.test.mjs`. It uses pure/fake-process boundaries and
-never contacts a real SSH host. Mandatory CI must not depend on Stanza; any Stanza
+Run:
+
+```bash
+node --test \
+  tests/ssh-lock.test.mjs \
+  tests/ssh-relocate.test.mjs \
+  tests/ssh-search-transport.test.mjs
+```
+
+These suites use pure state-machine, fake-process, and local fixed-script boundaries;
+they never contact a real SSH host. They cover locked-target integrity, stdin-framed
+positional transport (including empty, trailing-newline, and large values), atomic
+large-file writes, symlink rejection, hostile grep/find values, no-match and
+invalid-input exit codes, mode-safe UI failures, semantic relocation errors,
+unavailable-state reporting, and read/write transition fencing. Mandatory CI must not depend on Stanza; any Stanza
 canary is manual, read-only, and must not touch the live checkout.
 
 ## Smoke tests

@@ -32,8 +32,9 @@ export function parseLockedDescriptor(raw, expectedName) {
 
 function sha256(value) { return createHash("sha256").update(value).digest("hex"); }
 
-export function lockCodeDigest(extensionPath, helperPath = fileURLToPath(import.meta.url)) {
-  return sha256(`${sha256(fs.readFileSync(extensionPath))}\n${sha256(fs.readFileSync(helperPath))}\n`);
+export function lockCodeDigest(extensionPath, helperPath = fileURLToPath(import.meta.url), relocateHelperPath = path.join(path.dirname(helperPath), "ssh-relocate.mjs")) {
+  const paths = [extensionPath, helperPath, ...(fs.existsSync(relocateHelperPath) ? [relocateHelperPath] : [])];
+  return sha256(`${paths.map((item) => sha256(fs.readFileSync(item))).join("\n")}\n`);
 }
 
 export function executionTargetBindingDigest(descriptorBytes, knownHostsBytes, codeDigest) {
@@ -114,37 +115,94 @@ export function parseCompletionTrailer(output, token) {
   return { completion: "known", effects_state: "confirmed", exitCode: Number(match[1]), output: lines.join("\n") };
 }
 
-export const STARTUP_PROBE_SCRIPT = `set -eu\ncd -- "$1"\nprintf '%s\\n' "$(hostname)" "$(pwd -P)" "$(readlink -f -- "$2")"\n`;
+export const STARTUP_PROBE_SCRIPT = `set -eu\ncommand -v rg >/dev/null\nrg --version >/dev/null\ncd -- "$1"\nprintf '%s\\n' "$(hostname)" "$(pwd -P)" "$(readlink -f -- "$2")"\n`;
 export const PATH_PROBE_SCRIPT = `set -eu\np="$1"; root="$2"\ncase "$p" in /*) ;; *) exit 64;; esac\nparent=$(dirname -- "$p"); cp=$(readlink -f -- "$parent"); cr=$(readlink -f -- "$root")\ncase "$cp/" in "$cr/"*) ;; *) exit 65;; esac\nprintf '%s\\n' "$cp/$(basename -- "$p")"\n`;
+export const LOCKED_MKDIR_SCRIPT = `set -eu
+p="$1"; root="$2"
+cr=$(readlink -f -- "$root"); planned=$(realpath -ms -- "$p")
+case "$planned" in "$cr") exit 0 ;; "$cr/"*) ;; *) exit 65;; esac
+exec {currentfd}<"$cr"; current="/proc/$$/fd/$currentfd"; relative=\${planned#"$cr/"}
+IFS=/ read -r -a parts <<< "$relative"
+for part in "\${parts[@]}"; do
+  [ -n "$part" ] && [ "$part" != . ] && [ "$part" != .. ] || exit 65
+  entry="$current/$part"
+  if [ ! -e "$entry" ]; then mkdir -- "$entry" || [ -d "$entry" ] || exit 66; fi
+  [ -d "$entry" ] && [ ! -L "$entry" ] || exit 66
+  exec {nextfd}<"$entry" || exit 66; next="/proc/$$/fd/$nextfd"; resolved=$(readlink -f -- "$next")
+  case "$resolved" in "$cr"|"$cr/"*) ;; *) exit 67;; esac
+  exec {currentfd}<&-; currentfd=$nextfd; current="$next"
+done
+`;
+
 export const ATOMIC_WRITE_SCRIPT = `set -eu\np="$1"; root="$2"; expected="$3"\nparent=$(dirname -- "$p"); cr=$(readlink -f -- "$root"); cp=$(readlink -f -- "$parent")\nexec {rootfd}<"$cr"; rootcap="/proc/$$/fd/$rootfd"; cr=$(readlink -f -- "$rootcap")\nexec {parentfd}<"$cp"; parentcap="/proc/$$/fd/$parentfd"; cp=$(readlink -f -- "$parentcap")\ncase "$cp/" in "$cr/"*) ;; *) exit 65;; esac\ndest="$parentcap/$(basename -- "$p")"; [ ! -L "$dest" ] || exit 66\ntmp=$(mktemp "$parentcap/.monika-write.XXXXXX"); trap 'rm -f -- "$tmp"' EXIT HUP INT TERM\nbase64 -d > "$tmp"\nactual=$(sha256sum "$tmp" | awk '{print $1}'); [ "$actual" = "$expected" ] || exit 67\nmv -f -- "$tmp" "$dest"; trap - EXIT HUP INT TERM\nheld=$(readlink -f -- "$parentcap"); current=$(readlink -f -- "$parent" || true); rootnow=$(readlink -f -- "$rootcap")\ncase "$held/" in "$rootnow/"*) ;; *) rm -f -- "$dest"; exit 68;; esac\n[ "$current" = "$held" ] || { rm -f -- "$dest"; exit 68; }\n[ "$(sha256sum "$dest" | awk '{print $1}')" = "$expected" ] || exit 69\n`;
 
-const REMOTE_WRAPPER = `bash -c 'script=$(printf "%s" "$1" | base64 -d); shift; args=(); for encoded in "$@"; do args+=("$(printf "%s" "$encoded" | base64 -d)"); done; exec bash -c "$script" -- "\${args[@]}"' --`;
+// OpenSSH reconstructs remote argv as shell text, so even encoded arguments can
+// disappear when empty or hit ARG_MAX when large. Send the entire positional
+// vector as newline-delimited base64 on stdin instead; the dot line terminates
+// the header and leaves any caller payload available to the executed script.
+export const POSITIONAL_REMOTE_WRAPPER = `bash -c 'args=(); while IFS= read -r encoded; do [ "$encoded" != . ] || break; value=$(printf "%s" "$encoded" | base64 -d; code=$?; printf .; exit "$code") || exit 125; value="\${value%.}"; args+=("$value"); done; [ "\${#args[@]}" -gt 0 ] || exit 125; script="\${args[0]}"; set -- "\${args[@]:1}"; eval "$script"'`;
 
-export function runLockedSsh(descriptor, script, args = [], options = {}) {
+export function buildPositionalSshArgv(sshOptions, target) {
+  return [...sshOptions, "--", target, POSITIONAL_REMOTE_WRAPPER];
+}
+
+export function buildPositionalSshInput(script, args = [], payload) {
+  const header = [script, ...args]
+    .map((value) => Buffer.from(String(value), "utf8").toString("base64"))
+    .join("\n");
+  const prefix = `${header}\n.\n`;
+  if (payload === undefined) return Buffer.from(prefix, "utf8");
+  return Buffer.concat([Buffer.from(prefix, "utf8"), Buffer.isBuffer(payload) ? payload : Buffer.from(payload)]);
+}
+
+/** Shared SSH process runner. Callers must construct argv so model values are data, never shell source. */
+export function runSshArgv(argv, options = {}) {
   return new Promise((resolve, reject) => {
     const spawnProcess = options.spawnProcess ?? spawn;
-    const child = spawnProcess("ssh", buildLockedSshArgv(descriptor, REMOTE_WRAPPER, [script, ...args]), { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawnProcess("ssh", argv, { stdio: ["pipe", "pipe", "pipe"] });
     const stdout = [];
     const stderr = [];
     let timedOut = false;
+    let outputLimitExceeded = false;
+    let outputBytes = 0;
+    const maxOutputBytes = options.maxOutputBytes ?? 16 * 1024 * 1024;
     let spawnError;
     const timer = options.timeoutMs ? setTimeout(() => { timedOut = true; child.kill(); }, options.timeoutMs) : undefined;
     const abort = () => child.kill();
-    options.signal?.addEventListener("abort", abort, { once: true });
-    child.stdout.on("data", (chunk) => { stdout.push(chunk); options.onData?.(chunk); });
-    child.stderr.on("data", (chunk) => { stderr.push(chunk); options.onData?.(chunk); });
+    if (options.signal?.aborted) abort();
+    else options.signal?.addEventListener("abort", abort, { once: true });
+    const collect = (chunks, chunk) => {
+      outputBytes += chunk.length;
+      if (outputBytes > maxOutputBytes) {
+        outputLimitExceeded = true;
+        child.kill();
+        return;
+      }
+      chunks.push(chunk);
+      options.onData?.(chunk);
+    };
+    child.stdout.on("data", (chunk) => collect(stdout, chunk));
+    child.stderr.on("data", (chunk) => collect(stderr, chunk));
     child.on("error", (error) => { spawnError = error; });
     child.on("close", (code, signal) => {
       if (timer) clearTimeout(timer);
       options.signal?.removeEventListener("abort", abort);
-      const result = { code, signal, stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr), timedOut, aborted: Boolean(options.signal?.aborted), spawnError };
-      if (spawnError || timedOut || options.signal?.aborted || signal || code !== 0) {
-        const error = new Error(spawnError ? "ssh_spawn_error" : timedOut ? "ssh_timeout" : options.signal?.aborted ? "ssh_aborted" : `ssh_exit_${code}`);
+      const result = { code, signal, stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr), timedOut, outputLimitExceeded, aborted: Boolean(options.signal?.aborted), spawnError };
+      if (spawnError || timedOut || outputLimitExceeded || options.signal?.aborted || signal || code !== 0) {
+        const error = new Error(spawnError ? "ssh_spawn_error" : timedOut ? "ssh_timeout" : outputLimitExceeded ? "ssh_output_limit" : options.signal?.aborted ? "ssh_aborted" : `ssh_exit_${code}`);
         Object.assign(error, result);
         reject(error);
       } else resolve(result);
     });
+    child.stdin.on("error", () => {});
     child.stdin.end(options.stdin ?? undefined);
+  });
+}
+
+export function runLockedSsh(descriptor, script, args = [], options = {}) {
+  return runSshArgv(buildLockedSshArgv(descriptor, POSITIONAL_REMOTE_WRAPPER), {
+    ...options,
+    stdin: buildPositionalSshInput(script, args, options.stdin),
   });
 }
 

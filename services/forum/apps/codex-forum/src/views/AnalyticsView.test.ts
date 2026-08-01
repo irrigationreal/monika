@@ -27,9 +27,29 @@ const payload = {
     available: true,
     warning: null,
     metrics: {
+      build: { commit: 'abcdef1234567', createdAt: '2026-08-01T10:00:00.000Z' },
       coverage: {},
       usage: { successfulResponses: 4, medianTokens: 1234, byModel: [] },
-      tools: { worst: { operation: 'bash:pnpm test', calls: 5, failures: 1, failureRate: 0.2 }, rows: [] },
+      tools: {
+        worst: {
+          operation: 'relocate_remote',
+          backend: 'relocated_ssh',
+          calls: 5,
+          failures: 1,
+          failureRate: 0.2,
+          outcomes: { success: 4, transport: 1 },
+        },
+        rows: [
+          {
+            operation: 'relocate_remote',
+            backend: 'relocated_ssh',
+            calls: 5,
+            failures: 1,
+            failureRate: 0.2,
+            outcomes: { success: 4, transport: 1 },
+          },
+        ],
+      },
       errors: { top: { source: 'provider', category: 'rate_limit', operation: null, affectedTurns: 2 }, rows: [] },
       waiting: { count: 3, p95Ms: 4500, excluded: 0 },
       delegation: { successful: 4, unsuccessful: 1, unsuccessfulRate: 0.2, unknown: 1, byProfileMode: [] },
@@ -51,8 +71,11 @@ describe('AnalyticsView', () => {
     });
     await wrapper.vm.$nextTick();
     expect(wrapper.findAll('.analytics-metric')).toHaveLength(5);
+    expect(wrapper.text()).toContain('abcdef1234567');
     expect(wrapper.text()).toContain('1,234');
-    expect(wrapper.text()).toContain('bash:pnpm test');
+    expect(wrapper.text()).toContain('relocate_remote');
+    expect(wrapper.text()).toContain('relocated_ssh');
+    expect(wrapper.text()).toContain('transport: 1');
     expect(wrapper.text()).toContain('rate_limit');
     expect(wrapper.text()).toContain('4.5 s');
     expect(wrapper.text()).toContain('starlight');

@@ -1042,9 +1042,11 @@ export interface AnalyticsUsageModelDto {
 
 export interface AnalyticsToolDto {
   operation: string;
+  backend: string;
   calls: number;
   failures: number;
   failureRate: number;
+  outcomes: Record<string, number>;
 }
 
 export interface AnalyticsErrorClusterDto {
@@ -1070,6 +1072,7 @@ export interface AnalyticsModelUsagePointDto {
 }
 
 export interface AnalyticsRuntimeMetricsDto {
+  build: { commit: string | null; createdAt: string | null };
   coverage: Record<string, number>;
   usage: {
     successfulResponses: number;

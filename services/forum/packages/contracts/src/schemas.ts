@@ -758,9 +758,11 @@ export const RobotSettingsDtoSchema: z.ZodType<RobotSettingsDto> = z.object({
 
 const AnalyticsToolDtoSchema = z.object({
   operation: z.string(),
+  backend: z.string(),
   calls: z.number(),
   failures: z.number(),
   failureRate: z.number(),
+  outcomes: z.record(z.string(), z.number()),
 });
 
 const AnalyticsErrorClusterDtoSchema = z.object({
@@ -799,6 +801,7 @@ export const AdminAnalyticsDtoSchema: z.ZodType<AdminAnalyticsDto> = z.object({
     warning: optionalNullableString,
     metrics: z
       .object({
+        build: z.object({ commit: z.string().nullable(), createdAt: z.string().nullable() }),
         coverage: z.record(z.number()),
         usage: z.object({
           successfulResponses: z.number(),

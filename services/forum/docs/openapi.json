@@ -12326,6 +12326,23 @@
                           "type": "object",
                           "nullable": true,
                           "properties": {
+                            "build": {
+                              "type": "object",
+                              "properties": {
+                                "commit": {
+                                  "type": "string",
+                                  "nullable": true
+                                },
+                                "createdAt": {
+                                  "type": "string",
+                                  "nullable": true
+                                }
+                              },
+                              "required": [
+                                "commit",
+                                "createdAt"
+                              ]
+                            },
                             "coverage": {
                               "type": "object",
                               "additionalProperties": {
@@ -12390,6 +12407,9 @@
                                     "operation": {
                                       "type": "string"
                                     },
+                                    "backend": {
+                                      "type": "string"
+                                    },
                                     "calls": {
                                       "type": "number"
                                     },
@@ -12398,13 +12418,21 @@
                                     },
                                     "failureRate": {
                                       "type": "number"
+                                    },
+                                    "outcomes": {
+                                      "type": "object",
+                                      "additionalProperties": {
+                                        "type": "number"
+                                      }
                                     }
                                   },
                                   "required": [
                                     "operation",
+                                    "backend",
                                     "calls",
                                     "failures",
-                                    "failureRate"
+                                    "failureRate",
+                                    "outcomes"
                                   ]
                                 },
                                 "rows": {
@@ -12415,6 +12443,9 @@
                                       "operation": {
                                         "type": "string"
                                       },
+                                      "backend": {
+                                        "type": "string"
+                                      },
                                       "calls": {
                                         "type": "number"
                                       },
@@ -12423,13 +12454,21 @@
                                       },
                                       "failureRate": {
                                         "type": "number"
+                                      },
+                                      "outcomes": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                          "type": "number"
+                                        }
                                       }
                                     },
                                     "required": [
                                       "operation",
+                                      "backend",
                                       "calls",
                                       "failures",
-                                      "failureRate"
+                                      "failureRate",
+                                      "outcomes"
                                     ]
                                   }
                                 }
@@ -12612,6 +12651,7 @@
                             }
                           },
                           "required": [
+                            "build",
                             "coverage",
                             "usage",
                             "tools",

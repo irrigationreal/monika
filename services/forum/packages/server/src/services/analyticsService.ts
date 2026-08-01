@@ -18,17 +18,27 @@ const nullableNumber = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) ? value : null;
 const string = (value: unknown, fallback = 'unknown'): string =>
   typeof value === 'string' && value.trim() ? value.trim() : fallback;
+const nullableString = (value: unknown): string | null =>
+  typeof value === 'string' && value.trim() ? value.trim() : null;
 const field = (value: Record<string, unknown> | null, camel: string, snake = camel): unknown =>
   value?.[camel] ?? value?.[snake];
+const numberRecord = (value: unknown): Record<string, number> =>
+  Object.fromEntries(
+    Object.entries(record(value) ?? {}).flatMap(([key, count]) =>
+      typeof count === 'number' && Number.isFinite(count) ? [[key, count]] : []
+    )
+  );
 
 function tool(value: unknown): AnalyticsToolDto | null {
   const row = record(value);
   if (!row) return null;
   return {
     operation: string(field(row, 'operation', 'operation') ?? field(row, 'tool', 'tool')),
+    backend: string(field(row, 'backend', 'backend')),
     calls: number(field(row, 'calls', 'calls') ?? row['samples']),
     failures: number(field(row, 'failures', 'failures')),
     failureRate: number(field(row, 'failureRate', 'failure_rate')),
+    outcomes: numberRecord(field(row, 'outcomes', 'outcomes')),
   };
 }
 
@@ -48,6 +58,11 @@ function errorCluster(value: unknown): AnalyticsErrorClusterDto | null {
 
 export function mapAgentdAnalytics(rawValue: unknown): AnalyticsRuntimeMetricsDto {
   const raw = record(rawValue) ?? {};
+  const buildRaw = record(raw['build']);
+  const build = {
+    commit: nullableString(field(buildRaw, 'commit', 'commit')),
+    createdAt: nullableString(field(buildRaw, 'createdAt', 'created_at')),
+  };
   const totals = record(raw['totals']);
   if (totals) {
     const tokenFootprint = record(totals['token_footprint']);
@@ -78,9 +93,11 @@ export function mapAgentdAnalytics(rawValue: unknown): AnalyticsRuntimeMetricsDt
       return [
         {
           operation: string(row['operation']),
+          backend: string(row['backend']),
           calls: number(row['samples']),
           failures: number(row['failures']),
           failureRate: number(row['failure_rate']),
+          outcomes: numberRecord(row['outcomes']),
         },
       ];
     });
@@ -136,6 +153,7 @@ export function mapAgentdAnalytics(rawValue: unknown): AnalyticsRuntimeMetricsDt
     const unsuccessful = number(lifecycle?.['unsuccessful']);
     const worst = toolOperations?.['worst_qualifying_operation'];
     return {
+      build,
       coverage,
       usage: {
         successfulResponses: number(totals['successful_terminal_responses']),
@@ -222,6 +240,7 @@ export function mapAgentdAnalytics(rawValue: unknown): AnalyticsRuntimeMetricsDt
   const worst = tool(field(tools, 'worst', 'worst'));
   const top = errorCluster(field(errors, 'top', 'top'));
   return {
+    build,
     coverage,
     usage: {
       successfulResponses: number(field(usage, 'successfulResponses', 'successful_responses')),

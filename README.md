@@ -268,7 +268,13 @@ relocate stanza:/home/monika
 ```
 
 This keeps host access visible and reversible instead of making every shell command
-implicitly execute on the host.
+implicitly execute on the host. Omit the target to inspect whether execution is
+`local`, `remote`, or `ssh_unavailable`; use `relocate local` to return to the
+container. Remote paths must be absolute or begin with `~/`, and non-default ports
+belong in SSH config. Relocation validates the cwd and remote `rg` dependency before
+committing state, never falls back silently, and reports validation failures as real
+tool errors. See `config/extensions/SSH.md` for target grammar, locked-target
+boundaries, positional transport hardening, and search limits.
 
 ## Runner mode
 
