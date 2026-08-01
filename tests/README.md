@@ -136,7 +136,10 @@ an external provider. This catches invalid strict tool schemas during image CI;
 real-provider canaries remain separate because they require secrets, network
 availability, and quota. Provider-independent agentd lifecycle coverage also
 lives in `services/agentd/test/`, including the distinction between Pi's
-`agent_end` and authoritative `agent_settled` completion.
+`agent_end` and authoritative `agent_settled` completion. Retention fixtures match
+real package status files by omitting redundant `asyncDir`; tests verify that the
+scanner supplies the scoped containing path while conflicting explicit paths fail
+closed.
 
 ### `smoke/deploy-if-safe-drain-lifecycle.sh`
 

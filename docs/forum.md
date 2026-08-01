@@ -261,8 +261,11 @@ history; disposable child sessions still never become robots or topics.
 Agentd runs conservative retention daily and exposes the same deterministic
 dry-run inventory at `GET /v1/admin/subagents/retention` (every GET refreshes the inventory;
 dry run). Its storage metric is **tracked removable bytes**, not total retained
-storage; eligible bytes are the expected reclaimable subset. Compaction remains
-fenced to the exact inventory digest returned by the dry run. Compaction requires an exact, unique top-level run that is at least 14
+storage; eligible bytes are the expected reclaimable subset. The scanner binds a
+status artifact to its exact scoped containing directory because real
+pi-subagents status files omit redundant `asyncDir`; an explicitly conflicting
+path still fails closed. Compaction remains fenced to the exact inventory digest
+returned by the dry run. Compaction requires an exact, unique top-level run that is at least 14
 days old, proven terminal, explicitly non-resumable, affirmatively delivery-
 acknowledged by the central operator ledger, result-free, unloaded and unleased,
 and free of nested descendants. It removes only explicit owned verbose lifecycle
