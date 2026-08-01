@@ -204,3 +204,12 @@ Neon must copy this artifact immediately to independently encrypted offline stor
 and verify its checksum there. Never upload it to the Monika forum or another
 application service. Treat any online plaintext copy according to the incident
 custody and secure-removal policy, and rotate exposed credentials after recovery.
+
+## Validation failure behavior
+
+A failed SQLite or JSONL check does not discard the only captured copy. The WORM job
+records the failure in `manifest.json`, uploads the capsule for salvage, and then
+fails the systemd unit so ntfy and the Control freshness path can surface it. Treat
+that as an integrity incident: preserve the immutable object, inspect the named
+source records, and repair or explicitly account for the source corruption rather
+than disabling validation.
