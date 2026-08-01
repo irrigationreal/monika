@@ -174,8 +174,10 @@ current generation/operation, while out-of-order older results cannot change the
 current topic. Posting-author responses expose stable counts/state/message only;
 detailed run diagnostics remain administrative. Retained cancelled results never
 wake the parent, and SSH `effects_state=unknown` remains visible rather than implying
-rollback. Continue is disabled while stopping or uncertain. Package scheduled runs remain explicitly
-disabled/unsupported and are not claimed by this descendant-cancellation contract.
+rollback. Continue is disabled while stopping or uncertain. Every topic and Robot Dashboard Stop control
+opens an accessible confirmation dialog before issuing the cancellation request; the safe action receives
+initial focus, and the dialog is dynamic-viewport and safe-area bounded on mobile. Package scheduled runs
+remain explicitly disabled/unsupported and are not claimed by this descendant-cancellation contract.
 The container creates the private persistent operator root
 `/data/pi-subagent-operator-state` before agentd starts. An override through
 `PI_SUBAGENT_OPERATOR_ROOT` must be an absolute dedicated path below a top-level

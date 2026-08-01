@@ -165,13 +165,15 @@
     justify-content: center;
   }
 
-  .vb-compaction-modal-overlay {
+  .vb-compaction-modal-overlay,
+  .vb-confirmation-modal-overlay {
     align-items: flex-start;
     padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right))
       max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
   }
 
-  .vb-compaction-modal {
+  .vb-compaction-modal,
+  .vb-confirmation-modal {
     width: 100%;
     max-height: 100%;
   }
@@ -181,20 +183,25 @@
     font-size: 16px;
   }
 
-  .vb-compaction-modal-actions {
+  .vb-compaction-modal-actions,
+  .vb-confirmation-modal-actions {
     flex-direction: column;
   }
 
   .vb-compaction-modal-actions .vb-btn,
-  .vb-compaction-modal .vb-modal-close {
+  .vb-confirmation-modal-actions .vb-btn,
+  .vb-compaction-modal .vb-modal-close,
+  .vb-confirmation-modal .vb-modal-close {
     min-height: 44px;
   }
 
-  .vb-compaction-modal-actions .vb-btn {
+  .vb-compaction-modal-actions .vb-btn,
+  .vb-confirmation-modal-actions .vb-btn {
     width: 100%;
   }
 
-  .vb-compaction-modal .vb-modal-close {
+  .vb-compaction-modal .vb-modal-close,
+  .vb-confirmation-modal .vb-modal-close {
     min-width: 44px;
     padding: 8px;
   }

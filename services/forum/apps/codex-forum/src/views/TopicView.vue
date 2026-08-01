@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
 import AutoCompactOption from '../components/AutoCompactOption.vue';
+import ConfirmationDialog from '../components/ConfirmationDialog.vue';
 import DecryptText from '../components/DecryptText.vue';
 import LiveAssistantTurn from '../components/LiveAssistantTurn.vue';
 import MessageTemplatePicker from '../components/MessageTemplatePicker.vue';
@@ -97,6 +98,7 @@ const replyReasoningOptions = computed(() => state.modelReasoningOptions(effecti
 const canModerate = computed(() => state.canModerate.value);
 const isAdmin = computed(() => state.currentUser.value?.kind === 'admin');
 const isRobotBusy = computed(() => state.isRobotBusy.value);
+const showStopRobotConfirm = ref(false);
 const topicRobotMode = computed(() => state.selectedTopic.value?.robotMode ?? null);
 const autoCompactEnabled = ref(false);
 const robotControlPending = computed(() => state.robotControlPending.value);
@@ -1604,9 +1606,23 @@ async function reply(): Promise<void> {
   }
 }
 
-async function stopRobot(): Promise<void> {
+function requestStopRobot(): void {
+  if (!isRobotBusy.value || robotControlPending.value) return;
+  showStopRobotConfirm.value = true;
+}
+
+async function confirmStopRobot(): Promise<void> {
+  if (!isRobotBusy.value || robotControlPending.value) {
+    showStopRobotConfirm.value = false;
+    return;
+  }
+  showStopRobotConfirm.value = false;
   await state.interruptRobot();
 }
+
+watch(isRobotBusy, (busy) => {
+  if (!busy) showStopRobotConfirm.value = false;
+});
 
 async function continueRobot(): Promise<void> {
   await state.continueRobot();
@@ -1870,6 +1886,7 @@ watch(
 watch(
   routeTopicId,
   async (topicId) => {
+    showStopRobotConfirm.value = false;
     stopCompactionPolling();
     compactionRequestGeneration += 1;
     if (showCompactionModal.value) {
@@ -2007,6 +2024,17 @@ onUnmounted(() => {
       </div>
     </div>
   </div>
+
+  <ConfirmationDialog
+    :open="showStopRobotConfirm"
+    title="Stop robot?"
+    message="This will stop the current response and cancel queued or delegated work for this session. Partial output will remain visible, but work already performed cannot be undone."
+    confirm-label="Stop robot"
+    cancel-label="Keep running"
+    :pending="robotControlPending"
+    @confirm="confirmStopRobot"
+    @cancel="showStopRobotConfirm = false"
+  />
 
   <div v-if="showCompactionModal" class="vb-modal-overlay vb-compaction-modal-overlay">
     <div
@@ -2926,7 +2954,7 @@ onUnmounted(() => {
           <button
             class="vb-btn vb-small-btn vb-btn-danger"
             :disabled="state.robotControlPending.value"
-            @click="stopRobot"
+            @click="requestStopRobot"
           >
             {{ state.robotControlPending.value ? 'Stopping...' : 'Stop Robot' }}
           </button>
@@ -3037,7 +3065,7 @@ onUnmounted(() => {
             class="vb-small-btn vb-btn-danger"
             type="button"
             :disabled="!isRobotBusy || robotControlPending"
-            @click="stopRobot"
+            @click="requestStopRobot"
           >
             Stop
           </button>

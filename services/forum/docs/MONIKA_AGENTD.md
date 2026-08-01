@@ -70,8 +70,11 @@ operation rather than advancing the fence again, leaving posts created behind th
 fence deferred and current. Responses are typed as `stopping`, `stopped`, or
 `uncertain`; a transport timeout is an uncertain-but-fenced outcome. Agentd chooses
 latest by generation then request time, and forum applies only a result matching the
-current topic generation. The UI does not offer Continue while unresolved, and no
-queue, steer, auto-run, or durable post dispatch crosses the fence.
+current topic generation. Topic-page and Robot Dashboard Stop controls require an
+accessible confirmation before issuing this request; the safe action receives initial
+focus, and mobile dialogs respect dynamic viewport and safe-area bounds. The UI does
+not offer Continue while unresolved, and no queue, steer, auto-run, or durable post
+dispatch crosses the fence.
 Startup queries `GET /v1/pi/sessions/:canonicalId/cancellation` for unresolved
 topics; agentd actively re-runs the latest durable operation without loading the
 conversation. Parent-abort uncertainty remains in the durable operation until a

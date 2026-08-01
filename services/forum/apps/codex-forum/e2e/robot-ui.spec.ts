@@ -36,6 +36,7 @@ type MockContext = {
   automations: RobotAutomationDto[];
   automationRuns: RobotAutomationRunDto[];
   automationRunsQueryCount: number;
+  interruptCount: number;
 };
 
 const mockPassword = 'secret';
@@ -180,7 +181,8 @@ function buildMockContext(kind: UserKind): MockContext {
     jobs: [],
     automations: [],
     automationRuns: [],
-    automationRunsQueryCount: 0
+    automationRunsQueryCount: 0,
+    interruptCount: 0
   };
 }
 
@@ -460,6 +462,36 @@ async function attachMockApi(page: Page, context: MockContext) {
       return;
     }
 
+    if (pathname.startsWith('/api/topics/') && pathname.endsWith('/robot/interrupt') && method === 'POST') {
+      const topicId = extractTopicId(pathname);
+      context.interruptCount += 1;
+      if (topicId) {
+        const current = context.robotStates.get(topicId);
+        context.robotStates.set(topicId, {
+          topicId,
+          sessionId: current?.sessionId ?? `session-${topicId}`,
+          activity: 'stopped',
+          model: current?.model ?? null,
+          reasoningEffort: current?.reasoningEffort ?? null,
+          lastUpdatedAt: new Date().toISOString(),
+          currentPlan: null,
+          recentToolRuns: current?.recentToolRuns ?? []
+        });
+      }
+      await fulfillJson(route, {
+        ok: true,
+        operationId: `stop-${context.interruptCount}`,
+        generation: context.interruptCount,
+        state: 'stopped',
+        targets: 1,
+        unresolvedCount: 0,
+        effectsUnknownCount: 0,
+        errorCount: 0,
+        message: 'Stopped.'
+      });
+      return;
+    }
+
     if (pathname.startsWith('/api/topics/') && pathname.endsWith('/state') && method === 'GET') {
       const topicId = extractTopicId(pathname);
       const state = topicId ? context.robotStates.get(topicId) : null;
@@ -518,6 +550,21 @@ async function attachMockApi(page: Page, context: MockContext) {
       return;
     }
 
+    if (pathname.startsWith('/api/topics/') && pathname.endsWith('/operational-events') && method === 'GET') {
+      await fulfillJson(route, { items: [] });
+      return;
+    }
+
+    if (pathname.startsWith('/api/topics/') && pathname.endsWith('/compactions') && method === 'GET') {
+      await fulfillJson(route, { active: null, latest: null, checkpointDispatch: null });
+      return;
+    }
+
+    if (pathname.startsWith('/api/topics/') && pathname.endsWith('/session') && method === 'GET') {
+      await fulfillJson(route, null);
+      return;
+    }
+
     if (pathname.startsWith('/api/topics/') && method === 'GET') {
       const topicId = extractTopicId(pathname);
       if (topicId && context.topics.has(topicId)) {
@@ -528,11 +575,6 @@ async function attachMockApi(page: Page, context: MockContext) {
 
     if (pathname.startsWith('/api/posts/') && pathname.endsWith('/attachments') && method === 'GET') {
       await fulfillJson(route, []);
-      return;
-    }
-
-    if (pathname.startsWith('/api/topics/') && pathname.endsWith('/session') && method === 'GET') {
-      await fulfillJson(route, null);
       return;
     }
 
@@ -706,7 +748,7 @@ async function attachMockApi(page: Page, context: MockContext) {
       await route.fulfill({
         status: 500,
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ message: 'Unmocked request' })
+        body: JSON.stringify({ message: `Unmocked request: ${method} ${pathname}` })
       });
       return;
     }
@@ -770,6 +812,56 @@ test.describe('Robot UI (mocked)', () => {
     // Tool runs render as trace items with human-readable titles
     await expect(draftPanel.locator('.vb-live-turn-item--tool')).toHaveCount(2);
     await expect(draftPanel).toContainText('List -la');
+  });
+
+  test('requires a mobile-safe confirmation from both topic Stop controls', async ({ page }) => {
+    const context = buildMockContext('admin');
+    const topicId = 'topic-mention';
+    const initialState = context.robotStates.get(topicId);
+    const topic = context.topics.get(topicId);
+    if (!initialState || !topic) throw new Error('missing mocked topic state');
+    context.topics.set(topicId, { ...topic, robotMode: 'auto' });
+    context.robotStates.set(topicId, { ...initialState, activity: 'thinking' });
+    await page.setViewportSize({ width: 390, height: 720 });
+    await attachMockApi(page, context);
+
+    await page.goto('/');
+    await login(page, context.user.displayName);
+    await page.locator('.vb-forum-title', { hasText: context.forum.name }).first().click();
+    await page.getByRole('button', { name: /Mention-only robot thread/ }).click();
+    await page.waitForURL(`/topics/${topicId}`);
+    await page.locator('.vb-quick-reply textarea').fill('(@robot) keep working');
+
+    const quickStop = page.getByRole('button', { name: 'Stop Robot' });
+    await expect(quickStop).toBeVisible();
+    await quickStop.click();
+    expect(context.interruptCount).toBe(0);
+
+    const dialog = page.getByRole('dialog', { name: 'Stop robot?' });
+    await expect(dialog).toBeVisible();
+    const keepRunning = dialog.getByRole('button', { name: 'Keep running' });
+    await expect(keepRunning).toBeFocused();
+    const box = await dialog.boundingBox();
+    if (!box) throw new Error('confirmation dialog has no layout box');
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(390);
+    expect(box.y + box.height).toBeLessThanOrEqual(720);
+    const keepRunningBox = await keepRunning.boundingBox();
+    if (!keepRunningBox) throw new Error('safe action has no layout box');
+    expect(keepRunningBox.height).toBeGreaterThanOrEqual(44);
+    await page.keyboard.press('Tab');
+    await expect(dialog.getByRole('button', { name: 'Close Stop robot?' })).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    expect(context.interruptCount).toBe(0);
+
+    const robotStatePanel = page.locator('.vb-robot-state');
+    const panelStop = robotStatePanel.getByRole('button', { name: 'Stop', exact: true });
+    await panelStop.click();
+    expect(context.interruptCount).toBe(0);
+    await page.getByRole('dialog', { name: 'Stop robot?' }).getByRole('button', { name: 'Stop robot', exact: true }).click();
+    await expect.poll(() => context.interruptCount).toBe(1);
   });
 
   test('mention/off modes gate robot dispatch and block non-admin dashboard access', async ({ page }) => {
