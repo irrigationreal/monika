@@ -706,26 +706,6 @@ onMounted(async () => {
   line-height: 1.6;
 }
 
-.vb-form-options {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.vb-checkbox-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-
-.vb-checkbox-label input[type='checkbox'] {
-  width: 14px;
-  height: 14px;
-}
-
 .vb-form-actions {
   display: flex;
   gap: 8px;
