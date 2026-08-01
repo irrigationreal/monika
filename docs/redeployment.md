@@ -20,14 +20,20 @@ Subagent execution state comes from the durable run ledger below `/data/pi-subag
 
 `/v1/admin/drain` marks agentd as draining, rejects new conversation/message requests, installs a pi-subagents launch/completion barrier, closes idle loaded conversations, and reports the resulting quiescence state. Automation should defer if the response still contains blockers. If automation drains agentd but does not proceed to restart the runtime, it should call `/v1/admin/drain/cancel` before exiting. Drain also has a lease for defense in depth: by default agentd auto-cancels drain after 15 minutes without shutdown, unless the caller provides another `auto_cancel_ms` value or the process is handling SIGTERM.
 
-Host-side deploy automation reaches agentd through the loopback-only compose binding:
+Host-side deploy automation reaches agentd and forum administrative endpoints
+through loopback-only Compose bindings:
 
 ```yaml
-ports:
-  - "127.0.0.1:${MONIKA_AGENTD_PORT:-7724}:7724"
+services:
+  monika:
+    ports:
+      - "127.0.0.1:${MONIKA_AGENTD_PORT:-7724}:7724"
+  forum:
+    ports:
+      - "${MONIKA_FORUM_BIND:-127.0.0.1:4310:4310}"
 ```
 
-Do not publish agentd on a non-loopback host address unless the service has gained an external authentication/authorization boundary.
+Do not publish agentd on a non-loopback host address unless the service has gained an external authentication/authorization boundary. When the forum trusts forwarded client IPs, public traffic must arrive only through its private Docker-network tunnel/proxy path; direct origin access would permit header spoofing. See [`public-ingress.md`](public-ingress.md).
 
 ### memstore
 
@@ -57,7 +63,7 @@ Forum deploy blockers include active robot turns, queued turns, non-idle robot s
 7. Defers with exit code `75` (`EX_TEMPFAIL`) if either service is blocked, including while an interactive Pi TUI owns a session.
 8. Creates and verifies a whole-repo `.tar.zst` runtime capsule backup.
 9. If the `monika` image changed, re-checks/re-starts agentd drain immediately before Docker Compose runs.
-10. Pulls and applies the configured Monika and forum images with Docker Compose.
+10. Applies exactly the changed Monika/forum service with `--no-deps`. Hosts with `MONIKA_PUBLIC_INGRESS=1` reconcile the digest-pinned `cloudflared` connector independently before image comparison.
 11. If agentd was drained, cancels drain on the running agentd after Compose and waits for healthy/undrained state.
 12. Prunes old redeploy backups by tiered retention bucket.
 13. Prunes old dangling Docker image layers conservatively.

@@ -33,6 +33,7 @@ BACKUP_ZSTD_LEVEL="${MONIKA_DEPLOY_BACKUP_ZSTD_LEVEL:-3}"
 BACKUP_GZIP_LEVEL="${MONIKA_DEPLOY_BACKUP_GZIP_LEVEL:-6}"
 DOCKER_PRUNE_UNTIL="${MONIKA_DEPLOY_DOCKER_PRUNE_UNTIL:-168h}"
 REQUIRE_GIT_CURRENT="${MONIKA_DEPLOY_REQUIRE_GIT_CURRENT:-1}"
+PUBLIC_INGRESS="${MONIKA_PUBLIC_INGRESS:-0}"
 SUDO_BIN="${MONIKA_DEPLOY_SUDO_BIN:-/run/wrappers/bin/sudo}"
 TAR_BIN="${MONIKA_DEPLOY_TAR_BIN:-}"
 BACKUP_COMPRESSOR=""
@@ -46,6 +47,16 @@ DRAIN_STARTED=0
 CANCEL_DRAIN_ON_EXIT=0
 MONIKA_UPDATE_NEEDED=0
 FORUM_UPDATE_NEEDED=0
+COMPOSE_ARGS=(-f "$COMPOSE_FILE")
+STATUS_SERVICES=(monika forum)
+if [ "$PUBLIC_INGRESS" = "1" ]; then
+  COMPOSE_ARGS+=(--profile public-ingress)
+  STATUS_SERVICES+=(cloudflared)
+fi
+
+compose() {
+  docker compose "${COMPOSE_ARGS[@]}" "$@"
+}
 
 json_field() {
   python3 -c 'import json,sys; data=json.load(sys.stdin); expr=sys.argv[1].split("."); v=data
@@ -152,7 +163,7 @@ require_git_current() {
 
 container_image_id() {
   local service="$1" cid
-  cid="$(docker compose -f "$COMPOSE_FILE" ps -q "$service" 2>/dev/null || true)"
+  cid="$(compose ps -q "$service" 2>/dev/null || true)"
   if [ -z "$cid" ]; then
     return 0
   fi
@@ -308,8 +319,20 @@ sys.exit(1)
 PY
 }
 
+ensure_public_ingress() {
+  if [ "$PUBLIC_INGRESS" != "1" ]; then
+    return 0
+  fi
+
+  # Reconcile the digest-pinned connector on every deploy attempt, including
+  # when no application image changed. --no-deps guarantees this cannot
+  # recreate the forum or Monika containers.
+  compose up -d --no-deps cloudflared
+}
+
 pull_images() {
-  docker compose -f "$COMPOSE_FILE" pull monika forum
+  # Runtime autodeploy tracks only the coordinated Monika/forum images.
+  compose pull monika forum
 }
 
 update_needed() {
@@ -443,6 +466,7 @@ cd "$ROOT"
 require_git_current
 
 if [ "$MODE" = "deploy" ]; then
+  ensure_public_ingress
   pull_images
   if ! update_needed; then
     exit 0
@@ -468,8 +492,18 @@ if [ "$MONIKA_UPDATE_NEEDED" = "1" ]; then
   drain_agentd
 fi
 
-docker compose -f "$COMPOSE_FILE" up -d --remove-orphans monika forum
-docker compose -f "$COMPOSE_FILE" ps monika forum
+APPLY_SERVICES=()
+if [ "$MONIKA_UPDATE_NEEDED" = "1" ]; then
+  APPLY_SERVICES+=(monika)
+fi
+if [ "$FORUM_UPDATE_NEEDED" = "1" ]; then
+  APPLY_SERVICES+=(forum)
+fi
+
+# --no-deps is the safety boundary: a forum-only update cannot recreate Monika
+# because of unrelated Compose configuration drift.
+compose up -d --no-deps "${APPLY_SERVICES[@]}"
+compose ps "${STATUS_SERVICES[@]}"
 wait_for_agentd_drain_cancel_after_deploy
 prune_backups
 prune_docker_images

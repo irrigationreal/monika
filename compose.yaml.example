@@ -64,6 +64,28 @@ services:
       GIT_USER_NAME: ${GIT_USER_NAME:-Monika}
       GIT_USER_EMAIL: ${GIT_USER_EMAIL:-monika@neosynth.net}
       POOL_CONFIG_URL: ${POOL_CONFIG_URL:-}
+    networks:
+      - backend
+
+  cloudflared:
+    image: ${MONIKA_CLOUDFLARED_IMAGE:-cloudflare/cloudflared@sha256:e39ee8da81ad5e05d77f38d2f51c60ca51bf2a8450ac3abab50c17fdb91d91bf}
+    profiles: ["public-ingress"]
+    restart: unless-stopped
+    user: "65532:65532"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    command: ["tunnel", "run", "--token-file", "/run/secrets/cloudflared-token"]
+    volumes:
+      # Keep the tunnel credential outside runtime/secrets, which is mounted
+      # into the agent-capable Monika container.
+      - ./runtime/ingress/cloudflared-vmonika.token:/run/secrets/cloudflared-token:ro
+    networks:
+      - ingress
+    depends_on:
+      - forum
 
   forum:
     image: ${MONIKA_FORUM_IMAGE:-ghcr.io/irrigationreal/monika-forum:main}
@@ -77,7 +99,9 @@ services:
     depends_on:
       - monika
     ports:
-      - "${MONIKA_FORUM_BIND:-4310:4310}"
+      # Public traffic should arrive through the private Docker network via a
+      # trusted tunnel/proxy. Keep host-side health and deploy APIs on loopback.
+      - "${MONIKA_FORUM_BIND:-127.0.0.1:4310:4310}"
     volumes:
       - ./runtime/forum:/forum
       - ${MONIKA_WORKSPACE:-/home/monika/repos}:/workspace
@@ -103,6 +127,13 @@ services:
       CODEX_WORK_DIR: ${CODEX_WORK_DIR:-/workspace}
       CODEX_FORUM_ENABLE_AUTH: "1"
       CODEX_FORUM_REGISTRATION_MODE: ${CODEX_FORUM_REGISTRATION_MODE:-disabled}
-      CODEX_FORUM_ENABLE_RATE_LIMITING: "0"
+      CODEX_FORUM_ENABLE_RATE_LIMITING: ${CODEX_FORUM_ENABLE_RATE_LIMITING:-0}
       CODEX_FORUM_TRUST_PROXY: ${CODEX_FORUM_TRUST_PROXY:-0}
       CODEX_FORUM_REDIS_STREAM_BUS: "0"
+    networks:
+      - backend
+      - ingress
+
+networks:
+  backend:
+  ingress:

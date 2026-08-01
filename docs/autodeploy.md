@@ -12,6 +12,7 @@ This runbook describes a host-side deployment lifecycle for standalone Monika ru
 | `scripts/deploy-if-safe` | Host-side deploy entry point. Pulls images, checks quiescence, creates backups, applies images, and prunes old artifacts. |
 | agentd quiescence API | Reports whether forum turns, interactive Pi sessions, and memstore saves are safe to stop and performs deploy drain. |
 | forum deploy API | Reports whether forum robot dispatch, Pi sync, and robot state are safe to stop. Requires `CODEX_FORUM_DEPLOY_TOKEN`. |
+| `cloudflared` (optional) | Outbound-only public forum ingress enabled with the `public-ingress` Compose profile. |
 | systemd timer | Periodically invokes `scripts/deploy-if-safe` from the host. |
 
 Subagent execution ownership and effects safety are separate. `active` and
@@ -33,11 +34,19 @@ Git is only used to provide the local compose file, deploy script, docs, and rol
 
 ## Network boundary
 
-The forum is user-facing and binds to the configured forum port. agentd is not public. The compose template exposes agentd to the host only on loopback:
+The forum is user-facing but binds to host loopback by default; production public
+traffic should reach it through the private Compose network from a trusted tunnel
+or reverse proxy. Agentd is not public. The compose template exposes both host-side
+administrative surfaces on loopback:
 
 ```yaml
-ports:
-  - "127.0.0.1:${MONIKA_AGENTD_PORT:-7724}:7724"
+services:
+  monika:
+    ports:
+      - "127.0.0.1:${MONIKA_AGENTD_PORT:-7724}:7724"
+  forum:
+    ports:
+      - "${MONIKA_FORUM_BIND:-127.0.0.1:4310:4310}"
 ```
 
 This lets host automation call:
@@ -61,20 +70,27 @@ python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
 
 1. Fetch and inspect the live git checkout without modifying it.
 2. Defer if the checkout is dirty, detached, lacks an upstream, cannot fetch, or is behind upstream.
-3. Pull the configured Monika and forum images.
-4. Compare the pulled image IDs with the currently running containers.
+3. When `MONIKA_PUBLIC_INGRESS=1`, reconcile only the digest-pinned `cloudflared` service with `--no-deps`.
+4. Pull the configured Monika and forum images and compare them with the running containers.
 5. Exit cleanly if no image change is available.
 6. Ask the forum whether it is safe to stop, authenticating with the deploy token.
 7. If the `monika` image changed, start agentd deploy drain. Drain is a lock, so the script POSTs `/v1/admin/drain` even when agentd was already `safe_to_stop`; this rejects new work between the safety check and Docker shutdown.
 8. Create and verify a whole-repo backup archive.
 9. If the `monika` image changed, re-check/re-start agentd drain immediately before Compose runs. This closes the race where a long backup or external drain cancel could otherwise reopen agentd to new work.
-10. Recreate only the `monika` and `forum` services with Docker Compose.
+10. Recreate exactly the application service whose image changed, using `--no-deps`. A forum-only update therefore cannot recreate Monika because of unrelated Compose configuration drift.
 11. If agentd was drained, wait for the running agentd to accept `/v1/admin/drain/cancel` and report healthy/undrained.
 12. Print `docker compose ps` for the managed services.
 13. Prune old redeploy backups by retention bucket.
 14. Prune old dangling Docker images conservatively.
 
 Forum-only image updates do not drain agentd because the `monika` container is not expected to restart. The recreated forum passively reattaches only conversations agentd still reports loaded; it does not reopen missing Pi sessions. A coordinated runtime restart leaves historical sessions unloaded and recovered completion/request evidence non-waking until explicit new work. Backup-only mode still drains and cancels agentd so the runtime capsule is quiescence-gated.
+
+Public ingress is opt-in. Set `MONIKA_PUBLIC_INGRESS=1` on a host that has installed
+the tunnel connector token. Every deploy attempt reconciles `cloudflared` before
+application image comparison, so a stopped connector or reviewed digest/config
+change is repaired even when Monika/forum are already current. The connector is
+never allowed to pull an unreviewed moving image. See
+[`public-ingress.md`](public-ingress.md) for provisioning and recovery.
 
 The script exits `75` (`EX_TEMPFAIL`) when deployment should be retried later. This includes active or uncertain async-subagent execution and an active interactive Pi ownership lease: deployment waits rather than terminating work. systemd treats this as a successful deferral, not as a failed unit. Forum Deploy on Finish persists its request and retries after exit 75 instead of losing the one-shot intent.
 
@@ -172,6 +188,8 @@ mv monika monika.broken.$(date -u +%Y%m%dT%H%M%SZ)
 tar -xf /path/to/monika-redeploy-YYYYmmddTHHMMSSZ.tar.zst -C /home/monika/repos
 cd /home/monika/repos/monika
 docker compose up -d --remove-orphans monika forum
+# On the production public host, after restoring/rotating the connector token:
+docker compose --profile public-ingress up -d --no-deps cloudflared
 ```
 
 Verify:
