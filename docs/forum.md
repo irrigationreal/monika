@@ -228,10 +228,14 @@ open without model execution. Unproven legacy result files are never consumed or
 deleted automatically. An operator may retain and dismiss/supersede one with
 `POST /v1/admin/subagents/<run-id>/resolve-delivery` plus an action and reason.
 The source remains pending until retained bytes, a resolution sidecar, and the
-no-follow operator audit under `/data/pi-subagent-operator-state` are durable. A
-central agentd-owned delivery ledger in that operator root is fsynced before the
-run-local acknowledgement and atomic result custody; a run-local sidecar alone is
-never settlement authority. The Robot Dashboard treats terminal lifecycle-v4 runs
+no-follow operator audit under `/data/pi-subagent-operator-state` are durable.
+The container exports this dedicated root and creates it with mode `0700` before
+agentd starts, so startup retention inventory and later operator actions share the
+same persistent authority. `PI_SUBAGENT_OPERATOR_ROOT` may override the location,
+but it must resolve to an absolute dedicated directory below a top-level mount;
+relative, filesystem-root, and mount-root values fail startup. A central agentd-owned delivery ledger in that root is
+fsynced before the run-local acknowledgement and atomic result custody; a run-local
+sidecar alone is never settlement authority. The Robot Dashboard treats terminal lifecycle-v4 runs
 with unknown remote effects as safety blockers even though their runner is no longer
 live; agentd's authoritative `effects_unknown_count` prevents response capping from
 hiding that condition.
@@ -250,9 +254,9 @@ posts retain normal retry.
 Grouped notifications retain all contributing run origins. Live bridge projection
 and later sync share the canonical Pi message link, preventing duplicate completion
 posts. The admin Robot Dashboard reads agentd's `/v1/admin/subagents` safety counts
-and separates live/uncertain blockers, pending delivery/manual recovery, and
-collapsed retained terminal history; disposable child sessions still never become
-robots or topics.
+and separates deployment-safety blockers (including inactive effects-unknown
+records), pending delivery/manual recovery, and collapsed retained terminal
+history; disposable child sessions still never become robots or topics.
 
 Agentd runs conservative retention daily and exposes the same deterministic
 dry-run inventory at `GET /v1/admin/subagents/retention` (every GET refreshes the inventory;

@@ -65,6 +65,7 @@ RUN npm install -g --min-release-age=0 @earendil-works/pi-coding-agent@0.82.1
 # defensively before loading Pi, but they must also exist for direct TUI use.
 ENV PI_SUBAGENT_SESSION_ROOT=/app/.pi/agent/sessions/subagent \
     PI_SUBAGENT_RUNTIME_ROOT=/data/pi-subagents \
+    PI_SUBAGENT_OPERATOR_ROOT=/data/pi-subagent-operator-state \
     PI_SUBAGENT_SSH_LOCK_CODE_DIGEST=d96004cbd0cd4010c6b5d7e42ff5441998d748f57e9bd155f6ed97eba0ccfcc0
 
 # pi-subagents — install the exact reviewed git object because npm's dependency

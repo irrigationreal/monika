@@ -72,12 +72,19 @@ Normal reconciliation never deletes or fabricates process proof. If a legacy or 
 
 A terminal remote run with `effects_state: "unknown"` is quiescent but remains a deployment blocker until its mutation effects are investigated. After inspecting the target and operation evidence, an operator may post `{ "effects_state": "none"|"confirmed", "reason": "..." }` to `/v1/admin/subagents/<run-id>/resolve-effects`. The endpoint rejects active, uncertain, legacy, and conflicting already-resolved runs, then writes an audited `effects-resolution.json` attestation; an identical lost-response retry is idempotent. `none` means the investigation proved that the attempted operation made no change; `confirmed` means its resulting changes have been identified. Neither value asserts that those changes are desirable—review or revert them separately before redeployment.
 
-Pending completion delivery is separate from execution safety. Canonical completion
-provenance is the only automatic acknowledgement proof. For an unresolved legacy
-result, an operator can post `{ "action": "dismiss"|"supersede", "reason": "..." }`
+Pending completion delivery is separate from execution safety. The container
+exports `/data/pi-subagent-operator-state` and creates it privately before agentd
+starts; failure to create that persistent authority fails container startup rather
+than degrading retention or acknowledgement later. A
+`PI_SUBAGENT_OPERATOR_ROOT` override must resolve to an absolute dedicated path
+below a top-level mount; relative, filesystem-root, and mount-root values are
+rejected before permissions are changed. Canonical completion provenance
+is the only automatic acknowledgement proof. For an unresolved legacy result, an
+operator can post `{ "action": "dismiss"|"supersede", "reason": "..." }`
 to `/v1/admin/subagents/<run-id>/resolve-delivery`. The endpoint retains the exact
-result under `/data/pi-subagent-operator-state/retained-results/`, publishes a
-no-follow sidecar, durable delivery acknowledgement, and audit before removing
+result under `${PI_SUBAGENT_OPERATOR_ROOT}/retained-results/` (by default
+`/data/pi-subagent-operator-state/retained-results/`), publishes a no-follow
+sidecar, durable delivery acknowledgement, and audit before removing
 the pending source, and never creates an assistant completion. Partial failures
 leave the source pending and retryable. Scoped nested run keys must be supplied
 when a basename is ambiguous.

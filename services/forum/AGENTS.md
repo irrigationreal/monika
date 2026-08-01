@@ -110,9 +110,10 @@ The Robot Dashboard is an admin projection of parent forum jobs plus agentd-owne
 subagent workload. Disposable children must not become robot identities, topics,
 or forum sessions. Fetch execution state through agentd's internal API; never read
 `/data/pi-subagents` from the forum container. Treat `uncertain` and an unavailable
-workload endpoint as operationally visible/fail-closed states. Present live/uncertain
-blockers separately from pending completion delivery/manual recovery and collapsed
-terminal history; agentd `active_count`/`uncertain_count` remain authoritative.
+workload endpoint as operationally visible/fail-closed states. Present deployment-
+safety blockers—including inactive effects-unknown records—separately from pending
+completion delivery/manual recovery and collapsed terminal history; agentd
+`active_count`/`uncertain_count` and effects-unknown count remain authoritative.
 Show agentd's cached retention inventory as an informational dry-run only. Forum UI
 must not infer cleanup eligibility or expose casual bulk discard controls; only
 agentd can validate scoped identity, delivery proof, resumability, leases, and safe
