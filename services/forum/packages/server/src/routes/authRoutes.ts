@@ -1,33 +1,38 @@
-import type { FastifyInstance } from 'fastify';
-import type { FeatureFlags } from '../config';
-import type { SqliteOneTimeLinkIssuer } from '../auth/oneTimeLinks';
-import type { IEmailService } from '../services/emailService';
-import type { ForumStore } from '../store';
-import type { AccessHelpers } from '../utils/access';
-import { registerOidcRoutes } from '../oidc/routes';
 import {
   ChangePasswordRequestSchema,
   CreateApiKeyRequestSchema,
   CreateImpersonationTokenRequestSchema,
   CreateInviteRequestSchema,
+  CreatePasswordRequestSchema,
   LoginRequestSchema,
   RegisterRequestSchema,
-  UpdatePrivateEmailRequestSchema
+  UpdatePrivateEmailRequestSchema,
 } from '@irrigationreal/codex-forum-contracts';
+
+import { clearBrowserSession, issueBrowserSession } from '../auth/browserSession';
+import { mapIdentityRowToDomain, mapInviteRowToDomain } from '../mappers/db';
+import { mapIdentityToDto, mapInviteToDto } from '../mappers/dto';
+import { PASSWORD_LOGIN_ENABLED } from '../runtimeConfig';
 import {
   API_KEY_PREFIX,
   IMPERSONATION_PREFIX,
   generateApiToken,
-  generateToken,
   hashPassword,
   hashToken,
   normalizePrivateEmail,
   parseScopes,
-  verifyPassword
+  verifyPassword,
 } from '../utils/auth';
 import { parseBody } from '../utils/validation';
-import { mapIdentityRowToDomain, mapInviteRowToDomain } from '../mappers/db';
-import { mapIdentityToDto, mapInviteToDto } from '../mappers/dto';
+import { registerWebAuthnRoutes } from './webauthnRoutes';
+
+import type { FastifyInstance } from 'fastify';
+
+import type { SqliteOneTimeLinkIssuer } from '../auth/oneTimeLinks';
+import type { FeatureFlags } from '../config';
+import type { IEmailService } from '../services/emailService';
+import type { ForumStore } from '../store';
+import type { AccessHelpers } from '../utils/access';
 
 export function registerAuthRoutes({
   app,
@@ -35,7 +40,8 @@ export function registerAuthRoutes({
   featureFlags,
   linkIssuer,
   emailService,
-  access
+  access,
+  passwordLoginEnabled = PASSWORD_LOGIN_ENABLED,
 }: {
   app: FastifyInstance;
   store: ForumStore;
@@ -43,38 +49,54 @@ export function registerAuthRoutes({
   linkIssuer: SqliteOneTimeLinkIssuer;
   emailService: IEmailService;
   access: AccessHelpers;
+  passwordLoginEnabled?: boolean;
 }): void {
   const { getCurrentUser, requireAdmin, requireScope } = access;
 
   const registrationMode = featureFlags.registrationMode ?? 'disabled';
+  const publicRegistrationEnabled = featureFlags.enableAuth && registrationMode === 'public';
+  const inviteRegistrationEnabled = featureFlags.enableAuth && passwordLoginEnabled && registrationMode !== 'disabled';
   const registrationSettings = {
     mode: registrationMode,
-    registrationEnabled: featureFlags.enableAuth && registrationMode !== 'disabled',
-    inviteRegistrationEnabled: featureFlags.enableAuth && registrationMode !== 'disabled',
-    publicRegistrationEnabled: featureFlags.enableAuth && registrationMode === 'public'
+    registrationEnabled: publicRegistrationEnabled || inviteRegistrationEnabled,
+    inviteRegistrationEnabled,
+    publicRegistrationEnabled,
+    passwordLoginEnabled,
   };
 
-  // OIDC endpoints (optional; enabled via env)
-  registerOidcRoutes({ app, store, access });
+  registerWebAuthnRoutes({
+    app,
+    store,
+    access,
+    authEnabled: featureFlags.enableAuth,
+    passwordLoginEnabled,
+    rateLimitingEnabled: featureFlags.enableRateLimiting,
+  });
 
-  // Clean up expired sessions on startup and periodically
   store.cleanupExpiredAuthSessions();
-  store.cleanupExpiredRefreshSessions();
-  setInterval(() => {
-    store.cleanupExpiredAuthSessions();
-    store.cleanupExpiredRefreshSessions();
-  }, 60 * 60 * 1000); // Every hour
+  store.cleanupExpiredWebAuthnChallenges();
+  setInterval(
+    () => {
+      store.cleanupExpiredAuthSessions();
+      store.cleanupExpiredWebAuthnChallenges();
+    },
+    60 * 60 * 1000
+  );
 
   app.post(
     '/auth/login',
     {
+      bodyLimit: 16 * 1024,
       config: {
-        rateLimit: featureFlags.enableRateLimiting ? { max: 10, timeWindow: '1 minute' } : false
-      }
+        rateLimit: featureFlags.enableRateLimiting ? { max: 10, timeWindow: '1 minute' } : false,
+      },
     },
-    async (request) => {
+    async (request, reply) => {
       if (!featureFlags.enableAuth) {
-        return { token: null, message: 'Auth disabled' };
+        return { message: 'Auth disabled' };
+      }
+      if (!passwordLoginEnabled) {
+        throw app.httpErrors.forbidden('Password login is disabled');
       }
       const body = parseBody(app, LoginRequestSchema, request.body);
 
@@ -90,30 +112,16 @@ export function registerAuthRoutes({
         throw app.httpErrors.unauthorized('Invalid credentials');
       }
 
-      const token = generateToken('cforum_access');
-      const refreshToken = generateToken('cforum_refresh');
-      store.createAuthSession(token, identity.id);
-      store.createRefreshSession(refreshToken, identity.id);
+      issueBrowserSession(reply, store, identity.id, 'password');
       const identityDto = mapIdentityToDto(mapIdentityRowToDomain(identity));
-      return {
-        token,
-        refreshToken,
-        identity: identityDto
-      };
+      return { identity: { ...identityDto, hasPassword: true } };
     }
   );
 
-  app.post('/auth/logout', async (request) => {
-    const authHeader = request.headers['authorization'];
-    if (authHeader?.startsWith('Bearer ')) {
-      const token = authHeader.slice(7);
-      store.deleteAuthSession(token);
-    }
-    const refreshHeader = request.headers['x-refresh-token'];
-    const refreshValue = Array.isArray(refreshHeader) ? refreshHeader[0] : refreshHeader;
-    if (refreshValue) {
-      store.deleteRefreshSession(refreshValue);
-    }
+  app.post('/auth/logout', async (request, reply) => {
+    const auth = getCurrentUser(request);
+    if (auth?.authType === 'session' && auth.tokenId) store.deleteAuthSessionByHash(auth.tokenId);
+    clearBrowserSession(reply);
     return { ok: true };
   });
 
@@ -133,35 +141,10 @@ export function registerAuthRoutes({
     return {
       identity: {
         ...identityDto,
-        hasPrivateEmail: Boolean(identity.private_email)
-      }
+        hasPrivateEmail: Boolean(identity.private_email),
+        hasPassword: Boolean(identity.password_hash),
+      },
     };
-  });
-
-  app.post('/auth/refresh', async (request) => {
-    if (!featureFlags.enableAuth) {
-      return { token: null, refreshToken: null, message: 'Auth disabled' };
-    }
-    const refreshHeader = request.headers['x-refresh-token'];
-    const refreshValue = Array.isArray(refreshHeader) ? refreshHeader[0] : refreshHeader;
-    if (!refreshValue) {
-      throw app.httpErrors.unauthorized('Refresh token required');
-    }
-    const session = store.getRefreshSession(refreshValue);
-    if (!session) {
-      throw app.httpErrors.unauthorized('Refresh token expired');
-    }
-    const identity = store.getIdentity(session.identity_id);
-    if (!identity) {
-      store.deleteRefreshSession(refreshValue);
-      throw app.httpErrors.unauthorized('Refresh token invalid');
-    }
-    store.deleteRefreshSession(refreshValue);
-    const newAccessToken = generateToken('cforum_access');
-    const newRefreshToken = generateToken('cforum_refresh');
-    store.createAuthSession(newAccessToken, identity.id);
-    store.createRefreshSession(newRefreshToken, identity.id);
-    return { token: newAccessToken, refreshToken: newRefreshToken };
   });
 
   app.get('/api-keys', async (request) => {
@@ -192,7 +175,7 @@ export function registerAuthRoutes({
       tokenHash,
       tokenPrefix,
       scopes,
-      expiresAt
+      expiresAt,
     });
     return { apiKey, token };
   });
@@ -238,7 +221,11 @@ export function registerAuthRoutes({
       if (!body.displayName?.trim()) {
         throw app.httpErrors.badRequest('displayName is required when creating a new identity');
       }
-      const identity = store.createImpersonatedIdentity(auth.identityId, body.displayName.trim(), body.avatarUrl ?? null);
+      const identity = store.createImpersonatedIdentity(
+        auth.identityId,
+        body.displayName.trim(),
+        body.avatarUrl ?? null
+      );
       impersonatedIdentityId = identity.id;
     }
     const token = generateApiToken(IMPERSONATION_PREFIX);
@@ -252,7 +239,7 @@ export function registerAuthRoutes({
       tokenHash,
       tokenPrefix,
       scopes,
-      expiresAt
+      expiresAt,
     });
     return { impersonationToken, token };
   });
@@ -290,7 +277,8 @@ export function registerAuthRoutes({
   });
 
   // Password change (self-service)
-  app.post('/me/password', async (request) => {
+  app.post('/me/password', { bodyLimit: 16 * 1024 }, async (request) => {
+    if (!passwordLoginEnabled) throw app.httpErrors.forbidden('Password credentials are disabled');
     const user = requireScope(getCurrentUser(request), 'write');
     const body = parseBody(app, ChangePasswordRequestSchema, request.body);
 
@@ -313,7 +301,47 @@ export function registerAuthRoutes({
 
     const passwordHash = await hashPassword(body.newPassword);
     store.setIdentityPassword(identity.id, identity.username, passwordHash);
+    store.deleteAuthSessionsForIdentity(identity.id, user.tokenId);
 
+    return { ok: true };
+  });
+
+  app.delete('/me/password', async (request) => {
+    const user = requireScope(getCurrentUser(request), 'write');
+    const identity = store.getIdentity(user.identityId);
+    if (!identity?.password_hash || !identity.username) throw app.httpErrors.badRequest('Account has no password');
+    if (store.countWebAuthnCredentials(identity.id) < 1)
+      throw app.httpErrors.conflict('Add a passkey before removing your password');
+    if (
+      user.authType !== 'session' ||
+      (user.authMethod !== 'password' && user.authMethod !== 'webauthn') ||
+      !user.authenticatedAt ||
+      Date.now() - Date.parse(user.authenticatedAt) > 10 * 60_000
+    ) {
+      throw app.httpErrors.forbidden('Recent password or passkey authentication required');
+    }
+    store.setIdentityPassword(identity.id, identity.username, null);
+    store.deleteAuthSessionsForIdentity(identity.id, user.tokenId);
+    return { ok: true };
+  });
+
+  app.post('/me/password/create', { bodyLimit: 16 * 1024 }, async (request) => {
+    if (!passwordLoginEnabled) throw app.httpErrors.forbidden('Password credentials are disabled');
+    const user = requireScope(getCurrentUser(request), 'write');
+    if (
+      user.authType !== 'session' ||
+      user.authMethod !== 'webauthn' ||
+      !user.authenticatedAt ||
+      Date.now() - Date.parse(user.authenticatedAt) > 10 * 60_000
+    ) {
+      throw app.httpErrors.forbidden('Recent passkey authentication required');
+    }
+    const identity = store.getIdentity(user.identityId);
+    if (!identity?.username) throw app.httpErrors.badRequest('Set a username before creating a password');
+    if (identity.password_hash) throw app.httpErrors.conflict('Account already has a password');
+    const body = parseBody(app, CreatePasswordRequestSchema, request.body);
+    store.setIdentityPassword(identity.id, identity.username, await hashPassword(body.newPassword));
+    store.deleteAuthSessionsForIdentity(identity.id, user.tokenId);
     return { ok: true };
   });
 
@@ -323,11 +351,12 @@ export function registerAuthRoutes({
   app.post(
     '/auth/register',
     {
+      bodyLimit: 16 * 1024,
       config: {
-        rateLimit: featureFlags.enableRateLimiting ? { max: 5, timeWindow: '1 hour' } : false
-      }
+        rateLimit: featureFlags.enableRateLimiting ? { max: 5, timeWindow: '1 hour' } : false,
+      },
     },
-    async (request) => {
+    async (request, reply) => {
       if (!featureFlags.enableAuth || registrationMode === 'disabled') {
         throw app.httpErrors.forbidden('Registration disabled');
       }
@@ -349,6 +378,7 @@ export function registerAuthRoutes({
 
       // If invite code + username + password provided, create account directly
       if (body.inviteCode && body.username && body.password) {
+        if (!passwordLoginEnabled) throw app.httpErrors.forbidden('Password credentials are disabled');
         // Validate invite
         const inviteResult = store.useInvite(body.inviteCode);
         if (!inviteResult.ok) {
@@ -362,25 +392,11 @@ export function registerAuthRoutes({
 
         // Create identity with credentials
         const passwordHash = await hashPassword(body.password);
-        const identity = store.createIdentityWithPassword(
-          body.displayName,
-          body.username,
-          passwordHash,
-          'human'
-        );
+        const identity = store.createIdentityWithPassword(body.displayName, body.username, passwordHash, 'human');
 
-        // Create session token and log them in immediately
-        const sessionToken = generateToken('cforum_access');
-        const refreshToken = generateToken('cforum_refresh');
-        store.createAuthSession(sessionToken, identity.id);
-        store.createRefreshSession(refreshToken, identity.id);
+        issueBrowserSession(reply, store, identity.id, 'password');
         const identityDto = mapIdentityToDto(mapIdentityRowToDomain(identity));
-
-        return {
-          token: sessionToken,
-          refreshToken,
-          identity: identityDto
-        };
+        return { identity: { ...identityDto, hasPassword: true } };
       }
 
       // Invite code present but missing credentials
@@ -405,15 +421,15 @@ export function registerAuthRoutes({
       }
 
       return {
-        identity: identityDto,
+        identity: { ...identityDto, hasPassword: false },
         verifyUrl: link.url,
         expiresAt: link.expiresAt,
-        emailSent: !!body.email
+        emailSent: !!body.email,
       };
     }
   );
 
-  app.get('/auth/verify/:token', async (request) => {
+  app.get('/auth/verify/:token', async (request, reply) => {
     const { token } = request.params as { token: string };
     const result = await linkIssuer.verify(token);
 
@@ -426,18 +442,9 @@ export function registerAuthRoutes({
       throw app.httpErrors.notFound('User not found');
     }
 
-    // Create session token
-    const sessionToken = generateToken('cforum_access');
-    const refreshToken = generateToken('cforum_refresh');
-    store.createAuthSession(sessionToken, identity.id);
-    store.createRefreshSession(refreshToken, identity.id);
+    issueBrowserSession(reply, store, identity.id, 'verification');
     const identityDto = mapIdentityToDto(mapIdentityRowToDomain(identity));
-
-    return {
-      token: sessionToken,
-      refreshToken,
-      identity: identityDto
-    };
+    return { identity: { ...identityDto, hasPassword: Boolean(identity.password_hash) } };
   });
 
   // Invite endpoints (admin only)
@@ -464,7 +471,7 @@ export function registerAuthRoutes({
       page,
       pageSize,
       total: invites.length,
-      items: invites.map((invite) => mapInviteToDto(mapInviteRowToDomain(invite)))
+      items: invites.map((invite) => mapInviteToDto(mapInviteRowToDomain(invite))),
     };
   });
 
@@ -482,7 +489,7 @@ export function registerAuthRoutes({
   });
 
   app.get('/auth/invite/:code', async (request) => {
-    if (!featureFlags.enableAuth || registrationMode === 'disabled') {
+    if (!inviteRegistrationEnabled) {
       throw app.httpErrors.notFound('Invite not found');
     }
 
@@ -507,7 +514,7 @@ export function registerAuthRoutes({
       code: invite.code,
       valid: true,
       remainingUses: invite.max_uses - invite.uses,
-      expiresAt: invite.expires_at
+      expiresAt: invite.expires_at,
     };
   });
 }

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { nowIso } from './db';
 import { mapCompactionOperationRowToDomain, mapTopicOperationalEventRowToDomain } from './mappers/db';
 import { STORE_CACHE_MAX_ENTRIES, STORE_ENTITY_CACHE_TTL_MS, STORE_STATS_CACHE_TTL_MS } from './runtimeConfig';
+import { hashToken } from './utils/auth';
 
 import type {
   AccessRuleAction,
@@ -29,7 +30,6 @@ import type {
   ChatMessageRow,
   ChatRoomRow,
   CompactionOperationRow,
-  ExternalIdentityRow,
   ExternalRefRow,
   ForumRow,
   IdentityRoleRow,
@@ -43,7 +43,6 @@ import type {
   PostDispatchRow,
   PostRow,
   ReactionRow,
-  RefreshSessionRow,
   RobotAutomationRow,
   RobotAutomationRunRow,
   RobotPersonaRow,
@@ -61,11 +60,12 @@ import type {
   TopicRow,
   TopicSubscriptionRow,
   UserFileRow,
+  WebAuthnChallengeRow,
+  WebAuthnCredentialRow,
   WebhookRow,
 } from './db';
 
 const ACCESS_TOKEN_TTL_DAYS = 7;
-const REFRESH_TOKEN_TTL_DAYS = 30;
 const RECENT_DUPLICATE_WINDOW_MS = 5 * 60 * 1000;
 
 function normalizePostBodyForDuplicateCheck(text: string): string {
@@ -182,16 +182,6 @@ export interface ImpersonationTokenRecord {
   expiresAt: string | null;
   createdAt: string;
   revokedAt: string | null;
-}
-
-export interface ExternalIdentityRecord {
-  id: string;
-  identityId: string;
-  providerKey: string;
-  issuer: string;
-  subject: string;
-  createdAt: string;
-  lastLoginAt: string | null;
 }
 
 export interface CreateSessionInput {
@@ -2345,14 +2335,18 @@ export class ForumStore {
 
   requeueRunningCompactionOperations(): number {
     const result = this.db
-      .prepare("update compaction_operations set status = 'pending', started_at = null, next_attempt_at = null where status = 'running'")
+      .prepare(
+        "update compaction_operations set status = 'pending', started_at = null, next_attempt_at = null where status = 'running'"
+      )
       .run();
     return result.changes;
   }
 
   requeueCompactionOperation(id: string): boolean {
     const result = this.db
-      .prepare("update compaction_operations set status = 'pending', started_at = null, next_attempt_at = null where id = ? and status = 'running'")
+      .prepare(
+        "update compaction_operations set status = 'pending', started_at = null, next_attempt_at = null where id = ? and status = 'running'"
+      )
       .run(id);
     return result.changes === 1;
   }
@@ -2670,8 +2664,9 @@ export class ForumStore {
 
   getTopicDispatchGeneration(topicId: string): number {
     this.ensurePostDispatchGeneration(topicId);
-    const row = this.db.prepare('select generation from post_dispatch_generations where topic_id = ?').get(topicId) as
-      { generation: number };
+    const row = this.db.prepare('select generation from post_dispatch_generations where topic_id = ?').get(topicId) as {
+      generation: number;
+    };
     return row.generation;
   }
 
@@ -2839,9 +2834,10 @@ export class ForumStore {
   resetRobotActivities(activity = 'idle'): number {
     const now = nowIso();
     const currentPlanIdExpr = activity === 'idle' || activity === 'stopped' ? 'null' : 'current_plan_id';
-    const whereClause = activity === 'idle'
-      ? "(activity != ? or current_plan_id is not null) and activity not in ('stopping', 'stopped', 'uncertain')"
-      : 'activity != ?';
+    const whereClause =
+      activity === 'idle'
+        ? "(activity != ? or current_plan_id is not null) and activity not in ('stopping', 'stopped', 'uncertain')"
+        : 'activity != ?';
     const result = this.db
       .prepare(
         `update robot_state set activity = ?, current_plan_id = ${currentPlanIdExpr}, last_updated_at = ? where ${whereClause}`
@@ -3235,7 +3231,8 @@ export class ForumStore {
 
   upsertRobotState(input: UpdateRobotStateInput): RobotStateRow {
     const now = nowIso();
-    const currentPlanId = input.activity === 'idle' || input.activity === 'stopped' ? null : (input.currentPlanId ?? null);
+    const currentPlanId =
+      input.activity === 'idle' || input.activity === 'stopped' ? null : (input.currentPlanId ?? null);
     const existing = this.getRobotState(input.topicId);
     if (existing) {
       this.db
@@ -3288,9 +3285,11 @@ export class ForumStore {
   }
 
   listPiSessionLinksWithUnresolvedCancellation(): PiSessionLinkRow[] {
-    return this.db.prepare(
-      "select l.* from pi_session_links l join robot_state r on r.topic_id = l.topic_id where r.activity in ('stopping', 'uncertain')"
-    ).all() as PiSessionLinkRow[];
+    return this.db
+      .prepare(
+        "select l.* from pi_session_links l join robot_state r on r.topic_id = l.topic_id where r.activity in ('stopping', 'uncertain')"
+      )
+      .all() as PiSessionLinkRow[];
   }
 
   getPiSessionLinkByPiSessionId(piSessionId: string): PiSessionLinkRow | null {
@@ -3902,47 +3901,6 @@ export class ForumStore {
     this.db.prepare('delete from robot_personas where forum_id = ? and id = ?').run(forumId, key);
   }
 
-  getExternalIdentityBySubject(providerKey: string, issuer: string, subject: string): ExternalIdentityRow | null {
-    const row = this.db
-      .prepare('select * from external_identities where provider_key = ? and issuer = ? and subject = ? limit 1')
-      .get(providerKey, issuer, subject) as ExternalIdentityRow | undefined;
-    return row ?? null;
-  }
-
-  listExternalIdentitiesForIdentity(identityId: string): ExternalIdentityRow[] {
-    return this.db
-      .prepare('select * from external_identities where identity_id = ? order by created_at asc')
-      .all(identityId) as ExternalIdentityRow[];
-  }
-
-  createExternalIdentityLink(input: {
-    identityId: string;
-    providerKey: string;
-    issuer: string;
-    subject: string;
-  }): ExternalIdentityRow {
-    const id = randomUUID();
-    const now = nowIso();
-    this.db
-      .prepare(
-        'insert into external_identities (id, identity_id, provider_key, issuer, subject, created_at, last_login_at) values (?, ?, ?, ?, ?, ?, ?)'
-      )
-      .run(id, input.identityId, input.providerKey, input.issuer, input.subject, now, null);
-    return this.db.prepare('select * from external_identities where id = ?').get(id) as ExternalIdentityRow;
-  }
-
-  touchExternalIdentityLogin(externalIdentityId: string): void {
-    const now = nowIso();
-    this.db.prepare('update external_identities set last_login_at = ? where id = ?').run(now, externalIdentityId);
-  }
-
-  deleteExternalIdentityLink(externalIdentityId: string, identityId: string): { ok: boolean } {
-    const info = this.db
-      .prepare('delete from external_identities where id = ? and identity_id = ?')
-      .run(externalIdentityId, identityId);
-    return { ok: info.changes > 0 };
-  }
-
   getIdentityByUsername(username: string): IdentityRow | null {
     const row = this.db.prepare('select * from identities where username = ? collate nocase limit 1').get(username) as
       IdentityRow | undefined;
@@ -3966,11 +3924,12 @@ export class ForumStore {
     return this.getIdentity(id) as IdentityRow;
   }
 
-  setIdentityPassword(identityId: string, username: string, passwordHash: string): void {
+  setIdentityPassword(identityId: string, username: string, passwordHash: string | null): void {
     const now = nowIso();
     this.db
       .prepare('update identities set username = ?, password_hash = ?, updated_at = ? where id = ?')
       .run(username, passwordHash, now, identityId);
+    this.invalidateIdentityCache(identityId);
   }
 
   listAllIdentities(page = 1, pageSize = 100): IdentityRow[] {
@@ -4748,52 +4707,53 @@ export class ForumStore {
 
   // Auth session management (persistent sessions)
 
-  createAuthSession(token: string, identityId: string, ttlDays: number = ACCESS_TOKEN_TTL_DAYS): AuthSessionRow {
+  createAuthSession(
+    token: string,
+    identityId: string,
+    ttlDays: number = ACCESS_TOKEN_TTL_DAYS,
+    authMethod: AuthSessionRow['auth_method'] = 'internal'
+  ): AuthSessionRow {
     const now = nowIso();
     const expiresAt = new Date(Date.now() + ttlDays * 24 * 60 * 60 * 1000).toISOString();
+    const tokenHash = hashToken(token);
     this.db
-      .prepare('insert into auth_sessions (token, identity_id, created_at, expires_at) values (?, ?, ?, ?)')
-      .run(token, identityId, now, expiresAt);
-    return { token, identity_id: identityId, created_at: now, expires_at: expiresAt };
-  }
-
-  createRefreshSession(token: string, identityId: string, ttlDays: number = REFRESH_TOKEN_TTL_DAYS): RefreshSessionRow {
-    const now = nowIso();
-    const expiresAt = new Date(Date.now() + ttlDays * 24 * 60 * 60 * 1000).toISOString();
-    this.db
-      .prepare('insert into refresh_sessions (token, identity_id, created_at, expires_at) values (?, ?, ?, ?)')
-      .run(token, identityId, now, expiresAt);
-    return { token, identity_id: identityId, created_at: now, expires_at: expiresAt };
+      .prepare(
+        'insert into auth_sessions (token_hash, identity_id, auth_method, authenticated_at, created_at, expires_at) values (?, ?, ?, ?, ?, ?)'
+      )
+      .run(tokenHash, identityId, authMethod, now, now, expiresAt);
+    return {
+      token_hash: tokenHash,
+      identity_id: identityId,
+      auth_method: authMethod,
+      authenticated_at: now,
+      created_at: now,
+      expires_at: expiresAt,
+    };
   }
 
   getAuthSession(token: string): AuthSessionRow | null {
     const row = this.db
-      .prepare('select * from auth_sessions where token = ? and expires_at > ?')
-      .get(token, nowIso()) as AuthSessionRow | undefined;
-    return row ?? null;
-  }
-
-  getRefreshSession(token: string): RefreshSessionRow | null {
-    const row = this.db
-      .prepare('select * from refresh_sessions where token = ? and expires_at > ?')
-      .get(token, nowIso()) as RefreshSessionRow | undefined;
+      .prepare('select * from auth_sessions where token_hash = ? and expires_at > ?')
+      .get(hashToken(token), nowIso()) as AuthSessionRow | undefined;
     return row ?? null;
   }
 
   deleteAuthSession(token: string): void {
-    this.db.prepare('delete from auth_sessions where token = ?').run(token);
+    this.db.prepare('delete from auth_sessions where token_hash = ?').run(hashToken(token));
   }
 
-  deleteRefreshSession(token: string): void {
-    this.db.prepare('delete from refresh_sessions where token = ?').run(token);
+  deleteAuthSessionByHash(tokenHash: string): void {
+    this.db.prepare('delete from auth_sessions where token_hash = ?').run(tokenHash);
   }
 
-  deleteAuthSessionsForIdentity(identityId: string): void {
+  deleteAuthSessionsForIdentity(identityId: string, exceptTokenHash?: string | null): void {
+    if (exceptTokenHash) {
+      this.db
+        .prepare('delete from auth_sessions where identity_id = ? and token_hash <> ?')
+        .run(identityId, exceptTokenHash);
+      return;
+    }
     this.db.prepare('delete from auth_sessions where identity_id = ?').run(identityId);
-  }
-
-  deleteRefreshSessionsForIdentity(identityId: string): void {
-    this.db.prepare('delete from refresh_sessions where identity_id = ?').run(identityId);
   }
 
   cleanupExpiredAuthSessions(): number {
@@ -4801,9 +4761,162 @@ export class ForumStore {
     return result.changes;
   }
 
-  cleanupExpiredRefreshSessions(): number {
-    const result = this.db.prepare('delete from refresh_sessions where expires_at <= ?').run(nowIso());
-    return result.changes;
+  createWebAuthnChallenge(input: {
+    challenge: string;
+    ceremony: WebAuthnChallengeRow['ceremony'];
+    identityId: string | null;
+    ttlMs?: number;
+  }): WebAuthnChallengeRow {
+    const id = randomUUID();
+    const createdAt = nowIso();
+    const expiresAt = new Date(Date.now() + (input.ttlMs ?? 5 * 60_000)).toISOString();
+    const row = {
+      id,
+      challenge: input.challenge,
+      ceremony: input.ceremony,
+      identity_id: input.identityId,
+      expires_at: expiresAt,
+      created_at: createdAt,
+    };
+    this.db.transaction(() => {
+      this.db.prepare('delete from webauthn_challenges where expires_at <= ?').run(createdAt);
+      if (input.identityId) {
+        const maxIdentityChallenges = 20;
+        const identityCount = (
+          this.db
+            .prepare('select count(*) as count from webauthn_challenges where identity_id = ? and ceremony = ?')
+            .get(input.identityId, input.ceremony) as { count: number }
+        ).count;
+        if (identityCount >= maxIdentityChallenges) {
+          this.db
+            .prepare(
+              `delete from webauthn_challenges where id in (
+                 select id from webauthn_challenges
+                 where identity_id = ? and ceremony = ?
+                 order by created_at asc, id asc limit ?
+               )`
+            )
+            .run(input.identityId, input.ceremony, identityCount - maxIdentityChallenges + 1);
+        }
+      }
+      const maxChallenges = 10_000;
+      const count = (this.db.prepare('select count(*) as count from webauthn_challenges').get() as { count: number })
+        .count;
+      if (count >= maxChallenges) {
+        this.db
+          .prepare(
+            `delete from webauthn_challenges where id in (
+               select id from webauthn_challenges order by created_at asc, id asc limit ?
+             )`
+          )
+          .run(count - maxChallenges + 1);
+      }
+      this.db
+        .prepare(
+          'insert into webauthn_challenges (id, challenge, ceremony, identity_id, expires_at, created_at) values (?, ?, ?, ?, ?, ?)'
+        )
+        .run(id, input.challenge, input.ceremony, input.identityId, expiresAt, createdAt);
+    })();
+    return row;
+  }
+
+  consumeWebAuthnChallenge(
+    id: string,
+    ceremony: WebAuthnChallengeRow['ceremony'],
+    identityId: string | null
+  ): WebAuthnChallengeRow | null {
+    return this.db.transaction(() => {
+      const row = this.db.prepare('select * from webauthn_challenges where id = ?').get(id) as
+        WebAuthnChallengeRow | undefined;
+      if (!row) return null;
+      this.db.prepare('delete from webauthn_challenges where id = ?').run(id);
+      if (row.ceremony !== ceremony || row.identity_id !== identityId || row.expires_at <= nowIso()) return null;
+      return row;
+    })();
+  }
+
+  cleanupExpiredWebAuthnChallenges(): number {
+    return this.db.prepare('delete from webauthn_challenges where expires_at <= ?').run(nowIso()).changes;
+  }
+
+  createWebAuthnCredential(input: {
+    credentialId: string;
+    identityId: string;
+    name: string;
+    publicKey: Uint8Array;
+    counter: number;
+    transports: string[];
+    deviceType: string;
+    backedUp: boolean;
+  }): WebAuthnCredentialRow {
+    const now = nowIso();
+    this.db
+      .prepare(
+        `insert into webauthn_credentials
+       (credential_id, identity_id, name, public_key, counter, transports_json, device_type, backed_up, created_at, last_used_at, updated_at)
+       values (?, ?, ?, ?, ?, ?, ?, ?, ?, null, ?)`
+      )
+      .run(
+        input.credentialId,
+        input.identityId,
+        input.name,
+        Buffer.from(input.publicKey),
+        input.counter,
+        JSON.stringify(input.transports),
+        input.deviceType,
+        input.backedUp ? 1 : 0,
+        now,
+        now
+      );
+    return this.getWebAuthnCredential(input.credentialId) as WebAuthnCredentialRow;
+  }
+
+  getWebAuthnCredential(credentialId: string): WebAuthnCredentialRow | null {
+    return (
+      (this.db.prepare('select * from webauthn_credentials where credential_id = ?').get(credentialId) as
+        WebAuthnCredentialRow | undefined) ?? null
+    );
+  }
+
+  listWebAuthnCredentials(identityId: string): WebAuthnCredentialRow[] {
+    return this.db
+      .prepare('select * from webauthn_credentials where identity_id = ? order by created_at')
+      .all(identityId) as WebAuthnCredentialRow[];
+  }
+
+  updateWebAuthnCredentialUsage(credentialId: string, counter: number, deviceType: string, backedUp: boolean): void {
+    const now = nowIso();
+    this.db
+      .prepare(
+        'update webauthn_credentials set counter = ?, device_type = ?, backed_up = ?, last_used_at = ?, updated_at = ? where credential_id = ?'
+      )
+      .run(counter, deviceType, backedUp ? 1 : 0, now, now, credentialId);
+  }
+
+  deleteWebAuthnCredential(identityId: string, credentialId: string): boolean {
+    return (
+      this.db
+        .prepare('delete from webauthn_credentials where identity_id = ? and credential_id = ?')
+        .run(identityId, credentialId).changes > 0
+    );
+  }
+
+  countWebAuthnCredentials(identityId: string): number {
+    return (
+      this.db.prepare('select count(*) as count from webauthn_credentials where identity_id = ?').get(identityId) as {
+        count: number;
+      }
+    ).count;
+  }
+
+  hasWebAuthnAdmin(): boolean {
+    return Boolean(
+      this.db
+        .prepare(
+          `select 1 from webauthn_credentials c join identities i on i.id = c.identity_id where i.kind = 'admin' limit 1`
+        )
+        .get()
+    );
   }
 
   // API key management

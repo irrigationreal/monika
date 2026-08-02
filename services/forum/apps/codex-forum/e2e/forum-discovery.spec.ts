@@ -221,12 +221,7 @@ test.describe('Forum discovery + navigation (read-only)', () => {
     const adminToken = fixture.createSession(admin);
 
     await fixture.attach(page);
-    await page.addInitScript(
-      ([tokenKey, token]) => {
-        window.localStorage.setItem(tokenKey, token);
-      },
-      [fixture.AUTH_TOKEN_KEY, memberToken]
-    );
+    await context.addCookies([{ name: fixture.SESSION_COOKIE_NAME, value: memberToken, url: 'http://localhost:5173' }]);
     await page.goto('/');
 
     await expect(page.locator('.vb-forum-title', { hasText: publicForum.name })).toBeVisible();
@@ -235,12 +230,7 @@ test.describe('Forum discovery + navigation (read-only)', () => {
 
     const adminPage = await context.newPage();
     await fixture.attach(adminPage);
-    await adminPage.addInitScript(
-      ([tokenKey, token]) => {
-        window.localStorage.setItem(tokenKey, token);
-      },
-      [fixture.AUTH_TOKEN_KEY, adminToken]
-    );
+    await context.addCookies([{ name: fixture.SESSION_COOKIE_NAME, value: adminToken, url: 'http://localhost:5173' }]);
     await adminPage.goto('/');
 
     await expect(adminPage.locator('.vb-forum-title', { hasText: publicForum.name })).toBeVisible();

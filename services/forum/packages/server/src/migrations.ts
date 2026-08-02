@@ -1,4 +1,4 @@
-import Database from 'better-sqlite3';
+import type Database from 'better-sqlite3';
 
 export type Migration = {
   version: number;
@@ -1424,6 +1424,64 @@ export const MIGRATIONS: Migration[] = [
         );
         create unique index if not exists idx_external_refs_external_unique
           on external_refs(surface_id, surface_kind, external_id);
+      `);
+    },
+  },
+  {
+    version: 40,
+    name: 'opaque-cookie-sessions-and-webauthn',
+    up: (db) => {
+      if (hasTable(db, 'external_identities')) {
+        const row = db.prepare('select count(*) as count from external_identities').get() as { count: number };
+        if (row.count !== 0) {
+          throw new Error(
+            `Cannot remove legacy external identities: external_identities contains ${String(row.count)} row(s). Migrate or unlink every identity before upgrading.`
+          );
+        }
+        db.prepare('drop table external_identities').run();
+      }
+
+      db.exec(`
+        drop table auth_sessions;
+        create table auth_sessions (
+          token_hash text primary key,
+          identity_id text not null,
+          auth_method text not null default 'internal',
+          authenticated_at text not null,
+          created_at text not null,
+          expires_at text not null,
+          foreign key (identity_id) references identities(id) on delete cascade
+        );
+        drop table if exists refresh_sessions;
+        create index idx_auth_sessions_identity on auth_sessions(identity_id);
+        create index idx_auth_sessions_expires on auth_sessions(expires_at);
+
+        create table webauthn_credentials (
+          credential_id text primary key,
+          identity_id text not null,
+          name text not null,
+          public_key blob not null,
+          counter integer not null,
+          transports_json text not null,
+          device_type text not null,
+          backed_up integer not null,
+          created_at text not null,
+          last_used_at text,
+          updated_at text not null,
+          foreign key (identity_id) references identities(id) on delete cascade
+        );
+        create index idx_webauthn_credentials_identity on webauthn_credentials(identity_id);
+
+        create table webauthn_challenges (
+          id text primary key,
+          challenge text not null,
+          ceremony text not null check (ceremony in ('registration', 'authentication')),
+          identity_id text,
+          expires_at text not null,
+          created_at text not null,
+          foreign key (identity_id) references identities(id) on delete cascade
+        );
+        create index idx_webauthn_challenges_expires on webauthn_challenges(expires_at);
       `);
     },
   },

@@ -40,7 +40,7 @@ type PostFixtureInput = {
 type ApiResponse = { status: number; body: unknown };
 
 const toIso = (date: Date): string => date.toISOString();
-const AUTH_TOKEN_KEY = 'cforum_auth_token';
+const SESSION_COOKIE_NAME = 'cforum_session';
 
 const parseJsonBody = (request: Request): Record<string, unknown> | null => {
   const raw = request.postData();
@@ -321,11 +321,9 @@ export function createForumFixture() {
   };
 
   const resolveIdentity = (request: Request): IdentityDto | null => {
-    const authHeader = request.headers()['authorization'];
-    if (!authHeader?.startsWith('Bearer ')) {
-      return null;
-    }
-    const token = authHeader.slice(7);
+    const cookieHeader = request.headers()['cookie'] ?? '';
+    const token = cookieHeader.split(';').map((part) => part.trim()).find((part) => part.startsWith(`${SESSION_COOKIE_NAME}=`))?.slice(SESSION_COOKIE_NAME.length + 1);
+    if (!token) return null;
     return sessions.get(token) ?? null;
   };
 
@@ -463,7 +461,7 @@ export function createForumFixture() {
   return {
     attach,
     now,
-    AUTH_TOKEN_KEY,
+    SESSION_COOKIE_NAME,
     createIdentity,
     createSession,
     createForum,

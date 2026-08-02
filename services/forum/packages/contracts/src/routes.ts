@@ -116,12 +116,6 @@ const searchQuerySchema = z.object({
 
 const attachmentContentSchema = z.string();
 
-const refreshResponseSchema = z.object({
-  token: z.string().nullable(),
-  refreshToken: z.string().nullable(),
-  message: z.string().optional()
-});
-
 const avatarUploadResponseSchema = z.object({
   id: z.string(),
   displayName: z.string(),
@@ -560,13 +554,6 @@ export const apiRoutes: ApiRoute[] = [
     response: { schema: schemas.AuthUserDtoSchema }
   },
   {
-    method: 'post',
-    path: '/auth/refresh',
-    summary: 'Refresh auth tokens',
-    tags: ['auth'],
-    response: { schema: refreshResponseSchema }
-  },
-  {
     method: 'get',
     path: '/auth/registration',
     summary: 'Get registration mode',
@@ -598,58 +585,31 @@ export const apiRoutes: ApiRoute[] = [
     response: { schema: inviteInfoSchema }
   },
 
-  // OIDC
   {
-    method: 'get',
-    path: '/auth/oidc/enabled',
-    summary: 'Check whether OIDC is enabled',
-    tags: ['auth'],
-    response: { schema: schemas.OidcEnabledResponseDtoSchema }
+    method: 'post', path: '/auth/webauthn/login/options', summary: 'Begin usernameless passkey login', tags: ['auth'],
+    response: { schema: schemas.WebAuthnOptionsResponseDtoSchema }
   },
   {
-    method: 'get',
-    path: '/auth/oidc/start',
-    summary: 'Start OIDC sign-in',
-    tags: ['auth'],
-    response: { schema: z.any() }
+    method: 'post', path: '/auth/webauthn/login/verify', summary: 'Complete passkey login', tags: ['auth'],
+    request: { body: { schema: schemas.WebAuthnVerifyRequestSchema } }, response: { schema: schemas.WebAuthnLoginResponseDtoSchema }
   },
   {
-    method: 'get',
-    path: '/auth/oidc/start/link',
-    summary: 'Start OIDC account linking from an authenticated session',
-    tags: ['auth'],
-    response: { schema: z.any() }
+    method: 'get', path: '/me/webauthn/credentials', summary: 'List passkeys', tags: ['auth'],
+    response: { schema: schemas.WebAuthnCredentialListResponseDtoSchema }
   },
   {
-    method: 'get',
-    path: '/auth/oidc/callback',
-    summary: 'OIDC callback',
-    tags: ['auth'],
-    response: { schema: z.any() }
+    method: 'post', path: '/me/webauthn/register/options', summary: 'Begin passkey enrollment', tags: ['auth'],
+    response: { schema: schemas.WebAuthnOptionsResponseDtoSchema }
   },
   {
-    method: 'post',
-    path: '/auth/oidc/link',
-    summary: 'Link OIDC identity to an existing forum account',
-    tags: ['auth'],
-    request: { body: { schema: schemas.OidcLinkRequestSchema } },
-    response: { schema: schemas.OidcLinkResponseDtoSchema }
+    method: 'post', path: '/me/webauthn/register/verify', summary: 'Complete passkey enrollment', tags: ['auth'],
+    request: { body: { schema: schemas.WebAuthnRegistrationVerifyRequestSchema } }, response: { schema: schemas.WebAuthnCredentialDtoSchema }
   },
   {
-    method: 'get',
-    path: '/auth/oidc/links',
-    summary: 'List linked OIDC identities for the current user',
-    tags: ['auth'],
-    response: { schema: schemas.OidcExternalIdentityListResponseDtoSchema }
+    method: 'delete', path: '/me/webauthn/credentials/{credentialId}', summary: 'Remove a passkey', tags: ['auth'],
+    request: { params: stringParam('credentialId') }, response: { schema: okSchema }
   },
-  {
-    method: 'post',
-    path: '/auth/oidc/unlink',
-    summary: 'Unlink an OIDC identity from the current forum account',
-    tags: ['auth'],
-    request: { body: { schema: schemas.OidcUnlinkRequestSchema } },
-    response: { schema: schemas.OidcUnlinkResponseDtoSchema }
-  },
+
   {
     method: 'patch',
     path: '/me/private-email',
@@ -666,6 +626,14 @@ export const apiRoutes: ApiRoute[] = [
     tags: ['auth'],
     request: { body: { schema: schemas.ChangePasswordRequestSchema } },
     response: { schema: schemas.ChangePasswordResponseDtoSchema }
+  },
+  {
+    method: 'delete', path: '/me/password', summary: 'Remove current user password after passkey enrollment', tags: ['auth'],
+    response: { schema: okSchema }
+  },
+  {
+    method: 'post', path: '/me/password/create', summary: 'Create a password from a recent passkey session', tags: ['auth'],
+    request: { body: { schema: schemas.CreatePasswordRequestSchema } }, response: { schema: okSchema }
   },
 
   // API keys

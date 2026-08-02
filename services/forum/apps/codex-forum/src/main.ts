@@ -14,6 +14,15 @@ import './styles/chat.css';
 import './styles/analytics.css';
 import './styles/responsive.css';
 
+// One-time cleanup for credentials written by pre-cookie releases. These keys
+// must not leave stale bearer or refresh secrets in browser storage.
+try {
+  window.localStorage.removeItem('cforum_auth_token');
+  window.localStorage.removeItem('cforum_refresh_token');
+} catch {
+  // Storage can be unavailable under strict browser privacy settings.
+}
+
 // Global event delegation for actions in rendered (v-html) content.
 // This keeps the rendering pipeline simple (string → HTML) while still enabling
 // small interactive widgets like a "copy" button in code blocks.

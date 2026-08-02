@@ -31,7 +31,6 @@ vi.mock('../lib/apiClient', () => ({
   createStateStream: mocks.createStateStream,
   getAuthToken: vi.fn(),
   setAuthToken: vi.fn(),
-  setRefreshToken: vi.fn(),
 }));
 
 class FakeStateStream {

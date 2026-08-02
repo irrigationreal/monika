@@ -6,7 +6,6 @@
   "description": "codex-forum monorepo",
   "packageManager": "pnpm@10.26.2",
   "dependencies": {
-    "openid-client": "^6.8.1",
     "zod": "^3.25.76"
   },
   "scripts": {

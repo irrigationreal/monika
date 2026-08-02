@@ -225,8 +225,6 @@ function createBaseSessionLog(context: MockContext): SessionLog {
         path: '/api/auth/login',
         repeat: true,
         body: {
-          token: 'mock-access-token',
-          refreshToken: 'mock-refresh-token',
           identity: toAuthIdentity(context.user)
         }
       },
@@ -236,6 +234,18 @@ function createBaseSessionLog(context: MockContext): SessionLog {
         repeat: true,
         body: {
           identity: toAuthIdentity(context.user, true)
+        }
+      },
+      {
+        method: 'GET',
+        path: '/api/auth/registration',
+        repeat: true,
+        body: {
+          mode: 'disabled',
+          registrationEnabled: false,
+          inviteRegistrationEnabled: false,
+          publicRegistrationEnabled: false,
+          passwordLoginEnabled: true
         }
       },
       {
@@ -273,12 +283,30 @@ function createBaseSessionLog(context: MockContext): SessionLog {
 
 async function attachMockApi(page: Page, context: MockContext) {
   const simulator = createSessionLogSimulator(createBaseSessionLog(context));
+  let loggedIn = false;
 
   await page.route('**/api/**', async (route) => {
     const request = route.request();
     const method = request.method();
     const url = new URL(request.url());
     const { pathname } = url;
+
+    if (pathname === '/api/auth/login' && method === 'POST') {
+      loggedIn = true;
+      await fulfillJson(route, { identity: toAuthIdentity(context.user) });
+      return;
+    }
+
+    if (pathname === '/api/auth/logout' && method === 'POST') {
+      loggedIn = false;
+      await fulfillJson(route, { ok: true });
+      return;
+    }
+
+    if (pathname === '/api/auth/me' && method === 'GET') {
+      await fulfillJson(route, { identity: loggedIn ? toAuthIdentity(context.user, true) : null });
+      return;
+    }
 
     if (pathname === '/api/forums' && method === 'GET') {
       const lastPost: ForumLastPostDto = {
@@ -1056,8 +1084,7 @@ test.describe('Robot UI (mocked)', () => {
     await expect(robotLoadPanel.locator('.vb-kv', { hasText: 'Queued' })).toContainText('2');
 
     await page.evaluate(() => {
-      window.localStorage.setItem('cforum_auth_token', 'mock-access-token');
-      window.localStorage.setItem('cforum_refresh_token', 'mock-refresh-token');
+      document.cookie = 'cforum_session=mock-access-token; path=/; SameSite=Lax';
     });
     await page.goto('/admin');
     await page.waitForResponse((response) => response.url().includes('/api/admin/robot/automations'));

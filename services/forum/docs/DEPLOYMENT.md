@@ -431,11 +431,55 @@ CODEX_FORUM_ENABLE_SEARCH=1
 
 When registration is disabled, invite-code lookup also returns not found so public callers cannot probe invite codes.
 
+#### Passwords, passkeys, cookies, and CSRF
+
+`CODEX_FORUM_PASSWORD_LOGIN_ENABLED` defaults to `1`. Setting it to `0` disables password login and every server-side
+password creation/change/reset path, including admin user creation. Startup then fails closed unless SQLite already
+contains a WebAuthn credential for an admin. Enroll and verify an admin passkey **before** disabling passwords; do not
+attempt to bootstrap a password admin afterward.
+
+Set `CODEX_FORUM_BASE_URL` to the exact public URL. WebAuthn pins its expected origin to that URL's exact origin and
+defaults its RP ID to the exact hostname. `CODEX_FORUM_WEBAUTHN_RP_ID` may override the RP ID for a deliberate
+deployment layout; it must be a valid registrable suffix for the public hostname and changing it makes credentials for
+the old RP ID unusable. `CODEX_FORUM_WEBAUTHN_RP_NAME` controls only the display name. Attestation is `none`,
+credentials are discoverable, and user verification is mandatory.
+
+Each password login, invite registration, or verification creates an independent random opaque session. Only its SHA-256
+hash is stored. Browsers receive an HttpOnly, `SameSite=Lax`, path `/` cookie; it is also `Secure` whenever
+`CODEX_FORUM_BASE_URL` uses HTTPS. Logout removes only that session. Password and passkey changes deliberately revoke
+other sessions.
+
+The first-party browser SDK is same-origin by design: JSON, uploads, and EventSource use the browser cookie, and URLs
+never contain session secrets. Every unsafe request that supplies `Origin` must match the configured base origin
+exactly; cookie-authenticated `POST`, `PUT`, `PATCH`, and `DELETE` requests must always supply that exact origin.
+Originless API keys, internal bearer sessions, and impersonation bearer credentials remain supported for automation.
+`CODEX_FORUM_CORS_CREDENTIALS=1` requires an explicit `CODEX_FORUM_CORS_ORIGINS` allowlist, but it does not make the
+first-party SDK a cross-origin cookie client. API keys remain the supported non-browser integration credential.
+
+Native EventSource cannot attach an Authorization header. Cookie-authenticated same-origin streams work directly. SDK
+callers that configure an explicit bearer/API token must also provide an authorization-capable custom
+`eventSourceFactory`; the SDK fails clearly rather than putting the credential in the query string.
+
+Users enroll and name passkeys from User CP. Login is usernameless. Credential changes require a recent password or
+passkey authentication, except that a freshly verified account with neither a password nor a passkey may bootstrap its
+first passkey. An account cannot remove its final passkey unless global password login is enabled and it has a password.
+A passwordless user can create a new password only from a recent passkey-authenticated session while the global password
+gate is on.
+
+The authentication migration deliberately refuses to proceed if `external_identities` contains any rows. Before
+deploying, inventory and unlink or otherwise migrate every legacy external identity, back up SQLite, then restart. The
+migration drops the table only at row count zero, invalidates all legacy browser and refresh sessions, and creates
+WebAuthn credential and one-time challenge tables. Browser startup removes the legacy `cforum_auth_token` and
+`cforum_refresh_token` localStorage values. The removed browser token-storage and refresh SDK APIs are intentionally
+source-incompatible; migrate browser callers to same-origin cookies and automation to API-key `TokenStorage`. A nonzero
+external-identity row count leaves the migration unapplied and visible in startup logs; restore the backup for rollback
+rather than editing `schema_migrations` manually.
+
 #### Public search policy
 
 `CODEX_FORUM_ENABLE_SEARCH=1` exposes `GET /search` to public readers. The search query applies forum visibility in SQL before result ordering and limits, so private or admin-only matches cannot consume the public result limit. The API accepts `scope=all|topics|posts`, an optional `forumId` to restrict search to one visible forum, and a clamped `limit` from 1 to 100. The web forum page searches the current forum by default and lets users opt into searching all visible forums.
 
-For internet-facing deployments, keep `CODEX_FORUM_ENABLE_RATE_LIMITING=1` enabled with search. Rate limiting is route-specific rather than global: login/register, topic creation, replies, and search have limits, while normal authenticated read routes are not globally throttled. Browser sessions are bucketed by forum identity, API keys and impersonation tokens are bucketed by token id, and anonymous requests are bucketed by client IP.
+For internet-facing deployments, keep `CODEX_FORUM_ENABLE_RATE_LIMITING=1` enabled with search. Rate limiting is route-specific rather than global: password and passkey login, registration, topic creation, replies, and search have limits, while normal authenticated read routes are not globally throttled. Browser sessions are bucketed by forum identity, API keys and impersonation tokens are bucketed by token id, and anonymous requests are bucketed by client IP.
 
 Set `CODEX_FORUM_TRUST_PROXY=1` (or a narrower Fastify trust-proxy value such as a hop count/CIDR string) only when the forum origin cannot be reached directly by public clients. If the origin port is public while forwarded headers are trusted, clients can spoof IP headers and bypass anonymous IP limits. Cloudflare Tunnel deployments should keep the origin private and let Fastify derive `request.ip` from the trusted forwarding chain.
 

@@ -11,6 +11,7 @@ import type {
   AccessRuleEffect,
   AccessRulePrincipalKind,
   AccessRuleScopeKind,
+  AuthenticationMethod,
 } from '@irrigationreal/codex-forum-core';
 
 export interface DbConfig {
@@ -214,16 +215,6 @@ export interface ImpersonationTokenRow {
   expires_at: string | null;
   created_at: string;
   revoked_at: string | null;
-}
-
-export interface ExternalIdentityRow {
-  id: string;
-  identity_id: string;
-  provider_key: string;
-  issuer: string;
-  subject: string;
-  created_at: string;
-  last_login_at: string | null;
 }
 
 export interface SessionRow {
@@ -579,17 +570,35 @@ export interface WebhookRow {
 }
 
 export interface AuthSessionRow {
-  token: string;
+  token_hash: string;
   identity_id: string;
+  auth_method: AuthenticationMethod;
+  authenticated_at: string;
   created_at: string;
   expires_at: string;
 }
 
-export interface RefreshSessionRow {
-  token: string;
+export interface WebAuthnCredentialRow {
+  credential_id: string;
   identity_id: string;
+  name: string;
+  public_key: Buffer;
+  counter: number;
+  transports_json: string;
+  device_type: string;
+  backed_up: number;
   created_at: string;
+  last_used_at: string | null;
+  updated_at: string;
+}
+
+export interface WebAuthnChallengeRow {
+  id: string;
+  challenge: string;
+  ceremony: 'registration' | 'authentication';
+  identity_id: string | null;
   expires_at: string;
+  created_at: string;
 }
 
 export interface DbBootstrapResult {

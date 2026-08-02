@@ -53,6 +53,7 @@ import {
   DEPLOY_SCRIPT,
   DEPLOY_STATE_FILE,
   DEPLOY_WORKDIR,
+  PASSWORD_LOGIN_ENABLED,
   PROMPT_ENHANCER_ENABLED,
   WORK_DIR
 } from '../runtimeConfig';
@@ -378,6 +379,7 @@ export function registerAdminRoutes({
 
   app.post('/admin/users', async (request) => {
     requireAdmin(request);
+    if (!PASSWORD_LOGIN_ENABLED) throw app.httpErrors.forbidden('Password credentials are disabled');
     const body = parseBody(app, AdminCreateUserRequestSchema, request.body);
 
     // Check if username taken
@@ -432,11 +434,14 @@ export function registerAdminRoutes({
       store.updateIdentity(userId, { displayName: body.displayName });
     }
 
-    // Update password if provided
+    // Update password if provided and revoke every existing login for the target.
     if (body.password) {
+      if (!PASSWORD_LOGIN_ENABLED) throw app.httpErrors.forbidden('Password credentials are disabled');
       const passwordHash = await hashPassword(body.password);
-      db.prepare('update identities set password_hash = ?, updated_at = ? where id = ?')
-        .run(passwordHash, new Date().toISOString(), userId);
+      const target = store.getIdentity(userId);
+      if (!target?.username) throw app.httpErrors.badRequest('User does not support password login');
+      store.setIdentityPassword(userId, target.username, passwordHash);
+      store.deleteAuthSessionsForIdentity(userId);
     }
 
     const updated = store.getIdentity(userId);

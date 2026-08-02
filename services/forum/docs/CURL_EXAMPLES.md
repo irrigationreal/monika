@@ -1,145 +1,65 @@
 # cURL Examples
 
-All examples assume the API is reachable under the `/api` prefix.
-
-Set your base URL:
+All examples assume the API is under `/api`.
 
 ```bash
-export CODEX_FORUM_BASE_URL="https://forum.irrigate.cc"
+export CODEX_FORUM_BASE_URL="https://forum.example.com"
+export FORUM_ORIGIN="https://forum.example.com"
 ```
 
-## Health
+## Browser-style password login (opaque cookie)
+
+Login does not return a bearer or refresh token. It creates an independent opaque server-side session and sets an
+HttpOnly cookie. `-c`/`-b` model browser cookie handling; unsafe cookie-authenticated requests must send the exact
+configured base origin.
 
 ```bash
-curl -sS "$CODEX_FORUM_BASE_URL/api/healthz"
-```
-
-## Login (session token)
-
-```bash
-curl -sS \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"pp","password":"pp"}' \
+curl -sS -c forum.cookies -H 'content-type: application/json' \
+  -d '{"username":"admin","password":"correct horse battery staple"}' \
   "$CODEX_FORUM_BASE_URL/api/auth/login"
+curl -sS -b forum.cookies "$CODEX_FORUM_BASE_URL/api/auth/me"
 ```
 
-Store the returned `token`:
+Create an API key as the signed-in admin (the key is shown once):
 
 ```bash
-export CODEX_FORUM_TOKEN="cforum_..."
-```
-
-## Current user
-
-```bash
-curl -sS \
-  -H "Authorization: Bearer $CODEX_FORUM_TOKEN" \
-  "$CODEX_FORUM_BASE_URL/api/auth/me"
-```
-
-## List forums
-
-```bash
-curl -sS "$CODEX_FORUM_BASE_URL/api/forums" | jq
-```
-
-## Create topic
-
-```bash
-export FORUM_ID="..."
-
-curl -sS \
-  -H "Authorization: Bearer $CODEX_FORUM_TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"title":"API topic","body":"Created via curl."}' \
-  "$CODEX_FORUM_BASE_URL/api/forums/$FORUM_ID/topics"
-```
-
-## Reply to a topic
-
-```bash
-export TOPIC_ID="..."
-
-curl -sS \
-  -H "Authorization: Bearer $CODEX_FORUM_TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"body":"Reply via curl."}' \
-  "$CODEX_FORUM_BASE_URL/api/topics/$TOPIC_ID/posts"
-```
-
-## API keys
-
-API key management is admin-only. Use an admin session token for the examples in this section.
-
-### Create API key (token returned once)
-
-```bash
-curl -sS \
-  -H "Authorization: Bearer $CODEX_FORUM_TOKEN" \
-  -H 'Content-Type: application/json' \
+curl -sS -b forum.cookies -H "Origin: $FORUM_ORIGIN" -H 'content-type: application/json' \
   -d '{"label":"curl key","scopes":["read","write"]}' \
   "$CODEX_FORUM_BASE_URL/api/api-keys"
-```
-
-Store the returned key (starts with `cfk_...`):
-
-```bash
 export CODEX_FORUM_API_KEY="cfk_..."
 ```
 
-### Use API key (Authorization header)
+API keys and impersonation tokens remain explicit automation credentials and may use either `Authorization: Bearer` or
+`X-Api-Key`; they are not subject to browser CSRF origin checks.
 
 ```bash
-curl -sS \
-  -H "Authorization: Bearer $CODEX_FORUM_API_KEY" \
-  "$CODEX_FORUM_BASE_URL/api/forums"
+curl -sS -H "Authorization: Bearer $CODEX_FORUM_API_KEY" "$CODEX_FORUM_BASE_URL/api/forums"
+
+export FORUM_ID="..."
+curl -sS -H "Authorization: Bearer $CODEX_FORUM_API_KEY" -H 'content-type: application/json' \
+  -d '{"title":"API topic","body":"Created via curl."}' \
+  "$CODEX_FORUM_BASE_URL/api/forums/$FORUM_ID/topics"
+
+export TOPIC_ID="..."
+curl -sS -H "Authorization: Bearer $CODEX_FORUM_API_KEY" -H 'content-type: application/json' \
+  -d '{"body":"Reply via curl."}' "$CODEX_FORUM_BASE_URL/api/topics/$TOPIC_ID/posts"
 ```
 
-### Use API key (X-Api-Key header)
+## Documentation assets
 
 ```bash
-curl -sS \
-  -H "X-Api-Key: $CODEX_FORUM_API_KEY" \
-  "$CODEX_FORUM_BASE_URL/api/forums"
+curl -sS -H "Authorization: Bearer $CODEX_FORUM_API_KEY" "$CODEX_FORUM_BASE_URL/api/openapi.json"
+curl -sS -H "Authorization: Bearer $CODEX_FORUM_API_KEY" "$CODEX_FORUM_BASE_URL/api/postman/collection.json"
 ```
 
-## Downloads
+The contracts in `packages/contracts/src/schemas.ts` are canonical; the generated OpenAPI file is a reference artifact.
 
-These documentation assets require authenticated read access:
-
-```bash
-curl -sS \
-  -H "Authorization: Bearer $CODEX_FORUM_TOKEN" \
-  "$CODEX_FORUM_BASE_URL/api/openapi.json"
-
-curl -sS \
-  -H "Authorization: Bearer $CODEX_FORUM_TOKEN" \
-  "$CODEX_FORUM_BASE_URL/api/postman/collection.json"
-```
-
-- OpenAPI spec: `GET /api/openapi.json` — **manual reference only**; the contracts in
-  `packages/contracts/src/schemas.ts` are the canonical API boundary.
-- Postman collection: `GET /api/postman/collection.json`
-
-## Message Templates
-
-Create a private all-forum reply template:
+## Message templates
 
 ```bash
 curl -sS -X POST "$CODEX_FORUM_BASE_URL/api/message-templates" \
-  -H "Authorization: Bearer $CODEX_FORUM_TOKEN" -H 'content-type: application/json' \
+  -H "Authorization: Bearer $CODEX_FORUM_API_KEY" -H 'content-type: application/json' \
   -d '{"name":"Approval","category":"Review","body":"Approved after review.","threadTitle":null,"forumScope":"all","forumIds":[],"contexts":["reply"],"enabled":true}'
 ```
 
-List templates effective in one composer (filtering and forum authorization happen server-side):
-
-```bash
-curl -sS "$CODEX_FORUM_BASE_URL/api/message-templates/effective?context=reply&forumId=$FORUM_ID" \
-  -H "Authorization: Bearer $CODEX_FORUM_TOKEN"
-```
-
-All Message Template endpoints require authentication; system management additionally
-requires an administrator account. Update, delete, and reorder requests must send the
-current integer `revision` returned by the API. Stale revisions return `409 Conflict`.
-Administrators use the same payload shape under `/api/admin/message-templates` to
-manage the separate system library.
+Update, delete, and reorder requests must send the current integer `revision`.

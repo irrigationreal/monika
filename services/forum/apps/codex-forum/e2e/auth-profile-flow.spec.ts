@@ -1,5 +1,12 @@
-import { expect, test, type BrowserContext, type Page, type Request } from '@playwright/test';
-import type { AuthIdentityDto, IdentityDto, InviteInfoDto, RegistrationModeDto } from '@irrigationreal/codex-forum-contracts';
+import { expect, test } from '@playwright/test';
+
+import type {
+  AuthIdentityDto,
+  IdentityDto,
+  InviteInfoDto,
+  RegistrationModeDto,
+} from '@irrigationreal/codex-forum-contracts';
+import type { BrowserContext, Page, Request } from '@playwright/test';
 
 type IdentityRecord = IdentityDto & {
   username?: string;
@@ -19,6 +26,7 @@ type VerificationRecord = {
 type MockResponse = {
   status: number;
   body?: unknown;
+  headers?: Record<string, string>;
 };
 
 class MockAuthApi {
@@ -27,11 +35,9 @@ class MockAuthApi {
   private identities = new Map<string, IdentityRecord>();
   private identitiesByUsername = new Map<string, IdentityRecord>();
   private sessions = new Map<string, string>();
-  private refreshSessions = new Map<string, string>();
   private invites = new Map<string, InviteRecord>();
   private verificationTokens = new Map<string, VerificationRecord>();
   private baseUrl: string;
-  private refreshCallCount = 0;
   private registrationMode: RegistrationModeDto['mode'];
 
   constructor(baseUrl: string, registrationMode: RegistrationModeDto['mode'] = 'public') {
@@ -63,10 +69,6 @@ class MockAuthApi {
     return null;
   }
 
-  get refreshCalls(): number {
-    return this.refreshCallCount;
-  }
-
   async handle(request: Request): Promise<MockResponse> {
     const url = new URL(request.url());
     const path = url.pathname.replace(/^\/api/, '');
@@ -87,8 +89,9 @@ class MockAuthApi {
           mode: this.registrationMode,
           registrationEnabled: this.registrationMode !== 'disabled',
           inviteRegistrationEnabled: this.registrationMode !== 'disabled',
-          publicRegistrationEnabled: this.registrationMode === 'public'
-        } satisfies RegistrationModeDto
+          publicRegistrationEnabled: this.registrationMode === 'public',
+          passwordLoginEnabled: true,
+        } satisfies RegistrationModeDto,
       };
     }
 
@@ -104,8 +107,8 @@ class MockAuthApi {
           code: invite.code,
           valid: true,
           remainingUses: invite.remainingUses,
-          expiresAt: invite.expiresAt
-        }
+          expiresAt: invite.expiresAt,
+        },
       };
     }
 
@@ -132,7 +135,8 @@ class MockAuthApi {
         const session = this.issueSession(identity.id);
         return {
           status: 200,
-          body: { ...session, identity: this.toAuthIdentity(identity) }
+          headers: this.sessionHeaders(session),
+          body: { identity: this.toAuthIdentity(identity) },
         };
       }
 
@@ -146,8 +150,8 @@ class MockAuthApi {
           identity: this.toAuthIdentity(identity),
           verifyUrl: new URL(`/verify/${token}`, this.baseUrl).toString(),
           expiresAt,
-          emailSent: false
-        }
+          emailSent: false,
+        },
       };
     }
 
@@ -163,7 +167,7 @@ class MockAuthApi {
         return { status: 404, body: { message: 'User not found' } };
       }
       const session = this.issueSession(identity.id);
-      return { status: 200, body: { ...session, identity: this.toAuthIdentity(identity) } };
+      return { status: 200, headers: this.sessionHeaders(session), body: { identity: this.toAuthIdentity(identity) } };
     }
 
     if (method === 'POST' && path === '/auth/login') {
@@ -176,32 +180,17 @@ class MockAuthApi {
         return { status: 401, body: { message: 'Invalid credentials' } };
       }
       const session = this.issueSession(identity.id);
-      return { status: 200, body: { ...session, identity: this.toAuthIdentity(identity) } };
+      return { status: 200, headers: this.sessionHeaders(session), body: { identity: this.toAuthIdentity(identity) } };
     }
 
     if (method === 'POST' && path === '/auth/logout') {
-      const authHeader = request.headers()['authorization'];
-      if (authHeader?.startsWith('Bearer ')) {
-        const token = authHeader.slice(7);
-        this.sessions.delete(token);
-      }
-      const refresh = request.headers()['x-refresh-token'];
-      if (refresh) {
-        this.refreshSessions.delete(Array.isArray(refresh) ? refresh[0] : refresh);
-      }
-      return { status: 200, body: { ok: true } };
+      const token = this.getSessionToken(request);
+      if (token) this.sessions.delete(token);
+      return { status: 200, headers: { 'set-cookie': 'cforum_session=; Path=/; Max-Age=0' }, body: { ok: true } };
     }
 
-    if (method === 'POST' && path === '/auth/refresh') {
-      this.refreshCallCount += 1;
-      const refresh = request.headers()['x-refresh-token'];
-      const refreshToken = Array.isArray(refresh) ? refresh[0] : refresh;
-      if (!refreshToken || !this.refreshSessions.has(refreshToken)) {
-        return { status: 401, body: { message: 'Invalid refresh token' } };
-      }
-      const identityId = this.refreshSessions.get(refreshToken) ?? '';
-      const session = this.issueSession(identityId);
-      return { status: 200, body: session };
+    if (method === 'GET' && path === '/me/webauthn/credentials') {
+      return { status: this.getIdentityFromAuth(request) ? 200 : 401, body: { items: [] } };
     }
 
     if (method === 'GET' && path === '/auth/me') {
@@ -250,8 +239,8 @@ class MockAuthApi {
           id: identity.id,
           displayName: identity.displayName,
           avatarUrl: identity.avatarUrl,
-          message: 'Avatar updated.'
-        }
+          message: 'Avatar updated.',
+        },
       };
     }
 
@@ -296,7 +285,7 @@ class MockAuthApi {
       rank: 'Member',
       joinDate: now,
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
     };
     this.identities.set(id, identity);
     if (username) {
@@ -312,18 +301,30 @@ class MockAuthApi {
     return token;
   }
 
-  private issueSession(identityId: string): { token: string; refreshToken: string } {
+  private issueSession(identityId: string): string {
     const token = `token-${this.tokenCounter++}`;
-    const refreshToken = `refresh-${this.tokenCounter++}`;
     this.sessions.set(token, identityId);
-    this.refreshSessions.set(refreshToken, identityId);
-    return { token, refreshToken };
+    return token;
+  }
+
+  private sessionHeaders(token: string): Record<string, string> {
+    return { 'set-cookie': `cforum_session=${token}; Path=/; HttpOnly; SameSite=Lax` };
+  }
+
+  private getSessionToken(request: Request): string | null {
+    const cookie = request.headers()['cookie'] ?? '';
+    return (
+      cookie
+        .split(';')
+        .map((part) => part.trim())
+        .find((part) => part.startsWith('cforum_session='))
+        ?.slice(15) ?? null
+    );
   }
 
   private getIdentityFromAuth(request: Request): IdentityRecord | null {
-    const authHeader = request.headers()['authorization'];
-    if (!authHeader?.startsWith('Bearer ')) return null;
-    const token = authHeader.slice(7);
+    const token = this.getSessionToken(request);
+    if (!token) return null;
     const identityId = this.sessions.get(token);
     if (!identityId) return null;
     return this.identities.get(identityId) ?? null;
@@ -339,7 +340,7 @@ class MockAuthApi {
       location: identity.location,
       signature: identity.signature,
       theme: identity.theme,
-      hasPrivateEmail: includePrivate ? false : undefined
+      hasPrivateEmail: includePrivate ? false : undefined,
     };
   }
 
@@ -358,7 +359,7 @@ class MockAuthApi {
       rank: identity.rank,
       joinDate: identity.joinDate,
       createdAt: identity.createdAt,
-      updatedAt: identity.updatedAt
+      updatedAt: identity.updatedAt,
     };
   }
 }
@@ -368,8 +369,8 @@ async function attachMockApi(context: BrowserContext, api: MockAuthApi): Promise
     const response = await api.handle(route.request());
     await route.fulfill({
       status: response.status,
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(response.body ?? {})
+      headers: { 'content-type': 'application/json', ...(response.headers ?? {}) },
+      body: JSON.stringify(response.body ?? {}),
     });
   });
 }
@@ -412,7 +413,7 @@ test.describe('Auth registration and profile flows', () => {
     await page.setInputFiles('input[type="file"]', {
       name: 'avatar.png',
       mimeType: 'image/png',
-      buffer: avatarPng
+      buffer: avatarPng,
     });
     await page.locator('button', { hasText: 'Upload' }).click();
     await expect(page.locator('.vb-success-banner')).toContainText('Avatar updated.');
@@ -459,13 +460,9 @@ test.describe('Auth registration and profile flows', () => {
 
     await page.locator('.vb-welcome-links a', { hasText: 'User CP' }).click();
     await page.locator('button', { hasText: 'Edit Profile' }).click();
-    await page.evaluate(() => {
-      localStorage.setItem('cforum_auth_token', 'expired-token');
-    });
     await page.locator('#editLocation').fill('Portland, OR');
     await page.locator('button', { hasText: 'Save Changes' }).click();
     await expect(page.locator('.vb-profile-row', { hasText: 'Location:' })).toContainText('Portland, OR');
-    expect(api.refreshCalls).toBeGreaterThan(0);
   });
 
   test('disabled registration hides register UI and shows closed state', async ({ page }) => {
@@ -535,8 +532,9 @@ test.describe('Auth registration and profile flows', () => {
 
     await page.locator('.vb-link-btn', { hasText: 'Log Out' }).click();
     await expect(page.locator('.vb-welcome')).toContainText('Guest_User');
-    await expect(page.evaluate(() => localStorage.getItem('cforum_auth_token'))).resolves.toBeNull();
-    await expect(page.evaluate(() => localStorage.getItem('cforum_refresh_token'))).resolves.toBeNull();
+    await expect(page.context().cookies()).resolves.not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: 'cforum_session', value: expect.stringMatching(/.+/) })])
+    );
 
     await page.locator('.vb-link-btn', { hasText: 'Log In' }).click();
     await page.locator('.vb-modal input[type="text"]').fill('invite-user');
@@ -566,7 +564,7 @@ test.describe('Auth registration and profile flows', () => {
     await expect(page.locator('.vb-welcome')).toContainText('Guest_User');
   });
 
-  test('keeps parallel sessions consistent after refresh', async ({ browser }) => {
+  test('keeps parallel cookie sessions consistent after reload', async ({ browser }) => {
     const baseUrl = test.info().project.use.baseURL ?? 'http://localhost:5173';
     const api = new MockAuthApi(baseUrl);
     api.createVerifiedIdentity('Parallel User', 'parallel-user', 'sharedpass');
@@ -600,7 +598,7 @@ test.describe('Auth registration and profile flows', () => {
     await pageA.locator('button', { hasText: 'Save Changes' }).click();
     await expect(pageA.locator('.vb-welcome')).toContainText('Parallel Updated');
 
-    // Second session remains stale until it refreshes.
+    // Second session remains stale until it reloads.
     await expect(pageB.locator('.vb-welcome')).toContainText('Parallel User');
     await pageB.reload();
     await expect(pageB.locator('.vb-welcome')).toContainText('Parallel Updated');

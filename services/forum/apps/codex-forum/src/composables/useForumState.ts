@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue';
 
-import { api, createStateStream, getAuthToken, setAuthToken, setRefreshToken } from '../lib/apiClient';
+import { api, createStateStream } from '../lib/apiClient';
 import { parseReasoningSteps } from '../lib/reasoning';
 import { retainSessionContext } from '../lib/sessionContext';
 import { useTheme } from './useTheme';
@@ -34,7 +34,11 @@ import type { ReasoningStep } from '../lib/reasoning';
 export type TraceSegment =
   { kind: 'reasoning'; text: string } | { kind: 'assistant_text'; text: string } | { kind: 'tool'; toolRunId: string };
 
-export function freezeInterruptedTextSegments(segments: TraceSegment[], reasoning: string, assistant: string): TraceSegment[] {
+export function freezeInterruptedTextSegments(
+  segments: TraceSegment[],
+  reasoning: string,
+  assistant: string
+): TraceSegment[] {
   const frozen = [...segments];
   if (reasoning) frozen.push({ kind: 'reasoning', text: reasoning });
   if (assistant) frozen.push({ kind: 'assistant_text', text: assistant });
@@ -103,14 +107,16 @@ const attachmentsByPost = ref<Record<string, AttachmentDto[]>>({});
 const lastReplyModel = ref<string | null>(null);
 const lastReplyReasoning = ref<string | null>(null);
 const fallbackModelCatalog: ModelCatalogDto = {
-  items: [{
-    id: 'gpt-5.2',
-    family: 'echs',
-    supportsReasoning: true,
-    supportedThinkingLevels: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'],
-    supportsTools: true,
-    contextWindowTokens: 200000
-  }],
+  items: [
+    {
+      id: 'gpt-5.2',
+      family: 'echs',
+      supportsReasoning: true,
+      supportedThinkingLevels: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'],
+      supportsTools: true,
+      contextWindowTokens: 200000,
+    },
+  ],
   updatedAt: new Date(0).toISOString(),
 };
 const FORUM_REASONING_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -122,6 +128,7 @@ const registrationSettings = ref<RegistrationModeDto>({
   registrationEnabled: false,
   inviteRegistrationEnabled: false,
   publicRegistrationEnabled: false,
+  passwordLoginEnabled: false,
 });
 const registrationSettingsLoading = ref(false);
 const registrationSettingsError = ref<string | null>(null);
@@ -214,7 +221,7 @@ function freezeCurrentInterruptedTrace(): void {
   committedSegments.value = freezeInterruptedTextSegments(
     committedSegments.value,
     reasoningDraft.value,
-    assistantDraft.value,
+    assistantDraft.value
   );
   assistantDraft.value = '';
   reasoningDraft.value = '';
@@ -225,8 +232,10 @@ function freezeCurrentInterruptedTrace(): void {
 }
 
 function hasCurrentTrace(): boolean {
-  return interruptedTrace.value || committedSegments.value.length > 0 || Boolean(
-    reasoningDraft.value || assistantDraft.value || pendingReasoningDelta || pendingAssistantDelta,
+  return (
+    interruptedTrace.value ||
+    committedSegments.value.length > 0 ||
+    Boolean(reasoningDraft.value || assistantDraft.value || pendingReasoningDelta || pendingAssistantDelta)
   );
 }
 
@@ -350,13 +359,16 @@ export function useForumState() {
   const allModelOptions = computed(() => modelItems.value.map((item) => item.id));
 
   const latestToolRun = computed(() => robotState.value?.recentToolRuns[0] ?? null);
-  const isRobotBusy = computed(() => Boolean(robotState.value && !['idle', 'stopped'].includes(robotState.value.activity)));
+  const isRobotBusy = computed(() =>
+    Boolean(robotState.value && !['idle', 'stopped'].includes(robotState.value.activity))
+  );
 
   const isLoggedIn = computed(() => currentUser.value !== null);
   const isAdmin = computed(() => currentUser.value?.kind === 'admin');
   const canPublicRegister = computed(() => registrationSettings.value.publicRegistrationEnabled);
   const canInviteRegister = computed(() => registrationSettings.value.inviteRegistrationEnabled);
   const canShowRegisterLink = computed(() => registrationSettings.value.registrationEnabled);
+  const passwordLoginEnabled = computed(() => registrationSettings.value.passwordLoginEnabled);
   const canModerate = computed(() => {
     const kind = currentUser.value?.kind;
     if (kind === 'admin') return true;
@@ -384,11 +396,6 @@ export function useForumState() {
   }
 
   async function checkAuth(): Promise<void> {
-    if (!getAuthToken()) {
-      authChecked.value = true;
-      currentPermissions.value = [];
-      return;
-    }
     try {
       const res = await api.me();
       currentUser.value = res.identity;
@@ -404,8 +411,6 @@ export function useForumState() {
     } catch (err) {
       const status = err instanceof Error && 'status' in err ? (err as Error & { status?: number }).status : undefined;
       if (status === 401) {
-        setAuthToken(null);
-        setRefreshToken(null);
         currentUser.value = null;
         currentPermissions.value = [];
       }
@@ -416,13 +421,9 @@ export function useForumState() {
   async function login(username: string, password: string): Promise<boolean> {
     try {
       const res = await api.login(username, password);
-      if (res.token) {
-        setAuthToken(res.token);
-        setRefreshToken(res.refreshToken ?? null);
-        await checkAuth();
-        return true;
-      }
-      return false;
+      if (!res.identity) return false;
+      await checkAuth();
+      return true;
     } catch {
       return false;
     }
@@ -434,8 +435,6 @@ export function useForumState() {
     } catch {
       // ignore errors
     }
-    setAuthToken(null);
-    setRefreshToken(null);
     currentUser.value = null;
     currentPermissions.value = [];
     modelCatalog.value = null;
@@ -449,10 +448,8 @@ export function useForumState() {
     password?: string
   ): Promise<RegisterResponseDto> {
     const result = await api.register(displayName, inviteCode, username, password);
-    // If we got a token, user is logged in directly
-    if (result.token) {
-      setAuthToken(result.token);
-      setRefreshToken(result.refreshToken ?? null);
+    // Invite registration creates a cookie session; public registration waits for verification.
+    if (result.identity && username && password) {
       currentUser.value = result.identity;
       setTheme(result.identity.theme ?? 'vmonika');
       await loadCurrentPermissions();
@@ -466,8 +463,6 @@ export function useForumState() {
 
   async function verify(token: string): Promise<{ displayName: string }> {
     const result = await api.verify(token);
-    setAuthToken(result.token);
-    setRefreshToken(result.refreshToken ?? null);
     currentUser.value = result.identity;
     setTheme(result.identity.theme ?? 'vmonika');
     await loadCurrentPermissions();
@@ -1647,6 +1642,7 @@ export function useForumState() {
     canPublicRegister,
     canInviteRegister,
     canShowRegisterLink,
+    passwordLoginEnabled,
     canModerate,
     modelItems,
     modelSupportsReasoning,

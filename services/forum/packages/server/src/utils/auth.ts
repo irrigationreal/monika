@@ -1,6 +1,8 @@
 import { createHash, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 
+import type { AuthenticationMethod } from '@irrigationreal/codex-forum-core';
+
 const scryptAsync = promisify(scrypt);
 
 export async function hashPassword(password: string): Promise<string> {
@@ -23,6 +25,9 @@ export type AuthType = 'session' | 'apiKey' | 'impersonation';
 export interface AuthContext {
   identityId: string;
   authType: AuthType;
+  authSource?: 'cookie' | 'authorization' | 'api-key-header';
+  authMethod?: AuthenticationMethod;
+  authenticatedAt?: string;
   scopes: AuthScope[] | null;
   tokenId?: string | null;
   ownerIdentityId?: string | null;
@@ -33,7 +38,7 @@ export const IMPERSONATION_PREFIX = 'cfi_';
 export const ALLOWED_API_SCOPES: Set<AuthScope> = new Set<AuthScope>(['read', 'write', 'admin', '*']);
 
 export function generateToken(prefix: string = 'cforum'): string {
-  return `${prefix}_${Date.now()}_${randomBytes(24).toString('hex')}`;
+  return `${prefix}_${randomBytes(32).toString('base64url')}`;
 }
 
 export function generateApiToken(prefix: string): string {

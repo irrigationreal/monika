@@ -122,11 +122,13 @@
                 "properties": {
                   "username": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 100
                   },
                   "password": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 1024
                   }
                 },
                 "required": [
@@ -145,14 +147,6 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "token": {
-                      "type": "string",
-                      "nullable": true
-                    },
-                    "refreshToken": {
-                      "type": "string",
-                      "nullable": true
-                    },
                     "identity": {
                       "type": "object",
                       "properties": {
@@ -222,6 +216,9 @@
                         },
                         "hasPrivateEmail": {
                           "type": "boolean"
+                        },
+                        "hasPassword": {
+                          "type": "boolean"
                         }
                       },
                       "required": [
@@ -233,10 +230,7 @@
                     "message": {
                       "type": "string"
                     }
-                  },
-                  "required": [
-                    "token"
-                  ]
+                  }
                 }
               }
             }
@@ -356,6 +350,9 @@
                         },
                         "hasPrivateEmail": {
                           "type": "boolean"
+                        },
+                        "hasPassword": {
+                          "type": "boolean"
                         }
                       },
                       "required": [
@@ -367,43 +364,6 @@
                   },
                   "required": [
                     "identity"
-                  ]
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/auth/refresh": {
-      "post": {
-        "tags": [
-          "auth"
-        ],
-        "summary": "Refresh auth tokens",
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "token": {
-                      "type": "string",
-                      "nullable": true
-                    },
-                    "refreshToken": {
-                      "type": "string",
-                      "nullable": true
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "token",
-                    "refreshToken"
                   ]
                 }
               }
@@ -442,13 +402,17 @@
                     },
                     "publicRegistrationEnabled": {
                       "type": "boolean"
+                    },
+                    "passwordLoginEnabled": {
+                      "type": "boolean"
                     }
                   },
                   "required": [
                     "mode",
                     "registrationEnabled",
                     "inviteRegistrationEnabled",
-                    "publicRegistrationEnabled"
+                    "publicRegistrationEnabled",
+                    "passwordLoginEnabled"
                   ]
                 }
               }
@@ -471,23 +435,28 @@
                 "properties": {
                   "displayName": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 100
                   },
                   "username": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 100
                   },
                   "password": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 1024
                   },
                   "email": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 320
                   },
                   "inviteCode": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 256
                   }
                 },
                 "required": [
@@ -574,6 +543,9 @@
                         },
                         "hasPrivateEmail": {
                           "type": "boolean"
+                        },
+                        "hasPassword": {
+                          "type": "boolean"
                         }
                       },
                       "required": [
@@ -590,12 +562,6 @@
                     },
                     "emailSent": {
                       "type": "boolean"
-                    },
-                    "token": {
-                      "type": "string"
-                    },
-                    "refreshToken": {
-                      "type": "string"
                     }
                   },
                   "required": [
@@ -632,12 +598,6 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "token": {
-                      "type": "string"
-                    },
-                    "refreshToken": {
-                      "type": "string"
-                    },
                     "identity": {
                       "type": "object",
                       "properties": {
@@ -707,6 +667,9 @@
                         },
                         "hasPrivateEmail": {
                           "type": "boolean"
+                        },
+                        "hasPassword": {
+                          "type": "boolean"
                         }
                       },
                       "required": [
@@ -717,7 +680,6 @@
                     }
                   },
                   "required": [
-                    "token",
                     "identity"
                   ]
                 }
@@ -779,12 +741,12 @@
         }
       }
     },
-    "/auth/oidc/enabled": {
-      "get": {
+    "/auth/webauthn/login/options": {
+      "post": {
         "tags": [
           "auth"
         ],
-        "summary": "Check whether OIDC is enabled",
+        "summary": "Begin usernameless passkey login",
         "responses": {
           "200": {
             "description": "OK",
@@ -793,17 +755,19 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "enabled": {
-                      "type": "boolean"
+                    "challengeId": {
+                      "type": "string"
                     },
-                    "providerKey": {
-                      "type": "string",
-                      "nullable": true
+                    "options": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "nullable": true
+                      }
                     }
                   },
                   "required": [
-                    "enabled",
-                    "providerKey"
+                    "challengeId",
+                    "options"
                   ]
                 }
               }
@@ -812,101 +776,32 @@
         }
       }
     },
-    "/auth/oidc/start": {
-      "get": {
-        "tags": [
-          "auth"
-        ],
-        "summary": "Start OIDC sign-in",
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "nullable": true
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/auth/oidc/start/link": {
-      "get": {
-        "tags": [
-          "auth"
-        ],
-        "summary": "Start OIDC account linking from an authenticated session",
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "nullable": true
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/auth/oidc/callback": {
-      "get": {
-        "tags": [
-          "auth"
-        ],
-        "summary": "OIDC callback",
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "nullable": true
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/auth/oidc/link": {
+    "/auth/webauthn/login/verify": {
       "post": {
         "tags": [
           "auth"
         ],
-        "summary": "Link OIDC identity to an existing forum account",
+        "summary": "Complete passkey login",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
                 "properties": {
-                  "username": {
+                  "challengeId": {
                     "type": "string",
-                    "minLength": 1
+                    "format": "uuid"
                   },
-                  "password": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "issuer": {
-                    "type": "string"
-                  },
-                  "providerKey": {
-                    "type": "string"
-                  },
-                  "subject": {
-                    "type": "string",
-                    "minLength": 1
+                  "response": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "nullable": true
+                    }
                   }
                 },
                 "required": [
-                  "username",
-                  "password",
-                  "subject"
+                  "challengeId",
+                  "response"
                 ]
               }
             }
@@ -920,18 +815,89 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "token": {
-                      "type": "string"
-                    },
-                    "refreshToken": {
-                      "type": "string"
-                    },
-                    "linked": {
-                      "type": "boolean"
+                    "identity": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "displayName": {
+                          "type": "string"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "human",
+                            "robot",
+                            "persona",
+                            "webhook",
+                            "system",
+                            "admin"
+                          ]
+                        },
+                        "parentIdentityId": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "avatarUrl": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "location": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "signature": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "theme": {
+                          "type": "string",
+                          "nullable": true,
+                          "enum": [
+                            "system",
+                            "classic-light",
+                            "classic-dark",
+                            "vmonika",
+                            "vmonika-light",
+                            "lunar-horse",
+                            "cn-portal-2000s",
+                            "cn-im-2000s",
+                            "cn-commerce-2000s",
+                            "win95",
+                            "mac-platinum",
+                            "crt-green",
+                            "winxp-luna",
+                            "aqua",
+                            "netscape",
+                            "y2k-gel",
+                            "vista-aero",
+                            "ubuntu-human",
+                            "web20",
+                            "github-2012",
+                            "metro",
+                            "solarized-dark",
+                            "notion",
+                            "nord",
+                            "material-dark"
+                          ]
+                        },
+                        "hasPrivateEmail": {
+                          "type": "boolean"
+                        },
+                        "hasPassword": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "displayName",
+                        "kind"
+                      ]
                     }
                   },
                   "required": [
-                    "token"
+                    "identity"
                   ]
                 }
               }
@@ -940,12 +906,12 @@
         }
       }
     },
-    "/auth/oidc/links": {
+    "/me/webauthn/credentials": {
       "get": {
         "tags": [
           "auth"
         ],
-        "summary": "List linked OIDC identities for the current user",
+        "summary": "List passkeys",
         "responses": {
           "200": {
             "description": "OK",
@@ -962,28 +928,35 @@
                           "id": {
                             "type": "string"
                           },
-                          "providerKey": {
+                          "name": {
                             "type": "string"
                           },
-                          "issuer": {
+                          "transports": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "deviceType": {
                             "type": "string"
                           },
-                          "subject": {
-                            "type": "string"
+                          "backedUp": {
+                            "type": "boolean"
                           },
                           "createdAt": {
                             "type": "string"
                           },
-                          "lastLoginAt": {
+                          "lastUsedAt": {
                             "type": "string",
                             "nullable": true
                           }
                         },
                         "required": [
                           "id",
-                          "providerKey",
-                          "issuer",
-                          "subject",
+                          "name",
+                          "transports",
+                          "deviceType",
+                          "backedUp",
                           "createdAt"
                         ]
                       }
@@ -999,30 +972,143 @@
         }
       }
     },
-    "/auth/oidc/unlink": {
+    "/me/webauthn/register/options": {
       "post": {
         "tags": [
           "auth"
         ],
-        "summary": "Unlink an OIDC identity from the current forum account",
+        "summary": "Begin passkey enrollment",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "challengeId": {
+                      "type": "string"
+                    },
+                    "options": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "nullable": true
+                      }
+                    }
+                  },
+                  "required": [
+                    "challengeId",
+                    "options"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me/webauthn/register/verify": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Complete passkey enrollment",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
                 "properties": {
-                  "externalIdentityId": {
+                  "challengeId": {
                     "type": "string",
-                    "minLength": 1
+                    "format": "uuid"
+                  },
+                  "response": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "nullable": true
+                    }
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
                   }
                 },
                 "required": [
-                  "externalIdentityId"
+                  "challengeId",
+                  "response",
+                  "name"
                 ]
               }
             }
           }
         },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "transports": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "deviceType": {
+                      "type": "string"
+                    },
+                    "backedUp": {
+                      "type": "boolean"
+                    },
+                    "createdAt": {
+                      "type": "string"
+                    },
+                    "lastUsedAt": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "transports",
+                    "deviceType",
+                    "backedUp",
+                    "createdAt"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me/webauthn/credentials/{credentialId}": {
+      "delete": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Remove a passkey",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "credentialId",
+            "in": "path"
+          }
+        ],
         "responses": {
           "200": {
             "description": "OK",
@@ -1109,15 +1195,90 @@
                 "properties": {
                   "currentPassword": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 1024
                   },
                   "newPassword": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 8,
+                    "maxLength": 1024
                   }
                 },
                 "required": [
                   "currentPassword",
+                  "newPassword"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Remove current user password after passkey enrollment",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me/password/create": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Create a password from a recent passkey session",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "newPassword": {
+                    "type": "string",
+                    "minLength": 8,
+                    "maxLength": 1024
+                  }
+                },
+                "required": [
                   "newPassword"
                 ]
               }

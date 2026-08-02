@@ -15,14 +15,6 @@ import {
 } from '@irrigationreal/codex-forum-core';
 
 import { RegistrationModeValues } from './dto';
-import {
-  OidcEnabledResponseDtoSchema,
-  OidcExternalIdentityListResponseDtoSchema,
-  OidcLinkRequestSchema,
-  OidcLinkResponseDtoSchema,
-  OidcUnlinkRequestSchema,
-  OidcUnlinkResponseDtoSchema,
-} from './oidc';
 import { PageRequestSchema, PageResponseSchema } from './pagination';
 import { ForumThemeKeySchema } from './themes';
 
@@ -1054,6 +1046,7 @@ export const AuthIdentityDtoSchema: z.ZodType<AuthIdentityDto> = z.object({
   signature: optionalNullableString,
   theme: ForumThemeKeySchema.nullable().optional(),
   hasPrivateEmail: z.boolean().optional(),
+  hasPassword: z.boolean().optional(),
 });
 
 export const RegistrationModeDtoSchema: z.ZodType<RegistrationModeDto> = z.object({
@@ -1061,6 +1054,7 @@ export const RegistrationModeDtoSchema: z.ZodType<RegistrationModeDto> = z.objec
   registrationEnabled: z.boolean(),
   inviteRegistrationEnabled: z.boolean(),
   publicRegistrationEnabled: z.boolean(),
+  passwordLoginEnabled: z.boolean(),
 });
 
 export const AuthUserDtoSchema: z.ZodType<AuthUserDto> = z.object({
@@ -1072,8 +1066,6 @@ export const IdentityPermissionsDtoSchema: z.ZodType<IdentityPermissionsDto> = z
 });
 
 export const LoginResponseDtoSchema: z.ZodType<LoginResponseDto> = z.object({
-  token: z.string().nullable(),
-  refreshToken: optionalNullableString,
   identity: AuthIdentityDtoSchema.optional(),
   message: z.string().optional(),
 });
@@ -1083,15 +1075,36 @@ export const RegisterResponseDtoSchema: z.ZodType<RegisterResponseDto> = z.objec
   verifyUrl: z.string().optional(),
   expiresAt: z.string().optional(),
   emailSent: z.boolean().optional(),
-  token: z.string().optional(),
-  refreshToken: z.string().optional(),
 });
 
 export const VerifyResponseDtoSchema: z.ZodType<VerifyResponseDto> = z.object({
-  token: z.string(),
-  refreshToken: z.string().optional(),
   identity: AuthIdentityDtoSchema,
 });
+
+export const WebAuthnOptionsResponseDtoSchema = z.object({
+  challengeId: z.string(),
+  options: z.record(z.unknown()),
+});
+export const WebAuthnCredentialDtoSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  transports: z.array(z.string()),
+  deviceType: z.string(),
+  backedUp: z.boolean(),
+  createdAt: z.string(),
+  lastUsedAt: optionalNullableString,
+});
+export const WebAuthnCredentialListResponseDtoSchema = z.object({ items: z.array(WebAuthnCredentialDtoSchema) });
+export const WebAuthnLoginResponseDtoSchema = z.object({ identity: AuthIdentityDtoSchema });
+export const WebAuthnVerifyRequestSchema = z.object({
+  challengeId: z.string().uuid(),
+  response: z.record(z.unknown()),
+});
+export const WebAuthnRegistrationVerifyRequestSchema = WebAuthnVerifyRequestSchema.extend({
+  name: z.string().min(1).max(100),
+});
+export const PasswordCredentialSchema = z.string().min(8).max(1024);
+export const CreatePasswordRequestSchema = z.object({ newPassword: PasswordCredentialSchema });
 
 export const InviteInfoDtoSchema: z.ZodType<InviteInfoDto> = z.object({
   code: z.string(),
@@ -1107,8 +1120,8 @@ export const UpdatePrivateEmailResponseDtoSchema: z.ZodType<UpdatePrivateEmailRe
 });
 
 export const ChangePasswordRequestSchema = z.object({
-  currentPassword: z.string().min(1),
-  newPassword: z.string().min(1),
+  currentPassword: z.string().min(1).max(1024),
+  newPassword: z.string().min(8).max(1024),
 });
 
 export const ChangePasswordResponseDtoSchema = z.object({
@@ -1245,18 +1258,20 @@ export const CreatePostRequestSchema: z.ZodType<CreatePostRequest> = z.object({
 export const LoginRequestSchema: z.ZodType<LoginRequest> = z.object({
   username: z
     .string({ required_error: 'username and password are required' })
-    .min(1, 'username and password are required'),
+    .min(1, 'username and password are required')
+    .max(100),
   password: z
     .string({ required_error: 'username and password are required' })
-    .min(1, 'username and password are required'),
+    .min(1, 'username and password are required')
+    .max(1024),
 });
 
 export const RegisterRequestSchema: z.ZodType<RegisterRequest> = z.object({
-  displayName: z.string({ required_error: 'displayName is required' }).min(1, 'displayName is required'),
-  username: z.string().min(1).optional(),
-  password: z.string().min(1).optional(),
-  email: z.string().min(1).optional(),
-  inviteCode: z.string().min(1).optional(),
+  displayName: z.string({ required_error: 'displayName is required' }).min(1, 'displayName is required').max(100),
+  username: z.string().min(1).max(100).optional(),
+  password: z.string().min(1).max(1024).optional(),
+  email: z.string().min(1).max(320).optional(),
+  inviteCode: z.string().min(1).max(256).optional(),
 });
 
 export const MessageTemplateContextSchema = z.enum(MessageTemplateContextValues);
@@ -1465,16 +1480,14 @@ export const AdminCreateUserRequestSchema: z.ZodType<AdminCreateUserRequest> = z
   username: z
     .string({ required_error: 'displayName, username, and password are required' })
     .min(1, 'displayName, username, and password are required'),
-  password: z
-    .string({ required_error: 'displayName, username, and password are required' })
-    .min(1, 'displayName, username, and password are required'),
+  password: PasswordCredentialSchema,
   kind: z.string().optional(),
 });
 
 export const AdminUpdateUserRequestSchema: z.ZodType<AdminUpdateUserRequest> = z.object({
   displayName: z.string().optional(),
   kind: z.string().optional(),
-  password: z.string().optional(),
+  password: PasswordCredentialSchema.optional(),
 });
 
 export const AdminCreateForumRequestSchema: z.ZodType<AdminCreateForumRequest> = z.object({
@@ -1601,13 +1614,3 @@ export const PageResponseTopicDtoSchema: z.ZodType<PageResponse<TopicDto>> = Pag
 export const PageResponsePostDtoSchema: z.ZodType<PageResponse<PostDto>> = PageResponseSchema(PostDtoSchema);
 export const PageResponseIdentityDtoSchema: z.ZodType<PageResponse<IdentityDto>> =
   PageResponseSchema(IdentityDtoSchema);
-
-// OIDC
-export {
-  OidcEnabledResponseDtoSchema,
-  OidcExternalIdentityListResponseDtoSchema,
-  OidcLinkRequestSchema,
-  OidcLinkResponseDtoSchema,
-  OidcUnlinkRequestSchema,
-  OidcUnlinkResponseDtoSchema,
-};

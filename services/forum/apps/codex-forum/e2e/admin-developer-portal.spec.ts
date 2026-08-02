@@ -116,7 +116,7 @@ function adminForumToForum(forum: AdminForumDto): ForumDto {
 
 async function seedAuth(context: BrowserContext, token: string): Promise<void> {
   await context.addInitScript((authToken) => {
-    window.localStorage.setItem('cforum_auth_token', authToken);
+    document.cookie = `cforum_session=${authToken}; path=/; SameSite=Lax`;
   }, token);
 }
 

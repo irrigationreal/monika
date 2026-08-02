@@ -1,26 +1,61 @@
+import { BASE_URL } from '../runtimeConfig';
+import { hashToken, isTokenExpired, parseScopes } from './auth';
+
 import type { FastifyInstance } from 'fastify';
-import type { ForumRow, IdentityRow, TopicRow as DbTopicRow, PostRow as DbPostRow } from '../db';
+
+import type { PostRow as DbPostRow, TopicRow as DbTopicRow, ForumRow, IdentityRow } from '../db';
 import type { ForumStore } from '../store';
-import { type AuthContext, type AuthScope, hashToken, isTokenExpired, parseScopes } from './auth';
+import type { AuthContext, AuthScope } from './auth';
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type HeadersRequest = { headers: Record<string, unknown>; query?: unknown };
+interface HeadersRequest {
+  headers: Record<string, unknown>;
+  query?: unknown;
+}
 
-export function createAccessHelpers(app: FastifyInstance, store: ForumStore): {
+export const FORUM_SESSION_COOKIE: string =
+  new URL(BASE_URL).protocol === 'https:' ? '__Host-cforum_session' : 'cforum_session';
+
+function readCookie(header: unknown, name: string): string | null {
+  if (typeof header !== 'string') return null;
+  for (const part of header.split(';')) {
+    const separator = part.indexOf('=');
+    if (separator < 0) continue;
+    if (part.slice(0, separator).trim() === name) {
+      try {
+        return decodeURIComponent(part.slice(separator + 1).trim());
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+export interface AccessHelpers {
   getCurrentUser: (request: HeadersRequest) => AuthContext | null;
   requireScope: (context: AuthContext | null, scope: AuthScope) => AuthContext;
   requireAdmin: (request: HeadersRequest) => AuthContext;
   requireModerator: (request: HeadersRequest, tenantId?: string | null) => AuthContext;
   getIdentityFromRequest: (request: HeadersRequest) => IdentityRow | null;
   canViewForum: (forum: { visibility: string; tenant_id: string | null }, identity: IdentityRow | null) => boolean;
-  canViewTopic: (_topic: { forum_id: string }, forum: { visibility: string; tenant_id: string | null }, identity: IdentityRow | null) => boolean;
+  canViewTopic: (
+    _topic: { forum_id: string },
+    forum: { visibility: string; tenant_id: string | null },
+    identity: IdentityRow | null
+  ) => boolean;
   canCreateTopic: (forum: { visibility: string; tenant_id: string | null }, identity: IdentityRow | null) => boolean;
-  canPostTopic: (_topic: { forum_id: string }, forum: { visibility: string; tenant_id: string | null }, identity: IdentityRow | null) => boolean;
+  canPostTopic: (
+    _topic: { forum_id: string },
+    forum: { visibility: string; tenant_id: string | null },
+    identity: IdentityRow | null
+  ) => boolean;
   requireForumVisible: (forum: { visibility: string; tenant_id: string | null }, identity: IdentityRow | null) => void;
   requireForumVisibleById: (forumId: string, identity: IdentityRow | null) => ForumRow;
   requireTopicVisible: (topicId: string, request: HeadersRequest) => DbTopicRow;
   requirePostVisible: (postId: string, request: HeadersRequest) => DbPostRow;
-} {
+}
+
+export function createAccessHelpers(app: FastifyInstance, store: ForumStore): AccessHelpers {
   function hasScope(context: AuthContext, scope: AuthScope): boolean {
     if (context.scopes === null) return true;
     const scopes = context.scopes;
@@ -48,20 +83,26 @@ export function createAccessHelpers(app: FastifyInstance, store: ForumStore): {
     const bearerToken = authValue?.startsWith('Bearer ') ? authValue.slice(7) : null;
     const apiKeyHeader = request.headers['x-api-key'];
     const apiKeyToken = typeof apiKeyHeader === 'string' ? apiKeyHeader : null;
-    // Support token via query param for SSE endpoints (EventSource can't send headers)
-    const queryObj = request.query as Record<string, unknown> | undefined;
-    const queryToken = typeof queryObj?.['token'] === 'string' ? queryObj['token'] : null;
+    const cookieToken = readCookie(request.headers['cookie'], FORUM_SESSION_COOKIE);
 
-    // Check bearer token or query token for session auth
-    const sessionToken = bearerToken ?? queryToken;
-    if (sessionToken) {
-      const session = store.getAuthSession(sessionToken);
+    // Explicit credentials take precedence over ambient cookies so automation is
+    // never accidentally subjected to cookie CSRF policy. Query credentials are forbidden.
+    if (bearerToken) {
+      const session = store.getAuthSession(bearerToken);
       if (session) {
-        return { identityId: session.identity_id, authType: 'session', scopes: null, tokenId: session.token };
+        return {
+          identityId: session.identity_id,
+          authType: 'session',
+          authSource: 'authorization',
+          authMethod: session.auth_method,
+          authenticatedAt: session.authenticated_at,
+          scopes: null,
+          tokenId: session.token_hash,
+        };
       }
     }
 
-    const tokensToCheck = [bearerToken, apiKeyToken, queryToken].filter((token): token is string => Boolean(token));
+    const tokensToCheck = [bearerToken, apiKeyToken].filter((token): token is string => Boolean(token));
     for (const rawToken of tokensToCheck) {
       const tokenHash = hashToken(rawToken);
       const apiKey = store.getApiKeyByHash(tokenHash);
@@ -70,8 +111,9 @@ export function createAccessHelpers(app: FastifyInstance, store: ForumStore): {
         return {
           identityId: apiKey.identity_id,
           authType: 'apiKey',
+          authSource: rawToken === apiKeyToken ? 'api-key-header' : 'authorization',
           scopes: parseScopes(JSON.parse(apiKey.scopes_json)),
-          tokenId: apiKey.id
+          tokenId: apiKey.id,
         };
       }
       const impersonation = store.getImpersonationTokenByHash(tokenHash);
@@ -81,8 +123,24 @@ export function createAccessHelpers(app: FastifyInstance, store: ForumStore): {
           identityId: impersonation.impersonated_identity_id,
           ownerIdentityId: impersonation.owner_identity_id,
           authType: 'impersonation',
+          authSource: rawToken === apiKeyToken ? 'api-key-header' : 'authorization',
           scopes: parseScopes(JSON.parse(impersonation.scopes_json)),
-          tokenId: impersonation.id
+          tokenId: impersonation.id,
+        };
+      }
+    }
+
+    if (cookieToken) {
+      const session = store.getAuthSession(cookieToken);
+      if (session) {
+        return {
+          identityId: session.identity_id,
+          authType: 'session',
+          authSource: 'cookie',
+          authMethod: session.auth_method,
+          authenticatedAt: session.authenticated_at,
+          scopes: null,
+          tokenId: session.token_hash,
         };
       }
     }
@@ -185,7 +243,10 @@ export function createAccessHelpers(app: FastifyInstance, store: ForumStore): {
     }
   }
 
-  function requireForumVisibleById(forumId: string, identity: ReturnType<ForumStore['getIdentity']>): NonNullable<ReturnType<ForumStore['getForum']>> {
+  function requireForumVisibleById(
+    forumId: string,
+    identity: ReturnType<ForumStore['getIdentity']>
+  ): NonNullable<ReturnType<ForumStore['getForum']>> {
     const forum = store.getForum(forumId);
     if (!forum || !canViewForum(forum, identity)) throw app.httpErrors.notFound('Forum not found');
     return forum;
@@ -229,9 +290,8 @@ export function createAccessHelpers(app: FastifyInstance, store: ForumStore): {
     requireForumVisible,
     requireForumVisibleById,
     requireTopicVisible,
-    requirePostVisible
+    requirePostVisible,
   };
 }
 
-export type AccessHelpers = ReturnType<typeof createAccessHelpers>;
 export type { AuthContext, AuthScope };
