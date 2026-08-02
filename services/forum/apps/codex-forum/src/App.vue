@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
 import { startAuthentication } from '@simplewebauthn/browser';
@@ -21,6 +21,11 @@ const loginUsername = ref('');
 const loginPassword = ref('');
 const loginError = ref('');
 const loggingIn = ref(false);
+const loginDialog = ref<HTMLElement | null>(null);
+const loginUsernameInput = ref<HTMLInputElement | null>(null);
+const passkeyLoginButton = ref<HTMLButtonElement | null>(null);
+const logoutButton = ref<HTMLButtonElement | null>(null);
+let loginTrigger: HTMLElement | null = null;
 const mobileMenuOpen = ref(false);
 
 const buildCommit = import.meta.env.VITE_BUILD_COMMIT?.trim() ?? '';
@@ -124,9 +129,7 @@ async function handleLogin(): Promise<void> {
   const success = await state.login(loginUsername.value, loginPassword.value);
   loggingIn.value = false;
   if (success) {
-    state.closeLoginModal();
-    loginUsername.value = '';
-    loginPassword.value = '';
+    closeLoginForm('logout');
   } else {
     loginError.value = 'Invalid credentials';
   }
@@ -145,7 +148,7 @@ async function handlePasskeyLogin(): Promise<void> {
       response: response as unknown as Record<string, unknown>,
     });
     await state.checkAuth();
-    state.closeLoginModal();
+    closeLoginForm('logout');
   } catch (err) {
     loginError.value = err instanceof Error ? err.message : 'Passkey login failed';
   } finally {
@@ -158,16 +161,56 @@ async function handleLogout(): Promise<void> {
 }
 
 function openLoginForm(): void {
+  loginTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   state.openLoginModal();
   loginError.value = '';
 }
 
-function closeLoginForm(): void {
+function closeLoginForm(restoreFocusTo: 'trigger' | 'logout' = 'trigger'): void {
   state.closeLoginModal();
   loginUsername.value = '';
   loginPassword.value = '';
   loginError.value = '';
+  void nextTick(() => (restoreFocusTo === 'logout' ? logoutButton.value : loginTrigger)?.focus());
 }
+
+function handleLoginDialogKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    closeLoginForm();
+    return;
+  }
+  if (event.key !== 'Tab') return;
+
+  const focusable = Array.from(
+    loginDialog.value?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    ) ?? []
+  ).filter((element) => element.offsetParent !== null);
+  const first = focusable[0];
+  const last = focusable.at(-1);
+  if (!first || !last) {
+    event.preventDefault();
+    return;
+  }
+
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+watch(
+  () => state.showLoginModal.value,
+  async (isOpen) => {
+    if (!isOpen) return;
+    await nextTick();
+    (loginUsernameInput.value ?? passkeyLoginButton.value)?.focus();
+  }
+);
 
 onMounted(async () => {
   initTheme();
@@ -209,7 +252,7 @@ onMounted(async () => {
             <router-link v-if="isAdmin" :to="{ name: 'admin.analytics' }">Analytics</router-link>
             <router-link v-if="isAdmin" :to="{ name: 'admin' }">Admin</router-link>
             <template v-if="state.isLoggedIn.value">
-              <button class="vb-link-btn" type="button" @click="handleLogout">Log Out</button>
+              <button ref="logoutButton" class="vb-link-btn" type="button" @click="handleLogout">Log Out</button>
             </template>
             <template v-else>
               <router-link v-if="state.canShowRegisterLink.value" :to="{ name: 'auth.register' }">Register</router-link>
@@ -223,28 +266,64 @@ onMounted(async () => {
         </div>
       </header>
 
-      <div v-if="state.showLoginModal.value" class="vb-modal-overlay" @click.self="closeLoginForm">
-        <div class="vb-modal">
+      <div v-if="state.showLoginModal.value" class="vb-modal-overlay" @click.self="closeLoginForm()">
+        <div
+          ref="loginDialog"
+          class="vb-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="login-dialog-title"
+          @keydown="handleLoginDialogKeydown"
+        >
           <div class="vb-modal-header">
-            <span>Log In</span>
-            <button class="vb-modal-close" type="button" @click="closeLoginForm">&times;</button>
+            <span id="login-dialog-title">Log In</span>
+            <button class="vb-modal-close" type="button" aria-label="Close login dialog" @click="closeLoginForm()">
+              &times;
+            </button>
           </div>
-          <div class="vb-modal-body">
-            <div v-if="loginError" class="vb-login-error">{{ loginError }}</div>
+          <form class="vb-modal-body" autocomplete="on" @submit.prevent="handleLogin">
+            <div v-if="loginError" class="vb-login-error" role="alert">{{ loginError }}</div>
             <template v-if="state.passwordLoginEnabled.value">
-              <label>Username:</label>
-              <input v-model="loginUsername" type="text" @keyup.enter="handleLogin" />
-              <label>Password:</label>
-              <input v-model="loginPassword" type="password" @keyup.enter="handleLogin" />
+              <div class="vb-form-field">
+                <label for="login-username">Username:</label>
+                <input
+                  id="login-username"
+                  ref="loginUsernameInput"
+                  v-model="loginUsername"
+                  class="vb-text-input"
+                  name="username"
+                  type="text"
+                  autocomplete="username"
+                />
+              </div>
+              <div class="vb-form-field">
+                <label for="login-password">Password:</label>
+                <input
+                  id="login-password"
+                  v-model="loginPassword"
+                  class="vb-text-input"
+                  name="password"
+                  type="password"
+                  autocomplete="current-password"
+                />
+              </div>
             </template>
             <div class="vb-modal-actions">
-              <button v-if="state.passwordLoginEnabled.value" class="vb-btn" :disabled="loggingIn" @click="handleLogin">
+              <button v-if="state.passwordLoginEnabled.value" class="vb-btn" :disabled="loggingIn" type="submit">
                 Log In
               </button>
-              <button class="vb-btn" :disabled="loggingIn" @click="handlePasskeyLogin">Sign in with a passkey</button>
-              <button class="vb-btn vb-btn-secondary" @click="closeLoginForm">Cancel</button>
+              <button
+                ref="passkeyLoginButton"
+                class="vb-btn"
+                :disabled="loggingIn"
+                type="button"
+                @click="handlePasskeyLogin"
+              >
+                Sign in with a passkey
+              </button>
+              <button class="vb-btn vb-btn-secondary" type="button" @click="closeLoginForm()">Cancel</button>
             </div>
-          </div>
+          </form>
         </div>
       </div>
 

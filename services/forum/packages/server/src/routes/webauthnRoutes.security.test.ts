@@ -77,6 +77,21 @@ describe('WebAuthn route ceremony controls', () => {
     db.close();
   });
 
+  it('accepts the explicit empty JSON options contract over a real HTTP connection', async () => {
+    const address = await app.listen({ host: '127.0.0.1', port: 0 });
+    const response = await fetch(`${address}/auth/webauthn/login/options`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      challengeId: expect.any(String),
+      options: { rpId: 'localhost' },
+    });
+  });
+
   it('consumes wrong challenges and rejects reuse and missing user verification', async () => {
     const identity = store.createIdentity('Passkey User', 'human');
     store.createWebAuthnCredential({
@@ -90,7 +105,7 @@ describe('WebAuthn route ceremony controls', () => {
       backedUp: true,
     });
 
-    const wrongOptions = await app.inject({ method: 'POST', url: '/auth/webauthn/login/options' });
+    const wrongOptions = await app.inject({ method: 'POST', url: '/auth/webauthn/login/options', payload: {} });
     const wrongId = wrongOptions.json().challengeId as string;
     const wrong = await app.inject({
       method: 'POST',
@@ -105,7 +120,7 @@ describe('WebAuthn route ceremony controls', () => {
     });
     expect(reused.statusCode).toBe(400);
 
-    const uvOptions = await app.inject({ method: 'POST', url: '/auth/webauthn/login/options' });
+    const uvOptions = await app.inject({ method: 'POST', url: '/auth/webauthn/login/options', payload: {} });
     const noUv = await app.inject({
       method: 'POST',
       url: '/auth/webauthn/login/verify',
@@ -126,6 +141,7 @@ describe('WebAuthn route ceremony controls', () => {
       method: 'POST',
       url: '/me/webauthn/register/options',
       headers: { authorization: 'Bearer verification-session' },
+      payload: {},
     });
     expect(options.statusCode).toBe(200);
 
@@ -148,6 +164,7 @@ describe('WebAuthn route ceremony controls', () => {
       method: 'POST',
       url: '/me/webauthn/register/options',
       headers: { authorization: 'Bearer verification-session' },
+      payload: {},
     });
     expect(second.statusCode).toBe(403);
   });
@@ -228,6 +245,7 @@ describe('WebAuthn route ceremony controls', () => {
         method: 'POST',
         url: '/me/webauthn/register/options',
         headers: { authorization: 'Bearer bounded-session' },
+        payload: {},
       });
       expect(response.statusCode).toBe(200);
     }

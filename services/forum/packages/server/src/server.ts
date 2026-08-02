@@ -13,6 +13,7 @@ import { MessageTemplateService } from '@irrigationreal/codex-forum-core';
 
 import { createAdapterRegistry } from './adapters/adapterRegistry';
 import { AgentBridge } from './agentBridge';
+import { registerApiErrorHandler } from './apiErrorHandler';
 import { assertCorsCredentialsConfiguration, isTrustedCookieRequest } from './auth/csrf';
 import { SqliteOneTimeLinkIssuer } from './auth/oneTimeLinks';
 import { loadFeatureFlags } from './config';
@@ -315,45 +316,7 @@ if (recoveredCompactions > 0) {
 
 const app = Fastify({ logger: true, bodyLimit: MAX_REQUEST_BODY_BYTES, trustProxy: TRUST_PROXY });
 const access = createAccessHelpers(app, store);
-app.setErrorHandler((error, _request, reply) => {
-  const errObj = error as Record<string, unknown>;
-  const statusCode = typeof errObj['statusCode'] === 'number' ? errObj['statusCode'] : 500;
-  let code: string = 'internal_error';
-  if (errObj['validation']) {
-    code = 'validation_error';
-  } else {
-    switch (statusCode) {
-      case 400:
-        code = 'validation_error';
-        break;
-      case 401:
-        code = 'unauthorized';
-        break;
-      case 403:
-        code = 'forbidden';
-        break;
-      case 404:
-        code = 'not_found';
-        break;
-      case 409:
-        code = 'conflict';
-        break;
-      case 429:
-        code = 'rate_limited';
-        break;
-      default:
-        code = 'internal_error';
-    }
-  }
-  if (statusCode >= 500) {
-    app.log.error(error);
-  }
-  reply.status(statusCode).send({
-    code,
-    message: error instanceof Error ? error.message : String(error),
-    details: errObj['validation'] ? { validation: errObj['validation'] } : undefined,
-  });
-});
+registerApiErrorHandler(app);
 app.addHook('onClose', async () => {
   piSessionSync?.stop();
   const postDispatchStop = postDispatchService.stop();

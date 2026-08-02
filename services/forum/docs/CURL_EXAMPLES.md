@@ -20,6 +20,17 @@ curl -sS -c forum.cookies -H 'content-type: application/json' \
 curl -sS -b forum.cookies "$CODEX_FORUM_BASE_URL/api/auth/me"
 ```
 
+Begin a passkey ceremony with an explicit empty JSON object. These POSTs create one-time server challenges, so the empty
+object and JSON content type are part of the wire contract rather than an omitted body. The browser must complete the
+returned WebAuthn options; cURL cannot perform the authenticator operation itself.
+
+```bash
+curl -sS -H 'content-type: application/json' -d '{}' \
+  "$CODEX_FORUM_BASE_URL/api/auth/webauthn/login/options"
+curl -sS -b forum.cookies -H "Origin: $FORUM_ORIGIN" -H 'content-type: application/json' -d '{}' \
+  "$CODEX_FORUM_BASE_URL/api/me/webauthn/register/options"
+```
+
 Create an API key as the signed-in admin (the key is shown once):
 
 ```bash
@@ -53,6 +64,7 @@ curl -sS -H "Authorization: Bearer $CODEX_FORUM_API_KEY" "$CODEX_FORUM_BASE_URL/
 ```
 
 The contracts in `packages/contracts/src/schemas.ts` are canonical; the generated OpenAPI file is a reference artifact.
+Requests with an unsupported content type return HTTP 415 with API error code `unsupported_media_type`.
 
 ## Message templates
 

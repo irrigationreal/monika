@@ -587,6 +587,7 @@ export const apiRoutes: ApiRoute[] = [
 
   {
     method: 'post', path: '/auth/webauthn/login/options', summary: 'Begin usernameless passkey login', tags: ['auth'],
+    request: { body: { schema: schemas.EmptyJsonRequestSchema } },
     response: { schema: schemas.WebAuthnOptionsResponseDtoSchema }
   },
   {
@@ -599,6 +600,7 @@ export const apiRoutes: ApiRoute[] = [
   },
   {
     method: 'post', path: '/me/webauthn/register/options', summary: 'Begin passkey enrollment', tags: ['auth'],
+    request: { body: { schema: schemas.EmptyJsonRequestSchema } },
     response: { schema: schemas.WebAuthnOptionsResponseDtoSchema }
   },
   {

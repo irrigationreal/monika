@@ -6,6 +6,7 @@ export const ErrorCodeSchema = z.enum([
   'forbidden',
   'conflict',
   'validation_error',
+  'unsupported_media_type',
   'rate_limited',
   'internal_error'
 ]);

@@ -679,6 +679,48 @@
   text-decoration: underline;
 }
 
+.vb-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.vb-form-field label {
+  color: var(--text-primary);
+  font-weight: bold;
+}
+
+.vb-text-input {
+  width: 100%;
+  max-width: 400px;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+.vb-text-input::placeholder {
+  color: var(--text-muted);
+}
+
+.vb-text-input:focus {
+  outline: none;
+  border-color: var(--brand-secondary);
+  box-shadow: 0 0 0 3px rgba(92, 112, 153, 0.2);
+}
+
+.vb-text-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
 .vb-form-options {
   display: flex;
   flex-direction: column;
