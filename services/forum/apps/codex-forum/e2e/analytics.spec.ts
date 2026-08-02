@@ -101,7 +101,7 @@ const analyticsPayload = {
 };
 
 test.beforeEach(async ({ context }) => {
-  await context.addInitScript(() => window.localStorage.setItem('cforum_auth_token', 'analytics-admin'));
+  await context.addInitScript(() => document.cookie = 'cforum_session=analytics-admin; path=/; SameSite=Lax');
   await context.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname;
     let body: unknown = {};

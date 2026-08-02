@@ -41,7 +41,7 @@ describe('EmailService compatibility', () => {
       try {
         const result = await svc.sendVerificationEmail(
           'user@example.com',
-          'https://example.com/verify?token=abc',
+          'https://example.com/verify/abc',
           'TestUser'
         );
         expect(result).toBe(true);
@@ -108,7 +108,7 @@ describe('EmailService compatibility', () => {
 
       const result = await svc.sendVerificationEmail(
         'recipient@example.com',
-        'https://example.com/verify?token=abc123',
+        'https://example.com/verify/abc123',
         'TestRecipient'
       );
       expect(result).toBe(true);

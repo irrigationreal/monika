@@ -3,15 +3,29 @@
     "_postman_id": "8d64f3a0-8e8a-4e95-9f69-cc76e8e04d8e",
     "name": "Codex Forum API",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-    "description": "Codex Forum REST API collection. Set baseUrl to your deployment root (e.g. https://forum.irrigate.cc). All requests use the /api prefix."
+    "description": "Codex Forum REST API collection. Set baseUrl to the exact configured forum origin. Browser login uses Postman's cookie jar; API keys are used for non-browser automation. All requests use /api."
   },
   "variable": [
-    { "key": "baseUrl", "value": "https://forum.irrigate.cc" },
-    { "key": "token", "value": "" },
-    { "key": "apiKey", "value": "" },
-    { "key": "impersonationToken", "value": "" },
-    { "key": "forumId", "value": "" },
-    { "key": "topicId", "value": "" }
+    {
+      "key": "baseUrl",
+      "value": "https://forum.irrigate.cc"
+    },
+    {
+      "key": "apiKey",
+      "value": ""
+    },
+    {
+      "key": "impersonationToken",
+      "value": ""
+    },
+    {
+      "key": "forumId",
+      "value": ""
+    },
+    {
+      "key": "topicId",
+      "value": ""
+    }
   ],
   "item": [
     {
@@ -44,22 +58,19 @@
       "name": "Auth",
       "item": [
         {
-          "name": "Login",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "const body = pm.response.json();",
-                  "if (body && body.token) { pm.collectionVariables.set('token', body.token); }"
-                ]
-              }
-            }
-          ],
+          "name": "Browser Login (cookie session)",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Origin",
+                "value": "{{baseUrl}}"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"username\": \"pp\",\n  \"password\": \"pp\"\n}"
@@ -68,18 +79,22 @@
           }
         },
         {
-          "name": "Me",
+          "name": "Me (cookie session)",
           "request": {
             "method": "GET",
-            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
             "url": "{{baseUrl}}/api/auth/me"
           }
         },
         {
-          "name": "Logout",
+          "name": "Logout current cookie session",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "header": [
+              {
+                "key": "Origin",
+                "value": "{{baseUrl}}"
+              }
+            ],
             "url": "{{baseUrl}}/api/auth/logout"
           }
         }
@@ -99,7 +114,13 @@
           "name": "List Topics in Forum",
           "request": {
             "method": "GET",
-            "url": "{{baseUrl}}/api/forums/{{forumId}}/topics?page=1&pageSize=50"
+            "url": "{{baseUrl}}/api/forums/{{forumId}}/topics?page=1&pageSize=50",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{apiKey}}"
+              }
+            ]
           }
         },
         {
@@ -107,8 +128,14 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "Authorization", "value": "Bearer {{token}}" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{apiKey}}"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -133,7 +160,13 @@
           "name": "List Posts",
           "request": {
             "method": "GET",
-            "url": "{{baseUrl}}/api/topics/{{topicId}}/posts?page=1&pageSize=50"
+            "url": "{{baseUrl}}/api/topics/{{topicId}}/posts?page=1&pageSize=50",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{apiKey}}"
+              }
+            ]
           }
         },
         {
@@ -141,8 +174,14 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "Authorization", "value": "Bearer {{token}}" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{apiKey}}"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -160,7 +199,12 @@
           "name": "List User Files",
           "request": {
             "method": "GET",
-            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{apiKey}}"
+              }
+            ],
             "url": "{{baseUrl}}/api/user-files"
           }
         },
@@ -168,11 +212,20 @@
           "name": "Upload User File",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{apiKey}}"
+              }
+            ],
             "body": {
               "mode": "formdata",
               "formdata": [
-                { "key": "file", "type": "file", "src": "" }
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": ""
+                }
               ]
             },
             "url": "{{baseUrl}}/api/user-files"
@@ -187,7 +240,6 @@
           "name": "List API Keys",
           "request": {
             "method": "GET",
-            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
             "url": "{{baseUrl}}/api/api-keys"
           }
         },
@@ -208,8 +260,14 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "Authorization", "value": "Bearer {{token}}" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Origin",
+                "value": "{{baseUrl}}"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -222,7 +280,12 @@
           "name": "Use API Key (List Forums)",
           "request": {
             "method": "GET",
-            "header": [{ "key": "Authorization", "value": "Bearer {{apiKey}}" }],
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{apiKey}}"
+              }
+            ],
             "url": "{{baseUrl}}/api/forums"
           }
         }
@@ -235,7 +298,6 @@
           "name": "List Impersonation Tokens",
           "request": {
             "method": "GET",
-            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
             "url": "{{baseUrl}}/api/impersonation-tokens"
           }
         },
@@ -256,8 +318,14 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "Authorization", "value": "Bearer {{token}}" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Origin",
+                "value": "{{baseUrl}}"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -271,8 +339,14 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "Authorization", "value": "Bearer {{impersonationToken}}" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{impersonationToken}}"
+              }
             ],
             "body": {
               "mode": "raw",

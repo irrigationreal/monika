@@ -1,4 +1,4 @@
-import { BrowserTokenStorage, MemoryTokenStorage } from './storage';
+import { MemoryTokenStorage } from './storage';
 
 import type {
   AccessRuleDto,
@@ -56,8 +56,6 @@ import type {
   ModelCatalogDto,
   ModelInfoDto,
   NotificationDto,
-  OidcExternalIdentityListResponseDto,
-  OidcUnlinkResponseDto,
   PageResponse,
   PiSyncBackfillResponseDto,
   PiSyncHealthDto,
@@ -95,6 +93,10 @@ import type {
   UserPostHistoryResponseDto,
   UserProfileDto,
   VerifyResponseDto,
+  WebAuthnCredentialDto,
+  WebAuthnCredentialListResponseDto,
+  WebAuthnLoginResponseDto,
+  WebAuthnOptionsResponseDto,
 } from '@irrigationreal/codex-forum-contracts';
 
 import type { TokenStorage } from './storage';
@@ -194,7 +196,7 @@ export type {
   ForumApi,
 };
 
-export { BrowserTokenStorage, MemoryTokenStorage };
+export { MemoryTokenStorage };
 export type { TokenStorage };
 
 export type ListForumsParams = ListForumsRequest;
@@ -217,7 +219,7 @@ export interface ForumSdkOptions {
   eventSourceFactory?: (url: string) => EventSource;
 }
 
-type JsonFn = <T>(path: string, init?: RequestInit, options?: { skipRefresh?: boolean }) => Promise<T>;
+type JsonFn = <T>(path: string, init?: RequestInit) => Promise<T>;
 
 function createApi({
   json,
@@ -233,17 +235,7 @@ function createApi({
   return {
     login: (username: string, password: string) =>
       json<LoginResponseDto>('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
-    logout: () =>
-      json<{ ok: boolean }>('/auth/logout', {
-        method: 'POST',
-        headers: storage.getRefreshToken() ? { 'x-refresh-token': storage.getRefreshToken() as string } : undefined,
-      }),
-    refresh: () =>
-      json<{ token: string | null; refreshToken: string | null; message?: string }>(
-        '/auth/refresh',
-        { method: 'POST' },
-        { skipRefresh: true }
-      ),
+    logout: () => json<{ ok: boolean }>('/auth/logout', { method: 'POST' }),
     me: () => json<AuthUserDto>('/auth/me'),
     updatePrivateEmail: (emailAddress: string | null) =>
       json<UpdatePrivateEmailResponseDto>('/me/private-email', {
@@ -277,17 +269,22 @@ function createApi({
         body: JSON.stringify({ displayName, inviteCode, username, password }),
       }),
     verify: (token: string) => json<VerifyResponseDto>(`/auth/verify/${token}`),
-    oidcEnabled: () => json<{ enabled: boolean; providerKey: string | null }>(`/auth/oidc/enabled`),
-    oidcStartUrl: () => `${baseUrl}/auth/oidc/start`,
-    oidcStartLinkUrl: () => `${baseUrl}/auth/oidc/start/link`,
-    oidcLink: (input: { username: string; password: string; subject: string; issuer?: string; providerKey?: string }) =>
-      json<{ token: string; refreshToken?: string; linked?: boolean }>(`/auth/oidc/link`, {
+    webauthnLoginOptions: () => json<WebAuthnOptionsResponseDto>('/auth/webauthn/login/options', { method: 'POST' }),
+    webauthnLoginVerify: (input: { challengeId: string; response: Record<string, unknown> }) =>
+      json<WebAuthnLoginResponseDto>('/auth/webauthn/login/verify', { method: 'POST', body: JSON.stringify(input) }),
+    listWebauthnCredentials: () => json<WebAuthnCredentialListResponseDto>('/me/webauthn/credentials'),
+    webauthnRegistrationOptions: () =>
+      json<WebAuthnOptionsResponseDto>('/me/webauthn/register/options', { method: 'POST' }),
+    webauthnRegistrationVerify: (input: { challengeId: string; name: string; response: Record<string, unknown> }) =>
+      json<WebAuthnCredentialDto>('/me/webauthn/register/verify', {
         method: 'POST',
         body: JSON.stringify(input),
       }),
-    oidcListLinks: () => json<OidcExternalIdentityListResponseDto>(`/auth/oidc/links`),
-    oidcUnlink: (input: { externalIdentityId: string }) =>
-      json<OidcUnlinkResponseDto>(`/auth/oidc/unlink`, { method: 'POST', body: JSON.stringify(input) }),
+    removeWebauthnCredential: (id: string) =>
+      json<{ ok: boolean }>(`/me/webauthn/credentials/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    removePassword: () => json<{ ok: boolean }>('/me/password', { method: 'DELETE' }),
+    createPassword: (newPassword: string) =>
+      json<{ ok: boolean }>('/me/password/create', { method: 'POST', body: JSON.stringify({ newPassword }) }),
     listModels: () => json<ModelCatalogDto>('/models'),
     getInviteInfo: (code: string) => json<InviteInfoDto>(`/auth/invite/${code}`),
     updateIdentity: (
@@ -442,31 +439,12 @@ const defaultEventSourceFactory = (url: string): EventSource => {
 export function createForumSdk(options?: ForumSdkOptions) {
   const baseUrl = normalizeBaseUrl(options?.baseUrl);
   const fetchImpl = options?.fetch ?? fetch;
-  const storage = options?.storage ?? new BrowserTokenStorage();
+  // Browser sessions are first-party HttpOnly cookies. Memory storage remains
+  // available only for explicit API/internal bearer credentials supplied by SDK callers.
+  const storage = options?.storage ?? new MemoryTokenStorage();
   const eventSourceFactory = options?.eventSourceFactory ?? defaultEventSourceFactory;
 
-  async function refreshAuthTokens(): Promise<{ token: string; refreshToken: string } | null> {
-    const refreshToken = storage.getRefreshToken();
-    if (!refreshToken) return null;
-    const res = await fetchImpl(`${baseUrl}/auth/refresh`, {
-      method: 'POST',
-      headers: {
-        'x-refresh-token': refreshToken,
-      },
-    });
-    if (!res.ok) {
-      return null;
-    }
-    const body = (await res.json()) as { token?: string | null; refreshToken?: string | null };
-    if (!body.token || !body.refreshToken) {
-      return null;
-    }
-    storage.setAuthToken(body.token);
-    storage.setRefreshToken(body.refreshToken);
-    return { token: body.token, refreshToken: body.refreshToken };
-  }
-
-  async function json<T>(path: string, init?: RequestInit, options?: { skipRefresh?: boolean }): Promise<T> {
+  async function json<T>(path: string, init?: RequestInit): Promise<T> {
     const token = storage.getAuthToken();
     const headers: Record<string, string> = {};
     if (init?.body) {
@@ -489,20 +467,8 @@ export function createForumSdk(options?: ForumSdkOptions) {
         ...(normalizedInitHeaders as Record<string, string>),
       },
       ...restInit,
+      credentials: restInit.credentials ?? 'same-origin',
     });
-    const refreshEligible =
-      !options?.skipRefresh &&
-      !path.startsWith('/auth/refresh') &&
-      !path.startsWith('/auth/login') &&
-      !path.startsWith('/auth/register') &&
-      !path.startsWith('/auth/verify') &&
-      !path.startsWith('/auth/invite');
-    if (res.status === 401 && refreshEligible) {
-      const refreshed = await refreshAuthTokens();
-      if (refreshed) {
-        return json<T>(path, init, { skipRefresh: true });
-      }
-    }
     if (!res.ok) {
       let errorMessage = `Request failed: ${String(res.status)}`;
       let errorCode: string | undefined;
@@ -1137,29 +1103,20 @@ export function createForumSdk(options?: ForumSdkOptions) {
     }) => json<TamperTestResultDto>('/admin/tampers/test', { method: 'POST', body: JSON.stringify(input) }),
   };
 
-  const createStateStream = (topicId: string): EventSource => {
-    const token = storage.getAuthToken();
-    const url = token
-      ? `${baseUrl}/topics/${topicId}/state/stream?token=${encodeURIComponent(token)}`
-      : `${baseUrl}/topics/${topicId}/state/stream`;
-    return eventSourceFactory(url);
+  const createStream = (path: string): EventSource => {
+    if (storage.getAuthToken() && !options?.eventSourceFactory) {
+      throw new Error(
+        'Explicit bearer credentials require an authorization-capable custom eventSourceFactory for SSE streams.'
+      );
+    }
+    return eventSourceFactory(`${baseUrl}${path}`);
   };
 
-  const createNotificationStream = (): EventSource => {
-    const token = storage.getAuthToken();
-    const url = token
-      ? `${baseUrl}/notifications/stream?token=${encodeURIComponent(token)}`
-      : `${baseUrl}/notifications/stream`;
-    return eventSourceFactory(url);
-  };
+  const createStateStream = (topicId: string): EventSource => createStream(`/topics/${topicId}/state/stream`);
 
-  const createChatStream = (roomId: string): EventSource => {
-    const token = storage.getAuthToken();
-    const url = token
-      ? `${baseUrl}/chat/rooms/${roomId}/stream?token=${encodeURIComponent(token)}`
-      : `${baseUrl}/chat/rooms/${roomId}/stream`;
-    return eventSourceFactory(url);
-  };
+  const createNotificationStream = (): EventSource => createStream('/notifications/stream');
+
+  const createChatStream = (roomId: string): EventSource => createStream(`/chat/rooms/${roomId}/stream`);
 
   return { api, createStateStream, createNotificationStream, createChatStream, storage, baseUrl };
 }
@@ -1175,5 +1132,3 @@ export const createNotificationStream = defaultSdk.createNotificationStream;
 export const createChatStream = defaultSdk.createChatStream;
 export const getAuthToken = (): string | null => defaultSdk.storage.getAuthToken();
 export const setAuthToken = (token: string | null): void => defaultSdk.storage.setAuthToken(token);
-export const getRefreshToken = (): string | null => defaultSdk.storage.getRefreshToken();
-export const setRefreshToken = (token: string | null): void => defaultSdk.storage.setRefreshToken(token);

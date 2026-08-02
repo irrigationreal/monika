@@ -1,8 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 
-import { getAuthToken } from '../lib/apiClient';
-
 type OpenApiSpec = {
   info?: { title?: string; version?: string; description?: string };
   servers?: { url: string }[];
@@ -162,10 +160,7 @@ async function loadSpec(): Promise<void> {
   isLoading.value = true;
   errorMessage.value = '';
   try {
-    const token = getAuthToken();
-    const res = await fetch(openApiUrl.value, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
+    const res = await fetch(openApiUrl.value, { credentials: 'same-origin' });
     if (!res.ok) {
       throw new Error(`Failed to load OpenAPI: ${res.status}`);
     }

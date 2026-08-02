@@ -86,6 +86,83 @@ describe('schema migrations', () => {
     expect(() => insert.run('ref-3')).toThrow();
   });
 
+  it('fails visibly instead of dropping linked external identities', () => {
+    runMigrations(db, { targetVersion: 39 });
+    db.prepare(
+      `insert into identities (id, display_name, kind, created_at, updated_at) values ('user-1', 'User', 'human', 'now', 'now')`
+    ).run();
+    db.prepare(
+      `insert into external_identities (id, identity_id, provider_key, issuer, subject, created_at)
+       values ('external-1', 'user-1', 'legacy', 'https://issuer.example', 'subject', 'now')`
+    ).run();
+
+    expect(() => runMigrations(db)).toThrow(/contains 1 row/);
+    expect(
+      db.prepare("select name from sqlite_master where type = 'table' and name = 'external_identities'").get()
+    ).toBeTruthy();
+    expect(db.prepare('select version from schema_migrations where version = 40').get()).toBeUndefined();
+  });
+
+  it('invalidates legacy sessions, removes refresh sessions, and atomically consumes bound challenges', () => {
+    runMigrations(db, { targetVersion: 39 });
+    db.prepare(
+      `insert into identities (id, display_name, kind, created_at, updated_at) values ('user-1', 'User', 'human', 'now', 'now')`
+    ).run();
+    db.prepare(
+      `insert into identities (id, display_name, kind, created_at, updated_at) values ('user-2', 'Other', 'human', 'now', 'now')`
+    ).run();
+    db.prepare(
+      `insert into auth_sessions (token, identity_id, created_at, expires_at) values ('secret-token', 'user-1', 'now', '2999')`
+    ).run();
+    runMigrations(db);
+
+    expect(db.prepare('select token_hash from auth_sessions').all()).toEqual([]);
+    expect(
+      db.prepare("select name from sqlite_master where type = 'table' and name = 'refresh_sessions'").get()
+    ).toBeUndefined();
+
+    const store = new ForumStore(db);
+    const challenge = store.createWebAuthnChallenge({
+      challenge: 'challenge',
+      ceremony: 'registration',
+      identityId: 'user-1',
+    });
+    expect(store.consumeWebAuthnChallenge(challenge.id, 'registration', 'user-2')).toBeNull();
+    expect(store.consumeWebAuthnChallenge(challenge.id, 'registration', 'user-1')).toBeNull();
+
+    const valid = store.createWebAuthnChallenge({ challenge: 'valid', ceremony: 'authentication', identityId: null });
+    expect(store.consumeWebAuthnChallenge(valid.id, 'authentication', null)?.challenge).toBe('valid');
+    expect(store.consumeWebAuthnChallenge(valid.id, 'authentication', null)).toBeNull();
+
+    const expired = store.createWebAuthnChallenge({
+      challenge: 'expired',
+      ceremony: 'authentication',
+      identityId: null,
+      ttlMs: -1,
+    });
+    expect(store.consumeWebAuthnChallenge(expired.id, 'authentication', null)).toBeNull();
+  });
+
+  it('caps outstanding WebAuthn challenges when creating new ceremonies', () => {
+    runMigrations(db);
+    const insert = db.prepare(
+      `insert into webauthn_challenges (id, challenge, ceremony, identity_id, expires_at, created_at)
+       values (?, ?, 'authentication', null, '2999-01-01T00:00:00.000Z', ?)`
+    );
+    db.transaction(() => {
+      for (let index = 0; index < 10_000; index += 1) {
+        const value = String(index).padStart(5, '0');
+        insert.run(`id-${value}`, `challenge-${value}`, `2026-01-01T00:00:${value.slice(-2)}.000Z`);
+      }
+    })();
+
+    const store = new ForumStore(db);
+    store.createWebAuthnChallenge({ challenge: 'new', ceremony: 'authentication', identityId: null });
+    expect((db.prepare('select count(*) as count from webauthn_challenges').get() as { count: number }).count).toBe(
+      10_000
+    );
+  });
+
   it('clears stale current plans from idle robot states', () => {
     runMigrations(db, { targetVersion: 30 });
     const store = new ForumStore(db);

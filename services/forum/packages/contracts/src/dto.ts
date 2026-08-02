@@ -11,6 +11,7 @@ import type {
   MessageTemplateScope,
   RobotActivity,
   RobotMode,
+  WebAuthnCredential,
 } from '@irrigationreal/codex-forum-core';
 
 import type { ForumThemeKey } from './themes';
@@ -850,6 +851,7 @@ export interface AuthIdentityDto {
    * The email address itself is never returned to the web client.
    */
   hasPrivateEmail?: boolean;
+  hasPassword?: boolean;
 }
 
 export const RegistrationModeValues = ['disabled', 'invite-only', 'public'] as const;
@@ -860,6 +862,7 @@ export interface RegistrationModeDto {
   registrationEnabled: boolean;
   inviteRegistrationEnabled: boolean;
   publicRegistrationEnabled: boolean;
+  passwordLoginEnabled: boolean;
 }
 
 export interface AuthUserDto {
@@ -871,8 +874,6 @@ export interface IdentityPermissionsDto {
 }
 
 export interface LoginResponseDto {
-  token: string | null;
-  refreshToken?: string | null;
   identity?: AuthIdentityDto;
   message?: string;
 }
@@ -882,13 +883,32 @@ export interface RegisterResponseDto {
   verifyUrl?: string;
   expiresAt?: string;
   emailSent?: boolean;
-  token?: string;
-  refreshToken?: string;
 }
 
 export interface VerifyResponseDto {
-  token: string;
-  refreshToken?: string;
+  identity: AuthIdentityDto;
+}
+
+export interface WebAuthnCredentialDto {
+  id: string;
+  name: string;
+  transports: string[];
+  deviceType: WebAuthnCredential['deviceType'];
+  backedUp: boolean;
+  createdAt: string;
+  lastUsedAt?: string | null;
+}
+
+export interface WebAuthnOptionsResponseDto {
+  challengeId: string;
+  options: Record<string, unknown>;
+}
+
+export interface WebAuthnCredentialListResponseDto {
+  items: WebAuthnCredentialDto[];
+}
+
+export interface WebAuthnLoginResponseDto {
   identity: AuthIdentityDto;
 }
 

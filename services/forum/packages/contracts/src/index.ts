@@ -6,4 +6,3 @@ export * from './routes';
 export * from './openapi';
 export * from './themes';
 export * from './schemas';
-export * from './oidc';

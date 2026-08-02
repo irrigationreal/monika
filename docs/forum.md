@@ -638,6 +638,17 @@ the `forum` container and host-side deploy automation for quiescence checks. Bot
 fail-closed when unset; generate separate random values or copy the shape from
 `docs/examples/forum.env.example`.
 
+Forum browsers authenticate with a first-party opaque HttpOnly cookie. Session
+identifiers are random and stored only as hashes; browser SSE uses the same-origin
+cookie without query secrets. Unsafe cookie-authenticated methods require an exact
+`Origin` match to `CODEX_FORUM_BASE_URL`, while API keys and impersonation bearer
+tokens remain available for automation. Passkeys pin the exact configured origin
+and RP ID, require user verification, and are enrolled from User CP rather than
+registration. `CODEX_FORUM_PASSWORD_LOGIN_ENABLED=0` requires an existing
+passkey-capable admin or startup fails. Before this upgrade, legacy external identity
+rows must be migrated/unlinked; the schema migration refuses to drop a nonempty
+table. See `services/forum/docs/DEPLOYMENT.md` for the complete procedure.
+
 Health checks:
 
 ```bash
@@ -982,9 +993,9 @@ stages where data can be lost or misordered. Use these debug techniques:
 server actually sends:
 
 ```bash
-TOKEN=$(curl -s .../api/auth/login -d '...' | python3 -c '...')
-timeout 30 curl -sN ".../api/topics/$TOPIC/state/stream" \
-  -H "Authorization: Bearer $TOKEN" | grep '^event:'
+curl -sS -c /tmp/forum.cookies -H 'content-type: application/json' \
+  -d '{"username":"admin","password":"..."}' .../api/auth/login
+timeout 30 curl -sN -b /tmp/forum.cookies ".../api/topics/$TOPIC/state/stream" | grep '^event:'
 ```
 
 Verify `tool_started` events appear between `state` events, and that

@@ -23,7 +23,7 @@ const registrationRequiresInvite = computed(() => state.canInviteRegister.value 
 const registrationAllowsPublic = computed(() => state.canPublicRegister.value);
 
 // Show credential fields when invite code is valid
-const showCredentialFields = computed(() => inviteValid.value === true);
+const showCredentialFields = computed(() => inviteValid.value === true && state.passwordLoginEnabled.value);
 
 async function checkInviteCode(): Promise<void> {
   if (!inviteCode.value.trim()) {
@@ -96,8 +96,8 @@ async function handleSubmit(): Promise<void> {
       showCredentialFields.value ? password.value : undefined
     );
 
-    // If we got a token back, we're logged in directly
-    if (result.token) {
+    // Invite registration creates a cookie session and logs in directly.
+    if (showCredentialFields.value) {
       await router.push({ name: 'forum.home' });
       return;
     }
@@ -185,7 +185,12 @@ onMounted(() => {
         Registration is invite-only. Enter a valid invite code to create an account.
       </div>
       <div v-else-if="registrationAllowsPublic" class="vb-register-note vb-register-note-top">
-        You can register with an invite code, or continue without one to create a passwordless account using a verification link.
+        <template v-if="state.canInviteRegister.value">
+          You can register with an invite code, or continue without one to create a passwordless account using a verification link.
+        </template>
+        <template v-else>
+          Continue without an invite to verify your account, then enroll your first passkey.
+        </template>
       </div>
 
       <div class="vb-form-row">
@@ -201,7 +206,7 @@ onMounted(() => {
         <span class="vb-form-hint">Minimum 3 characters</span>
       </div>
 
-      <div class="vb-form-row">
+      <div v-if="state.canInviteRegister.value" class="vb-form-row">
         <label for="inviteCode">Invite Code:</label>
         <div class="vb-input-with-status">
           <input

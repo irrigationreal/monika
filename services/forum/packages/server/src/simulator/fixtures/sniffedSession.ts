@@ -205,8 +205,6 @@ export const sniffedForumSessionCapture: SessionCapture = {
       url: 'http://localhost:5173/api/auth/login',
       repeat: true,
       body: {
-        token: 'mock-access-token',
-        refreshToken: 'mock-refresh-token',
         identity: {
           id: 'identity-1',
           displayName: 'pp',

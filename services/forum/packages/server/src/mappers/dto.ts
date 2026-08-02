@@ -26,6 +26,7 @@ import type {
   UserFileDto,
   UserPostHistoryItemDto,
   UserPostHistoryResponseDto,
+  WebAuthnCredentialDto,
 } from '@irrigationreal/codex-forum-contracts';
 import type {
   CompactionOperation,
@@ -35,6 +36,7 @@ import type {
   RobotState,
   ToolRunSummary,
   TopicOperationalEvent,
+  WebAuthnCredential,
 } from '@irrigationreal/codex-forum-core';
 
 import type { ChatCategoryRow, ChatMessageRow, ChatRoomRow } from '../db';
@@ -200,6 +202,18 @@ export function mapUserFileToDto(file: UserFile): UserFileDto {
     mimeType: file.mimeType,
     sizeBytes: file.sizeBytes,
     createdAt: file.createdAt,
+  };
+}
+
+export function mapWebAuthnCredentialToDto(credential: WebAuthnCredential): WebAuthnCredentialDto {
+  return {
+    id: credential.id,
+    name: credential.name,
+    transports: credential.transports,
+    deviceType: credential.deviceType,
+    backedUp: credential.backedUp,
+    createdAt: credential.createdAt,
+    lastUsedAt: credential.lastUsedAt,
   };
 }
 

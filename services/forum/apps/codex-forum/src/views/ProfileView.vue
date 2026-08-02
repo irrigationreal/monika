@@ -1,12 +1,18 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
+
+import { startRegistration } from '@simplewebauthn/browser';
+
 import { useForumState } from '../composables/useForumState';
-import { useTheme } from '../composables/useTheme';
 import { useMarkdown } from '../composables/useMarkdown';
+import { useTheme } from '../composables/useTheme';
 import { api } from '../lib/apiClient';
-import { FORUM_THEMES, FORUM_THEME_BY_KEY, type ForumThemeDefinition } from '../themes/forumThemes';
+import { FORUM_THEMES, FORUM_THEME_BY_KEY } from '../themes/forumThemes';
+
 import type { ForumThemeKey } from '@irrigationreal/codex-forum-contracts';
+
+import type { ForumThemeDefinition } from '../themes/forumThemes';
 
 const router = useRouter();
 const state = useForumState();
@@ -31,19 +37,8 @@ const selectedFile = ref<File | null>(null);
 const selectedFilePreview = ref<string | null>(null);
 const selectedTheme = ref<ForumThemeKey>('vmonika');
 const originalTheme = ref<ForumThemeKey>('vmonika');
-
-type ExternalIdentityLink = {
-  id: string;
-  providerKey: string;
-  issuer: string;
-  subject: string;
-  createdAt: string;
-  lastLoginAt?: string | null;
-};
-
-const ssoLinks = ref<ExternalIdentityLink[]>([]);
-const isLoadingSso = ref(false);
-const isUnlinkingSso = ref(false);
+const passkeyName = ref('My passkey');
+const passkeys = ref<{ id: string; name: string; deviceType: string }[]>([]);
 
 const themeGroups = computed(() => {
   const groups = new Map<string, ForumThemeDefinition[]>();
@@ -172,71 +167,67 @@ function isValidPrivateEmail(input: string): boolean {
   return domain.includes('.');
 }
 
-
-
-async function linkSso(): Promise<void> {
-  errorMessage.value = '';
-  successMessage.value = '';
-  try {
-    // Browser navigation can't attach Authorization headers.
-    // Fetch the authorize URL using the existing session token, then redirect.
-    const token = localStorage.getItem('cforum_auth_token');
-    if (!token) {
-      errorMessage.value = 'Please sign in before linking SSO.';
-      return;
-    }
-    const res = await fetch('/api/auth/oidc/start/link?format=json', {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/json'
-      }
-    });
-    if (!res.ok) {
-      const body = (await res.json().catch(() => null)) as { message?: string } | null;
-      errorMessage.value = body?.message ?? 'Failed to start SSO linking.';
-      return;
-    }
-    const data = (await res.json()) as { authorizeUrl?: string };
-    if (!data.authorizeUrl) {
-      errorMessage.value = 'Failed to start SSO linking.';
-      return;
-    }
-    window.location.href = data.authorizeUrl;
-  } catch (err) {
-    errorMessage.value = err instanceof Error ? err.message : 'Failed to start SSO linking.';
-  }
-}
-
-async function loadSsoLinks(): Promise<void> {
+async function loadPasskeys(): Promise<void> {
   if (!currentUser.value) return;
-  isLoadingSso.value = true;
   try {
-    const res = await api.oidcListLinks();
-    ssoLinks.value = res.items;
+    const result = await api.listWebauthnCredentials();
+    passkeys.value = result.items;
   } catch {
-    ssoLinks.value = [];
-  } finally {
-    isLoadingSso.value = false;
+    passkeys.value = [];
   }
 }
 
-async function unlinkSso(externalIdentityId: string): Promise<void> {
-  if (!externalIdentityId) return;
-  isUnlinkingSso.value = true;
+async function enrollPasskey(): Promise<void> {
   errorMessage.value = '';
-  successMessage.value = '';
   try {
-    const res = await api.oidcUnlink({ externalIdentityId });
-    if (res.ok) {
-      successMessage.value = 'SSO link removed.';
-    } else {
-      errorMessage.value = 'Failed to unlink SSO.';
-    }
-    await loadSsoLinks();
+    const ceremony = await api.webauthnRegistrationOptions();
+    const response = await startRegistration({ optionsJSON: ceremony.options as never });
+    await api.webauthnRegistrationVerify({
+      challengeId: ceremony.challengeId,
+      name: passkeyName.value,
+      response: response as unknown as Record<string, unknown>,
+    });
+    successMessage.value = 'Passkey added.';
+    await loadPasskeys();
   } catch (err) {
-    errorMessage.value = err instanceof Error ? err.message : 'Failed to unlink SSO.';
-  } finally {
-    isUnlinkingSso.value = false;
+    errorMessage.value = err instanceof Error ? err.message : 'Failed to add passkey.';
+  }
+}
+
+async function removePasskey(id: string): Promise<void> {
+  errorMessage.value = '';
+  try {
+    await api.removeWebauthnCredential(id);
+    successMessage.value = 'Passkey removed.';
+    await loadPasskeys();
+  } catch (err) {
+    errorMessage.value = err instanceof Error ? err.message : 'Failed to remove passkey.';
+  }
+}
+
+async function removePassword(): Promise<void> {
+  errorMessage.value = '';
+  try {
+    await api.removePassword();
+    await state.checkAuth();
+    successMessage.value = 'Password login removed from this account.';
+  } catch (err) {
+    errorMessage.value = err instanceof Error ? err.message : 'Failed to remove password.';
+  }
+}
+
+async function createPassword(): Promise<void> {
+  errorMessage.value = '';
+  if (newPassword.value.length < 8 || newPassword.value !== confirmNewPassword.value) {
+    errorMessage.value = 'Passwords must match and be at least 8 characters.';
+    return;
+  }
+  try {
+    await api.createPassword(newPassword.value);
+    await state.checkAuth();
+    successMessage.value = 'Password login enabled for this account.';
+  } catch (err) {
+    errorMessage.value = err instanceof Error ? err.message : 'Failed to create password.';
   }
 }
 
@@ -304,7 +295,7 @@ async function saveProfile(): Promise<void> {
       displayName: displayName.value.trim(),
       location: location.value.trim() || null,
       signature: signature.value.trim() || null,
-      theme: selectedTheme.value
+      theme: selectedTheme.value,
     });
 
     if (clearPrivateEmail.value) {
@@ -351,19 +342,7 @@ onMounted(async () => {
     router.push({ name: 'forum.home' });
   }
 
-  // If we were redirected back after linking, show a success message.
-  try {
-    const url = new URL(window.location.href);
-    if (url.searchParams.get('linked') === '1') {
-      successMessage.value = 'SSO linked successfully.';
-      url.searchParams.delete('linked');
-      window.history.replaceState({}, '', url.toString());
-    }
-  } catch {
-    // ignore
-  }
-
-  await loadSsoLinks();
+  await loadPasskeys();
 });
 </script>
 
@@ -466,7 +445,9 @@ onMounted(async () => {
             </div>
             <div class="vb-modal-actions">
               <button class="vb-btn" @click="startEdit">Edit Profile</button>
-              <router-link class="vb-btn vb-btn-secondary" :to="{ name: 'user.messageTemplates' }">Message Templates</router-link>
+              <router-link class="vb-btn vb-btn-secondary" :to="{ name: 'user.messageTemplates' }"
+                >Message Templates</router-link
+              >
               <button class="vb-btn vb-btn-secondary" @click="goHome">Back to Forum</button>
             </div>
           </template>
@@ -531,8 +512,9 @@ onMounted(async () => {
               />
               <div class="vb-form-hint">
                 Status:
-                <strong>{{ currentUser.hasPrivateEmail ? 'set (hidden)' : 'not set' }}</strong>.
-                This email is not displayed publicly and is reserved for robot workflows (e.g., internal attribution).
+                <strong>{{ currentUser.hasPrivateEmail ? 'set (hidden)' : 'not set' }}</strong
+                >. This email is not displayed publicly and is reserved for robot workflows (e.g., internal
+                attribution).
               </div>
               <label class="vb-checkbox-row">
                 <input v-model="clearPrivateEmail" type="checkbox" />
@@ -550,44 +532,43 @@ onMounted(async () => {
         </div>
       </div>
 
-      <div v-if="currentUser" class="vb-card" style="margin-top: 12px;">
-        <div class="vb-card-header">SSO</div>
+      <div v-if="currentUser" class="vb-card" style="margin-top: 12px">
+        <div class="vb-card-header">Passkeys</div>
         <div class="vb-card-body">
-          <p class="vb-hint">Link your forum account to your Authelia identity so you can sign in with passkeys.</p>
-          <div v-if="isLoadingSso" class="vb-hint">Loading…</div>
-          <template v-else>
-            <div v-if="ssoLinks.length" class="vb-hint" style="margin-top: 8px;">
-              Linked identities:
-              <ul style="margin: 6px 0 0 18px;">
-                <li v-for="link in ssoLinks" :key="link.id">
-                  <strong>{{ link.providerKey }}</strong>
-                  <span class="vb-hint" style="margin-left: 6px;">({{ link.issuer }})</span>
-                  <div class="vb-hint" style="margin-top: 2px;">
-                    subject: <code>{{ link.subject }}</code>
-                  </div>
-                  <div class="vb-form-actions" style="margin-top: 6px;">
-                    <button
-                      class="vb-btn vb-btn-secondary"
-                      type="button"
-                      :disabled="isUnlinkingSso"
-                      @click="unlinkSso(link.id)"
-                    >
-                      {{ isUnlinkingSso ? 'Unlinking…' : 'Unlink' }}
-                    </button>
-                  </div>
-                </li>
-              </ul>
-            </div>
-            <div v-else class="vb-hint" style="margin-top: 8px;">No SSO identity linked yet.</div>
-
-            <div class="vb-form-actions" style="margin-top: 10px;">
-              <button class="vb-btn" type="button" @click="linkSso">Link Authelia SSO</button>
-            </div>
-          </template>
+          <p class="vb-hint">Passkeys are discoverable credentials protected by device user verification.</p>
+          <ul v-if="passkeys.length" style="margin: 8px 0 8px 18px">
+            <li v-for="credential in passkeys" :key="credential.id">
+              <strong>{{ credential.name }}</strong> — {{ credential.deviceType }}
+              <button class="vb-btn vb-btn-secondary" type="button" @click="removePasskey(credential.id)">
+                Remove
+              </button>
+            </li>
+          </ul>
+          <div v-else class="vb-hint">No passkeys enrolled.</div>
+          <div class="vb-form-actions" style="margin-top: 10px">
+            <input v-model="passkeyName" type="text" placeholder="Passkey name" />
+            <button class="vb-btn" type="button" @click="enrollPasskey">Add passkey</button>
+            <button
+              v-if="currentUser.hasPassword && passkeys.length"
+              class="vb-btn vb-btn-secondary"
+              type="button"
+              @click="removePassword"
+            >
+              Remove password
+            </button>
+          </div>
+          <div
+            v-if="!currentUser.hasPassword && state.passwordLoginEnabled.value"
+            class="vb-form-actions"
+            style="margin-top: 10px"
+          >
+            <input v-model="newPassword" type="password" placeholder="New password" />
+            <input v-model="confirmNewPassword" type="password" placeholder="Confirm password" />
+            <button class="vb-btn" type="button" @click="createPassword">Create password</button>
+          </div>
         </div>
       </div>
-
-      <div v-if="currentUser" class="vb-card" style="margin-top: 12px;">
+      <div v-if="currentUser?.hasPassword && state.passwordLoginEnabled.value" class="vb-card" style="margin-top: 12px">
         <div class="vb-card-header">Change Password</div>
         <div class="vb-card-body">
           <div class="vb-form-row">
@@ -620,8 +601,14 @@ onMounted(async () => {
 }
 
 @keyframes fade-in {
-  from { opacity: 0; transform: translateY(-10px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .vb-profile-card {
@@ -705,7 +692,9 @@ onMounted(async () => {
   font-size: 13px;
   background: var(--bg-input);
   color: var(--text-primary);
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .vb-form-row input:not([type='checkbox']):not([type='radio']):focus,
@@ -813,8 +802,12 @@ onMounted(async () => {
 }
 
 @keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
 }
 
 .vb-success-banner {

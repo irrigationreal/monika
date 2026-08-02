@@ -186,18 +186,21 @@ function createMockApi(options: MockApiOptions = {}): {
     const method = request.method();
 
     if (path === '/api/auth/me' && method === 'GET') {
+      const authenticated = request.headers()['cookie']?.includes('cforum_session=test-token') ?? false;
       return fulfillJson(route, {
-        identity: {
-          id: identity.id,
-          displayName: identity.displayName,
-          kind: identity.kind,
-          parentIdentityId: null,
-          avatarUrl: null,
-          location: identity.location,
-          signature: identity.signature,
-          theme: identity.theme,
-          hasPrivateEmail: false
-        }
+        identity: authenticated
+          ? {
+              id: identity.id,
+              displayName: identity.displayName,
+              kind: identity.kind,
+              parentIdentityId: null,
+              avatarUrl: null,
+              location: identity.location,
+              signature: identity.signature,
+              theme: identity.theme,
+              hasPrivateEmail: false
+            }
+          : null
       });
     }
 
@@ -418,15 +421,13 @@ function createMockApi(options: MockApiOptions = {}): {
 
 async function enableAuth(page: Page): Promise<void> {
   await page.addInitScript(() => {
-    window.localStorage.setItem('cforum_auth_token', 'test-token');
-    window.localStorage.setItem('cforum_refresh_token', 'test-refresh');
+    document.cookie = 'cforum_session=test-token; path=/; SameSite=Lax';
   });
 }
 
 async function clearAuth(page: Page): Promise<void> {
   await page.addInitScript(() => {
-    window.localStorage.removeItem('cforum_auth_token');
-    window.localStorage.removeItem('cforum_refresh_token');
+    document.cookie = 'cforum_session=; path=/; Max-Age=0';
   });
 }
 
@@ -435,8 +436,7 @@ async function gotoNewThreadComposer(page: Page, url: string): Promise<void> {
   await page.goto(url);
   if (await page.locator('#thread-title').count() === 0) {
     await page.evaluate(() => {
-      window.localStorage.setItem('cforum_auth_token', 'test-token');
-      window.localStorage.setItem('cforum_refresh_token', 'test-refresh');
+      document.cookie = 'cforum_session=test-token; path=/; SameSite=Lax';
     });
     await page.goto(url);
   }
@@ -664,8 +664,7 @@ test.describe('Attachment lifecycle', () => {
     await mock.attach(page);
 
     await page.addInitScript(() => {
-      window.localStorage.setItem('cforum_auth_token', 'test-token');
-      window.localStorage.setItem('cforum_refresh_token', 'test-refresh');
+      document.cookie = 'cforum_session=test-token; path=/; SameSite=Lax';
       Object.defineProperty(navigator, 'clipboard', {
         value: { writeText: async () => Promise.resolve() },
         configurable: true
@@ -752,8 +751,7 @@ test.describe('Attachment lifecycle', () => {
     await mock.attach(page);
 
     await page.addInitScript(() => {
-      window.localStorage.setItem('cforum_auth_token', 'test-token');
-      window.localStorage.setItem('cforum_refresh_token', 'test-refresh');
+      document.cookie = 'cforum_session=test-token; path=/; SameSite=Lax';
       Object.defineProperty(navigator, 'clipboard', {
         value: { writeText: async () => Promise.resolve() },
         configurable: true

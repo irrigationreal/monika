@@ -5,13 +5,13 @@ This repro uploads a 60MiB attachment through the API so you can confirm request
 ## Prereqs
 
 - Forum server running locally (defaults to `http://localhost:4310`).
-- A valid auth token from `POST /auth/login` (set as `AUTH_TOKEN`).
+- A valid API key with write scope (set as `AUTH_TOKEN`). Browser login cookies are not bearer tokens.
 - Python installed (used for tiny JSON parsing in the script).
 
 ## Run the script
 
 ```bash
-AUTH_TOKEN="cforum_..." \
+AUTH_TOKEN="cfk_..." \
 BASE_URL="http://localhost:4310" \
 ./scripts/repro-upload-60mib.sh
 ```
@@ -23,8 +23,8 @@ Optional environment variables:
 
 ## Expected result
 
-The script creates a forum (if needed), creates a topic + first post, then uploads the 60MiB attachment.
-On success you should see output like:
+The script creates a forum (if needed), creates a topic + first post, then uploads the 60MiB attachment. On success you
+should see output like:
 
 ```
 Uploaded attachment <attachment-id> sizeBytes= 62914560

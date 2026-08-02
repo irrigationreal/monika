@@ -8,6 +8,7 @@ export * from './domain/operationalEvents';
 export * from './domain/analytics';
 export * from './domain/messageTemplates';
 export * from './domain/dispatchPolicy';
+export * from './domain/authentication';
 export * from './state/robot';
 export * from './interfaces/repositories';
 export * from './interfaces/readModels';

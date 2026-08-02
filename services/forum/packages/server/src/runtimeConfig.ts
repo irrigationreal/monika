@@ -136,26 +136,22 @@ export const BASE_URL: string = process.env['CODEX_FORUM_BASE_URL'] ?? `http://l
 export const API_BASE_URL: string = process.env['CODEX_FORUM_API_BASE_URL'] ?? `http://localhost:${PORT}`;
 export const API_PREFIX: string = process.env['CODEX_FORUM_API_PREFIX'] ?? '/api';
 export const TRUST_PROXY: boolean | string | number = readTrustProxyEnv('CODEX_FORUM_TRUST_PROXY');
-
-// OIDC / SSO (optional)
-export const OIDC_ENABLED: boolean = process.env['CODEX_FORUM_OIDC_ENABLED'] === '1';
-export const OIDC_PROVIDER_KEY: string = process.env['CODEX_FORUM_OIDC_PROVIDER_KEY'] ?? 'oidc';
-export const OIDC_ISSUER_URL: string | null = process.env['CODEX_FORUM_OIDC_ISSUER_URL'] ?? null;
-export const OIDC_CLIENT_ID: string | null = process.env['CODEX_FORUM_OIDC_CLIENT_ID'] ?? null;
-export const OIDC_CLIENT_SECRET: string | null = process.env['CODEX_FORUM_OIDC_CLIENT_SECRET'] ?? null;
-export const OIDC_SCOPES: string = process.env['CODEX_FORUM_OIDC_SCOPES'] ?? 'openid profile email';
-export const OIDC_PROMPT: string | null = process.env['CODEX_FORUM_OIDC_PROMPT'] ?? null;
-// If unset, defaults to `${BASE_URL}${API_PREFIX}/auth/oidc/callback`.
-export const OIDC_REDIRECT_URL: string | null = process.env['CODEX_FORUM_OIDC_REDIRECT_URL'] ?? null;
+export const PASSWORD_LOGIN_ENABLED: boolean = process.env['CODEX_FORUM_PASSWORD_LOGIN_ENABLED'] !== '0';
+export const WEBAUTHN_ORIGIN: string = new URL(BASE_URL).origin;
+export const WEBAUTHN_RP_ID: string = readStringEnv('CODEX_FORUM_WEBAUTHN_RP_ID') ?? new URL(BASE_URL).hostname;
+export const WEBAUTHN_RP_NAME: string = readStringEnv('CODEX_FORUM_WEBAUTHN_RP_NAME') ?? 'Monika Forum';
 export const CORS_ORIGINS: string[] | null = readCommaListEnv('CODEX_FORUM_CORS_ORIGINS');
 export const CORS_CREDENTIALS: boolean = process.env['CODEX_FORUM_CORS_CREDENTIALS'] === '1';
 export const BOOTSTRAP_ADMIN_USERNAME: string | null = readStringEnv('CODEX_FORUM_BOOTSTRAP_ADMIN_USERNAME');
 export const BOOTSTRAP_ADMIN_PASSWORD: string | null = process.env['CODEX_FORUM_BOOTSTRAP_ADMIN_PASSWORD'] ?? null;
-export const BOOTSTRAP_ADMIN_DISPLAY_NAME: string = readStringEnv('CODEX_FORUM_BOOTSTRAP_ADMIN_DISPLAY_NAME') ?? 'Admin';
+export const BOOTSTRAP_ADMIN_DISPLAY_NAME: string =
+  readStringEnv('CODEX_FORUM_BOOTSTRAP_ADMIN_DISPLAY_NAME') ?? 'Admin';
 export const DEFAULT_WEB_IDENTITY_ID: string | null = readStringEnv('CODEX_FORUM_DEFAULT_WEB_IDENTITY_ID');
 export const DEFAULT_WEB_IDENTITY_USERNAME: string | null = readStringEnv('CODEX_FORUM_DEFAULT_WEB_IDENTITY_USERNAME');
-export const DEFAULT_WEB_IDENTITY_DISPLAY_NAME: string = readStringEnv('CODEX_FORUM_DEFAULT_WEB_IDENTITY_DISPLAY_NAME') ?? 'Web User';
-export const DEFAULT_WEB_IDENTITY_AVATAR_URL: string = readStringEnv('CODEX_FORUM_DEFAULT_WEB_IDENTITY_AVATAR_URL') ?? '/avatars/user.svg';
+export const DEFAULT_WEB_IDENTITY_DISPLAY_NAME: string =
+  readStringEnv('CODEX_FORUM_DEFAULT_WEB_IDENTITY_DISPLAY_NAME') ?? 'Web User';
+export const DEFAULT_WEB_IDENTITY_AVATAR_URL: string =
+  readStringEnv('CODEX_FORUM_DEFAULT_WEB_IDENTITY_AVATAR_URL') ?? '/avatars/user.svg';
 const DEFAULT_STORE_STATS_CACHE_TTL_MS = 2_000;
 const DEFAULT_STORE_ENTITY_CACHE_TTL_MS = 30_000;
 const DEFAULT_STORE_CACHE_MAX_ENTRIES = 5_000;
@@ -181,7 +177,9 @@ export const UPLOADS_DIR: string = process.env['CODEX_FORUM_UPLOADS_DIR'] ?? '/m
 export const UPLOAD_TEMP_DIR: string = join(UPLOADS_DIR, '_chunked');
 export const USER_FILES_DIR: string = join(UPLOADS_DIR, 'user-files');
 export const PENDING_ATTACHMENTS_DIR: string = join(UPLOADS_DIR, 'pending');
-export const PENDING_ATTACHMENT_TTL_MS: number = Number(process.env['CODEX_FORUM_PENDING_ATTACHMENT_TTL_MS'] ?? 24 * 60 * 60 * 1000);
+export const PENDING_ATTACHMENT_TTL_MS: number = Number(
+  process.env['CODEX_FORUM_PENDING_ATTACHMENT_TTL_MS'] ?? 24 * 60 * 60 * 1000
+);
 export const INTERNAL_API_TOKEN: string | null = readStringEnv('CODEX_FORUM_INTERNAL_API_TOKEN');
 export const DEPLOY_TOKEN: string | null = readStringEnv('CODEX_FORUM_DEPLOY_TOKEN');
 export const AVATARS_DIR: string = join(UPLOADS_DIR, 'avatars');

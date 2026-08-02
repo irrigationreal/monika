@@ -8,10 +8,12 @@ import rateLimit from '@fastify/rate-limit';
 import sensible from '@fastify/sensible';
 import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
+
 import { MessageTemplateService } from '@irrigationreal/codex-forum-core';
 
 import { createAdapterRegistry } from './adapters/adapterRegistry';
 import { AgentBridge } from './agentBridge';
+import { assertCorsCredentialsConfiguration, isTrustedCookieRequest } from './auth/csrf';
 import { SqliteOneTimeLinkIssuer } from './auth/oneTimeLinks';
 import { loadFeatureFlags } from './config';
 import { ForumQueries } from './core/queries';
@@ -30,8 +32,8 @@ import { registerAttachmentRoutes } from './routes/attachmentRoutes';
 import { registerAuthRoutes } from './routes/authRoutes';
 import { registerChatRoutes } from './routes/chatRoutes';
 import { registerForumRoutes } from './routes/forumRoutes';
-import { registerNotificationRoutes } from './routes/notificationRoutes';
 import { registerMessageTemplateRoutes } from './routes/messageTemplateRoutes';
+import { registerNotificationRoutes } from './routes/notificationRoutes';
 import { registerProfileRoutes } from './routes/profileRoutes';
 import { registerRobotRoutes } from './routes/robotRoutes';
 import { registerSearchRoutes } from './routes/searchRoutes';
@@ -69,6 +71,7 @@ import {
   MODEL_CATALOG_TTL_MS,
   MONIKA_PI_SYNC_ENABLED,
   MONIKA_PI_SYNC_INTERVAL_MS,
+  PASSWORD_LOGIN_ENABLED,
   PORT,
   PROMPT_ENHANCER_ENABLED,
   REASONING_EFFORT,
@@ -83,12 +86,12 @@ import {
   USER_FILES_DIR,
   WORK_DIR,
 } from './runtimeConfig';
-import { AutoRunDirector } from './services/autoRunDirector';
 import { AnalyticsService } from './services/analyticsService';
+import { AutoRunDirector } from './services/autoRunDirector';
+import { CompactionService } from './services/compactionService';
 import { getEmailService } from './services/emailService';
 import { PiSessionSyncService } from './services/piSessionSyncService';
 import { PostDispatchService } from './services/postDispatchService';
-import { CompactionService } from './services/compactionService';
 import { WebhookService } from './services/webhookService';
 import { ForumStore } from './store';
 import { RedisStreamBus, createStreamBus } from './streamBus';
@@ -100,6 +103,7 @@ import { rateLimitKeyForRequest } from './utils/rateLimit';
 import type { MessageTamperContext } from '@irrigationreal/codex-forum-core';
 import type { FastifyPluginAsync } from 'fastify';
 
+assertCorsCredentialsConfiguration(CORS_ORIGINS, CORS_CREDENTIALS);
 const featureFlags = loadFeatureFlags();
 const { db } = openDb({ path: DB_PATH });
 migrate(db);
@@ -166,6 +170,7 @@ const autoRunDirector = new AutoRunDirector(store, bus, {
 
 // Bootstrap admin account if it doesn't exist
 async function bootstrapAdminAccount(): Promise<void> {
+  if (!PASSWORD_LOGIN_ENABLED) return;
   if (!BOOTSTRAP_ADMIN_USERNAME || !BOOTSTRAP_ADMIN_PASSWORD) {
     return;
   }
@@ -174,38 +179,31 @@ async function bootstrapAdminAccount(): Promise<void> {
     return;
   }
   const adminPassword = BOOTSTRAP_ADMIN_PASSWORD;
+  if (adminPassword.length < 8 || adminPassword.length > 1024) {
+    throw new Error('CODEX_FORUM_BOOTSTRAP_ADMIN_PASSWORD must be between 8 and 1024 characters');
+  }
   const adminDisplayName = BOOTSTRAP_ADMIN_DISPLAY_NAME.trim() || adminUsername;
   const existing = store.getIdentityByUsername(adminUsername);
   if (existing) {
-    // Already have an admin with this username
     if (existing.kind !== 'admin') {
-      db.prepare('update identities set kind = ? where id = ?').run('admin', existing.id);
-      console.log(`Upgraded ${existing.display_name} to admin`);
+      throw new Error(
+        `Refusing to promote non-admin identity ${existing.id} that already owns bootstrap username ${adminUsername}`
+      );
     }
     return;
   }
-  // Check if db.ts bootstrap created a human without username
-  const seededHuman = db
-    .prepare('select id from identities where display_name = ? and username is null limit 1')
-    .get(adminDisplayName) as { id: string } | undefined;
-  if (seededHuman) {
-    // Upgrade the existing identity instead of creating a duplicate
-    const passwordHash = await hashPassword(adminPassword);
-    db.prepare('update identities set username = ?, password_hash = ?, kind = ? where id = ?').run(
-      adminUsername,
-      passwordHash,
-      'admin',
-      seededHuman.id
-    );
-    console.log(`Upgraded existing ${adminDisplayName} identity to admin: ${seededHuman.id}`);
-    return;
-  }
-  // Create new admin account
+  // Never adopt an identity by display name: public users control display names.
+  // Create a distinct bootstrap administrator instead.
   const passwordHash = await hashPassword(adminPassword);
   const identity = store.createIdentityWithPassword(adminDisplayName, adminUsername, passwordHash, 'admin');
   console.log(`Created admin account: ${identity.display_name} (${identity.id})`);
 }
-void bootstrapAdminAccount();
+await bootstrapAdminAccount();
+if (!PASSWORD_LOGIN_ENABLED && !store.hasWebAuthnAdmin()) {
+  throw new Error(
+    'CODEX_FORUM_PASSWORD_LOGIN_ENABLED=0 requires at least one admin account with a registered WebAuthn credential'
+  );
+}
 const normalizeApiPrefix = (prefix: string): string => {
   const trimmed = prefix.trim();
   if (!trimmed || trimmed === '/') return '';
@@ -298,10 +296,15 @@ try {
   const { reattached, missing } = await codex.reconcileLoadedThreads();
   const superseded = store.reconcilePostDispatchGenerations();
   if (reattached > 0 || missing > 0 || superseded > 0) {
-    console.log(`Startup reconciliation reattached ${reattached} loaded conversation(s), marked ${missing} unloaded, and superseded ${superseded} stale dispatch(es).`);
+    console.log(
+      `Startup reconciliation reattached ${reattached} loaded conversation(s), marked ${missing} unloaded, and superseded ${superseded} stale dispatch(es).`
+    );
   }
 } catch (err) {
-  console.warn('Passive startup reconciliation failed; durable dispatch processing remains stopped:', err instanceof Error ? err.message : err);
+  console.warn(
+    'Passive startup reconciliation failed; durable dispatch processing remains stopped:',
+    err instanceof Error ? err.message : err
+  );
   throw err;
 }
 const recoveredCompactions = compactionService.start();
@@ -383,6 +386,13 @@ app.addHook('onSend', async (_request, reply, payload) => {
   return payload;
 });
 await app.register(sensible);
+const trustedOrigin = new URL(BASE_URL).origin;
+app.addHook('onRequest', async (request) => {
+  const auth = access.getCurrentUser(request);
+  if (!isTrustedCookieRequest({ method: request.method, origin: request.headers.origin, trustedOrigin, auth })) {
+    throw app.httpErrors.forbidden('Invalid request origin');
+  }
+});
 await app.register(multipart, { limits: { fileSize: MAX_ATTACHMENT_BYTES } });
 
 // Ensure uploads directory exists

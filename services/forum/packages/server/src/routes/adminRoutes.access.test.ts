@@ -1,7 +1,8 @@
-import Fastify from 'fastify';
 import sensible from '@fastify/sensible';
 import Database from 'better-sqlite3';
+import Fastify from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
 import { migrate } from '../db';
 import { ForumStore } from '../store';
 import { createAccessHelpers } from '../utils/access';
@@ -28,7 +29,7 @@ describe('Admin routes access controls', () => {
     const codex = {
       listActiveTurns: () => [],
       listQueuedTurns: () => [],
-      pauseActiveThreads: async () => ({ paused: 0, skipped: 0 })
+      pauseActiveThreads: async () => ({ paused: 0, skipped: 0 }),
     } as any;
     registerAdminRoutes({ app, store, db, access, codex });
     await app.ready();
@@ -84,7 +85,7 @@ describe('Admin routes access controls', () => {
       { method: 'POST', url: '/admin/robot/automations/auto-1/run' },
       { method: 'GET', url: '/admin/robot/automations/auto-1/runs' },
       { method: 'GET', url: '/admin/robot/dashboard' },
-      { method: 'PATCH', url: '/admin/robot/settings' }
+      { method: 'PATCH', url: '/admin/robot/settings' },
     ];
 
     for (const route of routes) {
@@ -94,7 +95,7 @@ describe('Admin routes access controls', () => {
       const humanRes = await app.inject({
         method: route.method,
         url: route.url,
-        headers: { authorization: 'Bearer human-token' }
+        headers: { authorization: 'Bearer human-token' },
       });
       expect(humanRes.statusCode, `${route.method} ${route.url} human`).toBe(403);
     }
@@ -102,9 +103,49 @@ describe('Admin routes access controls', () => {
     const adminRes = await app.inject({
       method: 'GET',
       url: '/admin/users',
-      headers: { authorization: 'Bearer admin-token' }
+      headers: { authorization: 'Bearer admin-token' },
     });
     expect(adminRes.statusCode).toBe(200);
   });
-});
 
+  it('enforces the password credential policy for admin-created and reset passwords', async () => {
+    const app = await buildApp();
+    const admin = store.createIdentity('Admin', 'admin');
+    const human = store.createIdentityWithPassword('Human', 'human', 'old-hash', 'human');
+    store.createAuthSession('admin-token', admin.id);
+
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/admin/users',
+      headers: { authorization: 'Bearer admin-token' },
+      payload: { displayName: 'Short Password', username: 'short-password', password: 'short' },
+    });
+    expect(createResponse.statusCode).toBe(400);
+
+    const resetResponse = await app.inject({
+      method: 'PATCH',
+      url: `/admin/users/${human.id}`,
+      headers: { authorization: 'Bearer admin-token' },
+      payload: { password: 'short' },
+    });
+    expect(resetResponse.statusCode).toBe(400);
+  });
+
+  it('revokes target sessions when an admin resets a password', async () => {
+    const app = await buildApp();
+    const admin = store.createIdentity('Admin', 'admin');
+    const human = store.createIdentityWithPassword('Human', 'human', 'old-hash', 'human');
+    store.createAuthSession('admin-token', admin.id);
+    store.createAuthSession('human-token', human.id);
+
+    const response = await app.inject({
+      method: 'PATCH',
+      url: `/admin/users/${human.id}`,
+      headers: { authorization: 'Bearer admin-token' },
+      payload: { password: 'replacement-password' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(store.getAuthSession('human-token')).toBeNull();
+  });
+});

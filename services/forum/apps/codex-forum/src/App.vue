@@ -2,12 +2,16 @@
 import { computed, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
+import { startAuthentication } from '@simplewebauthn/browser';
+
 import VMonikaLogo from './components/VMonikaLogo.vue';
 import { useForumState } from './composables/useForumState';
 import { useTheme } from './composables/useTheme';
+import { api } from './lib/apiClient';
 import { themeLabel } from './themes/forumThemes';
 
-const apiBaseUrl = '/api';
+import type { PublicKeyCredentialRequestOptionsJSON } from '@simplewebauthn/browser';
+
 const route = useRoute();
 const router = useRouter();
 const state = useForumState();
@@ -128,6 +132,27 @@ async function handleLogin(): Promise<void> {
   }
 }
 
+async function handlePasskeyLogin(): Promise<void> {
+  loggingIn.value = true;
+  loginError.value = '';
+  try {
+    const ceremony = await api.webauthnLoginOptions();
+    const response = await startAuthentication({
+      optionsJSON: ceremony.options as unknown as PublicKeyCredentialRequestOptionsJSON,
+    });
+    await api.webauthnLoginVerify({
+      challengeId: ceremony.challengeId,
+      response: response as unknown as Record<string, unknown>,
+    });
+    await state.checkAuth();
+    state.closeLoginModal();
+  } catch (err) {
+    loginError.value = err instanceof Error ? err.message : 'Passkey login failed';
+  } finally {
+    loggingIn.value = false;
+  }
+}
+
 async function handleLogout(): Promise<void> {
   await state.logout();
 }
@@ -206,15 +231,17 @@ onMounted(async () => {
           </div>
           <div class="vb-modal-body">
             <div v-if="loginError" class="vb-login-error">{{ loginError }}</div>
-            <label>Username:</label>
-            <input v-model="loginUsername" type="text" @keyup.enter="handleLogin" />
-            <label>Password:</label>
-            <input v-model="loginPassword" type="password" @keyup.enter="handleLogin" />
-            <div class="vb-login-hint" style="margin-top: 10px">
-              <a class="vb-link" :href="`${apiBaseUrl}/auth/oidc/start`">Sign in with SSO</a>
-            </div>
+            <template v-if="state.passwordLoginEnabled.value">
+              <label>Username:</label>
+              <input v-model="loginUsername" type="text" @keyup.enter="handleLogin" />
+              <label>Password:</label>
+              <input v-model="loginPassword" type="password" @keyup.enter="handleLogin" />
+            </template>
             <div class="vb-modal-actions">
-              <button class="vb-btn" :disabled="loggingIn" @click="handleLogin">Log In</button>
+              <button v-if="state.passwordLoginEnabled.value" class="vb-btn" :disabled="loggingIn" @click="handleLogin">
+                Log In
+              </button>
+              <button class="vb-btn" :disabled="loggingIn" @click="handlePasskeyLogin">Sign in with a passkey</button>
               <button class="vb-btn vb-btn-secondary" @click="closeLoginForm">Cancel</button>
             </div>
           </div>

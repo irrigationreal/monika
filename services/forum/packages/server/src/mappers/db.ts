@@ -13,6 +13,7 @@ import type {
   Topic,
   TopicOperationalEvent,
   TopicStatus,
+  WebAuthnCredential,
 } from '@irrigationreal/codex-forum-core';
 
 import type {
@@ -32,6 +33,7 @@ import type {
   TopicOperationalEventRow,
   TopicRow,
   UserFileRow,
+  WebAuthnCredentialRow,
 } from '../db';
 import type { Attachment, Invite, Plan, Session, SessionMessage, ToolRun, TopicAutoRun, UserFile } from './domain';
 
@@ -118,6 +120,22 @@ export function mapMessageTemplateRowToDomain(
   };
 }
 
+export function mapWebAuthnCredentialRowToDomain(row: WebAuthnCredentialRow): WebAuthnCredential {
+  return {
+    id: row.credential_id,
+    identityId: row.identity_id,
+    name: row.name,
+    publicKey: new Uint8Array(row.public_key),
+    counter: row.counter,
+    transports: JSON.parse(row.transports_json) as string[],
+    deviceType: row.device_type,
+    backedUp: Boolean(row.backed_up),
+    createdAt: row.created_at,
+    lastUsedAt: row.last_used_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 export function mapIdentityRowToDomain(row: IdentityRow): Identity {
   return {
     id: row.id,
@@ -186,15 +204,16 @@ export function mapRobotStateRowToDomain(row: RobotStateRow): RobotState {
     model: row.model,
     reasoningEffort: row.reasoning_effort,
     lastUpdatedAt: row.last_updated_at,
-    lastTurnError: row.last_error_message && row.last_error_at
-      ? {
-          message: row.last_error_message,
-          at: row.last_error_at,
-          postId: row.last_error_post_id ?? null,
-          turnId: row.last_error_turn_id ?? null,
-        }
-      : null,
-    recentToolRuns: []
+    lastTurnError:
+      row.last_error_message && row.last_error_at
+        ? {
+            message: row.last_error_message,
+            at: row.last_error_at,
+            postId: row.last_error_post_id ?? null,
+            turnId: row.last_error_turn_id ?? null,
+          }
+        : null,
+    recentToolRuns: [],
   };
 }
 

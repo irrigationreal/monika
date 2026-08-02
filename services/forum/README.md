@@ -140,11 +140,12 @@ curl -sS "$CODEX_FORUM_BASE_URL/api/forums" | jq
 Example: create a topic
 
 ```bash
-export CODEX_FORUM_TOKEN="cforum_..."
+# Create an API key in the authenticated Developer Portal first.
+export CODEX_FORUM_API_KEY="cfk_..."
 export FORUM_ID="..."
 
 curl -sS \
-  -H "Authorization: Bearer $CODEX_FORUM_TOKEN" \
+  -H "Authorization: Bearer $CODEX_FORUM_API_KEY" \
   -H 'Content-Type: application/json' \
   -d '{"title":"API topic","body":"Created via curl."}' \
   "$CODEX_FORUM_BASE_URL/api/forums/$FORUM_ID/topics"
@@ -170,28 +171,38 @@ Key env vars (see `packages/server/src/runtimeConfig.ts` for the full list):
 | `CODEX_FORUM_REDIS_STREAM_BUS`             | Redis stream bus toggle                                                                                                         | `0`                              |
 | `CODEX_FORUM_ENABLE_AUTH`                  | Auth toggle                                                                                                                     | `0`                              |
 | `CODEX_FORUM_REGISTRATION_MODE`            | Self-registration policy: `disabled`, `invite-only`, or `public`                                                                | `disabled`                       |
-| `CODEX_FORUM_ENABLE_RATE_LIMITING`         | Route-specific rate limit toggle for auth/write/search endpoints; safe authenticated reads are not globally throttled            | `0`                              |
-| `CODEX_FORUM_TRUST_PROXY`                  | Fastify trusted proxy setting (`0`, `1`, hop count, or CIDR/list string) for deployments behind Cloudflare Tunnel/reverse proxy  | `0`                              |
+| `CODEX_FORUM_PASSWORD_LOGIN_ENABLED`       | Enable password login and all password credential creation/change paths                                                         | `1`                              |
+| `CODEX_FORUM_WEBAUTHN_RP_ID`               | Optional WebAuthn RP ID override (defaults to exact base URL hostname)                                                          | unset                            |
+| `CODEX_FORUM_WEBAUTHN_RP_NAME`             | WebAuthn relying-party display name                                                                                             | `Monika Forum`                   |
+| `CODEX_FORUM_ENABLE_RATE_LIMITING`         | Route-specific rate limit toggle for auth/write/search endpoints; safe authenticated reads are not globally throttled           | `0`                              |
+| `CODEX_FORUM_TRUST_PROXY`                  | Fastify trusted proxy setting (`0`, `1`, hop count, or CIDR/list string) for deployments behind Cloudflare Tunnel/reverse proxy | `0`                              |
 | `CODEX_FORUM_ENABLE_SEARCH`                | Search toggle                                                                                                                   | `0`                              |
 | `CODEX_FORUM_ECHS_BASE_URL`                | ECHS server base URL (required)                                                                                                 | unset                            |
 | `CODEX_FORUM_ECHS_API_TOKEN`               | Optional ECHS API token                                                                                                         | unset                            |
-| `CODEX_FORUM_AGENT_MODEL`                  | Default agent model                                                                                                             | `codex/gpt-5.6-sol`                  |
+| `CODEX_FORUM_AGENT_MODEL`                  | Default agent model                                                                                                             | `codex/gpt-5.6-sol`              |
 | `CODEX_FORUM_ECHS_REASONING_EFFORT`        | Default reasoning effort                                                                                                        | `medium`                         |
 
 `CODEX_FORUM_ENABLE_AUTH=1` does not open registration by itself. Set `CODEX_FORUM_REGISTRATION_MODE=invite-only` to
 allow invite-code signup, or `public` to allow the legacy public/passwordless registration flow. Internet-facing
 deployments should keep the default `disabled` mode unless account creation is deliberately open.
 
+Browser login uses an opaque HttpOnly same-origin cookie, not a bearer/refresh token. Unsafe cookie-authenticated
+requests require the exact `CODEX_FORUM_BASE_URL` origin; API keys and impersonation tokens remain explicit bearer
+automation credentials. Passkeys use exact origin/RP validation, discoverable credentials, and required user
+verification. Before setting `CODEX_FORUM_PASSWORD_LOGIN_ENABLED=0`, enroll an admin passkey; startup otherwise fails
+closed. See `docs/DEPLOYMENT.md` for enrollment and legacy external-identity migration procedure.
+
 Search is visibility-aware when `CODEX_FORUM_ENABLE_SEARCH=1`: unauthenticated callers only search public-visible
 forums, authenticated members can also search members-only forums, and admin-only results require admin visibility.
 Forum pages search the current forum by default; the UI can opt into searching all visible forums. Public search should
 be paired with `CODEX_FORUM_ENABLE_RATE_LIMITING=1` so the route-specific search limiter is active.
 
-When `CODEX_FORUM_ENABLE_RATE_LIMITING=1`, limits are route-specific rather than global. Login/register, topic creation,
-replies, and search are limited; normal authenticated read routes are not globally throttled. Authenticated rate-limit
-buckets use the forum identity for browser sessions and the token id for API keys/impersonation tokens; anonymous
-buckets use `request.ip`. Set `CODEX_FORUM_TRUST_PROXY` only when the forum origin is private behind a trusted reverse
-proxy or Cloudflare Tunnel, so forwarded client IP headers cannot be spoofed by direct public traffic.
+When `CODEX_FORUM_ENABLE_RATE_LIMITING=1`, limits are route-specific rather than global. Password and passkey login,
+registration, topic creation, replies, and search are limited; normal authenticated read routes are not globally
+throttled. Authenticated rate-limit buckets use the forum identity for browser sessions and the token id for API
+keys/impersonation tokens; anonymous buckets use `request.ip`. Set `CODEX_FORUM_TRUST_PROXY` only when the forum origin
+is private behind a trusted reverse proxy or Cloudflare Tunnel, so forwarded client IP headers cannot be spoofed by
+direct public traffic.
 
 Public `/healthz` and `/api/healthz` responses are intentionally minimal. Operational deploy state is available through
 `/api/deploy/quiescence` only with `CODEX_FORUM_DEPLOY_TOKEN`, while `/api/models` requires an authenticated forum user.
@@ -203,7 +214,9 @@ For full deployment guidance, see `docs/DEPLOYMENT.md`.
 - The repo is intentionally interface-first: most packages define types and boundaries so the system can evolve safely.
 - The Admin Panel is available under `/admin`; logged-in users can access the Developer Portal under `/developers`, API
   docs under `/docs/api`, and chat under `/chat`.
-- The UI assumes forum-native auth, but the API supports API keys and impersonation tokens.
+- The UI and browser SDK use same-origin first-party cookie sessions for JSON, uploads, and EventSource. API keys and
+  impersonation tokens are bearer credentials for automation; bearer-authenticated SSE requires a caller-provided
+  authorization-capable EventSource transport and never uses query-string credentials.
 - Manual **Compact and recover** is an admin-only durable job: the forum returns `202 Accepted`, resumes pending or
   interrupted work after restart using the canonical expected-leaf guard, exposes active/latest state across reloads,
   and creates the recovery checkpoint only after Pi compaction succeeds. A failed checkpoint dispatch can be retried

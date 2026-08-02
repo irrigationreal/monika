@@ -789,10 +789,13 @@ async function attachMockApi(target: Page | BrowserContext, state: MockState): P
 }
 
 function identityFromRequest(state: MockState, request: Request): IdentityRecord | null {
-  const header = request.headers()['authorization'];
-  if (!header) return null;
-  const token = header.replace('Bearer ', '').trim();
-  const identityId = state.tokens[token];
+  const cookie = request.headers()['cookie'] ?? '';
+  const token = cookie
+    .split(';')
+    .map((part) => part.trim())
+    .find((part) => part.startsWith('cforum_session='))
+    ?.slice('cforum_session='.length);
+  const identityId = token ? state.tokens[token] : null;
   return identityId ? state.identities[identityId] ?? null : null;
 }
 
@@ -831,8 +834,7 @@ async function createFixture(page: Page, payload: FixtureRequest): Promise<Fixtu
 async function setAuthTokens(context: BrowserContext, token: string): Promise<void> {
   await context.addInitScript(
     (value) => {
-      localStorage.setItem('cforum_auth_token', value);
-      localStorage.setItem('cforum_refresh_token', 'refresh-token');
+      document.cookie = `cforum_session=${value}; path=/; SameSite=Lax`;
     },
     token
   );
