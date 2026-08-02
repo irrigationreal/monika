@@ -71,6 +71,7 @@ import type {
   ModelCatalogDto,
   ModelInfoDto,
   NotificationDto,
+  PiSessionDiagnosticsDto,
   PlanDto,
   PostDto,
   ReactionCountDto,
@@ -99,6 +100,7 @@ import type {
   TopicAttachmentsDto,
   TopicAutoRunDto,
   TopicDto,
+  TopicLineageDto,
   TopicMoveDto,
   TopicOperationalEventDto,
   TopicSubscriptionDto,
@@ -235,6 +237,11 @@ export const ForumDtoSchema: z.ZodType<ForumDto> = z.object({
   updatedAt: z.string(),
 });
 
+export const TopicLineageDtoSchema: z.ZodType<TopicLineageDto> = z.object({
+  kind: z.enum(['handoff', 'delegate', 'sleep', 'parent']),
+  parentTopicId: optionalNullableString,
+});
+
 export const TopicDtoSchema: z.ZodType<TopicDto> = z.object({
   id: z.string(),
   forumId: z.string(),
@@ -253,6 +260,7 @@ export const TopicDtoSchema: z.ZodType<TopicDto> = z.object({
   lastPostAuthorId: optionalNullableString,
   lastPostAuthorName: optionalNullableString,
   lastPostAt: optionalNullableString,
+  lineage: TopicLineageDtoSchema.nullable().optional(),
 });
 
 export const TopicMoveDtoSchema: z.ZodType<TopicMoveDto> = z.object({
@@ -974,12 +982,25 @@ export const TopicAutoRunDtoSchema: z.ZodType<TopicAutoRunDto> = z.object({
   updatedAt: optionalNullableString,
 });
 
+export const PiSessionDiagnosticsDtoSchema: z.ZodType<PiSessionDiagnosticsDto> = z.object({
+  id: z.string(),
+  path: z.string(),
+  cwd: optionalNullableString,
+  parentId: optionalNullableString,
+  parentPath: optionalNullableString,
+  lineageKind: optionalNullableString,
+  lineageSource: optionalNullableString,
+  importedAt: z.string(),
+  lastImportRunId: optionalNullableString,
+});
+
 export const SessionDtoSchema: z.ZodType<SessionDto> = z.object({
   id: z.string(),
   topicId: z.string(),
   createdAt: z.string(),
   updatedAt: z.string(),
   status: z.enum(['active', 'paused', 'completed', 'error']),
+  piSession: PiSessionDiagnosticsDtoSchema.nullable().optional(),
 });
 
 export const SessionMessageDtoSchema: z.ZodType<SessionMessageDto> = z.object({

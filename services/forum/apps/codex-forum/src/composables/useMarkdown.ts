@@ -150,9 +150,6 @@ const bbcodePatterns: Array<{
   { pattern: /\[hr\]/gi, replacement: '<hr class="vb-hr" />' }
 ];
 
-const attachmentPattern = /\[\[attach:([^\]|]+)(?:\|([^\]]+))?\]\]/gi;
-const imageExtensions = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg']);
-
 type CodeBlockReplacement = {
   html: string;
   token: string;
@@ -162,58 +159,6 @@ type InlineCodeReplacement = {
   html: string;
   token: string;
 };
-
-function parseAttachmentOptions(raw: string | undefined): Record<string, string> {
-  if (!raw) return {};
-  const options: Record<string, string> = {};
-  for (const part of raw.split('|')) {
-    const [key, ...rest] = part.split('=');
-    if (!key || rest.length === 0) continue;
-    options[key.trim()] = rest.join('=').trim();
-  }
-  return options;
-}
-
-function attachmentProxyUrl(path: string, name?: string, topicId?: string | null): string {
-  const query = new URLSearchParams({ path });
-  if (name) query.set('name', name);
-  if (topicId) query.set('topicId', topicId);
-  return `/api/robot-attachments?${query.toString()}`;
-}
-
-function renderAttachmentHtml(path: string, options: Record<string, string>, topicId?: string | null): string {
-  const fallbackName = path.split('/').pop() || 'attachment';
-  const label = options['name'] || fallbackName;
-  const url = attachmentProxyUrl(path, label, topicId);
-  const extIndex = path.lastIndexOf('.');
-  const ext = extIndex >= 0 ? path.slice(extIndex).toLowerCase() : '';
-  if (imageExtensions.has(ext)) {
-    return `<img src="${url}" alt="${escapeHtml(label)}" class="vb-robot-attachment-image" loading="lazy" />`;
-  }
-  return `<a class="vb-robot-attachment-link" href="${url}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`;
-}
-
-function replaceAttachmentMarkup(text: string, topicId?: string | null): string {
-  return text.replace(attachmentPattern, (_match, path: string, rawOptions: string | undefined) => {
-    const options = parseAttachmentOptions(rawOptions);
-    return renderAttachmentHtml(path.trim(), options, topicId);
-  });
-}
-
-function replaceAttachmentMarkupWithPlaceholders(
-  text: string,
-  topicId?: string | null
-): { text: string; replacements: string[] } {
-  const replacements: string[] = [];
-  const next = text.replace(attachmentPattern, (_match, path: string, rawOptions: string | undefined) => {
-    const options = parseAttachmentOptions(rawOptions);
-    const html = renderAttachmentHtml(path.trim(), options, topicId);
-    const token = `@@ATTACHMENT_TOKEN_${replacements.length}@@`;
-    replacements.push(html);
-    return token;
-  });
-  return { text: next, replacements };
-}
 
 function escapeHtml(text: string): string {
   const map: Record<string, string> = {
@@ -727,34 +672,25 @@ function sanitizeRenderedHtml(html: string): string {
  * Render text with BBCode and Markdown support
  * BBCode is processed first, then Markdown
  */
-export function renderContent(text: string, ctx?: { topicId?: string | null } | null): string {
+export function renderContent(text: string, _ctx?: { topicId?: string | null } | null): string {
   if (!text) return '';
 
   // Code blocks must be "verbatim":
   // - no BBCode parsing inside them
   // - no Markdown parsing inside them
-  // - no attachment expansion inside them
   const withCodeBlocks = replaceCodeBlocksWithPlaceholders(text);
 
   // Inline code spans should be verbatim as well.
   const withInlineCode = replaceInlineCodeWithPlaceholders(withCodeBlocks.text);
 
-  // Convert attachment markup to placeholders first so markdown doesn't escape it,
-  // but only outside code blocks (code blocks are placeholders at this point).
-  const withAttachments = replaceAttachmentMarkupWithPlaceholders(withInlineCode.text, ctx?.topicId ?? null);
-
   // Do not pre-escape: we intentionally allow a small, sanitized subset of HTML.
-  let result = withAttachments.text;
+  let result = withInlineCode.text;
 
   // First, parse BBCode
   result = parseBBCode(result);
 
   // Then parse Markdown
   result = marked.parse(result) as string;
-
-  for (let i = 0; i < withAttachments.replacements.length; i += 1) {
-    result = result.replace(`@@ATTACHMENT_TOKEN_${i}@@`, withAttachments.replacements[i] ?? '');
-  }
 
   // Sanitize only the non-code HTML. Code spans/blocks are restored afterward.
   result = sanitizeRenderedHtml(result);
@@ -777,15 +713,13 @@ export function renderContent(text: string, ctx?: { topicId?: string | null } | 
  * Render text with only BBCode support (no Markdown)
  * Use this for contexts where Markdown might cause issues
  */
-export function renderBBCode(text: string, ctx?: { topicId?: string | null } | null): string {
+export function renderBBCode(text: string, _ctx?: { topicId?: string | null } | null): string {
   if (!text) return '';
 
   const withInlineCode = replaceInlineCodeWithPlaceholders(text);
 
   // Do not pre-escape: we intentionally allow a small, sanitized subset of HTML.
   let result = withInlineCode.text;
-  // Convert attachment markup
-  result = replaceAttachmentMarkup(result, ctx?.topicId ?? null);
   // Then parse BBCode
   result = parseBBCode(result);
 

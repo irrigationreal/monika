@@ -64,30 +64,32 @@ export function registerForumRoutes({
     return 'auto';
   }
 
-  function serializeTopicWithPiLineage(
-    topic: Parameters<typeof serializeTopic>[0]
-  ): ReturnType<typeof serializeTopic> & { piSession?: Record<string, unknown> } {
-    const dto = serializeTopic(topic) as ReturnType<typeof serializeTopic> & { piSession?: Record<string, unknown> };
+  function serializeTopicWithPublicLineage(
+    topic: Parameters<typeof serializeTopic>[0],
+    request: Parameters<typeof getIdentityFromRequest>[0]
+  ): ReturnType<typeof serializeTopic> & {
+    lineage?: { kind: 'handoff' | 'delegate' | 'sleep' | 'parent'; parentTopicId: string | null };
+  } {
+    const dto = serializeTopic(topic) as ReturnType<typeof serializeTopic> & {
+      lineage?: { kind: 'handoff' | 'delegate' | 'sleep' | 'parent'; parentTopicId: string | null };
+    };
     const link = store.getPiSessionLinkByTopic(topic.id);
-    const parentLink = link?.parent_pi_session_id
+    if (!link?.parent_pi_session_id && !link?.parent_pi_session_path) return dto;
+
+    const rawKind = link.lineage_kind?.trim().toLowerCase();
+    const kind = rawKind === 'handoff' || rawKind === 'delegate' || rawKind === 'sleep' ? rawKind : 'parent';
+    const parentLink = link.parent_pi_session_id
       ? store.getPiSessionLinkByPiSessionId(link.parent_pi_session_id)
-      : link?.parent_pi_session_path
+      : link.parent_pi_session_path
         ? store.getPiSessionLinkByPiSessionPath(link.parent_pi_session_path)
         : null;
-    if (link) {
-      dto.piSession = {
-        id: link.pi_session_id,
-        path: link.pi_session_path,
-        cwd: link.cwd,
-        parentId: link.parent_pi_session_id,
-        parentPath: link.parent_pi_session_path,
-        parentTopicId: parentLink?.topic_id ?? null,
-        lineageKind: link.lineage_kind,
-        lineageSource: link.lineage_source,
-        importedAt: link.imported_at,
-        lastImportRunId: link.last_import_run_id,
-      };
-    }
+    const parentTopic = parentLink ? store.getTopic(parentLink.topic_id) : null;
+    const parentForum = parentTopic ? store.getForum(parentTopic.forum_id) : null;
+    const identity = getIdentityFromRequest(request);
+    const parentTopicId =
+      parentTopic && parentForum && canViewTopic(parentTopic, parentForum, identity) ? parentTopic.id : null;
+
+    dto.lineage = { kind, parentTopicId };
     return dto;
   }
 
@@ -408,7 +410,7 @@ export function registerForumRoutes({
         },
       });
 
-      return serializeTopicWithPiLineage(topic);
+      return serializeTopicWithPublicLineage(topic, request);
     }
   );
 
@@ -426,7 +428,7 @@ export function registerForumRoutes({
     if (!canViewTopic(topic, forum, identity)) {
       throw app.httpErrors.notFound('topic not found');
     }
-    return serializeTopicWithPiLineage(topic);
+    return serializeTopicWithPublicLineage(topic, request);
   });
 
   app.get('/topics/:topicId/operational-events', async (request) => {
@@ -658,7 +660,7 @@ export function registerForumRoutes({
       },
     });
 
-    return { topic: serializeTopicWithPiLineage(topic), post: serializePost(post), launchError };
+    return { topic: serializeTopicWithPublicLineage(topic, request), post: serializePost(post), launchError };
   });
 
   app.patch('/topics/:topicId/status', async (request) => {
@@ -689,7 +691,7 @@ export function registerForumRoutes({
 
     try {
       const topic = store.updateTopicStatus(topicId, body.status as 'open' | 'locked' | 'archived');
-      return serializeTopicWithPiLineage(topic);
+      return serializeTopicWithPublicLineage(topic, request);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'update failed';
       if (message === 'topic not found') {
@@ -721,7 +723,7 @@ export function registerForumRoutes({
 
     try {
       const topic = store.updateTopicTitle(topicId, body.title);
-      return serializeTopicWithPiLineage(topic);
+      return serializeTopicWithPublicLineage(topic, request);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'update failed';
       if (message === 'topic not found') {
@@ -768,7 +770,7 @@ export function registerForumRoutes({
     }
 
     const updated = store.updateTopicTags(topicId, nextTags);
-    return serializeTopicWithPiLineage(updated);
+    return serializeTopicWithPublicLineage(updated, request);
   });
 
   app.delete('/topics/:topicId', async (request) => {

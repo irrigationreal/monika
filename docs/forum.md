@@ -419,6 +419,11 @@ Implemented in `services/forum`:
   metadata, edited draft post, and first robot turn.
 - `pi_session_links` stores `parent_pi_session_id`, `parent_pi_session_path`,
   `lineage_kind`, and `lineage_source`.
+- General topic responses expose only public-safe semantic lineage (`kind` and a
+  `parentTopicId` when that parent is visible to the requester). Canonical Pi
+  session IDs, JSONL paths, working directories, raw lineage source, and import
+  identifiers are returned only by the existing admin-authorized session and
+  inspector endpoints.
 
 ### Provenance-aware Pi reconciliation
 
@@ -737,6 +742,12 @@ API surfaces:
 Attachment support is implemented as a hybrid reference model rather than treating
 Pi JSONL as a blob store:
 
+- Browser downloads use opaque attachment IDs backed by attachment rows bound to
+  a post and topic. Topic visibility is checked through that persisted
+  relationship before the file is streamed.
+- The legacy `/api/robot-attachments?path=...` filesystem-path proxy and
+  `[[attach:path]]` renderer have been retired. Never authorize an arbitrary
+  output path using an independently supplied topic ID.
 - Forum uploads remain in forum-owned upload storage.
 - Forum attachment rows store optional `sha256` for verification.
 - When dispatching a post to agentd, the forum sends internal attachment

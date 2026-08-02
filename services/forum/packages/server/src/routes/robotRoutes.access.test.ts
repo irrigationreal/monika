@@ -221,6 +221,17 @@ describe('Robot routes access controls', () => {
 
     const { topic } = store.createTopic({ forumId: forum.id, title: 'Topic', body: 'starter', authorId: admin.id });
     const session = store.ensureSession({ topicId: topic.id });
+    store.upsertPiSessionLink({
+      piSessionId: 'pi-session',
+      piSessionPath: '/app/.pi/agent/sessions/topic.jsonl',
+      topicId: topic.id,
+      sessionId: session.id,
+      cwd: '/workspace/monika',
+      parentPiSessionId: 'pi-parent',
+      parentPiSessionPath: '/app/.pi/agent/sessions/parent.jsonl',
+      lineageKind: 'handoff',
+      lineageSource: 'forum',
+    });
 
     const guestInspector = await app.inject({
       method: 'GET',
@@ -242,6 +253,9 @@ describe('Robot routes access controls', () => {
     });
     expect(adminInspector.statusCode).toBe(200);
 
+    const guestSession = await app.inject({ method: 'GET', url: `/topics/${topic.id}/session` });
+    expect(guestSession.statusCode).toBe(401);
+
     const memberSession = await app.inject({
       method: 'GET',
       url: `/topics/${topic.id}/session`,
@@ -255,6 +269,17 @@ describe('Robot routes access controls', () => {
       headers: { authorization: 'Bearer admin-token' }
     });
     expect(adminSession.statusCode).toBe(200);
+    expect(adminSession.json()).toMatchObject({
+      piSession: {
+        id: 'pi-session',
+        path: '/app/.pi/agent/sessions/topic.jsonl',
+        cwd: '/workspace/monika',
+        parentId: 'pi-parent',
+        parentPath: '/app/.pi/agent/sessions/parent.jsonl',
+        lineageKind: 'handoff',
+        lineageSource: 'forum',
+      },
+    });
 
     const memberSessionById = await app.inject({
       method: 'GET',

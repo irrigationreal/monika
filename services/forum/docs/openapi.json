@@ -2408,6 +2408,28 @@
                           "lastPostAt": {
                             "type": "string",
                             "nullable": true
+                          },
+                          "lineage": {
+                            "type": "object",
+                            "nullable": true,
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "handoff",
+                                  "delegate",
+                                  "sleep",
+                                  "parent"
+                                ]
+                              },
+                              "parentTopicId": {
+                                "type": "string",
+                                "nullable": true
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ]
                           }
                         },
                         "required": [
@@ -2577,6 +2599,28 @@
                     "lastPostAt": {
                       "type": "string",
                       "nullable": true
+                    },
+                    "lineage": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "handoff",
+                            "delegate",
+                            "sleep",
+                            "parent"
+                          ]
+                        },
+                        "parentTopicId": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ]
                     }
                   },
                   "required": [
@@ -2691,6 +2735,28 @@
                     "lastPostAt": {
                       "type": "string",
                       "nullable": true
+                    },
+                    "lineage": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "handoff",
+                            "delegate",
+                            "sleep",
+                            "parent"
+                          ]
+                        },
+                        "parentTopicId": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ]
                     }
                   },
                   "required": [
@@ -2821,6 +2887,28 @@
                     "lastPostAt": {
                       "type": "string",
                       "nullable": true
+                    },
+                    "lineage": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "handoff",
+                            "delegate",
+                            "sleep",
+                            "parent"
+                          ]
+                        },
+                        "parentTopicId": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ]
                     }
                   },
                   "required": [
@@ -2993,6 +3081,28 @@
                     "lastPostAt": {
                       "type": "string",
                       "nullable": true
+                    },
+                    "lineage": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "handoff",
+                            "delegate",
+                            "sleep",
+                            "parent"
+                          ]
+                        },
+                        "parentTopicId": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ]
                     }
                   },
                   "required": [
@@ -3127,6 +3237,28 @@
                     "lastPostAt": {
                       "type": "string",
                       "nullable": true
+                    },
+                    "lineage": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "handoff",
+                            "delegate",
+                            "sleep",
+                            "parent"
+                          ]
+                        },
+                        "parentTopicId": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ]
                     }
                   },
                   "required": [
@@ -4959,6 +5091,28 @@
                           "lastPostAt": {
                             "type": "string",
                             "nullable": true
+                          },
+                          "lineage": {
+                            "type": "object",
+                            "nullable": true,
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "handoff",
+                                  "delegate",
+                                  "sleep",
+                                  "parent"
+                                ]
+                              },
+                              "parentTopicId": {
+                                "type": "string",
+                                "nullable": true
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ]
                           }
                         },
                         "required": [
@@ -8084,6 +8238,50 @@
                         "completed",
                         "error"
                       ]
+                    },
+                    "piSession": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "path": {
+                          "type": "string"
+                        },
+                        "cwd": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "parentId": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "parentPath": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "lineageKind": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "lineageSource": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "importedAt": {
+                          "type": "string"
+                        },
+                        "lastImportRunId": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "path",
+                        "importedAt"
+                      ]
                     }
                   },
                   "required": [
@@ -8146,6 +8344,50 @@
                             "paused",
                             "completed",
                             "error"
+                          ]
+                        },
+                        "piSession": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "path": {
+                              "type": "string"
+                            },
+                            "cwd": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "parentId": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "parentPath": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "lineageKind": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "lineageSource": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "importedAt": {
+                              "type": "string"
+                            },
+                            "lastImportRunId": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "path",
+                            "importedAt"
                           ]
                         }
                       },
@@ -11931,6 +12173,28 @@
                         "lastPostAt": {
                           "type": "string",
                           "nullable": true
+                        },
+                        "lineage": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "handoff",
+                                "delegate",
+                                "sleep",
+                                "parent"
+                              ]
+                            },
+                            "parentTopicId": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          },
+                          "required": [
+                            "kind"
+                          ]
                         }
                       },
                       "required": [

@@ -16,8 +16,11 @@ map external events into topics; and the UI renders the live agent trace and mod
 Key capabilities:
 
 - **Forum-native agent sessions**: each topic is a durable session with posts, attachments, and robot activity.
+- **Post-bound attachments**: browser downloads use opaque attachment IDs associated with visible posts; arbitrary
+  robot-output filesystem paths are never a public attachment surface.
 - **Live robot state + tool trace**: authenticated users can see reasoning steps, tool runs, and outputs inline in a
-  topic view; public readers see only final posts and a neutral in-progress placeholder.
+  topic view; public readers see only final posts, public-safe topic lineage, and a neutral in-progress placeholder.
+  Canonical Pi identifiers, JSONL paths, working directories, and import diagnostics remain admin-only.
 - **Forums as folders**: organize workspaces with category + pre-prompt defaults per forum.
 - **Adapters as first-class citizens**: Discord/Matrix/Slack/web surfaces share the same contracts.
 - **API-first + CLI ready**: OpenAPI spec, Postman collection, and CLI command shapes are included.

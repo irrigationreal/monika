@@ -85,6 +85,16 @@ describe('useMarkdown sanitizer', () => {
     expect(html).toContain('<td>1</td>');
   });
 
+  it('does not expand retired filesystem-path attachment markup', () => {
+    const markdown = renderContent('[[attach:/workspace/private/output.txt|name=output.txt]]', { topicId: 'public-topic' });
+    const bbcode = renderBBCode('[[attach:/workspace/private/output.txt|name=output.txt]]', { topicId: 'public-topic' });
+
+    expect(markdown).not.toContain('/api/robot-attachments');
+    expect(bbcode).not.toContain('/api/robot-attachments');
+    expect(markdown).toContain('attach:/workspace/private/output.txt');
+    expect(bbcode).toContain('attach:/workspace/private/output.txt');
+  });
+
   it('sanitizes bbcode output through the same allowlist', () => {
     const html = renderBBCode('[URL=javascript:alert(1)]x[/URL]\n[IMG]data:text/html;base64,AAAA[/IMG]');
     expect(html).not.toMatch(/href="javascript:/i);
