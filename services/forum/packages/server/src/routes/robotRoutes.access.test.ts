@@ -177,7 +177,7 @@ describe('Robot routes access controls', () => {
     });
   });
 
-  it('requires authentication to interrupt/continue robot', async () => {
+  it('requires authentication to interrupt robot', async () => {
     const app = await buildApp();
     const forum = store.createForum('Forum', null, null, null, null, 'active', 'public');
     const author = store.createIdentityWithPassword('Author', 'author', 'pw-hash', 'human');
@@ -190,31 +190,12 @@ describe('Robot routes access controls', () => {
     });
     expect(guestInterrupt.statusCode).toBe(401);
 
-    const guestContinue = await app.inject({
-      method: 'POST',
-      url: `/topics/${topic.id}/robot/continue`
-    });
-    expect(guestContinue.statusCode).toBe(401);
-
     const authorInterrupt = await app.inject({
       method: 'POST',
       url: `/topics/${topic.id}/robot/interrupt`,
       headers: { authorization: 'Bearer author-token' }
     });
     expect(authorInterrupt.statusCode).toBe(200);
-  });
-
-  it('refuses Continue while cancellation is unresolved', async () => {
-    const app = await buildApp();
-    const forum = store.createForum('Forum', null, null, null, null, 'active', 'public');
-    const author = store.createIdentityWithPassword('Author', 'author', 'pw-hash', 'human');
-    store.createAuthSession('author-token', author.id);
-    const { topic } = store.createTopic({ forumId: forum.id, title: 'Topic', body: 'starter', authorId: author.id });
-    const session = store.ensureSession({ topicId: topic.id });
-    store.upsertRobotState({ topicId: topic.id, sessionId: session.id, activity: 'uncertain' });
-    const response = await app.inject({ method: 'POST', url: `/topics/${topic.id}/robot/continue`, headers: { authorization: 'Bearer author-token' } });
-    expect(response.statusCode).toBe(409);
-    expect(response.json().message).toMatch(/Cancellation is unresolved/);
   });
 
   it('refuses manual auto-run dispatch while cancellation is unresolved', async () => {

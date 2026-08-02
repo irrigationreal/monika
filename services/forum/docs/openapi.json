@@ -7878,47 +7878,6 @@
         }
       }
     },
-    "/topics/{topicId}/robot/continue": {
-      "post": {
-        "tags": [
-          "robot"
-        ],
-        "summary": "Continue robot",
-        "parameters": [
-          {
-            "schema": {
-              "type": "string"
-            },
-            "required": true,
-            "name": "topicId",
-            "in": "path"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "ok": {
-                      "type": "boolean"
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "ok"
-                  ]
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/topics/{topicId}/session": {
       "get": {
         "tags": [

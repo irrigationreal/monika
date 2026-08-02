@@ -915,20 +915,6 @@ export function useForumState() {
     }
   }
 
-  async function continueRobot(): Promise<void> {
-    if (!selectedTopicId.value) return;
-    robotControlPending.value = true;
-    error.value = null;
-    try {
-      await api.continueRobot(selectedTopicId.value);
-      await loadState(selectedTopicId.value);
-    } catch (err) {
-      error.value = err instanceof Error ? err.message : 'Failed to continue robot.';
-    } finally {
-      robotControlPending.value = false;
-    }
-  }
-
   function scheduleStreamFlush(): void {
     if (flushHandle !== null) return;
     flushHandle = window.requestAnimationFrame(() => {
@@ -1698,7 +1684,6 @@ export function useForumState() {
     loadRegistrationSettings,
     loadModelCatalog,
     interruptRobot,
-    continueRobot,
     updateAutoRun,
     runAutoRun,
     loadAttachmentsForPosts,

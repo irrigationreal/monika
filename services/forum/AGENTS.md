@@ -123,9 +123,10 @@ Deploy on Finish must retain its durable request after exit 75.
 Stop Robot is a canonical-session cancellation barrier, not a fire-and-forget
 interrupt. The forum fences dispatch first and must preserve agentd's typed
 `stopping`/`stopped`/`uncertain` result, including for unloaded parents. Do not
-enable Continue while unresolved or collapse SSH effects uncertainty into local
-termination. A successful Stop remains durable as `stopped` across hydration and
-reconnect, and fresh dispatch clears that boundary. Interrupted live traces freeze
+allow fresh dispatch while cancellation is unresolved or collapse SSH effects
+uncertainty into local termination. A successful Stop remains durable as `stopped`
+across hydration and reconnect, and a new attributable forum post clears that
+boundary. Interrupted live traces freeze
 buffered text even when no tool boundary has committed a segment. Public Stop
 responses expose safe counts/state/message only; raw run diagnostics remain admin-only.
 Scheduled subagent runs are disabled and are

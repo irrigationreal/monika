@@ -11,7 +11,6 @@ const robotApi = api as typeof api & {
   getRobotDashboard: () => Promise<RobotDashboardDto>;
   getDeployStatus: () => Promise<AdminDeployStatus>;
   interruptRobot: (topicId: string) => Promise<RobotStopResultDto>;
-  continueRobot: (topicId: string) => Promise<unknown>;
   triggerDeploy: () => Promise<unknown>;
   triggerDeployOnFinish: () => Promise<unknown>;
   cancelDeployOnFinish: () => Promise<unknown>;
@@ -138,19 +137,6 @@ async function interruptTopic(topicId: string): Promise<void> {
     await refresh();
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Failed to interrupt robot.';
-  } finally {
-    loading.value = false;
-  }
-}
-
-async function continueTopic(topicId: string): Promise<void> {
-  loading.value = true;
-  error.value = null;
-  try {
-    await robotApi.continueRobot(topicId);
-    await refresh();
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : 'Failed to continue robot.';
   } finally {
     loading.value = false;
   }
@@ -429,7 +415,6 @@ onBeforeUnmount(() => {
             <div class="vb-job-actions">
               <button class="vb-btn vb-btn-compact" type="button" :disabled="loading" @click="openTopic(job.topicId)">Open</button>
               <button class="vb-btn vb-btn-danger vb-btn-compact" type="button" :disabled="loading" @click="requestStopTopic(job.topicId)">Stop</button>
-              <button class="vb-btn vb-btn-compact" type="button" :disabled="loading || job.activity === 'stopping' || job.activity === 'uncertain'" @click="continueTopic(job.topicId)">Continue</button>
               <span v-if="stopResults[job.topicId]" class="vb-job-meta">{{ stopResults[job.topicId]?.message }}</span>
             </div>
           </div>

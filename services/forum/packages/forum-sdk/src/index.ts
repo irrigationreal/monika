@@ -893,8 +893,6 @@ export function createForumSdk(options?: ForumSdkOptions) {
       }),
     interruptRobot: (topicId: string) =>
       json<RobotStopResultDto>(`/topics/${topicId}/robot/interrupt`, { method: 'POST' }),
-    continueRobot: (topicId: string) =>
-      json<{ ok: boolean; message?: string }>(`/topics/${topicId}/robot/continue`, { method: 'POST' }),
     getSessionByTopic: (topicId: string) => json<SessionDto | null>(`/topics/${topicId}/session`),
     inspectSession: (sessionId: string) => json<SessionInspectorDto>(`/sessions/${sessionId}/inspector`),
 

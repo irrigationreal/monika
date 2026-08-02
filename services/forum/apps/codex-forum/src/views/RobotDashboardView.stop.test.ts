@@ -11,7 +11,6 @@ const mocks = vi.hoisted(() => ({
   getRobotDashboard: vi.fn(),
   getDeployStatus: vi.fn(),
   interruptRobot: vi.fn(),
-  continueRobot: vi.fn(),
 }));
 
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: mocks.push }) }));
@@ -24,7 +23,6 @@ vi.mock('../lib/apiClient', async (original) => {
     getRobotDashboard: mocks.getRobotDashboard,
     getDeployStatus: mocks.getDeployStatus,
     interruptRobot: mocks.interruptRobot,
-    continueRobot: mocks.continueRobot,
   } };
 });
 
@@ -42,15 +40,14 @@ describe('Robot Dashboard Stop', () => {
       unresolved: [{}], effectsUnknown: [{}], errors: [], message: 'Stop remains uncertain.' });
   });
 
-  it('offers canonical Stop for an unloaded parent and disables Continue while unresolved', async () => {
+  it('offers canonical Stop for an unloaded parent while cancellation is unresolved', async () => {
     const wrapper = shallowMount(RobotDashboardView, { global: { stubs: { RouterLink: true } } });
     await flushPromises();
     expect(wrapper.text()).toContain('not loaded; canonical stop available');
     const buttons = wrapper.findAll('button');
     const stop = buttons.find((button) => button.text() === 'Stop');
-    const continueButton = buttons.find((button) => button.text() === 'Continue');
     expect(stop?.attributes('disabled')).toBeUndefined();
-    expect(continueButton?.attributes('disabled')).toBeDefined();
+    expect(buttons.some((button) => button.text() === 'Continue')).toBe(false);
     await stop?.trigger('click');
     expect(mocks.interruptRobot).not.toHaveBeenCalled();
     const confirmation = wrapper.findComponent(ConfirmationDialog);
