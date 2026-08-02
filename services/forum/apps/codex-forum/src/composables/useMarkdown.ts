@@ -227,7 +227,7 @@ function renderCodeBlockHtml(rawCode: string, rawLanguage: string | undefined): 
   const language = normalizeCodeLanguage(rawLanguage);
 
   // Code blocks should always be literal text (no HTML rendering).
-  const resolvedLanguage = isLanguageExplicit ? language : (language || 'markdown');
+  const resolvedLanguage = isLanguageExplicit ? language : (language ?? 'markdown');
   const languageClass = resolvedLanguage ? ` language-${escapeHtml(resolvedLanguage)}` : '';
   const languageLabel = isLanguageExplicit && resolvedLanguage
     ? `<span class="vb-code-lang">${escapeHtml(resolvedLanguage)}</span>`
@@ -239,51 +239,176 @@ function renderCodeBlockHtml(rawCode: string, rawLanguage: string | undefined): 
     languageLabel,
     '    <button class="vb-code-copy" type="button">Copy</button>',
     '  </div>',
-    `  <pre class="vb-code"><code class="${languageClass.trim()}">${escapeHtml(rawCode)}</code></pre>`,
+    `  <pre class="vb-code"><code class="vb-code-content${languageClass}">${escapeHtml(rawCode)}</code></pre>`,
     '</div>'
   ].join('');
 }
 
-function replaceCodeBlocksWithPlaceholders(text: string): { text: string; replacements: CodeBlockReplacement[] } {
-  const replacements: CodeBlockReplacement[] = [];
-  let next = text;
+interface SourceLine {
+  content: string;
+  contentEnd: number;
+  end: number;
+  start: number;
+}
 
-  // 1) BBCode code blocks: [code]...[/code] or [code=lang]...[/code]
-  next = next.replace(/\[code(?:=([^\]]+))?\]([\s\S]*?)\[\/code\]/gi, (_match, lang: string | undefined, code: string) => {
-    const token = `@@CODE_BLOCK_TOKEN_${replacements.length}@@`;
-    // In bbcode, the common formatting pattern is:
-    //   [code]
-    //   ...
-    //   [/code]
-    // which results in a leading/trailing newline being part of the captured
-    // content. Strip a single surrounding newline so bbcode and fenced blocks
-    // feel consistent in size/spacing.
-    const normalizedCode = stripSingleSurroundingNewline(code);
-    const html = renderCodeBlockHtml(normalizedCode, lang);
-    replacements.push({ token, html });
-    return token;
-  });
+function readSourceLine(text: string, start: number): SourceLine {
+  const newline = text.indexOf('\n', start);
+  const end = newline === -1 ? text.length : newline + 1;
+  let contentEnd = newline === -1 ? text.length : newline;
+  if (contentEnd > start && text[contentEnd - 1] === '\r') contentEnd -= 1;
+  return { start, contentEnd, end, content: text.slice(start, contentEnd) };
+}
 
-  // 2) Markdown fenced code blocks (```lang ... ``` and ~~~lang ... ~~~)
-  // Note: We do this before escaping HTML, and we replace the whole block with
-  // a placeholder so BBCode/Markdown parsing does not touch the contents.
-  const fencedPatterns: RegExp[] = [
-    // Allow leading indentation so fenced blocks inside lists/quotes still work.
-    /(^|\r?\n)([ \t]*)```([^\r\n`]*)\r?\n([\s\S]*?)\r?\n\2```(?=\r?\n|$)/g,
-    /(^|\r?\n)([ \t]*)~~~([^\r\n~]*)\r?\n([\s\S]*?)\r?\n\2~~~(?=\r?\n|$)/g
-  ];
+function makePlaceholderPrefix(text: string, label: string): string {
+  let prefix = `VB${label}PLACEHOLDER`;
+  while (text.includes(prefix)) prefix += 'X';
+  return prefix;
+}
 
-  for (const pattern of fencedPatterns) {
-    next = next.replace(pattern, (_match: string, leadingNewline: string, indent: string, lang: string, code: string) => {
-      const token = `@@CODE_BLOCK_TOKEN_${replacements.length}@@`;
-      const html = renderCodeBlockHtml(code, lang);
-      replacements.push({ token, html });
-      // Preserve leading newline/BOF handling so we don't join words together.
-      return `${leadingNewline}${indent}${token}`;
-    });
+function compatibleFenceIndent(opening: string, closing: string): boolean {
+  if (opening === closing) return true;
+  // At the document level CommonMark permits up to three leading spaces on
+  // either line. Deeper/list indentation is preserved by requiring an exact
+  // match, which avoids pulling a closing fence out of its container.
+  return /^ {0,3}$/.test(opening) && /^ {0,3}$/.test(closing);
+}
+
+interface MarkdownFenceBlock {
+  code: string;
+  end: number;
+  indent: string;
+  info: string;
+  resumeAt: number;
+  start: number;
+}
+
+interface BbCodeBlock {
+  code: string;
+  end: number;
+  language: string | undefined;
+  start: number;
+}
+
+function findNextMarkdownFence(text: string, from: number): MarkdownFenceBlock | null {
+  let position = from;
+  if (position > 0 && text[position - 1] !== '\n') {
+    const nextLine = text.indexOf('\n', position);
+    if (nextLine === -1) return null;
+    position = nextLine + 1;
   }
 
-  return { text: next, replacements };
+  while (position < text.length) {
+    const openingLine = readSourceLine(text, position);
+    const opening = /^([ \t]*)(`{3,}|~{3,})([^\r\n]*)$/.exec(openingLine.content);
+    if (!opening || (opening[2]?.startsWith('`') && opening[3]?.includes('`'))) {
+      position = openingLine.end;
+      continue;
+    }
+
+    const indent = opening[1] ?? '';
+    const markerRun = opening[2] ?? '';
+    const marker = markerRun.charAt(0);
+    const info = opening[3] ?? '';
+    let closingLine: SourceLine | null = null;
+    let searchPosition = openingLine.end;
+
+    while (searchPosition < text.length) {
+      const candidateLine = readSourceLine(text, searchPosition);
+      const candidate = /^([ \t]*)(`+|~+)[ \t]*$/.exec(candidateLine.content);
+      const candidateRun = candidate?.[2] ?? '';
+      if (
+        candidate &&
+        candidateRun.startsWith(marker) &&
+        candidateRun.length >= markerRun.length &&
+        compatibleFenceIndent(indent, candidate[1] ?? '')
+      ) {
+        closingLine = candidateLine;
+        break;
+      }
+      searchPosition = candidateLine.end;
+    }
+
+    const codeStart = openingLine.end;
+    let codeEnd = closingLine?.start ?? text.length;
+    if (closingLine) {
+      if (codeEnd >= 2 && text.slice(codeEnd - 2, codeEnd) === '\r\n') codeEnd -= 2;
+      else if (codeEnd > codeStart && (text[codeEnd - 1] === '\n' || text[codeEnd - 1] === '\r')) codeEnd -= 1;
+    }
+
+    return {
+      code: text.slice(codeStart, codeEnd),
+      end: closingLine?.contentEnd ?? text.length,
+      indent,
+      info,
+      resumeAt: closingLine?.end ?? text.length,
+      start: openingLine.start
+    };
+  }
+
+  return null;
+}
+
+function findNextBbCodeBlock(text: string, from: number): BbCodeBlock | null {
+  const openingPattern = /\[code(?:=([^\]]+))?\]/gi;
+  openingPattern.lastIndex = from;
+
+  for (let opening = openingPattern.exec(text); opening; opening = openingPattern.exec(text)) {
+    const closingPattern = /\[\/code\]/gi;
+    closingPattern.lastIndex = openingPattern.lastIndex;
+    const closing = closingPattern.exec(text);
+    if (!closing) return null;
+
+    return {
+      code: text.slice(openingPattern.lastIndex, closing.index),
+      end: closing.index + closing[0].length,
+      language: opening[1],
+      start: opening.index
+    };
+  }
+
+  return null;
+}
+
+function appendBlockPlaceholder(result: string, indent: string, token: string): string {
+  let next = result;
+  if (next && !/(?:\r?\n){2}$/.test(next)) next += /\r?\n$/.test(next) ? '\n' : '\n\n';
+  return `${next}${indent}${token}\n\n`;
+}
+
+function replaceCodeBlocksWithPlaceholders(text: string): { text: string; replacements: CodeBlockReplacement[] } {
+  const replacements: CodeBlockReplacement[] = [];
+  const tokenPrefix = makePlaceholderPrefix(text, 'CODEBLOCK');
+  let result = '';
+  let copiedThrough = 0;
+  let position = 0;
+
+  // Markdown and BBCode blocks share one source-ordered scanner. Whichever
+  // valid opener occurs first owns its contents, so delimiter-like text inside
+  // either block remains literal and cannot pair with a closer outside it.
+  while (position < text.length) {
+    const markdown = findNextMarkdownFence(text, position);
+    const bbcode = findNextBbCodeBlock(text, position);
+    const markdownFirst = Boolean(markdown && (!bbcode || markdown.start < bbcode.start));
+    const block = markdownFirst ? markdown : bbcode;
+    if (!block) break;
+
+    result += text.slice(copiedThrough, block.start);
+    const token = `${tokenPrefix}${String(replacements.length)}TOKEN`;
+    if (markdownFirst && markdown) {
+      replacements.push({ token, html: renderCodeBlockHtml(markdown.code, markdown.info) });
+      result = appendBlockPlaceholder(result, markdown.indent, token);
+      copiedThrough = markdown.end;
+      position = markdown.resumeAt;
+    } else if (bbcode) {
+      const normalizedCode = stripSingleSurroundingNewline(bbcode.code);
+      replacements.push({ token, html: renderCodeBlockHtml(normalizedCode, bbcode.language) });
+      result = appendBlockPlaceholder(result, '', token);
+      copiedThrough = bbcode.end;
+      position = bbcode.end;
+    }
+  }
+
+  return { text: result + text.slice(copiedThrough), replacements };
 }
 
 function replaceInlineCodeWithPlaceholders(text: string): { text: string; replacements: InlineCodeReplacement[] } {

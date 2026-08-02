@@ -154,6 +154,11 @@ a:hover {
 
 .vb-code-block {
   margin: var(--spacing-sm) 0;
+  overflow: hidden;
+  border: 1px solid var(--border-default);
+  border-radius: 3px;
+  background: var(--bg-code);
+  color: var(--text-code);
 }
 
 .vb-code-toolbar {
@@ -161,14 +166,18 @@ a:hover {
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  margin-bottom: 6px;
+  min-height: 31px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border-default);
+  background: var(--bg-code);
 }
 
 .vb-code-toolbar .vb-code-lang {
   margin-right: auto;
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--text-code);
   font-family: var(--font-mono);
+  opacity: 0.75;
 }
 
 .vb-code-copy {
@@ -176,8 +185,8 @@ a:hover {
   padding: 4px 8px;
   border-radius: 3px;
   border: 1px solid var(--border-default);
-  background: var(--bg-surface-alt);
-  color: var(--text-secondary);
+  background: transparent;
+  color: var(--text-code);
   cursor: pointer;
 }
 
@@ -264,11 +273,11 @@ a:hover {
   background: var(--bg-code);
   color: var(--text-code);
   padding: 12px;
-  margin: 8px 0;
+  margin: 0;
   font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
   font-size: 12px;
   line-height: 1.5;
-  border-radius: 3px;
+  border-radius: 0;
   overflow-x: auto;
   white-space: pre-wrap;
   word-wrap: break-word;
@@ -300,16 +309,20 @@ pre.vb-code .hljs {
   font-size: 11px;
 }
 
-.vb-rendered-content code:not(.vb-inline-code) {
-  background: var(--bg-surface-alt);
+.vb-rendered-content :not(pre) > code:not(.vb-inline-code) {
+  background: var(--inline-code-bg);
+  color: var(--text-code-inline);
   padding: 2px 4px;
   border-radius: 3px;
   font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
   font-size: 0.9em;
 }
 
-.vb-rendered-content pre code {
-  background: none;
+.vb-rendered-content pre > code,
+.vb-code-content {
+  display: block;
+  background: transparent;
+  color: inherit;
   padding: 0;
   border-radius: 0;
   font-size: inherit;

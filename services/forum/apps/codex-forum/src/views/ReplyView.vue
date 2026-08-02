@@ -10,6 +10,7 @@ import { useAutosavedDraft } from '../composables/useAutosavedDraft';
 import { useForumState } from '../composables/useForumState';
 import { useMarkdown } from '../composables/useMarkdown';
 import { applyTemplateToTextarea } from '../composables/useMessageTemplateInsertion';
+import { fencedCodeBlock } from '../lib/editorFormatting';
 
 import type { MessageTemplateDto } from '../lib/apiClient';
 
@@ -141,7 +142,7 @@ function insertBBCode(tag: string, defaultText?: string): void {
   } else if (tag === 'quote') {
     body.value = `${before}[QUOTE]\n${selectedText}\n[/QUOTE]${after}`;
   } else if (tag === 'code') {
-    body.value = `${before}[CODE]\n${selectedText}\n[/CODE]${after}`;
+    body.value = `${before}${fencedCodeBlock(selectedText, before, after)}${after}`;
   } else if (tag === 'list') {
     body.value = `${before}[LIST]\n[*]${selectedText || 'Item 1'}\n[*]Item 2\n[/LIST]${after}`;
   } else {
@@ -837,11 +838,11 @@ onMounted(async () => {
             <ul>
               <li>You <strong>may</strong> post replies</li>
               <li>You <strong>may</strong> edit your posts</li>
-              <li>You <strong>may</strong> use BBCode formatting</li>
+              <li>You <strong>may</strong> use Markdown and BBCode formatting</li>
             </ul>
             <div class="vb-bbcode-legend">
-              <strong>BBCode:</strong> [B]bold[/B], [I]italic[/I], [U]underline[/U], [URL]link[/URL], [IMG]image[/IMG],
-              [QUOTE]quote[/QUOTE], [CODE]code[/CODE]
+              <strong>Formatting:</strong> Markdown fences for code; [B]bold[/B], [I]italic[/I], [U]underline[/U], [URL]link[/URL],
+              [IMG]image[/IMG], [QUOTE]quote[/QUOTE], and legacy [CODE]code[/CODE]
             </div>
           </div>
         </div>

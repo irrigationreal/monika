@@ -112,6 +112,15 @@ text; it never submits or changes robot options.
 Manage personal templates at `/profile/message-templates` and system templates in the Admin Panel. See
 `docs/CURL_EXAMPLES.md` and the OpenAPI document for APIs.
 
+## Post formatting and code fences
+
+Post bodies and previews support Markdown and legacy BBCode. Fenced Markdown code blocks accept backtick or tilde fences
+of three or more markers. To display a fenced block inside another code block, make the outer fence longer than every
+run of the same marker in its content—for example, use four backticks around text containing triple-backtick fences.
+The composer Code button calculates this delimiter length from the selection automatically. Unclosed fences extend to
+the current end of input, so partial robot responses remain literal and use the same deterministic renderer as completed
+posts. Code contents are HTML-escaped and bypass Markdown, BBCode, and typographic-ligature processing.
+
 ## Private autosaved drafts
 
 Authenticated browser users receive private server-side autosave for quick replies, full replies, and new threads. Reply
