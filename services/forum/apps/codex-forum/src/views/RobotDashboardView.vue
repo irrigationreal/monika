@@ -220,6 +220,7 @@ onBeforeUnmount(() => {
     message="This will stop the current response and cancel queued or delegated work for this session. Partial output will remain visible, but work already performed cannot be undone."
     confirm-label="Stop robot"
     cancel-label="Keep running"
+    pending-label="Stopping…"
     :pending="loading"
     @confirm="confirmStopTopic"
     @cancel="stopConfirmationTopicId = null"

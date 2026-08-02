@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router';
 
 import AutoCompactOption from '../components/AutoCompactOption.vue';
+import ConfirmationDialog from '../components/ConfirmationDialog.vue';
 import DraftStatus from '../components/DraftStatus.vue';
 import MessageTemplatePicker from '../components/MessageTemplatePicker.vue';
 import { useAutosavedDraft } from '../composables/useAutosavedDraft';
@@ -22,6 +23,8 @@ const editorTextareaRef = ref<HTMLTextAreaElement | null>(null);
 const isSubmitting = ref(false);
 const isUploading = ref(false);
 const errorMessage = ref('');
+const showDiscardDraftConfirm = ref(false);
+const discardDraftPending = ref(false);
 const showPreview = ref(false);
 const previewHtml = ref('');
 const previewSource = ref('');
@@ -322,8 +325,24 @@ async function handleSubmit(): Promise<void> {
   }
 }
 
+function requestDiscardDraft(): void {
+  errorMessage.value = '';
+  showDiscardDraftConfirm.value = true;
+}
+
 async function confirmDiscardDraft(): Promise<void> {
-  if (window.confirm('Discard this draft permanently?')) await autosavedDraft.discard();
+  if (discardDraftPending.value) return;
+  discardDraftPending.value = true;
+  errorMessage.value = '';
+  try {
+    await autosavedDraft.discard();
+    showDiscardDraftConfirm.value = false;
+  } catch (err) {
+    errorMessage.value = err instanceof Error ? err.message : 'Failed to discard draft.';
+    showDiscardDraftConfirm.value = false;
+  } finally {
+    discardDraftPending.value = false;
+  }
 }
 
 async function guardDraftNavigation(): Promise<boolean> {
@@ -460,6 +479,18 @@ onMounted(async () => {
 </script>
 
 <template>
+  <ConfirmationDialog
+    :open="showDiscardDraftConfirm"
+    title="Discard draft?"
+    message="This permanently deletes the saved draft and clears this editor. This cannot be undone."
+    confirm-label="Discard draft"
+    cancel-label="Keep editing"
+    pending-label="Discarding…"
+    :pending="discardDraftPending"
+    @confirm="confirmDiscardDraft"
+    @cancel="showDiscardDraftConfirm = false"
+  />
+
   <section class="vb-section vb-fade-in">
     <div class="vb-table-header">Post Reply</div>
 
@@ -648,7 +679,7 @@ onMounted(async () => {
               :expires-at="autosavedDraft.expiresAt.value"
               :conflict="Boolean(autosavedDraft.remoteDraft.value)"
               @retry="autosavedDraft.resume()"
-              @discard="confirmDiscardDraft"
+              @discard="requestDiscardDraft"
               @use-saved="autosavedDraft.useSavedVersion()"
               @keep-mine="autosavedDraft.keepMyVersion()"
               @copy-mine="autosavedDraft.copyMyText()"

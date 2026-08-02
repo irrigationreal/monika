@@ -1137,11 +1137,15 @@ test.describe('Threading and reply flows', () => {
     await expect(page.locator('.vb-preview-body')).toContainText('Preview content for the thread.');
 
     await expect(page).toHaveURL(new RegExp(`/forums/${fixture.forumId}/newthread\\?draft=draft-`));
-    page.once('dialog', (dialog) => {
-      expect(dialog.message()).toContain('Discard this draft permanently');
-      dialog.accept();
-    });
-    await page.click('button:has-text("Discard draft")');
+    await page.getByRole('button', { name: 'Discard draft' }).click();
+    const discardDialog = page.getByRole('dialog', { name: 'Discard draft?' });
+    await expect(discardDialog).toBeVisible();
+    await expect(discardDialog.getByRole('button', { name: 'Keep editing' })).toBeFocused();
+    await discardDialog.getByRole('button', { name: 'Keep editing' }).click();
+    await expect(page.locator('.vb-editor-textarea')).toHaveValue('Preview content for the thread.');
+
+    await page.getByRole('button', { name: 'Discard draft' }).click();
+    await discardDialog.getByRole('button', { name: 'Discard draft', exact: true }).click();
     await expect(page.locator('.vb-editor-textarea')).toHaveValue('');
 
     await page.goto(`/forums/${fixture.forumId}`);
@@ -1167,6 +1171,34 @@ test.describe('Threading and reply flows', () => {
     const topicRow = topicRowForTitle(page, 'Shipping Roadmap Q1');
     await expect(topicRow).toBeVisible();
     await expect(topicRow.locator('.vb-lastpost-author').first()).toContainText('Regular User');
+  });
+
+  test('My Drafts requires forum confirmation before permanent deletion', async ({ page, context }) => {
+    const state = createMockState();
+    await attachMockApi(page, state);
+    await setAuthTokens(context, REGULAR_TOKEN);
+    await page.goto('/');
+    const fixture = await createFixture(page, { postCount: 2 });
+
+    await page.goto(`/forums/${fixture.forumId}/newthread`);
+    await page.fill('#thread-title', 'Draft awaiting review');
+    await page.fill('.vb-editor-textarea', 'This draft should remain until deletion is explicitly confirmed.');
+    await expect.poll(() => Object.keys(state.drafts).length).toBe(1);
+
+    await page.goto('/profile/drafts');
+    const draftCard = page.locator('.vb-draft-card', { hasText: 'Draft awaiting review' });
+    await expect(draftCard).toBeVisible();
+    await draftCard.getByRole('button', { name: 'Delete' }).click();
+    const deleteDialog = page.getByRole('dialog', { name: 'Delete draft?' });
+    await expect(deleteDialog).toBeVisible();
+    await deleteDialog.getByRole('button', { name: 'Keep draft' }).click();
+    await expect(draftCard).toBeVisible();
+    expect(Object.keys(state.drafts)).toHaveLength(1);
+
+    await draftCard.getByRole('button', { name: 'Delete' }).click();
+    await deleteDialog.getByRole('button', { name: 'Delete draft', exact: true }).click();
+    await expect(draftCard).toHaveCount(0);
+    expect(Object.keys(state.drafts)).toHaveLength(0);
   });
 
   test('autosaved reply is shared by quick and full composers and consumed on post', async ({ page, context }) => {

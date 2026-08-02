@@ -10,6 +10,7 @@ const props = {
   message: 'This will stop current work.',
   confirmLabel: 'Stop robot',
   cancelLabel: 'Keep running',
+  pendingLabel: 'Stopping…',
 };
 
 afterEach(() => {

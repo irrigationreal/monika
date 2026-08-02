@@ -756,7 +756,10 @@ Publication optionally carries an exact draft ID/revision: topic/post insertion,
 required synchronous projection writes, and owner-checked draft deletion occur in one
 SQLite transaction. Failed publication therefore preserves the draft, a newer tab
 revision survives, and post-commit webhook/stream wake failures cannot turn a committed
-publication into a client-visible generic failure.
+publication into a client-visible generic failure. Composer discard controls and deletion
+from **My Drafts** require the shared accessible forum confirmation dialog; cancellation
+leaves the draft untouched, while a failed confirmed deletion preserves its content and
+surfaces an error in the current view.
 
 Drafts never enter topic/forum projections, search, SSE, webhooks, analytics,
 notifications, logs, Pi JSONL, agentd, or memstore. Autosave excludes attachments,
