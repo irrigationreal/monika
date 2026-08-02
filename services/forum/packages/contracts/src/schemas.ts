@@ -8,6 +8,7 @@ import {
   AnalyticsAudienceValues,
   AnalyticsBucketValues,
   ForumVisibilityValues,
+  MessageDraftContextValues,
   MessageTemplateContextValues,
   MessageTemplateForumScopeValues,
   MessageTemplateScopeValues,
@@ -66,6 +67,9 @@ import type {
   LoginResponseDto,
   MatrixBridgeStatusDto,
   MatrixRoomMappingDto,
+  MessageDraftDto,
+  MessageDraftListResponseDto,
+  MessageDraftResponseDto,
   MessageTemplateDto,
   MessageTemplateListResponseDto,
   ModelCatalogDto,
@@ -144,6 +148,7 @@ import type {
   LoginRequest,
   MatrixMapRoomRequest,
   MatrixSendRequest,
+  MessageDraftWriteRequest,
   MessageTemplateReorderRequest,
   MessageTemplateUpdateRequest,
   MessageTemplateWriteRequest,
@@ -1256,6 +1261,8 @@ export const ListForumsRequestSchema: z.ZodType<ListForumsRequest> = z.object({
   includeArchived: z.boolean().optional(),
 });
 
+const DraftReferenceRequestSchema = z.object({ id: z.string().uuid(), revision: z.number().int().positive() }).strict();
+
 export const CreateTopicRequestSchema: z.ZodType<CreateTopicRequest> = z.object({
   title: z.string().min(1),
   body: z.string().min(1),
@@ -1264,7 +1271,8 @@ export const CreateTopicRequestSchema: z.ZodType<CreateTopicRequest> = z.object(
   attachmentsPending: z.boolean().optional(),
   robotMode: RobotModeSchema.optional(),
   autoCompactEnabled: z.boolean().optional(),
-  silent: z.boolean().optional()
+  silent: z.boolean().optional(),
+  draft: DraftReferenceRequestSchema.optional()
 });
 
 export const CreatePostRequestSchema: z.ZodType<CreatePostRequest> = z.object({
@@ -1275,7 +1283,8 @@ export const CreatePostRequestSchema: z.ZodType<CreatePostRequest> = z.object({
   attachmentsPending: z.boolean().optional(),
   autoCompactEnabled: z.boolean().optional(),
   autoCompactRevision: z.number().int().nonnegative().optional(),
-  silent: z.boolean().optional()
+  silent: z.boolean().optional(),
+  draft: DraftReferenceRequestSchema.optional()
 });
 
 export const LoginRequestSchema: z.ZodType<LoginRequest> = z.object({
@@ -1296,6 +1305,40 @@ export const RegisterRequestSchema: z.ZodType<RegisterRequest> = z.object({
   email: z.string().min(1).max(320).optional(),
   inviteCode: z.string().min(1).max(256).optional(),
 });
+
+export const MessageDraftContextSchema = z.enum(MessageDraftContextValues);
+export const MessageDraftDtoSchema: z.ZodType<MessageDraftDto> = z.object({
+  id: z.string(),
+  context: MessageDraftContextSchema,
+  forumId: nullableString,
+  topicId: nullableString,
+  title: nullableString,
+  body: z.string(),
+  revision: z.number().int().positive(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  expiresAt: z.string(),
+  destinationName: nullableString,
+  canContinue: z.boolean(),
+});
+export const MessageDraftResponseDtoSchema: z.ZodType<MessageDraftResponseDto> = z.object({
+  draft: MessageDraftDtoSchema.nullable(),
+});
+export const MessageDraftListResponseDtoSchema: z.ZodType<MessageDraftListResponseDto> = z.object({
+  drafts: z.array(MessageDraftDtoSchema),
+});
+export const MessageDraftWriteRequestSchema: z.ZodType<MessageDraftWriteRequest> = z
+  .object({
+    expectedRevision: z.number().int().nonnegative(),
+    title: z.string().max(255).nullable().optional(),
+    body: z.string(),
+  })
+  .strict();
+export const MessageDraftRevisionQuerySchema = z
+  .object({
+    revision: z.coerce.number().int().positive(),
+  })
+  .strict();
 
 export const MessageTemplateContextSchema = z.enum(MessageTemplateContextValues);
 export const MessageTemplateScopeSchema = z.enum(MessageTemplateScopeValues);

@@ -1,4 +1,6 @@
-import type { Forum, Topic, Post, IdentityPublic, IdentityPrivate, ForumStatus } from '../domain/entities';
+import type { AccessRule, AccessRuleScopeKind } from '../domain/access';
+import type { Forum, ForumStatus, IdentityPrivate, IdentityPublic, Post, Topic } from '../domain/entities';
+import type { ForumCoreEvent } from '../domain/events';
 import type {
   EventCursor,
   EventId,
@@ -10,17 +12,16 @@ import type {
   PostId,
   SurfaceCursor,
   SurfaceId,
-  TopicId
+  TopicId,
 } from '../domain/ids';
-import type { ForumCoreEvent } from '../domain/events';
+import type { MessageDraft, MessageDraftWriteInput } from '../domain/messageDrafts';
 import type {
   MessageTemplate,
   MessageTemplateContext,
   MessageTemplateScope,
-  MessageTemplateWriteInput
+  MessageTemplateWriteInput,
 } from '../domain/messageTemplates';
 import type { ExternalRef, ExternalRefKind } from '../domain/surfaces';
-import type { AccessRule, AccessRuleScopeKind } from '../domain/access';
 
 export interface ForumListOptions {
   parentForumId?: ForumId | null;
@@ -55,6 +56,26 @@ export interface IdentityRepository {
   listByTopic(topicId: TopicId, page?: number, pageSize?: number): Promise<IdentityPublic[]>;
   create(identity: IdentityPrivate): Promise<void>;
   update(identity: IdentityPrivate): Promise<void>;
+}
+
+export interface MessageDraftRepository {
+  getById(ownerIdentityId: IdentityId, id: string, now: string): Promise<MessageDraft | null>;
+  getReply(ownerIdentityId: IdentityId, topicId: TopicId, now: string): Promise<MessageDraft | null>;
+  listOwner(ownerIdentityId: IdentityId, now: string): Promise<MessageDraft[]>;
+  listNewThreadByForum(ownerIdentityId: IdentityId, forumId: ForumId, now: string): Promise<MessageDraft[]>;
+  save(input: {
+    draft: MessageDraft;
+    expectedRevision: number;
+    value: MessageDraftWriteInput;
+    now: string;
+    quota: number;
+  }): Promise<MessageDraft | 'conflict' | 'quota'>;
+  delete(
+    ownerIdentityId: IdentityId,
+    id: string,
+    expectedRevision?: number
+  ): Promise<'deleted' | 'missing' | 'conflict'>;
+  purgeExpired(now: string): Promise<number>;
 }
 
 export interface MessageTemplateRepository {

@@ -1,15 +1,17 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router';
 
 import AutoCompactOption from '../components/AutoCompactOption.vue';
 import ConfirmationDialog from '../components/ConfirmationDialog.vue';
 import DecryptText from '../components/DecryptText.vue';
+import DraftStatus from '../components/DraftStatus.vue';
 import LiveAssistantTurn from '../components/LiveAssistantTurn.vue';
 import MessageTemplatePicker from '../components/MessageTemplatePicker.vue';
 import OperationalEventBar from '../components/OperationalEventBar.vue';
 import PostTracePanel from '../components/PostTracePanel.vue';
 import ToolMiniView from '../components/ToolMiniView.vue';
+import { useAutosavedDraft } from '../composables/useAutosavedDraft';
 import { useForumState } from '../composables/useForumState';
 import { useMarkdown } from '../composables/useMarkdown';
 import { applyTemplateToTextarea } from '../composables/useMessageTemplateInsertion';
@@ -81,6 +83,8 @@ const showScrollTop = ref(false);
 const isReplying = ref(false);
 const isUploadingReply = ref(false);
 const replyFiles = ref<File[]>([]);
+const publishedReplyPostId = ref<string | null>(null);
+const publishedReplyNeedsDispatch = ref(false);
 const replyFileInputRef = ref<HTMLInputElement | null>(null);
 const deletingByAttachment = ref<Record<string, boolean>>({});
 const ttsLoadingByPost = ref<Record<string, boolean>>({});
@@ -296,10 +300,7 @@ async function refreshCompactionState(topicId: string, refreshTopic = false): Pr
     else if (intent) clearCompactionIntent(topicId);
     compactionState.value = next;
     compactionOperation.value = next.active ?? next.latest;
-    if (
-      refreshTopic ||
-      (previousStatus !== null && previousStatus !== next.active?.status && !next.active)
-    ) {
+    if (refreshTopic || (previousStatus !== null && previousStatus !== next.active?.status && !next.active)) {
       await refreshCompactionDependentState(topicId);
     }
     return true;
@@ -422,7 +423,8 @@ async function submitCompaction(): Promise<void> {
         const refreshed = await refreshCompactionState(topicId);
         if (routeTopicId.value !== topicId) return;
         if (refreshed) clearCompactionIntent(topicId);
-        compactionError.value = refreshed && compactionFence.value
+        compactionError.value =
+          refreshed && compactionFence.value
           ? ''
           : refreshed
             ? err instanceof Error
@@ -1277,6 +1279,7 @@ function scrollToTop(): void {
 }
 
 const routeTopicId = computed(() => (route.params['topicId'] as string | undefined) ?? null);
+const autosavedReply = useAutosavedDraft({ context: 'reply', contextId: routeTopicId, body: replyBody });
 const routePage = computed(() => {
   const raw = route.query['page'];
   if (Array.isArray(raw)) return Number(raw[0] ?? 1);
@@ -1552,37 +1555,83 @@ async function applyQuickReplyTemplate(template: MessageTemplateDto, replace: bo
   });
 }
 
+async function finishQuickReplyAttachments(): Promise<void> {
+  const postId = publishedReplyPostId.value;
+  if (!postId) return;
+  isUploadingReply.value = true;
+  for (const file of [...replyFiles.value]) {
+    await state.uploadAttachment(postId, file);
+    replyFiles.value = replyFiles.value.filter((item) => item !== file);
+  }
+  if (publishedReplyNeedsDispatch.value) {
+    await state.dispatchPost(postId, {
+      model: effectiveSelectedModel.value,
+      ...(supportsReasoning.value ? { reasoningEffort: selectedReasoning.value } : {}),
+    });
+  }
+  publishedReplyNeedsDispatch.value = false;
+  publishedReplyPostId.value = null;
+  clearReplyFiles();
+}
+
+async function retryQuickReplyAttachments(): Promise<void> {
+  state.setError('');
+  try {
+    await finishQuickReplyAttachments();
+  } catch (err) {
+    state.setError(err instanceof Error ? err.message : 'Attachment retry failed.');
+  } finally {
+    isUploadingReply.value = false;
+  }
+}
+
+async function abandonQuickReplyAttachments(): Promise<void> {
+  const postId = publishedReplyPostId.value;
+  if (!postId) return;
+  if (publishedReplyNeedsDispatch.value) {
+    await state.dispatchPost(postId, {
+      model: effectiveSelectedModel.value,
+      ...(supportsReasoning.value ? { reasoningEffort: selectedReasoning.value } : {}),
+    });
+  }
+  publishedReplyNeedsDispatch.value = false;
+  publishedReplyPostId.value = null;
+  clearReplyFiles();
+}
+
+async function confirmDiscardQuickDraft(): Promise<void> {
+  if (window.confirm('Discard this draft permanently?')) await autosavedReply.discard();
+}
+
 async function reply(): Promise<void> {
   if (!replyBody.value.trim() || compactionFence.value) return;
-  const shouldClearReplyFiles = replyFiles.value.length > 0;
   isReplying.value = true;
+  let postCreated = false;
   try {
+    const draftReference = await autosavedReply.flush();
+    if (autosavedReply.status.value === 'conflict') {
+      throw new Error('Resolve the draft conflict before posting.');
+    }
+    autosavedReply.pause();
     const attachmentsPending = replyFiles.value.length > 0;
     const post = await state.createPost(replyBody.value.trim(), {
       model: effectiveSelectedModel.value,
-      reasoningEffort: supportsReasoning.value ? selectedReasoning.value : null,
+      ...(supportsReasoning.value ? { reasoningEffort: selectedReasoning.value } : {}),
       ...(isAdmin.value
         ? {
             autoCompactEnabled: autoCompactEnabled.value,
-            autoCompactRevision: state.selectedTopic.value?.autoCompactRevision,
+            autoCompactRevision: state.selectedTopic.value?.autoCompactRevision ?? 0,
           }
         : {}),
       attachmentsPending,
+      ...(draftReference ? { draft: draftReference } : {}),
     });
-    if (replyFiles.value.length > 0) {
-      isUploadingReply.value = true;
-      for (const file of replyFiles.value) {
-        await state.uploadAttachment(post.id, file);
-      }
-      if (attachmentsPending) {
-        await state.dispatchPost(post.id, {
-          model: effectiveSelectedModel.value,
-          reasoningEffort: supportsReasoning.value ? selectedReasoning.value : null,
-        });
-      }
-      clearReplyFiles();
-    }
+    postCreated = true;
     replyBody.value = '';
+    publishedReplyPostId.value = post.id;
+    publishedReplyNeedsDispatch.value = attachmentsPending;
+    if (replyFiles.value.length > 0) await finishQuickReplyAttachments();
+    else publishedReplyPostId.value = null;
 
     // UX: when replying from an earlier page in a multi-page thread, your post lands on the last page.
     // Jump to the last page and set the URL hash to the new post number.
@@ -1594,11 +1643,15 @@ async function reply(): Promise<void> {
     await nextTick();
     scrollToAnchor('smooth');
   } catch (err) {
-    state.setError(err instanceof Error ? err.message : 'Failed to post reply.');
+    if (!postCreated) autosavedReply.resume();
+    state.setError(
+      postCreated
+        ? 'Reply posted, but one or more attachments did not finish. Do not resubmit the reply; the selected files remain in this tab.'
+        : err instanceof Error
+          ? err.message
+          : 'Failed to post reply.'
+    );
   } finally {
-    if (shouldClearReplyFiles) {
-      clearReplyFiles();
-    }
     isReplying.value = false;
     isUploadingReply.value = false;
   }
@@ -1877,6 +1930,28 @@ watch(
   { immediate: true }
 );
 
+async function guardQuickDraftNavigation(): Promise<boolean> {
+  if (publishedReplyPostId.value) {
+    state.setError('Finish or abandon the published reply’s attachment recovery before leaving this topic.');
+    return false;
+  }
+  const saved = await autosavedReply.flushForNavigation();
+  if (!saved) state.setError('This draft could not be saved. Resolve the draft status before leaving.');
+  return saved;
+}
+
+onBeforeRouteLeave(() => guardQuickDraftNavigation());
+onBeforeRouteUpdate(async (to, from) => {
+  if (to.params['topicId'] === from.params['topicId']) return true;
+  if (!(await guardQuickDraftNavigation())) return false;
+  if (replyFiles.value.length > 0) {
+    if (!window.confirm('Selected files are not saved with drafts. Leave this topic and clear those files?'))
+      return false;
+    clearReplyFiles();
+  }
+  return true;
+});
+
 watch(
   routeTopicId,
   async (topicId) => {
@@ -1892,9 +1967,20 @@ watch(
     compactionRetryingCheckpoint.value = false;
     compactionState.value = { active: null, latest: null, checkpointDispatch: null };
     compactionError.value = '';
-    if (topicId) await loadTopic(topicId);
+    replyBody.value = '';
+    if (topicId) {
+      await loadTopic(topicId);
+      if (state.isLoggedIn.value) await autosavedReply.load();
+    }
   },
   { immediate: true }
+);
+
+watch(
+  () => state.isLoggedIn.value,
+  (loggedIn) => {
+    if (loggedIn && routeTopicId.value && !autosavedReply.hydrated.value) void autosavedReply.load();
+  }
 );
 
 onMounted(() => {
@@ -2166,10 +2252,18 @@ onUnmounted(() => {
 
     <div class="vb-controls">
       <div class="vb-control-group">
-        <button class="vb-btn" :disabled="state.loading.value || state.isTopicLocked() || compactionFence" @click="openReplyPage">
+        <button
+          class="vb-btn"
+          :disabled="state.loading.value || state.isTopicLocked() || compactionFence"
+          @click="openReplyPage"
+        >
           Post Reply
         </button>
-        <button class="vb-btn" :disabled="state.loading.value || state.isTopicLocked() || compactionFence" @click="openHandoffModal">
+        <button
+          class="vb-btn"
+          :disabled="state.loading.value || state.isTopicLocked() || compactionFence"
+          @click="openHandoffModal"
+        >
           Handoff
         </button>
         <button v-if="isAdmin" class="vb-btn" :disabled="!canCompact" @click="openCompactionModal">Compact</button>
@@ -2225,7 +2319,12 @@ onUnmounted(() => {
     <div v-if="showAdminPanel && canModerate" class="vb-admin-panel">
       <div class="vb-admin-actions">
         <button class="vb-small-btn" :disabled="state.loading.value" @click="openEditTitle">Edit Title</button>
-        <button v-if="isAdmin" class="vb-small-btn" :disabled="state.loading.value || compactionFence" @click="openMoveTopicModal">
+        <button
+          v-if="isAdmin"
+          class="vb-small-btn"
+          :disabled="state.loading.value || compactionFence"
+          @click="openMoveTopicModal"
+        >
           Move Thread
         </button>
         <button class="vb-small-btn" :disabled="state.loading.value" @click="handleToggleSticky">
@@ -2281,7 +2380,12 @@ onUnmounted(() => {
               <input type="checkbox" v-model="autoRunEnabled" :disabled="!canEditAutoRun || autoRunBusy" />
               <span>Enabled</span>
             </label>
-            <button class="vb-small-btn" type="button" :disabled="!canEditAutoRun || autoRunBusy || compactionFence" @click="saveAutoRun">
+            <button
+              class="vb-small-btn"
+              type="button"
+              :disabled="!canEditAutoRun || autoRunBusy || compactionFence"
+              @click="saveAutoRun"
+            >
               Save
             </button>
             <button
@@ -2449,7 +2553,9 @@ onUnmounted(() => {
                 v-if="state.isRobotPost(post) && hasTraceForPost(post)"
                 :reasoningSteps="planStepsForPost(post)"
                 :reasoningFallbackHtml="
-                  planForPost(post) ? renderPost(planForPost(post)?.summary || planForPost(post)?.content || '') : null
+                    planForPost(post)
+                      ? renderPost(planForPost(post)?.summary || planForPost(post)?.content || '')
+                      : null
                 "
                 :toolRuns="toolRunsForPost(post)"
                 :traceId="post.id"
@@ -2460,7 +2566,9 @@ onUnmounted(() => {
 
               <div class="vb-post-heading">
                 <span>{{ state.selectedTopic.value?.title }}</span>
-                <span v-if="isRecoveryCheckpoint(post.id)" class="vb-recovery-checkpoint-badge">Automated recovery checkpoint</span>
+                  <span v-if="isRecoveryCheckpoint(post.id)" class="vb-recovery-checkpoint-badge"
+                    >Automated recovery checkpoint</span
+                  >
                 <button
                   v-if="state.isRobotPost(post)"
                   class="vb-tts-inline"
@@ -2583,7 +2691,9 @@ onUnmounted(() => {
                 v-if="state.isRobotPost(post) && hasTraceForPost(post)"
                 :reasoningSteps="planStepsForPost(post)"
                 :reasoningFallbackHtml="
-                  planForPost(post) ? renderPost(planForPost(post)?.summary || planForPost(post)?.content || '') : null
+                    planForPost(post)
+                      ? renderPost(planForPost(post)?.summary || planForPost(post)?.content || '')
+                      : null
                 "
                 :toolRuns="toolRunsForPost(post)"
                 :traceId="post.id"
@@ -2593,7 +2703,9 @@ onUnmounted(() => {
               />
               <div class="vb-post-heading">
                 <span>{{ state.selectedTopic.value?.title }}</span>
-                <span v-if="isRecoveryCheckpoint(post.id)" class="vb-recovery-checkpoint-badge">Automated recovery checkpoint</span>
+                  <span v-if="isRecoveryCheckpoint(post.id)" class="vb-recovery-checkpoint-badge"
+                    >Automated recovery checkpoint</span
+                  >
                 <button
                   v-if="state.isRobotPost(post)"
                   class="vb-tts-inline"
@@ -2681,7 +2793,11 @@ onUnmounted(() => {
           >
             Edit
           </button>
-          <button class="vb-control-btn" :disabled="state.isTopicLocked() || !!post.deletedAt" @click="quotePost(post)">
+            <button
+              class="vb-control-btn"
+              :disabled="state.isTopicLocked() || !!post.deletedAt"
+              @click="quotePost(post)"
+            >
             Quote
           </button>
           <button
@@ -2703,7 +2819,11 @@ onUnmounted(() => {
         </div>
         <div v-if="showDeleteConfirm === post.id" class="vb-delete-confirm">
           <span>Delete this post?</span>
-          <button class="vb-small-btn vb-btn-danger" :disabled="state.loading.value || compactionFence" @click="handleDelete(post.id)">
+            <button
+              class="vb-small-btn vb-btn-danger"
+              :disabled="state.loading.value || compactionFence"
+              @click="handleDelete(post.id)"
+            >
             Yes, Delete
           </button>
           <button class="vb-small-btn" @click="cancelDelete">Cancel</button>
@@ -2751,10 +2871,18 @@ onUnmounted(() => {
 
     <div class="vb-controls vb-controls-bottom">
       <div class="vb-control-group">
-        <button class="vb-btn" :disabled="state.loading.value || state.isTopicLocked() || compactionFence" @click="openReplyPage">
+        <button
+          class="vb-btn"
+          :disabled="state.loading.value || state.isTopicLocked() || compactionFence"
+          @click="openReplyPage"
+        >
           Post Reply
         </button>
-        <button class="vb-btn" :disabled="state.loading.value || state.isTopicLocked() || compactionFence" @click="openHandoffModal">
+        <button
+          class="vb-btn"
+          :disabled="state.loading.value || state.isTopicLocked() || compactionFence"
+          @click="openHandoffModal"
+        >
           Handoff
         </button>
         <button v-if="isAdmin" class="vb-btn" :disabled="!canCompact" @click="openCompactionModal">Compact</button>
@@ -2811,7 +2939,11 @@ onUnmounted(() => {
           <div class="vb-form-section">
             <div class="vb-form-section-header">Draft Generation</div>
             <div class="vb-form-section-body">
-              <button class="vb-small-btn" type="button" @click="showHandoffDraftModelAdvanced = !showHandoffDraftModelAdvanced">
+                <button
+                  class="vb-small-btn"
+                  type="button"
+                  @click="showHandoffDraftModelAdvanced = !showHandoffDraftModelAdvanced"
+                >
                 {{ showHandoffDraftModelAdvanced ? 'Hide model options' : 'Advanced model options' }}
               </button>
               <div v-if="showHandoffDraftModelAdvanced" class="vb-reply-options">
@@ -2825,11 +2957,17 @@ onUnmounted(() => {
                 <div v-if="handoffDraftSupportsReasoning" class="vb-option-group">
                   <label>Reasoning:</label>
                   <select v-model="handoffDraftReasoning" class="vb-option-select">
-                    <option v-for="option in handoffDraftReasoningOptions" :key="option" :value="option">{{ formatReasoningLabel(option) }}</option>
+                      <option v-for="option in handoffDraftReasoningOptions" :key="option" :value="option">
+                        {{ formatReasoningLabel(option) }}
+                      </option>
                   </select>
                 </div>
               </div>
-              <button class="vb-small-btn" type="button" @click="showHandoffAdvancedPrompt = !showHandoffAdvancedPrompt">
+                <button
+                  class="vb-small-btn"
+                  type="button"
+                  @click="showHandoffAdvancedPrompt = !showHandoffAdvancedPrompt"
+                >
                 {{ showHandoffAdvancedPrompt ? 'Hide generation prompt' : 'Customize generation prompt' }}
               </button>
               <div v-if="showHandoffAdvancedPrompt" class="vb-form-row">
@@ -2857,7 +2995,9 @@ onUnmounted(() => {
               <div class="vb-form-row">
                 <label class="vb-form-label">Forum:</label>
                 <select v-model="handoffDestinationForumId" class="vb-option-input">
-                  <option v-for="forum in moveForumOptions" :key="forum.id" :value="forum.id">{{ forumOptionLabel(forum) }}</option>
+                    <option v-for="forum in moveForumOptions" :key="forum.id" :value="forum.id">
+                      {{ forumOptionLabel(forum) }}
+                    </option>
                 </select>
               </div>
               <div class="vb-form-row">
@@ -2871,9 +3011,15 @@ onUnmounted(() => {
                   class="vb-option-input"
                   placeholder="/path/to/workspace"
                 />
-                <div v-else class="vb-form-hint">Workspace: {{ handoffEffectiveCwd || 'forum/default runtime workspace' }}</div>
+                  <div v-else class="vb-form-hint">
+                    Workspace: {{ handoffEffectiveCwd || 'forum/default runtime workspace' }}
+                  </div>
               </div>
-              <button class="vb-small-btn" type="button" @click="showHandoffLaunchAdvanced = !showHandoffLaunchAdvanced">
+                <button
+                  class="vb-small-btn"
+                  type="button"
+                  @click="showHandoffLaunchAdvanced = !showHandoffLaunchAdvanced"
+                >
                 {{ showHandoffLaunchAdvanced ? 'Hide launch model options' : 'Advanced launch model options' }}
               </button>
               <div v-if="showHandoffLaunchAdvanced" class="vb-reply-options">
@@ -2887,7 +3033,9 @@ onUnmounted(() => {
                 <div v-if="handoffLaunchSupportsReasoning" class="vb-option-group">
                   <label>Reasoning:</label>
                   <select v-model="handoffLaunchReasoning" class="vb-option-select">
-                    <option v-for="option in handoffLaunchReasoningOptions" :key="option" :value="option">{{ formatReasoningLabel(option) }}</option>
+                      <option v-for="option in handoffLaunchReasoningOptions" :key="option" :value="option">
+                        {{ formatReasoningLabel(option) }}
+                      </option>
                   </select>
                 </div>
               </div>
@@ -2902,11 +3050,25 @@ onUnmounted(() => {
         </template>
       </div>
       <div class="vb-modal-actions">
-        <button v-if="handoffStage === 'edit'" class="vb-btn vb-btn-secondary" type="button" :disabled="handoffLoading" @click="handoffStage = 'generate'">
+          <button
+            v-if="handoffStage === 'edit'"
+            class="vb-btn vb-btn-secondary"
+            type="button"
+            :disabled="handoffLoading"
+            @click="handoffStage = 'generate'"
+          >
           Back
         </button>
-        <button class="vb-btn vb-btn-secondary" type="button" :disabled="handoffLoading" @click="closeHandoffModal">Cancel</button>
-        <button v-if="handoffStage === 'generate'" class="vb-btn" type="button" :disabled="handoffLoading" @click="generateHandoffDraft">
+          <button class="vb-btn vb-btn-secondary" type="button" :disabled="handoffLoading" @click="closeHandoffModal">
+            Cancel
+          </button>
+          <button
+            v-if="handoffStage === 'generate'"
+            class="vb-btn"
+            type="button"
+            :disabled="handoffLoading"
+            @click="generateHandoffDraft"
+          >
           {{ handoffLoading ? 'Generating...' : 'Generate Draft' }}
         </button>
         <button v-else class="vb-btn" type="button" :disabled="handoffLoading" @click="createHandoffThread">
@@ -2915,7 +3077,6 @@ onUnmounted(() => {
       </div>
     </div>
   </div>
-
 
     <div class="vb-quick-reply">
       <div class="vb-table-header">Quick Reply</div>
@@ -2955,6 +3116,16 @@ onUnmounted(() => {
           :has-draft="replyBody.length > 0"
           @apply="applyQuickReplyTemplate"
         />
+        <DraftStatus
+          :status="autosavedReply.status.value"
+          :expires-at="autosavedReply.expiresAt.value"
+          :conflict="Boolean(autosavedReply.remoteDraft.value)"
+          @retry="autosavedReply.resume()"
+          @discard="confirmDiscardQuickDraft"
+          @use-saved="autosavedReply.useSavedVersion()"
+          @keep-mine="autosavedReply.keepMyVersion()"
+          @copy-mine="autosavedReply.copyMyText()"
+        />
         <textarea
           ref="quickReplyTextareaRef"
           v-model="replyBody"
@@ -2963,7 +3134,24 @@ onUnmounted(() => {
         ></textarea>
         <div class="vb-reply-attachments">
           <label class="vb-attachment-label">Attachments:</label>
+          <span class="vb-form-hint">Selected files are not included in autosaved drafts.</span>
           <input ref="replyFileInputRef" class="vb-attachment-input" type="file" multiple @change="handleReplyFiles" />
+          <div v-if="publishedReplyPostId" class="vb-template-conflict" role="alert">
+            Reply posted; attachment upload is incomplete. Retrying cannot duplicate the reply. Complete it within five
+            minutes.
+            <button type="button" class="vb-small-btn" :disabled="isUploadingReply" @click="retryQuickReplyAttachments">
+              {{ replyFiles.length ? 'Retry remaining files' : 'Retry dispatch' }}
+            </button>
+            <button
+              type="button"
+              class="vb-small-btn"
+              :disabled="isUploadingReply"
+              @click="abandonQuickReplyAttachments"
+            >
+              {{ replyFiles.length ? 'Abandon files' : 'Continue'
+              }}{{ publishedReplyNeedsDispatch ? ' and dispatch' : '' }}
+            </button>
+          </div>
           <div v-if="replyFiles.length > 0" class="vb-attachment-selected">
             <span>Selected:</span>
             <ul>
@@ -3020,7 +3208,14 @@ onUnmounted(() => {
         </div>
         <button
           class="vb-btn"
-          :disabled="state.loading.value || isReplying || isUploadingReply || compactionFence || !replyBody.trim()"
+          :disabled="
+            state.loading.value ||
+            isReplying ||
+            isUploadingReply ||
+            Boolean(publishedReplyPostId) ||
+            compactionFence ||
+            !replyBody.trim()
+          "
           @click="reply"
         >
           <span v-if="isReplying" class="vb-spinner" style="width: 12px; height: 12px; margin-right: 4px"></span>

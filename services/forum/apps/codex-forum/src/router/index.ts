@@ -6,6 +6,7 @@ import AnalyticsView from '../views/AnalyticsView.vue';
 import ApiDocsView from '../views/ApiDocsView.vue';
 import ChatView from '../views/ChatView.vue';
 import DeveloperPortalView from '../views/DeveloperPortalView.vue';
+import DraftsView from '../views/DraftsView.vue';
 import ForumHomeView from '../views/ForumHomeView.vue';
 import ForumIndexView from '../views/ForumIndexView.vue';
 import NewThreadView from '../views/NewThreadView.vue';
@@ -40,6 +41,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/verify/:token', name: 'auth.verify', component: VerifyView, meta: { title: 'Verify Account' } },
   { path: '/profile', name: 'user.profile', component: ProfileView, meta: { title: 'User Control Panel' } },
   { path: '/profile/message-templates', name: 'user.messageTemplates', component: MessageTemplatesView, meta: { title: 'Message Templates', requiresAuth: true } },
+  { path: '/profile/drafts', name: 'user.drafts', component: DraftsView, meta: { title: 'My Drafts', requiresAuth: true } },
   { path: '/chat', name: 'chat.home', component: ChatView, meta: { title: 'Chat Rooms', requiresAuth: true } },
   { path: '/chat/:roomId', name: 'chat.room', component: ChatView, meta: { title: 'Chat Room', requiresAuth: true } },
   { path: '/users/:identityId', name: 'user.view', component: UserProfileView, meta: { title: 'User Profile' } },

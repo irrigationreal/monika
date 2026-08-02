@@ -1485,6 +1485,40 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 41,
+    name: 'private-autosaved-drafts',
+    up: (db) => {
+      db.exec(`
+        create table message_drafts (
+          id text primary key,
+          owner_identity_id text not null,
+          context text not null check (context in ('reply', 'new_thread')),
+          forum_id text,
+          topic_id text,
+          title text,
+          body text not null,
+          revision integer not null default 1 check (revision >= 1),
+          created_at text not null,
+          updated_at text not null,
+          expires_at text not null,
+          check (
+            (context = 'reply' and topic_id is not null and forum_id is null and title is null)
+            or (context = 'new_thread' and forum_id is not null and topic_id is null)
+          ),
+          foreign key (owner_identity_id) references identities(id) on delete cascade,
+          foreign key (forum_id) references forums(id) on delete cascade,
+          foreign key (topic_id) references topics(id) on delete cascade
+        );
+        create unique index idx_message_drafts_reply on message_drafts(owner_identity_id, topic_id)
+          where context = 'reply';
+        create index idx_message_drafts_owner_updated on message_drafts(owner_identity_id, updated_at desc);
+        create index idx_message_drafts_expiry on message_drafts(expires_at);
+        create index idx_message_drafts_forum on message_drafts(owner_identity_id, forum_id, updated_at desc)
+          where context = 'new_thread';
+      `);
+    },
+  },
 ];
 
 export const SCHEMA_VERSION: number = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;

@@ -1,8 +1,12 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { test, expect, type Locator, type Page, type Route } from '@playwright/test';
-import type { AttachmentDto, ForumDto, IdentityDto, TopicDto, PostDto, UserFileDto } from '../../src/lib/apiClient';
+
+import { expect, test } from '@playwright/test';
+
+import type { Locator, Page, Route } from '@playwright/test';
+
+import type { AttachmentDto, ForumDto, IdentityDto, PostDto, TopicDto, UserFileDto } from '../../src/lib/apiClient';
 
 declare global {
   interface Window {
@@ -19,6 +23,7 @@ type MockApiOptions = {
   failUserFileUploads?: Set<string>;
   failUserFileDeletes?: Set<string>;
   failAttachmentUploads?: Set<string>;
+  failFirstDispatch?: boolean;
   attachmentUploadDelayMs?: number;
   userFileUploadDelayMs?: number;
 };
@@ -53,7 +58,7 @@ function createMockApi(options: MockApiOptions = {}): {
     rank: 'Member',
     joinDate: now,
     createdAt: now,
-    updatedAt: now
+    updatedAt: now,
   };
 
   const forum: ForumDto = {
@@ -70,7 +75,7 @@ function createMockApi(options: MockApiOptions = {}): {
     postCount: 0,
     lastPost: null,
     createdAt: now,
-    updatedAt: now
+    updatedAt: now,
   };
 
   const topics = new Map<string, TopicDto>();
@@ -82,6 +87,7 @@ function createMockApi(options: MockApiOptions = {}): {
   let postCounter = 0;
   let attachmentCounter = 0;
   let userFileCounter = 0;
+  let dispatchAttempts = 0;
 
   const chunkedUploads = new Map<string, { postId: string; filename: string; sizeBytes: number; mimeType: string }>();
 
@@ -110,7 +116,7 @@ function createMockApi(options: MockApiOptions = {}): {
       filename,
       mimeType,
       sizeBytes,
-      createdAt: now
+      createdAt: now,
     };
     const existing = attachmentsByPost.get(postId) ?? [];
     attachmentsByPost.set(postId, [...existing, attachment]);
@@ -132,7 +138,7 @@ function createMockApi(options: MockApiOptions = {}): {
       createdAt: now,
       editedAt: null,
       deletedAt: null,
-      reactionCounts: []
+      reactionCounts: [],
     };
     const existing = postsByTopic.get(topicId) ?? [];
     postsByTopic.set(topicId, [...existing, post]);
@@ -158,7 +164,7 @@ function createMockApi(options: MockApiOptions = {}): {
       postCount: 0,
       lastPostAuthorId: identity.id,
       lastPostAuthorName: identity.displayName,
-      lastPostAt: now
+      lastPostAt: now,
     };
     topics.set(topic.id, topic);
     return topic;
@@ -171,7 +177,7 @@ function createMockApi(options: MockApiOptions = {}): {
     await route.fulfill({
       status,
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
     });
   }
 
@@ -198,9 +204,9 @@ function createMockApi(options: MockApiOptions = {}): {
               location: identity.location,
               signature: identity.signature,
               theme: identity.theme,
-              hasPrivateEmail: false
+              hasPrivateEmail: false,
             }
-          : null
+          : null,
       });
     }
 
@@ -232,7 +238,7 @@ function createMockApi(options: MockApiOptions = {}): {
         filename,
         mimeType: 'application/octet-stream',
         sizeBytes,
-        createdAt: now
+        createdAt: now,
       };
       userFiles.unshift(file);
       return fulfillJson(route, file, 200, options.userFileUploadDelayMs ?? 0);
@@ -342,13 +348,13 @@ function createMockApi(options: MockApiOptions = {}): {
         postId: postsAttachmentsChunkedStart[1],
         filename: payload.filename ?? 'chunked.bin',
         sizeBytes,
-        mimeType: payload.mimeType ?? 'application/octet-stream'
+        mimeType: payload.mimeType ?? 'application/octet-stream',
       });
       requestLog.push(`chunk-start:${postsAttachmentsChunkedStart[1]}:${uploadId}`);
       return fulfillJson(route, {
         uploadId,
         chunkBytes: Math.max(1, Math.ceil(sizeBytes / 2)),
-        totalChunks: 2
+        totalChunks: 2,
       });
     }
 
@@ -357,7 +363,9 @@ function createMockApi(options: MockApiOptions = {}): {
       return fulfillJson(route, { ok: true });
     }
 
-    const postsAttachmentsChunkedComplete = path.match(/^\/api\/posts\/([^/]+)\/attachments\/chunked\/([^/]+)\/complete$/);
+    const postsAttachmentsChunkedComplete = path.match(
+      /^\/api\/posts\/([^/]+)\/attachments\/chunked\/([^/]+)\/complete$/
+    );
     if (postsAttachmentsChunkedComplete && method === 'POST') {
       const uploadId = postsAttachmentsChunkedComplete[2];
       const meta = chunkedUploads.get(uploadId);
@@ -398,8 +406,14 @@ function createMockApi(options: MockApiOptions = {}): {
     const postDispatchMatch = path.match(/^\/api\/posts\/([^/]+)\/dispatch$/);
     if (postDispatchMatch && method === 'POST') {
       const postId = postDispatchMatch[1];
-      const post = Array.from(postsByTopic.values()).flat().find((item) => item.id === postId);
+      const post = Array.from(postsByTopic.values())
+        .flat()
+        .find((item) => item.id === postId);
       requestLog.push(`dispatch:${postId}`);
+      dispatchAttempts += 1;
+      if (options.failFirstDispatch && dispatchAttempts === 1) {
+        return fulfillJson(route, { message: 'Dispatch failed' }, 500);
+      }
       return fulfillJson(route, { ok: true, dispatched: true, post });
     }
 
@@ -413,9 +427,9 @@ function createMockApi(options: MockApiOptions = {}): {
         requestLog,
         createdPostIds,
         getLastCreateTopicPayload: () => lastCreateTopicPayload,
-        getLastCreatePostPayload: () => lastCreatePostPayload
+        getLastCreatePostPayload: () => lastCreatePostPayload,
       };
-    }
+    },
   };
 }
 
@@ -434,7 +448,7 @@ async function clearAuth(page: Page): Promise<void> {
 async function gotoNewThreadComposer(page: Page, url: string): Promise<void> {
   await enableAuth(page);
   await page.goto(url);
-  if (await page.locator('#thread-title').count() === 0) {
+  if ((await page.locator('#thread-title').count()) === 0) {
     await page.evaluate(() => {
       document.cookie = 'cforum_session=test-token; path=/; SameSite=Lax';
     });
@@ -460,7 +474,7 @@ test.describe('Attachment lifecycle', () => {
       'first.txt': Buffer.byteLength(firstContents),
       'chunked.bin': largeFileSize,
       'reply-a.txt': 7,
-      'reply-b.txt': 9
+      'reply-b.txt': 9,
     };
     const mock = createMockApi({ fileSizeByName: fileSizes, attachmentUploadDelayMs: 50 });
     const mockState = await mock.attach(page);
@@ -477,7 +491,7 @@ test.describe('Attachment lifecycle', () => {
               return 90 * 1024 * 1024 + 4;
             }
             return originalGetSize ? originalGetSize.call(this) : 0;
-          }
+          },
         });
         File.prototype.slice = function slice(start?: number, end?: number, contentType?: string) {
           if (this.name === 'chunked.bin') {
@@ -516,12 +530,16 @@ test.describe('Attachment lifecycle', () => {
       expect(dispatchIndex).toBeGreaterThan(Math.max(...uploadIndices));
 
       const firstAttachmentLink = page.locator('.vb-post-attachments .vb-attachment-link', { hasText: 'first.txt' });
-      const chunkedAttachmentLink = page.locator('.vb-post-attachments .vb-attachment-link', { hasText: 'chunked.bin' });
+      const chunkedAttachmentLink = page.locator('.vb-post-attachments .vb-attachment-link', {
+        hasText: 'chunked.bin',
+      });
       await expect(firstAttachmentLink).toBeVisible();
       await expect(firstAttachmentLink).toHaveAttribute('href', /\/api\/attachments\/attachment-/);
       await expect(chunkedAttachmentLink).toBeVisible();
 
-      const removeButton = page.locator('.vb-attachment-item', { hasText: 'first.txt' }).locator('button', { hasText: 'Remove' });
+      const removeButton = page
+        .locator('.vb-attachment-item', { hasText: 'first.txt' })
+        .locator('button', { hasText: 'Remove' });
       await removeButton.click();
       await expect(page.locator('.vb-post-attachments .vb-attachment-link', { hasText: 'first.txt' })).toHaveCount(0);
 
@@ -529,7 +547,7 @@ test.describe('Attachment lifecycle', () => {
       await quickReply.locator('textarea').fill('Replying with attachments.');
       await quickReply.locator('.vb-attachment-input').setInputFiles([
         { name: 'reply-a.txt', mimeType: 'text/plain', buffer: Buffer.from('reply-a') },
-        { name: 'reply-b.txt', mimeType: 'text/plain', buffer: Buffer.from('reply-b') }
+        { name: 'reply-b.txt', mimeType: 'text/plain', buffer: Buffer.from('reply-b') },
       ]);
 
       const quickReplyButton = quickReply.locator('.vb-btn', { hasText: 'Post Quick Reply' });
@@ -570,7 +588,7 @@ test.describe('Attachment lifecycle', () => {
     const fileSizes = {
       'multi-1.txt': 15,
       'multi-2.txt': 18,
-      'multi-3.txt': 21
+      'multi-3.txt': 21,
     };
     const mock = createMockApi({ fileSizeByName: fileSizes, attachmentUploadDelayMs: 60 });
     const mockState = await mock.attach(page);
@@ -586,7 +604,7 @@ test.describe('Attachment lifecycle', () => {
     await page.locator('.vb-reply-attachments .vb-attachment-input').setInputFiles([
       { name: 'multi-1.txt', mimeType: 'text/plain', buffer: Buffer.from('file-one') },
       { name: 'multi-2.txt', mimeType: 'text/plain', buffer: Buffer.from('file-two') },
-      { name: 'multi-3.txt', mimeType: 'text/plain', buffer: Buffer.from('file-three') }
+      { name: 'multi-3.txt', mimeType: 'text/plain', buffer: Buffer.from('file-three') },
     ]);
 
     const submitButton = page.locator('.vb-form-actions .vb-btn-primary');
@@ -604,10 +622,10 @@ test.describe('Attachment lifecycle', () => {
     await expect(page.locator('.vb-post-attachments .vb-attachment-link', { hasText: 'multi-3.txt' })).toBeVisible();
   });
 
-  test('shows an error banner when attachment uploads fail', async ({ page }) => {
+  test('preserves remaining quick-reply files when attachment uploads fail after publication', async ({ page }) => {
     const mock = createMockApi({
       failAttachmentUploads: new Set(['broken.txt']),
-      attachmentUploadDelayMs: 40
+      attachmentUploadDelayMs: 40,
     });
     await mock.attach(page);
 
@@ -619,22 +637,22 @@ test.describe('Attachment lifecycle', () => {
 
     const quickReply = page.locator('.vb-quick-reply');
     await quickReply.locator('textarea').fill('This reply has a broken attachment.');
-    await quickReply.locator('.vb-attachment-input').setInputFiles([
-      { name: 'broken.txt', mimeType: 'text/plain', buffer: Buffer.from('broken') }
-    ]);
+    await quickReply
+      .locator('.vb-attachment-input')
+      .setInputFiles([{ name: 'broken.txt', mimeType: 'text/plain', buffer: Buffer.from('broken') }]);
 
     await quickReply.locator('.vb-btn', { hasText: 'Post Quick Reply' }).click();
 
-    await expect(page.locator('.vb-banner')).toContainText('Upload failed');
-    await expectFileInputCleared(quickReply.locator('.vb-attachment-input'));
-    await expect(quickReply.locator('.vb-attachment-selected')).toHaveCount(0);
+    await expect(page.locator('.vb-banner')).toContainText('Reply posted');
+    await expect(quickReply.locator('.vb-attachment-selected')).toContainText('broken.txt');
+    await expect(quickReply.locator('.vb-template-conflict')).toContainText('Retry remaining files');
     await expect(page.locator('.vb-post-attachments .vb-attachment-link', { hasText: 'broken.txt' })).toHaveCount(0);
   });
 
-  test('clears the new thread file input after a failed attachment upload', async ({ page }) => {
+  test('preserves remaining new-thread files when attachment upload fails after publication', async ({ page }) => {
     const mock = createMockApi({
       failAttachmentUploads: new Set(['too-large.txt']),
-      attachmentUploadDelayMs: 40
+      attachmentUploadDelayMs: 40,
     });
     await mock.attach(page);
 
@@ -644,21 +662,59 @@ test.describe('Attachment lifecycle', () => {
 
     const fileInput = page.locator('.vb-newthread-form .vb-attachment-input');
     await fileInput.setInputFiles([
-      { name: 'too-large.txt', mimeType: 'text/plain', buffer: Buffer.from('too large') }
+      { name: 'too-large.txt', mimeType: 'text/plain', buffer: Buffer.from('too large') },
     ]);
     await expect(page.locator('.vb-attachment-selected')).toContainText('too-large.txt');
 
     await page.locator('.vb-form-actions .vb-btn-primary').click();
 
-    await expect(page.locator('.vb-login-error')).toContainText('Upload failed');
-    await expectFileInputCleared(fileInput);
+    await expect(page.locator('.vb-login-error')).toContainText('Thread created');
+    await expect(page.locator('.vb-attachment-selected')).toContainText('too-large.txt');
+    await expect(page.locator('.vb-template-conflict')).toContainText('Retry remaining files');
+  });
+
+  test('keeps new-thread recovery visible when uploads succeed but deferred dispatch fails', async ({ page }) => {
+    const mock = createMockApi({ failFirstDispatch: true });
+    await mock.attach(page);
+
+    await gotoNewThreadComposer(page, '/forums/forum-1/newthread');
+    await page.locator('#thread-title').fill('Dispatch recovery');
+    await page.locator('.vb-editor-textarea').fill('The file succeeds before dispatch fails.');
+    await page
+      .locator('.vb-newthread-form .vb-attachment-input')
+      .setInputFiles([{ name: 'success.txt', mimeType: 'text/plain', buffer: Buffer.from('success') }]);
+    await page.locator('.vb-form-actions .vb-btn-primary').click();
+
+    await expect(page.locator('.vb-login-error')).toContainText('Thread created');
+    await expect(page.locator('.vb-template-conflict')).toContainText('robot dispatch');
+    await expect(page.locator('.vb-template-conflict')).toContainText('Retry dispatch');
+    await page.locator('.vb-template-conflict button', { hasText: 'Retry dispatch' }).click();
+    await expect(page).toHaveURL(/\/topics\/topic-1/);
+  });
+
+  test('confirms and clears unpublished files when a reused composer changes destination', async ({ page }) => {
+    const mock = createMockApi();
+    await mock.attach(page);
+    await gotoNewThreadComposer(page, '/forums/forum-1/newthread');
+    const fileInput = page.locator('.vb-newthread-form .vb-attachment-input');
+    await fileInput.setInputFiles([{ name: 'old-forum.txt', mimeType: 'text/plain', buffer: Buffer.from('old') }]);
+    await expect(page.locator('.vb-attachment-selected')).toContainText('old-forum.txt');
+    page.once('dialog', (dialog) => void dialog.accept());
+
+    await page.evaluate(() => {
+      window.history.pushState({}, '', '/forums/forum-2/newthread');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+
+    await expect(page).toHaveURL(/\/forums\/forum-2\/newthread/);
     await expect(page.locator('.vb-attachment-selected')).toHaveCount(0);
+    await expect.poll(() => fileInput.evaluate((element: HTMLInputElement) => element.files?.length ?? 0)).toBe(0);
   });
 
   test('uploads user files, copies links, and updates totals', async ({ page }) => {
     const fileSizes = {
       'alpha.txt': 100,
-      'beta.txt': 200
+      'beta.txt': 200,
     };
     const mock = createMockApi({ fileSizeByName: fileSizes, userFileUploadDelayMs: 50 });
     await mock.attach(page);
@@ -667,7 +723,7 @@ test.describe('Attachment lifecycle', () => {
       document.cookie = 'cforum_session=test-token; path=/; SameSite=Lax';
       Object.defineProperty(navigator, 'clipboard', {
         value: { writeText: async () => Promise.resolve() },
-        configurable: true
+        configurable: true,
       });
     });
 
@@ -676,7 +732,7 @@ test.describe('Attachment lifecycle', () => {
     const fileInput = page.locator('.vb-user-files .vb-attachment-input');
     await fileInput.setInputFiles([
       { name: 'alpha.txt', mimeType: 'text/plain', buffer: Buffer.alloc(100, 1) },
-      { name: 'beta.txt', mimeType: 'text/plain', buffer: Buffer.alloc(200, 1) }
+      { name: 'beta.txt', mimeType: 'text/plain', buffer: Buffer.alloc(200, 1) },
     ]);
 
     const uploadButton = page.locator('.vb-user-files .vb-user-files-actions .vb-btn', { hasText: 'Upload' });
@@ -700,7 +756,9 @@ test.describe('Attachment lifecycle', () => {
     await expect(page.locator('.vb-success-banner')).toContainText('Link copied to clipboard');
     await expect(copyButton).toContainText('Copied!');
 
-    const deleteButton = page.locator('.vb-user-file-item', { hasText: 'beta.txt' }).locator('button', { hasText: 'Delete' });
+    const deleteButton = page
+      .locator('.vb-user-file-item', { hasText: 'beta.txt' })
+      .locator('button', { hasText: 'Delete' });
     await deleteButton.click();
 
     await expect(page.locator('.vb-user-file-name', { hasText: 'beta.txt' })).toHaveCount(0);
@@ -727,7 +785,7 @@ test.describe('Attachment lifecycle', () => {
         filename: 'existing.txt',
         mimeType: 'text/plain',
         sizeBytes: 120,
-        createdAt: '2025-01-01T12:00:00.000Z'
+        createdAt: '2025-01-01T12:00:00.000Z',
       },
       {
         id: 'user-file-10',
@@ -735,18 +793,18 @@ test.describe('Attachment lifecycle', () => {
         filename: 'recoverable.txt',
         mimeType: 'text/plain',
         sizeBytes: 64,
-        createdAt: '2025-01-01T12:10:00.000Z'
-      }
+        createdAt: '2025-01-01T12:10:00.000Z',
+      },
     ];
     const fileSizes = {
       'good.txt': 80,
-      'oversized.bin': 130
+      'oversized.bin': 130,
     };
     const mock = createMockApi({
       initialUserFiles: initialFiles,
       fileSizeByName: fileSizes,
       failUserFileUploads: new Set(['oversized.bin']),
-      failUserFileDeletes: new Set(['user-file-9'])
+      failUserFileDeletes: new Set(['user-file-9']),
     });
     await mock.attach(page);
 
@@ -754,7 +812,7 @@ test.describe('Attachment lifecycle', () => {
       document.cookie = 'cforum_session=test-token; path=/; SameSite=Lax';
       Object.defineProperty(navigator, 'clipboard', {
         value: { writeText: async () => Promise.resolve() },
-        configurable: true
+        configurable: true,
       });
     });
 
@@ -763,7 +821,7 @@ test.describe('Attachment lifecycle', () => {
     const fileInput = page.locator('.vb-user-files .vb-attachment-input');
     await fileInput.setInputFiles([
       { name: 'good.txt', mimeType: 'text/plain', buffer: Buffer.alloc(80, 1) },
-      { name: 'oversized.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(130, 1) }
+      { name: 'oversized.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(130, 1) },
     ]);
 
     await page.locator('.vb-user-files .vb-user-files-actions .vb-btn', { hasText: 'Upload' }).click();
@@ -772,13 +830,17 @@ test.describe('Attachment lifecycle', () => {
     await expect(page.locator('.vb-user-file-name', { hasText: 'existing.txt' })).toBeVisible();
     await expect(page.locator('.vb-user-file-name', { hasText: 'good.txt' })).toHaveCount(0);
 
-    const deleteButton = page.locator('.vb-user-file-item', { hasText: 'existing.txt' }).locator('button', { hasText: 'Delete' });
+    const deleteButton = page
+      .locator('.vb-user-file-item', { hasText: 'existing.txt' })
+      .locator('button', { hasText: 'Delete' });
     await deleteButton.click();
 
     await expect(page.locator('.vb-login-error')).toContainText('Delete failed');
     await expect(page.locator('.vb-user-file-name', { hasText: 'existing.txt' })).toBeVisible();
 
-    const recoveryDelete = page.locator('.vb-user-file-item', { hasText: 'recoverable.txt' }).locator('button', { hasText: 'Delete' });
+    const recoveryDelete = page
+      .locator('.vb-user-file-item', { hasText: 'recoverable.txt' })
+      .locator('button', { hasText: 'Delete' });
     await recoveryDelete.click();
 
     await expect(page.locator('.vb-user-file-name', { hasText: 'recoverable.txt' })).toHaveCount(0);

@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router';
 
 import AutoCompactOption from '../components/AutoCompactOption.vue';
+import DraftStatus from '../components/DraftStatus.vue';
 import MessageTemplatePicker from '../components/MessageTemplatePicker.vue';
+import { useAutosavedDraft } from '../composables/useAutosavedDraft';
 import { useForumState } from '../composables/useForumState';
 import { useMarkdown } from '../composables/useMarkdown';
 import { applyTemplateToTextarea } from '../composables/useMessageTemplateInsertion';
@@ -24,6 +26,11 @@ const showPreview = ref(false);
 const previewHtml = ref('');
 const previewSource = ref('');
 const replyFiles = ref<File[]>([]);
+const replyFileInputRef = ref<HTMLInputElement | null>(null);
+const publishedPostId = ref<string | null>(null);
+const publishedTopicId = ref<string | null>(null);
+const publishedNeedsDispatch = ref(false);
+const allowPublishedNavigation = ref(false);
 const selectedModel = ref(state.lastReplyModel.value ?? '');
 const selectedReasoning = ref(state.lastReplyReasoning.value ?? 'medium');
 const replyModels = computed(() => state.allModelOptions.value);
@@ -64,9 +71,12 @@ const canEditAutoRun = computed(() => Boolean(state.currentUser.value));
 const autoRunBusy = computed(() => state.autoRunLoading.value);
 
 const routeTopicId = computed(() => (route.params['topicId'] as string | undefined) ?? null);
+const autosavedDraft = useAutosavedDraft({ context: 'reply', contextId: routeTopicId, body });
 const topicTitle = computed(() => state.selectedTopic.value?.title ?? 'Topic');
 const robotMode = computed(() => state.selectedTopic.value?.robotMode ?? 'auto');
-const canSubmit = computed(() => body.value.trim().length > 0 && !isSubmitting.value && !isUploading.value);
+const canSubmit = computed(
+  () => body.value.trim().length > 0 && !isSubmitting.value && !isUploading.value && !publishedPostId.value
+);
 const isRobotBusy = computed(() => state.isRobotBusy.value);
 const willDispatchRobot = computed(() => {
   if (silentPost.value) return false;
@@ -178,6 +188,11 @@ function handleReplyFiles(event: Event): void {
   replyFiles.value = input?.files ? Array.from(input.files) : [];
 }
 
+function clearReplyFiles(): void {
+  replyFiles.value = [];
+  if (replyFileInputRef.value) replyFileInputRef.value.value = '';
+}
+
 async function saveAutoRun(): Promise<void> {
   await state.updateAutoRun({
     enabled: autoRunEnabled.value,
@@ -199,6 +214,53 @@ async function runAutoRunDirector(): Promise<void> {
   autoRunSteerMessage.value = '';
 }
 
+async function finishPublishedAttachments(): Promise<void> {
+  const postId = publishedPostId.value;
+  if (!postId) return;
+  isUploading.value = true;
+  for (const file of [...replyFiles.value]) {
+    await state.uploadAttachment(postId, file);
+    replyFiles.value = replyFiles.value.filter((item) => item !== file);
+  }
+  if (publishedNeedsDispatch.value) {
+    await state.dispatchPost(postId, {
+      model: effectiveSelectedModel.value,
+      ...(supportsReasoning.value ? { reasoningEffort: selectedReasoning.value } : {}),
+    });
+  }
+  publishedNeedsDispatch.value = false;
+  publishedPostId.value = null;
+}
+async function goToPublishedReply(): Promise<void> {
+  if (!publishedTopicId.value) return;
+  allowPublishedNavigation.value = true;
+  await router.push({ name: 'topic.view', params: { topicId: publishedTopicId.value } });
+}
+async function retryPublishedAttachments(): Promise<void> {
+  errorMessage.value = '';
+  try {
+    await finishPublishedAttachments();
+    await goToPublishedReply();
+  } catch (err) {
+    errorMessage.value = err instanceof Error ? err.message : 'Attachment retry failed.';
+  } finally {
+    isUploading.value = false;
+  }
+}
+async function abandonPublishedAttachments(): Promise<void> {
+  const postId = publishedPostId.value;
+  if (!postId) return;
+  if (publishedNeedsDispatch.value)
+    await state.dispatchPost(postId, {
+      model: effectiveSelectedModel.value,
+      ...(supportsReasoning.value ? { reasoningEffort: selectedReasoning.value } : {}),
+    });
+  replyFiles.value = [];
+  publishedNeedsDispatch.value = false;
+  publishedPostId.value = null;
+  await goToPublishedReply();
+}
+
 async function handleSubmit(): Promise<void> {
   if (!canSubmit.value) return;
   if (state.isTopicLocked()) {
@@ -208,35 +270,36 @@ async function handleSubmit(): Promise<void> {
 
   errorMessage.value = '';
   isSubmitting.value = true;
+  let postCreated = false;
 
   try {
+    const draftReference = await autosavedDraft.flush();
+    if (autosavedDraft.status.value === 'conflict') {
+      throw new Error('Resolve the draft conflict before posting.');
+    }
+    autosavedDraft.pause();
     const attachmentsPending = replyFiles.value.length > 0 && !silentPost.value;
     const post = await state.createPost(body.value.trim(), {
       silent: silentPost.value,
       model: effectiveSelectedModel.value,
-      reasoningEffort: supportsReasoning.value ? selectedReasoning.value : null,
+      ...(supportsReasoning.value ? { reasoningEffort: selectedReasoning.value } : {}),
       ...(isAdmin.value
         ? {
             autoCompactEnabled: autoCompactEnabled.value,
-            autoCompactRevision: state.selectedTopic.value?.autoCompactRevision,
+            autoCompactRevision: state.selectedTopic.value?.autoCompactRevision ?? 0,
           }
         : {}),
       attachmentsPending,
+      ...(draftReference ? { draft: draftReference } : {}),
     });
+    postCreated = true;
+    body.value = '';
+    publishedPostId.value = post.id;
+    publishedTopicId.value = post.topicId;
+    publishedNeedsDispatch.value = attachmentsPending;
 
-    if (replyFiles.value.length > 0) {
-      isUploading.value = true;
-      for (const file of replyFiles.value) {
-        await state.uploadAttachment(post.id, file);
-      }
-      if (attachmentsPending) {
-        await state.dispatchPost(post.id, {
-          model: effectiveSelectedModel.value,
-          reasoningEffort: supportsReasoning.value ? selectedReasoning.value : null,
-        });
-      }
-      replyFiles.value = [];
-    }
+    if (replyFiles.value.length > 0) await finishPublishedAttachments();
+    else publishedPostId.value = null;
 
     const lastPage = state.totalPages.value;
     const lastIndex = state.sortedPosts.value.length;
@@ -247,25 +310,51 @@ async function handleSubmit(): Promise<void> {
       hash: `#${lastIndex}`,
     });
   } catch (err) {
-    errorMessage.value = err instanceof Error ? err.message : 'Failed to post reply.';
+    if (!postCreated) autosavedDraft.resume();
+    errorMessage.value = postCreated
+      ? 'Reply posted, but one or more attachments did not finish. Do not resubmit it; selected files remain in this tab.'
+      : err instanceof Error
+        ? err.message
+        : 'Failed to post reply.';
   } finally {
     isSubmitting.value = false;
     isUploading.value = false;
   }
 }
 
-function handleCancel(): void {
-  if (body.value.trim()) {
-    if (!confirm('Are you sure you want to cancel? Your message will be lost.')) {
-      return;
-    }
+async function confirmDiscardDraft(): Promise<void> {
+  if (window.confirm('Discard this draft permanently?')) await autosavedDraft.discard();
+}
+
+async function guardDraftNavigation(): Promise<boolean> {
+  if (!allowPublishedNavigation.value && publishedPostId.value) {
+    errorMessage.value = 'Finish or abandon the published reply’s attachment recovery before leaving this page.';
+    return false;
   }
+  const saved = await autosavedDraft.flushForNavigation();
+  if (!saved) errorMessage.value = 'This draft could not be saved. Resolve the draft status before leaving.';
+  return saved;
+}
+
+async function handleCancel(): Promise<void> {
+  if (!(await guardDraftNavigation())) return;
   if (routeTopicId.value) {
-    router.push({ name: 'topic.view', params: { topicId: routeTopicId.value } });
+    await router.push({ name: 'topic.view', params: { topicId: routeTopicId.value } });
   } else {
     router.back();
   }
 }
+
+onBeforeRouteLeave(() => guardDraftNavigation());
+onBeforeRouteUpdate(async (to, from) => {
+  if (!(await guardDraftNavigation())) return false;
+  if (to.params['topicId'] !== from.params['topicId'] && replyFiles.value.length > 0) {
+    if (!window.confirm('Selected files are not saved with drafts. Leave this topic and clear those files?'))
+      return false;
+    clearReplyFiles();
+  }
+  return true;
+});
 
 async function loadTopic(topicId: string): Promise<void> {
   try {
@@ -290,7 +379,11 @@ function syncSelectionFromQuery(): void {
 watch(
   routeTopicId,
   async (topicId) => {
-    if (topicId) await loadTopic(topicId);
+    body.value = '';
+    if (topicId) {
+      await loadTopic(topicId);
+      if (state.isLoggedIn.value) await autosavedDraft.load();
+    }
   },
   { immediate: true }
 );
@@ -322,9 +415,13 @@ watch(autoRunModel, (model) => {
   }
 });
 
-watch(() => route.query, () => {
+watch(
+  () => route.query,
+  () => {
   syncSelectionFromQuery();
-}, { immediate: true });
+  },
+  { immediate: true }
+);
 
 watch(
   () => state.lastReplyModel.value,
@@ -355,8 +452,10 @@ onMounted(async () => {
     await state.checkAuth();
   }
   if (!state.isLoggedIn.value) {
-    router.push({ name: 'topic.view', params: { topicId: routeTopicId.value ?? '' } });
+    await router.push({ name: 'topic.view', params: { topicId: routeTopicId.value ?? '' } });
+    return;
   }
+  if (!autosavedDraft.hydrated.value) await autosavedDraft.load();
 });
 </script>
 
@@ -466,9 +565,22 @@ onMounted(async () => {
             </div>
             <div class="vb-option-group">
               <label>Max Replies:</label>
-              <input v-model.number="autoRunMaxReplies" type="number" min="1" class="vb-option-input" :disabled="!canEditAutoRun || autoRunBusy" />
+              <input
+                v-model.number="autoRunMaxReplies"
+                type="number"
+                min="1"
+                class="vb-option-input"
+                :disabled="!canEditAutoRun || autoRunBusy"
+              />
           </div>
-          <button class="vb-small-btn" type="button" :disabled="!canEditAutoRun || autoRunBusy" @click="resetAutoRunCount">Reset Count</button>
+            <button
+              class="vb-small-btn"
+              type="button"
+              :disabled="!canEditAutoRun || autoRunBusy"
+              @click="resetAutoRunCount"
+            >
+              Reset Count
+            </button>
           </div>
           <label>Steer director (optional):</label>
           <textarea
@@ -531,6 +643,16 @@ onMounted(async () => {
               :has-draft="body.length > 0"
               @apply="applyMessageTemplate"
             />
+            <DraftStatus
+              :status="autosavedDraft.status.value"
+              :expires-at="autosavedDraft.expiresAt.value"
+              :conflict="Boolean(autosavedDraft.remoteDraft.value)"
+              @retry="autosavedDraft.resume()"
+              @discard="confirmDiscardDraft"
+              @use-saved="autosavedDraft.useSavedVersion()"
+              @keep-mine="autosavedDraft.keepMyVersion()"
+              @copy-mine="autosavedDraft.copyMyText()"
+            />
             <div class="vb-form-row">
               <textarea
                 ref="editorTextareaRef"
@@ -547,13 +669,28 @@ onMounted(async () => {
 
             <div class="vb-reply-attachments">
               <label class="vb-attachment-label">Attachments:</label>
+              <span class="vb-form-hint">Selected files are not included in autosaved drafts.</span>
               <input
+                ref="replyFileInputRef"
                 class="vb-attachment-input"
                 type="file"
                 multiple
                 @change="handleReplyFiles"
                 :disabled="state.isTopicLocked()"
               />
+              <div v-if="publishedPostId" class="vb-template-conflict" role="alert">
+                Reply posted; attachment upload is incomplete. Retrying cannot duplicate the reply.
+                <button type="button" class="vb-small-btn" :disabled="isUploading" @click="retryPublishedAttachments">
+                  {{ replyFiles.length ? 'Retry remaining files' : 'Retry dispatch' }}
+                </button>
+                <button type="button" class="vb-small-btn" :disabled="isUploading" @click="abandonPublishedAttachments">
+                  {{ replyFiles.length ? 'Abandon files' : 'Continue'
+                  }}{{ publishedNeedsDispatch ? ' and dispatch' : '' }}
+                </button>
+                <button type="button" class="vb-small-btn" :disabled="isUploading" @click="goToPublishedReply">
+                  Go to posted reply
+                </button>
+              </div>
               <div v-if="replyFiles.length > 0" class="vb-attachment-selected">
                 <span>Selected:</span>
                 <ul>
@@ -660,7 +797,7 @@ onMounted(async () => {
             }}
           </button>
           <button class="vb-btn" @click="handlePreviewButton">Preview Reply</button>
-          <button class="vb-btn vb-btn-secondary" @click="handleCancel">Cancel</button>
+          <button class="vb-btn vb-btn-secondary" @click="handleCancel">Back (keep draft)</button>
         </div>
 
         <div class="vb-posting-rules">

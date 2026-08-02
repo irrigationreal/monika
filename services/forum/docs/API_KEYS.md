@@ -3,6 +3,9 @@
 This forum supports first-class API keys for automation and impersonation tokens for managed personas. API key and
 impersonation-token management is currently admin-only.
 
+Private autosaved draft endpoints reject both API keys and impersonation tokens. Unpublished drafts are available only
+to the creator's opaque browser session and are not an automation surface.
+
 ## Integration assets
 
 - OpenAPI spec: `docs/openapi.json` (also served at `GET /api/openapi.json` with authenticated read access) — **manual

@@ -737,6 +737,38 @@ API surfaces:
   `/api/message-templates/mine`
 - Admin-managed system templates under `/api/admin/message-templates`
 
+## Private autosaved drafts
+
+Reply and new-thread composers autosave unpublished title/body text as private,
+account-owned forum metadata. Quick reply and full reply share one row per
+identity/topic; new-thread drafts have stable IDs and multiple drafts may target the
+same forum. Drafts are addressed through `/api/drafts`, `/api/topics/:id/draft`, and
+`/api/forums/:id/drafts`, and are available only to opaque browser sessions. API
+keys, impersonation credentials, other users, and administrator management APIs
+cannot read them. Foreign draft IDs return the same not-found boundary as missing
+ones, and every response is `Cache-Control: no-store`.
+
+Draft rows use optimistic integer revisions and 30-day rolling retention. Only a
+material title/body edit renews `expires_at`; reads and identical saves do not.
+Expired rows are excluded immediately and purged on startup, daily, and before the
+500-active-drafts safety quota is checked. Identity/topic/forum deletion cascades.
+Publication optionally carries an exact draft ID/revision: topic/post insertion,
+required synchronous projection writes, and owner-checked draft deletion occur in one
+SQLite transaction. Failed publication therefore preserves the draft, a newer tab
+revision survives, and post-commit webhook/stream wake failures cannot turn a committed
+publication into a client-visible generic failure.
+
+Drafts never enter topic/forum projections, search, SSE, webhooks, analytics,
+notifications, logs, Pi JSONL, agentd, or memstore. Autosave excludes attachments,
+model/reasoning selection, silent/robot/compaction options, and preview state.
+Selected `File` objects remain tab-local; once publication succeeds, a subsequent
+upload failure must be presented as partial attachment failure rather than a safely
+resubmittable post. Draft endpoints return `401` without authentication, `403` for
+API-key/impersonation access or disallowed destinations, `404` for missing and foreign
+IDs, and `409` for stale optimistic revisions. Database and backup operators remain
+part of the trusted infrastructure boundary because draft rows are stored as plaintext
+SQLite data.
+
 ## Forum attachments and artifacts
 
 Attachment support is implemented as a hybrid reference model rather than treating

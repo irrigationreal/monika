@@ -1,15 +1,17 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router';
 
 import AutoCompactOption from '../components/AutoCompactOption.vue';
+import DraftStatus from '../components/DraftStatus.vue';
 import MessageTemplatePicker from '../components/MessageTemplatePicker.vue';
+import { useAutosavedDraft } from '../composables/useAutosavedDraft';
 import { useForumState } from '../composables/useForumState';
 import { useMarkdown } from '../composables/useMarkdown';
 import { applyTemplateToTextarea } from '../composables/useMessageTemplateInsertion';
 import { api } from '../lib/apiClient';
 
-import type { MessageTemplateDto } from '../lib/apiClient';
+import type { MessageDraftDto, MessageTemplateDto } from '../lib/apiClient';
 
 const router = useRouter();
 const route = useRoute();
@@ -26,6 +28,9 @@ const showPreview = ref(false);
 const previewHtml = ref('');
 const previewSource = ref('');
 const threadFiles = ref<File[]>([]);
+const publishedPostId = ref<string | null>(null);
+const publishedTopicId = ref<string | null>(null);
+const publishedNeedsDispatch = ref(false);
 const threadFileInputRef = ref<HTMLInputElement | null>(null);
 const selectedModel = ref(state.lastReplyModel.value ?? '');
 const selectedReasoning = ref(state.lastReplyReasoning.value ?? 'medium');
@@ -43,10 +48,28 @@ const allowedReasoning = computed(() => new Set(reasoningOptions.value));
 const CHUNKED_THRESHOLD_BYTES = 90 * 1024 * 1024;
 
 const routeForumId = computed(() => (route.params['forumId'] as string | undefined) ?? null);
+const routeDraftId = computed(() => (typeof route.query['draft'] === 'string' ? route.query['draft'] : null));
+const existingForumDrafts = ref<MessageDraftDto[]>([]);
+const draftListError = ref('');
+const allowPublishedNavigation = ref(false);
+const autosavedDraft = useAutosavedDraft({
+  context: 'new_thread',
+  contextId: routeForumId,
+  body,
+  title,
+  initialDraftId: routeDraftId,
+  onDraftCreated: (id) => void router.replace({ query: { ...route.query, draft: id } }),
+});
 const forumName = computed(() => state.selectedForum.value?.name ?? 'Forum');
 
 const canSubmit = computed(() => {
-  return title.value.trim().length >= 3 && body.value.trim().length >= 10 && !isSubmitting.value && !isUploading.value;
+  return (
+    title.value.trim().length >= 3 &&
+    body.value.trim().length >= 10 &&
+    !isSubmitting.value &&
+    !isUploading.value &&
+    !publishedTopicId.value
+  );
 });
 
 const titleCharCount = computed(() => title.value.length);
@@ -144,60 +167,113 @@ function handlePreviewButton(): void {
   showPreview.value = false;
 }
 
+async function resolvePublishedPostId(): Promise<string> {
+  if (publishedPostId.value) return publishedPostId.value;
+  if (!publishedTopicId.value) throw new Error('The published thread is unavailable.');
+  const postPage = await api.listPosts(publishedTopicId.value, { page: 1, pageSize: 1 });
+  const initialPost = postPage.items[0];
+  if (!initialPost) throw new Error('Thread created, but its initial post could not be located.');
+  publishedPostId.value = initialPost.id;
+  return initialPost.id;
+}
+
+async function finishPublishedAttachments(): Promise<void> {
+  const postId = await resolvePublishedPostId();
+  isUploading.value = true;
+  for (const file of [...threadFiles.value]) {
+    await state.uploadAttachment(postId, file);
+    threadFiles.value = threadFiles.value.filter((item) => item !== file);
+  }
+  if (publishedNeedsDispatch.value) {
+    await state.dispatchPost(postId, {
+      model: effectiveSelectedModel.value,
+      ...(supportsReasoning.value ? { reasoningEffort: selectedReasoning.value } : {}),
+    });
+  }
+  publishedNeedsDispatch.value = false;
+  publishedPostId.value = null;
+  clearThreadFiles();
+}
+
+async function goToPublishedTopic(): Promise<void> {
+  if (!publishedTopicId.value) return;
+  allowPublishedNavigation.value = true;
+  await router.push({ name: 'topic.view', params: { topicId: publishedTopicId.value } });
+}
+
+async function retryPublishedAttachments(): Promise<void> {
+  errorMessage.value = '';
+  try {
+    await finishPublishedAttachments();
+    await goToPublishedTopic();
+  } catch (err) {
+    errorMessage.value = err instanceof Error ? err.message : 'Attachment retry failed.';
+  } finally {
+    isUploading.value = false;
+  }
+}
+
+async function abandonPublishedAttachments(): Promise<void> {
+  if (publishedNeedsDispatch.value) {
+    const postId = await resolvePublishedPostId();
+    await state.dispatchPost(postId, {
+      model: effectiveSelectedModel.value,
+      ...(supportsReasoning.value ? { reasoningEffort: selectedReasoning.value } : {}),
+    });
+  }
+  clearThreadFiles();
+  publishedNeedsDispatch.value = false;
+  publishedPostId.value = null;
+  await goToPublishedTopic();
+}
+
 async function handleSubmit(): Promise<void> {
   if (!canSubmit.value) return;
-
-  const shouldClearThreadFiles = threadFiles.value.length > 0;
   errorMessage.value = '';
   isSubmitting.value = true;
-
+  let topicCreated = false;
   try {
+    const draftReference = await autosavedDraft.flush();
+    if (autosavedDraft.status.value === 'conflict') {
+      throw new Error('Resolve the draft conflict before posting.');
+    }
+    autosavedDraft.pause();
     const attachmentsPending = threadFiles.value.length > 0 && !silentPost.value;
     const topic = await state.createTopic(title.value.trim(), body.value.trim(), {
       silent: silentPost.value,
       robotMode: robotMode.value,
       ...(isAdmin.value ? { autoCompactEnabled: autoCompactEnabled.value } : {}),
       model: effectiveSelectedModel.value,
-      reasoningEffort: supportsReasoning.value ? selectedReasoning.value : null,
+      ...(supportsReasoning.value ? { reasoningEffort: selectedReasoning.value } : {}),
       attachmentsPending,
+      ...(draftReference ? { draft: draftReference } : {}),
     });
-    if (threadFiles.value.length > 0) {
-      isUploading.value = true;
-      const postPage = await api.listPosts(topic.id, { page: 1, pageSize: 1 });
-      const initialPost = postPage.items[0];
-      if (!initialPost) {
-        throw new Error('Unable to locate the initial post to attach files.');
-      }
-      for (const file of threadFiles.value) {
-        await state.uploadAttachment(initialPost.id, file);
-      }
-      if (attachmentsPending) {
-        await state.dispatchPost(initialPost.id, {
-          model: effectiveSelectedModel.value,
-          reasoningEffort: supportsReasoning.value ? selectedReasoning.value : null,
-        });
-      }
-      clearThreadFiles();
-    }
-    await router.push({ name: 'topic.view', params: { topicId: topic.id } });
+    topicCreated = true;
+    title.value = '';
+    body.value = '';
+    publishedTopicId.value = topic.id;
+    publishedNeedsDispatch.value = attachmentsPending;
+    if (threadFiles.value.length > 0) await finishPublishedAttachments();
+    await goToPublishedTopic();
   } catch (err) {
-    errorMessage.value = err instanceof Error ? err.message : 'Failed to create thread.';
+    if (!topicCreated) autosavedDraft.resume();
+    errorMessage.value = topicCreated
+      ? 'Thread created, but one or more attachments did not finish. Do not create it again; selected files remain in this tab.'
+      : err instanceof Error
+        ? err.message
+        : 'Failed to create thread.';
   } finally {
-    if (shouldClearThreadFiles) {
-      clearThreadFiles();
-    }
     isSubmitting.value = false;
     isUploading.value = false;
   }
 }
 
-function handleCancel(): void {
-  if (title.value.trim() || body.value.trim()) {
-    if (!confirm('Are you sure you want to cancel? Your message will be lost.')) {
-      return;
-    }
-  }
-  router.back();
+async function confirmDiscardDraft(): Promise<void> {
+  if (window.confirm('Discard this draft permanently?')) await autosavedDraft.discard();
+}
+
+async function handleCancel(): Promise<void> {
+  if (await guardDraftNavigation()) router.back();
 }
 
 function handleThreadFiles(event: Event): void {
@@ -221,13 +297,68 @@ async function loadForum(forumId: string): Promise<void> {
   }
 }
 
-watch(routeForumId, async (forumId) => {
+async function loadExistingForumDrafts(forumId: string): Promise<void> {
+  draftListError.value = '';
+  try {
+    existingForumDrafts.value = (await api.listForumDrafts(forumId)).drafts;
+  } catch {
+    draftListError.value = 'Existing drafts could not be listed. Autosave is still available.';
+  }
+}
+
+async function guardDraftNavigation(): Promise<boolean> {
+  if (
+    !allowPublishedNavigation.value &&
+    publishedTopicId.value &&
+    (threadFiles.value.length > 0 || publishedNeedsDispatch.value)
+  ) {
+    errorMessage.value = 'Finish or abandon the published thread’s attachment recovery before leaving this page.';
+    return false;
+  }
+  const saved = await autosavedDraft.flushForNavigation();
+  if (!saved) errorMessage.value = 'This draft could not be saved. Resolve the draft status before leaving.';
+  return saved;
+}
+
+async function startFreshAfterLoadError(): Promise<void> {
+  const query = { ...route.query };
+  delete query['draft'];
+  title.value = '';
+  body.value = '';
+  await router.replace({ query });
+}
+
+onBeforeRouteLeave(() => guardDraftNavigation());
+onBeforeRouteUpdate(async (to, from) => {
+  if (!(await guardDraftNavigation())) return false;
+  if (to.params['forumId'] !== from.params['forumId'] && threadFiles.value.length > 0) {
+    if (!window.confirm('Selected files are not saved with drafts. Leave this forum and clear those files?'))
+      return false;
+    clearThreadFiles();
+  }
+  return true;
+});
+
+watch(
+  routeForumId,
+  async (forumId) => {
+    title.value = '';
+    body.value = '';
+    existingForumDrafts.value = [];
   if (forumId) {
     await loadForum(forumId);
+      if (state.isLoggedIn.value) {
+        await autosavedDraft.load();
+        void loadExistingForumDrafts(forumId);
   }
-}, { immediate: true });
+    }
+  },
+  { immediate: true }
+);
 
-watch(() => route.query, () => {
+watch(
+  () => route.query,
+  () => {
   const model = route.query['model'];
   if (typeof model === 'string' && allowedModels.value.has(model)) {
     selectedModel.value = model;
@@ -236,7 +367,9 @@ watch(() => route.query, () => {
   if (typeof reasoning === 'string' && allowedReasoning.value.has(reasoning)) {
     selectedReasoning.value = reasoning;
   }
-}, { immediate: true });
+  },
+  { immediate: true }
+);
 
 watch([selectedModel, () => state.defaultModel.value], ([model]) => {
   const effective = model || state.defaultModel.value || '';
@@ -244,12 +377,24 @@ watch([selectedModel, () => state.defaultModel.value], ([model]) => {
   if (!selectedModel.value && state.defaultModel.value) selectedModel.value = state.defaultModel.value;
 });
 
+watch(routeDraftId, async (id) => {
+  if (id === (autosavedDraft.draft.value?.id ?? null) && !autosavedDraft.loadError.value) return;
+  title.value = '';
+  body.value = '';
+  await autosavedDraft.load();
+});
+
 onMounted(async () => {
   if (!state.authChecked.value) {
     await state.checkAuth();
   }
   if (!state.isLoggedIn.value) {
-    router.push({ name: 'forum.home' });
+    await router.push({ name: 'forum.home' });
+    return;
+  }
+  if (routeForumId.value) {
+    if (!autosavedDraft.hydrated.value) await autosavedDraft.load();
+    void loadExistingForumDrafts(routeForumId.value);
   }
 });
 </script>
@@ -343,6 +488,34 @@ onMounted(async () => {
               :has-draft="body.length > 0 || title.length > 0"
               @apply="applyMessageTemplate"
             />
+            <div v-if="draftListError" class="vb-form-hint" role="status">{{ draftListError }}</div>
+            <div v-if="autosavedDraft.loadError.value" class="vb-template-conflict" role="alert">
+              {{ autosavedDraft.loadError.value }}
+              <button type="button" class="vb-small-btn" @click="startFreshAfterLoadError">Start a fresh draft</button>
+            </div>
+            <div v-if="!routeDraftId && existingForumDrafts.length" class="vb-form-hint vb-draft-notice">
+              You have {{ existingForumDrafts.length }} existing draft{{ existingForumDrafts.length === 1 ? '' : 's' }}
+              in this forum.
+              <router-link
+                :to="{
+                  name: 'forum.newthread',
+                  params: { forumId: routeForumId },
+                  query: { draft: existingForumDrafts[0]?.id },
+                }"
+                >Continue most recent</router-link
+              >
+              · <router-link :to="{ name: 'user.drafts' }">View all drafts</router-link>
+            </div>
+            <DraftStatus
+              :status="autosavedDraft.status.value"
+              :expires-at="autosavedDraft.expiresAt.value"
+              :conflict="Boolean(autosavedDraft.remoteDraft.value)"
+              @retry="autosavedDraft.resume()"
+              @discard="confirmDiscardDraft"
+              @use-saved="autosavedDraft.useSavedVersion()"
+              @keep-mine="autosavedDraft.keepMyVersion()"
+              @copy-mine="autosavedDraft.copyMyText()"
+            />
             <!-- Textarea -->
             <div class="vb-form-row">
               <textarea
@@ -362,6 +535,7 @@ onMounted(async () => {
 
             <div class="vb-reply-attachments">
               <label class="vb-attachment-label">Attachments:</label>
+              <span class="vb-form-hint">Selected files are not included in autosaved drafts.</span>
               <input
                 ref="threadFileInputRef"
                 class="vb-attachment-input"
@@ -369,6 +543,24 @@ onMounted(async () => {
                 multiple
                 @change="handleThreadFiles"
               />
+              <div
+                v-if="publishedTopicId && (threadFiles.length || publishedNeedsDispatch)"
+                class="vb-template-conflict"
+                role="alert"
+              >
+                Thread created; {{ threadFiles.length ? 'attachment upload' : 'robot dispatch' }} is incomplete.
+                Retrying cannot create a duplicate thread. Complete it within five minutes.
+                <button type="button" class="vb-small-btn" :disabled="isUploading" @click="retryPublishedAttachments">
+                  {{ threadFiles.length ? 'Retry remaining files' : 'Retry dispatch' }}
+                </button>
+                <button type="button" class="vb-small-btn" :disabled="isUploading" @click="abandonPublishedAttachments">
+                  {{ threadFiles.length ? 'Abandon files' : 'Continue'
+                  }}{{ publishedNeedsDispatch ? ' and dispatch' : '' }}
+                </button>
+                <button type="button" class="vb-small-btn" :disabled="isUploading" @click="goToPublishedTopic">
+                  Go to created thread
+                </button>
+              </div>
               <div v-if="threadFiles.length > 0" class="vb-attachment-selected">
                 <span>Selected:</span>
                 <ul>
@@ -457,7 +649,7 @@ onMounted(async () => {
             {{ isUploading ? 'Uploading...' : isSubmitting ? 'Posting...' : 'Submit New Thread' }}
           </button>
           <button class="vb-btn" @click="handlePreviewButton">Preview Post</button>
-          <button class="vb-btn vb-btn-secondary" @click="handleCancel">Cancel</button>
+          <button class="vb-btn vb-btn-secondary" @click="handleCancel">Back (keep draft)</button>
         </div>
 
         <!-- Posting Rules -->

@@ -6,6 +6,7 @@ import type {
   AnalyticsAudience,
   AnalyticsBucket,
   ForumVisibility,
+  MessageDraftContext,
   MessageTemplateContext,
   MessageTemplateForumScope,
   MessageTemplateScope,
@@ -254,6 +255,28 @@ export interface UserFileDto {
   mimeType: string;
   sizeBytes: number;
   createdAt: string;
+}
+
+export interface MessageDraftDto {
+  id: string;
+  context: MessageDraftContext;
+  forumId: string | null;
+  topicId: string | null;
+  title: string | null;
+  body: string;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
+  destinationName: string | null;
+  canContinue: boolean;
+}
+
+export interface MessageDraftResponseDto {
+  draft: MessageDraftDto | null;
+}
+export interface MessageDraftListResponseDto {
+  drafts: MessageDraftDto[];
 }
 
 export interface MessageTemplateDto {

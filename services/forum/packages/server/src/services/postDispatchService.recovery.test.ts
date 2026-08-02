@@ -369,4 +369,31 @@ describe('durable post dispatch recovery fence', () => {
     await expect(accepted).resolves.toBe(false);
     expect(store.getRobotState(topic.id)?.activity).toBe('idle');
   });
+  it('contains fire-and-forget selection failures and remains wakeable', async () => {
+    const selection = vi
+      .spyOn(store, 'listDuePostDispatches')
+      .mockImplementationOnce(() => {
+        throw new Error('selection unavailable');
+      })
+      .mockReturnValue([]);
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    const service = new PostDispatchService(store, { dispatchPostToAgent: vi.fn() } as any, { intervalMs: 5 });
+
+    try {
+      service.start();
+      await vi.waitFor(() => expect(log).toHaveBeenCalledWith(expect.stringContaining('selection unavailable')));
+      await vi.waitFor(() => expect(selection.mock.calls.length).toBeGreaterThanOrEqual(2));
+      const callsBeforeWake = selection.mock.calls.length;
+      service.wake();
+      await vi.waitFor(() => expect(selection.mock.calls.length).toBeGreaterThan(callsBeforeWake));
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      await service.stop();
+      process.off('unhandledRejection', unhandled);
+      log.mockRestore();
+    }
+  });
+
 });

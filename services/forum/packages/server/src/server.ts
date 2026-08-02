@@ -9,7 +9,7 @@ import sensible from '@fastify/sensible';
 import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
 
-import { MessageTemplateService } from '@irrigationreal/codex-forum-core';
+import { MessageDraftService, MessageTemplateService } from '@irrigationreal/codex-forum-core';
 
 import { createAdapterRegistry } from './adapters/adapterRegistry';
 import { AgentBridge } from './agentBridge';
@@ -25,6 +25,7 @@ import { InMemoryMessageTamperLayer } from './messageTamper';
 import { createModelCatalog } from './modelCatalog';
 import { SqliteForumAnalyticsReadModel } from './readModels/analyticsReadModel';
 import { SqliteStatsReadModel } from './readModels/statsReadModel';
+import { SqliteMessageDraftRepository } from './repositories/sqliteMessageDraftRepository';
 import { SqliteMessageTemplateRepository } from './repositories/sqliteMessageTemplateRepository';
 import { registerAdapterRoutes } from './routes/adapterRoutes';
 import { registerAdminRoutes } from './routes/adminRoutes';
@@ -33,6 +34,7 @@ import { registerAttachmentRoutes } from './routes/attachmentRoutes';
 import { registerAuthRoutes } from './routes/authRoutes';
 import { registerChatRoutes } from './routes/chatRoutes';
 import { registerForumRoutes } from './routes/forumRoutes';
+import { registerMessageDraftRoutes } from './routes/messageDraftRoutes';
 import { registerMessageTemplateRoutes } from './routes/messageTemplateRoutes';
 import { registerNotificationRoutes } from './routes/notificationRoutes';
 import { registerProfileRoutes } from './routes/profileRoutes';
@@ -107,7 +109,11 @@ assertCorsCredentialsConfiguration(CORS_ORIGINS, CORS_CREDENTIALS);
 const featureFlags = loadFeatureFlags();
 const { db } = openDb({ path: DB_PATH });
 migrate(db);
+const messageDraftService = new MessageDraftService(new SqliteMessageDraftRepository(db));
 const messageTemplateService = new MessageTemplateService(new SqliteMessageTemplateRepository(db));
+void messageDraftService.purgeExpired();
+const draftCleanupTimer = setInterval(() => void messageDraftService.purgeExpired(), 24 * 60 * 60 * 1000);
+draftCleanupTimer.unref();
 const bootstrapResult = bootstrap(db, {
   defaultWebIdentityId: DEFAULT_WEB_IDENTITY_ID,
   defaultWebIdentityUsername: DEFAULT_WEB_IDENTITY_USERNAME,
@@ -472,6 +478,7 @@ const registerApiRoutes: FastifyPluginAsync = async (api) => {
   registerAttachmentRoutes({ app: api, store, access });
   registerRobotRoutes({ app: api, store, codex, bus, access, autoRunDirector });
   registerProfileRoutes({ app: api, store, access });
+  registerMessageDraftRoutes({ app: api, store, access, service: messageDraftService });
   registerMessageTemplateRoutes({ app: api, access, service: messageTemplateService });
   registerSearchRoutes({ app: api, store, featureFlags, access });
   registerAdapterRoutes({

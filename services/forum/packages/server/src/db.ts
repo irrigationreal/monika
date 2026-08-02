@@ -488,6 +488,20 @@ export interface AttachmentRow {
   created_at: string;
 }
 
+export interface MessageDraftRow {
+  id: string;
+  owner_identity_id: string;
+  context: 'reply' | 'new_thread';
+  forum_id: string | null;
+  topic_id: string | null;
+  title: string | null;
+  body: string;
+  revision: number;
+  created_at: string;
+  updated_at: string;
+  expires_at: string;
+}
+
 export interface MessageTemplateRow {
   id: string;
   scope: string;

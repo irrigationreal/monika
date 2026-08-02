@@ -112,6 +112,21 @@ text; it never submits or changes robot options.
 Manage personal templates at `/profile/message-templates` and system templates in the Admin Panel. See
 `docs/CURL_EXAMPLES.md` and the OpenAPI document for APIs.
 
+## Private autosaved drafts
+
+Authenticated browser users receive private server-side autosave for quick replies, full replies, and new threads. Reply
+composers share one draft per account/topic; new threads may have multiple ID-addressed drafts. Drafts contain only
+literal title/body text—never attachments, model/reasoning, silent mode, robot settings, or preview state—and expire 30
+days after their last material edit. Opening or saving identical content does not renew retention. Publishing atomically
+consumes the exact saved revision; ordinary navigation preserves it and explicit discard deletes it.
+
+`/profile/drafts` lists only the signed-in user's drafts. Draft endpoints reject API keys and impersonation tokens, have
+no administrator browsing surface, use `Cache-Control: no-store`, and never project draft content into posts, search,
+streams, webhooks, analytics, Pi sessions, or agentd. Direct database/backup operators remain inside the trusted
+infrastructure boundary. Selected browser files are tab-local and are not backed up with drafts. Draft endpoints use
+`401` for missing authentication, `403` for unsupported credentials or destination access, `404` for missing/foreign
+IDs, and `409` for stale optimistic revisions.
+
 ## Admin analytics
 
 Administrators can open `/admin/analytics` to inspect privacy-safe canonical Pi usage, tool reliability, normalized
