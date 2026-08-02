@@ -38,6 +38,7 @@ export interface CreateTopicInput {
   model?: string | null;
   reasoningEffort?: string | null;
   tenantId?: TenantId | null;
+  draft?: { id: string; revision: number };
 }
 
 export interface CreatePostInput {
@@ -53,6 +54,7 @@ export interface CreatePostInput {
   model?: string | null;
   reasoningEffort?: string | null;
   tenantId?: TenantId | null;
+  draft?: { id: string; revision: number };
 }
 
 export interface ForumService {

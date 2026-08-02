@@ -75,3 +75,24 @@ curl -sS -X POST "$CODEX_FORUM_BASE_URL/api/message-templates" \
 ```
 
 Update, delete, and reorder requests must send the current integer `revision`.
+
+## Private autosaved drafts
+
+Draft APIs intentionally reject API keys and impersonation tokens. They are private browser-session endpoints; the
+examples below assume an opaque session cookie captured from a same-origin browser login and the exact configured forum
+origin required by CSRF protection.
+
+```bash
+curl -sS "$CODEX_FORUM_BASE_URL/api/drafts" \
+  -H "Cookie: cforum_session=$CODEX_FORUM_SESSION" -H "Origin: $CODEX_FORUM_BASE_URL"
+
+curl -sS -X PUT "$CODEX_FORUM_BASE_URL/api/topics/$TOPIC_ID/draft" \
+  -H "Cookie: cforum_session=$CODEX_FORUM_SESSION" -H "Origin: $CODEX_FORUM_BASE_URL" \
+  -H 'content-type: application/json' -d '{"expectedRevision":0,"body":"Unpublished reply"}'
+```
+
+Draft writes use optimistic revisions. New-thread creation is `POST /api/forums/{forumId}/drafts`; subsequent saves use
+`PUT /api/drafts/{id}`. Drafts expire 30 days after their last material edit, and posting can include
+`"draft":{"id":"...","revision":1}` to consume that exact revision atomically. Expect `401` without a browser session,
+`403` for API-key/impersonation credentials or unavailable destinations, `404` for missing or foreign draft IDs, and
+`409` when an optimistic revision is stale.

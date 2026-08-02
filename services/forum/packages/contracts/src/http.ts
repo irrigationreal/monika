@@ -5,6 +5,8 @@ import type {
   ExternalRefDto,
   ForumDto,
   IdentityDto,
+  MessageDraftListResponseDto,
+  MessageDraftResponseDto,
   MessageTemplateDto,
   MessageTemplateListResponseDto,
   PostDto,
@@ -28,6 +30,17 @@ export interface ListForumsRequest {
   parentForumId?: string | null;
   status?: 'active' | 'archived';
   includeArchived?: boolean;
+}
+
+export interface DraftReferenceRequest {
+  id: string;
+  revision: number;
+}
+
+export interface MessageDraftWriteRequest {
+  expectedRevision: number;
+  title?: string | null | undefined;
+  body: string;
 }
 
 export interface CreateTopicRequest {
@@ -54,6 +67,8 @@ export interface CreateTopicRequest {
    * A subsequent non-silent post will include these silent posts as catch-up context once.
    */
   silent?: boolean;
+  /** Exact private draft snapshot to consume atomically with publication. */
+  draft?: DraftReferenceRequest;
 }
 
 export interface CreatePostRequest {
@@ -74,6 +89,8 @@ export interface CreatePostRequest {
    * A subsequent non-silent post will include these silent posts as catch-up context once.
    */
   silent?: boolean;
+  /** Exact private draft snapshot to consume atomically with publication. */
+  draft?: DraftReferenceRequest;
 }
 
 export interface LoginRequest {
@@ -344,6 +361,14 @@ export interface ForumApi {
   getRobotState(topicId: string): Promise<RobotStateDto>;
   listIdentities(topicId: string, page?: number, pageSize?: number): Promise<PageResponse<IdentityDto>>;
   getIdentity(identityId: string): Promise<IdentityDto>;
+  listDrafts(): Promise<MessageDraftListResponseDto>;
+  getDraft(id: string): Promise<MessageDraftResponseDto>;
+  listForumDrafts(forumId: string): Promise<MessageDraftListResponseDto>;
+  getReplyDraft(topicId: string): Promise<MessageDraftResponseDto>;
+  saveReplyDraft(topicId: string, req: MessageDraftWriteRequest): Promise<MessageDraftResponseDto>;
+  createNewThreadDraft(forumId: string, req: MessageDraftWriteRequest): Promise<MessageDraftResponseDto>;
+  updateDraft(id: string, req: MessageDraftWriteRequest): Promise<MessageDraftResponseDto>;
+  deleteDraft(id: string, revision: number): Promise<{ ok: boolean }>;
   listEffectiveMessageTemplates(
     context: MessageTemplateContext,
     forumId: string

@@ -10,6 +10,7 @@ import type {
   ForumThemeKey,
   IdentityDto,
   InviteDto,
+  MessageDraftDto,
   MessageTemplateDto,
   PlanDto,
   PostDto,
@@ -31,6 +32,7 @@ import type {
 import type {
   CompactionOperation,
   ExternalRef,
+  MessageDraft,
   MessageTemplate,
   PlanArtifact,
   RobotState,
@@ -60,6 +62,26 @@ import type {
 } from './domain';
 
 type ChatCategorySummaryRow = ChatCategoryRow & { room_count: number };
+
+export function mapMessageDraftToDto(
+  draft: MessageDraft,
+  presentation: { destinationName?: string | null; canContinue?: boolean } = {}
+): MessageDraftDto {
+  return {
+    id: draft.id,
+    context: draft.context,
+    forumId: draft.forumId,
+    topicId: draft.topicId,
+    title: draft.title,
+    body: draft.body,
+    revision: draft.revision,
+    createdAt: draft.createdAt,
+    updatedAt: draft.updatedAt,
+    expiresAt: draft.expiresAt,
+    destinationName: presentation.destinationName ?? null,
+    canContinue: presentation.canContinue ?? false,
+  };
+}
 
 export function mapMessageTemplateToDto(template: MessageTemplate): MessageTemplateDto {
   return {

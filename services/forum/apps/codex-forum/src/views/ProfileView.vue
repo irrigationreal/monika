@@ -448,6 +448,7 @@ onMounted(async () => {
               <router-link class="vb-btn vb-btn-secondary" :to="{ name: 'user.messageTemplates' }"
                 >Message Templates</router-link
               >
+              <router-link class="vb-btn vb-btn-secondary" :to="{ name: 'user.drafts' }">My Drafts</router-link>
               <button class="vb-btn vb-btn-secondary" @click="goHome">Back to Forum</button>
             </div>
           </template>

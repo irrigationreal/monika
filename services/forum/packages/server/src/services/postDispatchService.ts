@@ -1,6 +1,6 @@
 import type { AgentBridge } from '../agentBridge';
-import type { ForumStore } from '../store';
 import type { PostDispatchRow } from '../db';
+import type { ForumStore } from '../store';
 
 const DEFAULT_INTERVAL_MS = 2_000;
 const DEFAULT_MAX_CONCURRENT = 5;
@@ -24,7 +24,7 @@ export class PostDispatchService {
   private timer: ReturnType<typeof setInterval> | null = null;
   private running = false;
   private stopped = true;
-  private readonly stopWaiters: Array<() => void> = [];
+  private readonly stopWaiters: (() => void)[] = [];
   private readonly activeTopics = new Set<string>();
 
   constructor(
@@ -36,9 +36,11 @@ export class PostDispatchService {
   start(): void {
     if (this.timer) return;
     this.stopped = false;
-    this.timer = setInterval(() => void this.processDue(), this.opts.intervalMs ?? DEFAULT_INTERVAL_MS);
-    this.timer.unref?.();
-    void this.processDue();
+    this.timer = setInterval(() => {
+      this.runProcessDue('timer');
+    }, this.opts.intervalMs ?? DEFAULT_INTERVAL_MS);
+    this.timer.unref();
+    this.runProcessDue('startup');
   }
 
   async stop(): Promise<void> {
@@ -51,7 +53,14 @@ export class PostDispatchService {
 
   wake(): void {
     if (this.stopped) return;
-    void this.processDue();
+    this.runProcessDue('wake');
+  }
+
+  private runProcessDue(trigger: 'startup' | 'timer' | 'wake'): void {
+    void this.processDue().catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Post dispatch ${trigger} processing failed: ${message}`);
+    });
   }
 
   private async processDue(): Promise<void> {
@@ -121,7 +130,9 @@ export class PostDispatchService {
       claimToken = claimed?.claim_token ?? null;
       if (!claimed || !claimToken || !this.store.isPostDispatchClaimCurrent(row.id, claimToken)) return;
       const robotState = this.store.getRobotState(row.topic_id);
-      const mode = row.mode === 'steer' || (row.mode === 'auto' && robotState && !['idle', 'stopped', 'error'].includes(robotState.activity))
+      const mode =
+        row.mode === 'steer' ||
+        (row.mode === 'auto' && robotState && !['idle', 'stopped', 'error'].includes(robotState.activity))
         ? 'steer'
         : 'queue';
 

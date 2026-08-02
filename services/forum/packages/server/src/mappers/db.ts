@@ -5,6 +5,7 @@ import type {
   ExternalScopeKind,
   Identity,
   IdentityKind,
+  MessageDraft,
   MessageTemplate,
   Post,
   RobotActivity,
@@ -22,6 +23,7 @@ import type {
   ExternalRefRow,
   IdentityRow,
   InviteRow,
+  MessageDraftRow,
   MessageTemplateRow,
   PlanRow,
   PostRow,
@@ -91,6 +93,22 @@ export function mapUserFileRowToDomain(row: UserFileRow): UserFile {
     mimeType: row.mime_type,
     sizeBytes: row.size_bytes,
     createdAt: row.created_at,
+  };
+}
+
+export function mapMessageDraftRowToDomain(row: MessageDraftRow): MessageDraft {
+  return {
+    id: row.id,
+    ownerIdentityId: row.owner_identity_id,
+    context: row.context,
+    forumId: row.forum_id,
+    topicId: row.topic_id,
+    title: row.title,
+    body: row.body,
+    revision: row.revision,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    expiresAt: row.expires_at,
   };
 }
 

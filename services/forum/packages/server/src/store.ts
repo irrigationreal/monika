@@ -445,6 +445,21 @@ export class ForumStore {
 
   constructor(private readonly db: Database.Database) {}
 
+  runInTransaction<T>(operation: () => T): T {
+    try {
+      return this.db.transaction(operation)();
+    } catch (error) {
+      // Nested store calls may have populated entity caches before an outer transaction
+      // rolled back. Clear all caches so a failed publication cannot leave ghost rows.
+      this.forumCache.clear();
+      this.topicCache.clear();
+      this.identityCache.clear();
+      this.forumStatsCache.clear();
+      this.topicStatsCache.clear();
+      throw error;
+    }
+  }
+
   private invalidateForumCache(forumId?: string | null): void {
     if (!forumId) return;
     this.forumCache.delete(forumId);
@@ -1096,6 +1111,15 @@ export class ForumStore {
     const topicId = randomUUID();
     const postId = randomUUID();
     const now = nowIso();
+    this.db.transaction(() => {
+      if (input.draft) {
+        const draft = this.db
+          .prepare(
+            "select id from message_drafts where id = ? and owner_identity_id = ? and context = 'new_thread' and forum_id = ? and revision = ? and expires_at > ?"
+          )
+          .get(input.draft.id, input.authorId, input.forumId, input.draft.revision, now);
+        if (!draft) throw new Error('draft changed in another session');
+      }
     this.db
       .prepare(
         'insert into topics (id, forum_id, tenant_id, title, status, tags_json, robot_mode, created_by, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
@@ -1116,20 +1140,22 @@ export class ForumStore {
       const supportsAutoCompact = this.db
         .prepare("select 1 from pragma_table_info('topics') where name = 'auto_compact_enabled'")
         .get();
-      if (supportsAutoCompact) {
+        if (supportsAutoCompact)
         this.db.prepare('update topics set auto_compact_enabled = 1 where id = ?').run(topicId);
       }
-    }
     this.db
       .prepare(
         'insert into posts (id, topic_id, tenant_id, parent_post_id, author_id, body, source_message_id, silent, created_at, edited_at, deleted_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
       .run(postId, topicId, null, null, input.authorId, input.body, null, input.silent ? 1 : 0, now, null, null);
+      if (input.draft)
+        this.db
+          .prepare('delete from message_drafts where id = ? and owner_identity_id = ? and revision = ?')
+          .run(input.draft.id, input.authorId, input.draft.revision);
+    })();
     this.invalidateForumStatsCache(input.forumId);
     this.invalidateTopicStatsCache(topicId);
-    const topic = this.getTopic(topicId) as TopicRow;
-    const post = this.getPost(postId) as PostRow;
-    return { topic, post };
+    return { topic: this.getTopic(topicId) as TopicRow, post: this.getPost(postId) as PostRow };
   }
 
   moveTopic(input: MoveTopicInput): { topic: TopicRow; move: TopicMoveRecord; markerPost: PostRow | null } {
@@ -1620,6 +1646,14 @@ export class ForumStore {
     const now = nowIso();
     let autoCompactChanged = false;
     this.db.transaction(() => {
+      if (input.draft) {
+        const draft = this.db
+          .prepare(
+            "select id from message_drafts where id = ? and owner_identity_id = ? and context = 'reply' and topic_id = ? and revision = ? and expires_at > ?"
+          )
+          .get(input.draft.id, input.authorId, input.topicId, input.draft.revision, now);
+        if (!draft) throw new Error('draft changed in another session');
+      }
       if (input.autoCompactEnabled !== undefined || input.autoCompactRevision !== undefined) {
         if (input.autoCompactEnabled === undefined || input.autoCompactRevision === undefined) {
           throw new Error('auto-compaction setting and revision must be provided together');
@@ -1658,6 +1692,10 @@ export class ForumStore {
           null,
           null
         );
+      if (input.draft)
+        this.db
+          .prepare('delete from message_drafts where id = ? and owner_identity_id = ? and revision = ?')
+          .run(input.draft.id, input.authorId, input.draft.revision);
     })();
     if (autoCompactChanged) this.invalidateTopicCache(input.topicId);
     this.invalidateTopicStatsCache(input.topicId);

@@ -1202,6 +1202,7 @@ export function useForumState() {
       silent?: boolean;
       robotMode?: 'auto' | 'mention' | 'off';
       autoCompactEnabled?: boolean;
+      draft?: { id: string; revision: number };
     }
   ): Promise<TopicDto> {
     if (!selectedForumId.value) {
@@ -1219,10 +1220,12 @@ export function useForumState() {
         autoCompactEnabled?: boolean;
         attachmentsPending?: boolean;
         silent?: boolean;
+        draft?: { id: string; revision: number };
       } = {
         title,
         body,
       };
+      if (options?.draft) payload.draft = options.draft;
       if (options?.robotMode) {
         payload.robotMode = options.robotMode;
       }
@@ -1240,7 +1243,11 @@ export function useForumState() {
       if (!options?.silent) {
         rememberReplyOptions(options);
       }
+      try {
       await loadTopics();
+      } catch {
+        // Publication already committed; a projection refresh failure must not make the composer resubmit it.
+      }
       return topic;
     } finally {
       loading.value = false;
@@ -1256,6 +1263,7 @@ export function useForumState() {
       autoCompactRevision?: number;
       attachmentsPending?: boolean;
       silent?: boolean;
+      draft?: { id: string; revision: number };
     }
   ): Promise<PostDto> {
     if (!selectedTopic.value) {
@@ -1272,7 +1280,9 @@ export function useForumState() {
         autoCompactRevision?: number;
         attachmentsPending?: boolean;
         silent?: boolean;
+        draft?: { id: string; revision: number };
       } = { body };
+      if (options?.draft) payload.draft = options.draft;
       if (options?.autoCompactEnabled !== undefined) payload.autoCompactEnabled = options.autoCompactEnabled;
       if (options?.autoCompactRevision !== undefined) payload.autoCompactRevision = options.autoCompactRevision;
       if (options?.attachmentsPending) {
@@ -1306,12 +1316,12 @@ export function useForumState() {
       if (!options?.silent) {
         rememberReplyOptions(options);
       }
-      await Promise.all([
-        loadPosts(selectedTopic.value.id),
-        loadIdentities(selectedTopic.value.id),
-        loadRobotPersonas(selectedTopic.value.id),
-      ]);
-      await loadAttachmentsForPosts(posts.value.map((post) => post.id));
+      try {
+        await Promise.all([loadPosts(topicId), loadIdentities(topicId), loadRobotPersonas(topicId)]);
+        await loadAttachmentsForPosts(posts.value.map((item) => item.id));
+      } catch {
+        // Publication already committed; a projection refresh failure must not make the composer resubmit it.
+      }
       return post;
     } finally {
       loading.value = false;

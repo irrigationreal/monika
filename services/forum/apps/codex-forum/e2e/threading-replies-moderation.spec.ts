@@ -1,16 +1,19 @@
-import { test, expect, type BrowserContext, type Page, type Route, type Request } from '@playwright/test';
+import { expect, test } from '@playwright/test';
+
 import type {
   CompactionOperationDto,
   ForumDto,
   ForumLastPostDto,
   IdentityDto,
+  MessageDraftDto,
   MessageTemplateDto,
   PostDto,
   RecentPostDto,
   RobotStateDto,
   TopicDto,
-  TopicOperationalEventDto
+  TopicOperationalEventDto,
 } from '@irrigationreal/codex-forum-contracts';
+import type { BrowserContext, Page, Request, Route } from '@playwright/test';
 
 type ForumRecord = ForumDto;
 type TopicRecord = TopicDto;
@@ -52,6 +55,7 @@ type MockState = {
   compactionOperations: Record<string, CompactionOperationDto>;
   compactionRequests: Array<Record<string, unknown>>;
   messageTemplates: MessageTemplateDto[];
+  drafts: Record<string, MessageDraftDto>;
 };
 
 const REGULAR_TOKEN = 'token-regular';
@@ -78,7 +82,7 @@ function createMockState(): MockState {
       rank: 'Member',
       joinDate: now,
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
     },
     [MODERATOR_ID]: {
       id: MODERATOR_ID,
@@ -94,8 +98,8 @@ function createMockState(): MockState {
       rank: 'Moderator',
       joinDate: now,
       createdAt: now,
-      updatedAt: now
-    }
+      updatedAt: now,
+    },
   };
 
   return {
@@ -109,11 +113,11 @@ function createMockState(): MockState {
     identities,
     permissionsByIdentity: {
       [REGULAR_ID]: ['read', 'write'],
-      [MODERATOR_ID]: ['read', 'write', 'mod.all', 'admin.all']
+      [MODERATOR_ID]: ['read', 'write', 'mod.all', 'admin.all'],
     },
     tokens: {
       [REGULAR_TOKEN]: REGULAR_ID,
-      [MODERATOR_TOKEN]: MODERATOR_ID
+      [MODERATOR_TOKEN]: MODERATOR_ID,
     },
     fixture: null,
     lastMoveRequest: null,
@@ -121,9 +125,40 @@ function createMockState(): MockState {
     compactionOperations: {},
     compactionRequests: [],
     messageTemplates: [
-      { id: 'template-reply', scope: 'personal', name: 'Review approval', category: 'Review', body: 'Approved after review.', threadTitle: null, forumScope: 'all', forumIds: [], contexts: ['reply'], enabled: true, sortOrder: 0, revision: 1, createdAt: now, updatedAt: now },
-      { id: 'template-thread', scope: 'system', name: 'Project kickoff', category: 'Project', body: 'Kickoff details for this project.', threadTitle: 'Project kickoff thread', forumScope: 'all', forumIds: [], contexts: ['new_thread'], enabled: true, sortOrder: 0, revision: 1, createdAt: now, updatedAt: now }
-    ]
+      {
+        id: 'template-reply',
+        scope: 'personal',
+        name: 'Review approval',
+        category: 'Review',
+        body: 'Approved after review.',
+        threadTitle: null,
+        forumScope: 'all',
+        forumIds: [],
+        contexts: ['reply'],
+        enabled: true,
+        sortOrder: 0,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: 'template-thread',
+        scope: 'system',
+        name: 'Project kickoff',
+        category: 'Project',
+        body: 'Kickoff details for this project.',
+        threadTitle: 'Project kickoff thread',
+        forumScope: 'all',
+        forumIds: [],
+        contexts: ['new_thread'],
+        enabled: true,
+        sortOrder: 0,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+      },
+    ],
+    drafts: {},
   };
 }
 
@@ -140,6 +175,7 @@ function seedFixtures(state: MockState, request: FixtureRequest = {}): FixtureRe
   state.operationalEventsByTopic = {};
   state.compactionOperations = {};
   state.compactionRequests = [];
+  state.drafts = {};
   state.tick = 0;
   state.topicSeq = 0;
   state.postSeq = 0;
@@ -162,7 +198,7 @@ function seedFixtures(state: MockState, request: FixtureRequest = {}): FixtureRe
     postCount: 0,
     lastPost: null,
     createdAt,
-    updatedAt: createdAt
+    updatedAt: createdAt,
   });
 
   state.forums.push({
@@ -179,7 +215,7 @@ function seedFixtures(state: MockState, request: FixtureRequest = {}): FixtureRe
     postCount: 0,
     lastPost: null,
     createdAt,
-    updatedAt: createdAt
+    updatedAt: createdAt,
   });
 
   const normalTopicId = addTopic(state, {
@@ -188,11 +224,12 @@ function seedFixtures(state: MockState, request: FixtureRequest = {}): FixtureRe
     status: 'open',
     tags: [],
     createdBy: REGULAR_ID,
-    postCount: request.postCount ?? 2
+    postCount: request.postCount ?? 2,
   });
 
   const anchorPostId = state.postsByTopic[normalTopicId]?.[0]?.id ?? null;
-  state.operationalEventsByTopic[normalTopicId] = [{
+  state.operationalEventsByTopic[normalTopicId] = [
+    {
     id: 'overflow-event-1',
     topicId: normalTopicId,
     anchorPostId,
@@ -202,12 +239,14 @@ function seedFixtures(state: MockState, request: FixtureRequest = {}): FixtureRe
     summary: 'Assistant response failed.',
     detail: {
       category: 'context_overflow',
-      error: 'Codex error: Your input exceeds the context window of this model. Please adjust your input and try again.'
+        error:
+          'Codex error: Your input exceeds the context window of this model. Please adjust your input and try again.',
     },
     sourceKind: 'echs_turn',
     sourceId: 'pi-message-1',
-    createdAt: nextTimestamp(state)
-  }];
+      createdAt: nextTimestamp(state),
+    },
+  ];
 
   const lockedTopicId = request.includeLocked
     ? addTopic(state, {
@@ -216,7 +255,7 @@ function seedFixtures(state: MockState, request: FixtureRequest = {}): FixtureRe
       status: 'locked',
       tags: [],
       createdBy: REGULAR_ID,
-      postCount: 1
+        postCount: 1,
     })
     : null;
 
@@ -227,7 +266,7 @@ function seedFixtures(state: MockState, request: FixtureRequest = {}): FixtureRe
       status: 'archived',
       tags: [],
       createdBy: REGULAR_ID,
-      postCount: 1
+        postCount: 1,
     })
     : null;
 
@@ -243,7 +282,7 @@ function seedFixtures(state: MockState, request: FixtureRequest = {}): FixtureRe
     regularToken: REGULAR_TOKEN,
     moderatorToken: MODERATOR_TOKEN,
     regularIdentityId: REGULAR_ID,
-    moderatorIdentityId: MODERATOR_ID
+    moderatorIdentityId: MODERATOR_ID,
   };
   state.fixture = fixture;
   return fixture;
@@ -267,13 +306,13 @@ function addTopic(
   const posts: PostRecord[] = [];
 
   for (let i = 0; i < input.postCount; i += 1) {
-    posts.push(createPostRecord(state, {
+    posts.push(
+      createPostRecord(state, {
       topicId,
       authorId: input.createdBy,
-      body: i === 0
-        ? `Opening message for ${input.title}.`
-        : `Follow-up ${i} for ${input.title}.`
-    }));
+        body: i === 0 ? `Opening message for ${input.title}.` : `Follow-up ${i} for ${input.title}.`,
+      })
+    );
   }
 
   const lastPost = posts[posts.length - 1];
@@ -293,7 +332,7 @@ function addTopic(
     postCount: posts.length,
     lastPostAuthorId: lastPost.authorId,
     lastPostAuthorName: state.identities[lastPost.authorId]?.displayName ?? 'Unknown',
-    lastPostAt: lastPost.createdAt
+    lastPostAt: lastPost.createdAt,
   };
 
   state.postsByTopic[topicId] = posts;
@@ -329,7 +368,7 @@ function createPostRecord(
     createdAt,
     editedAt: null,
     deletedAt: null,
-    reactionCounts: []
+    reactionCounts: [],
   };
 }
 
@@ -352,7 +391,7 @@ function recomputeForumStats(state: MockState, forumId: string): void {
         topicTitle: topic.title,
         authorId: candidate.authorId,
         authorName: state.identities[candidate.authorId]?.displayName ?? 'Unknown',
-        createdAt: candidate.createdAt
+        createdAt: candidate.createdAt,
       };
     }
   }
@@ -385,7 +424,7 @@ function listRecentPosts(state: MockState, limit: number): RecentPostDto[] {
         authorId: post.authorId,
         authorName: state.identities[post.authorId]?.displayName ?? 'Unknown',
         body: post.body,
-        createdAt: post.createdAt
+        createdAt: post.createdAt,
       };
     });
 }
@@ -411,9 +450,9 @@ async function attachMockApi(target: Page | BrowserContext, state: MockState): P
         identity: identity
           ? {
             ...identity,
-            hasPrivateEmail: false
+              hasPrivateEmail: false,
           }
-          : null
+          : null,
       });
       return;
     }
@@ -433,15 +472,134 @@ async function attachMockApi(target: Page | BrowserContext, state: MockState): P
       return;
     }
 
+    if (path === '/api/drafts' && method === 'GET') {
+      await fulfillJson(route, 200, { drafts: Object.values(state.drafts) });
+      return;
+    }
+
+    const draftMatch = path.match(/^\/api\/drafts\/([^/]+)$/);
+    if (draftMatch) {
+      const id = draftMatch[1];
+      const current = id ? state.drafts[id] : undefined;
+      if (method === 'GET') {
+        await fulfillJson(route, current ? 200 : 404, { draft: current ?? null });
+        return;
+      }
+      if (method === 'DELETE') {
+        const revision = Number(url.searchParams.get('revision'));
+        if (current && current.revision !== revision) {
+          await fulfillJson(route, 409, { message: 'Draft changed in another session' });
+          return;
+        }
+        if (id && current) delete state.drafts[id];
+        await fulfillJson(route, current ? 200 : 404, current ? { ok: true } : { message: 'Draft not found' });
+        return;
+      }
+      if (method === 'PUT' && id && current) {
+        if (current.revision !== Number(payload?.expectedRevision)) {
+          await fulfillJson(route, 409, { message: 'Draft changed in another session' });
+          return;
+        }
+        const updated = {
+          ...current,
+          title: payload?.title ?? null,
+          body: payload?.body ?? '',
+          revision: current.revision + 1,
+          updatedAt: nextTimestamp(state),
+        };
+        state.drafts[id] = updated;
+        await fulfillJson(route, 200, { draft: updated });
+        return;
+      }
+    }
+
+    const forumDraftMatch = path.match(/^\/api\/forums\/([^/]+)\/drafts$/);
+    if (forumDraftMatch) {
+      const forumId = forumDraftMatch[1] ?? '';
+      if (method === 'GET') {
+        await fulfillJson(route, 200, {
+          drafts: Object.values(state.drafts).filter(
+            (item) => item.context === 'new_thread' && item.forumId === forumId
+          ),
+        });
+        return;
+      }
+      if (method === 'POST') {
+        if (Number(payload?.expectedRevision) !== 0) {
+          await fulfillJson(route, 409, { message: 'Draft changed in another session' });
+          return;
+        }
+        const id = `draft-${Object.keys(state.drafts).length + 1}`;
+        const now = nextTimestamp(state);
+        const created: MessageDraftDto = {
+          id,
+          context: 'new_thread',
+          forumId,
+          topicId: null,
+          title: payload?.title ?? null,
+          body: payload?.body ?? '',
+          revision: 1,
+          createdAt: now,
+          updatedAt: now,
+          expiresAt: new Date(Date.parse(now) + 30 * 86400000).toISOString(),
+          destinationName: state.forums.find((item) => item.id === forumId)?.name ?? null,
+          canContinue: true,
+        };
+        state.drafts[id] = created;
+        await fulfillJson(route, 200, { draft: created });
+        return;
+      }
+    }
+
+    const replyDraftMatch = path.match(/^\/api\/topics\/([^/]+)\/draft$/);
+    if (replyDraftMatch) {
+      const topicId = replyDraftMatch[1] ?? '';
+      const current =
+        Object.values(state.drafts).find((item) => item.context === 'reply' && item.topicId === topicId) ?? null;
+      if (method === 'GET') {
+        await fulfillJson(route, 200, { draft: current });
+        return;
+      }
+      if (method === 'PUT') {
+        if (Number(payload?.expectedRevision) !== (current?.revision ?? 0)) {
+          await fulfillJson(route, 409, { message: 'Draft changed in another session' });
+          return;
+        }
+        const now = nextTimestamp(state);
+        const id = current?.id ?? `draft-${Object.keys(state.drafts).length + 1}`;
+        const updated: MessageDraftDto = {
+          id,
+          context: 'reply',
+          forumId: null,
+          topicId,
+          title: null,
+          body: payload?.body ?? '',
+          revision: (current?.revision ?? 0) + 1,
+          createdAt: current?.createdAt ?? now,
+          updatedAt: now,
+          expiresAt: new Date(Date.parse(now) + 30 * 86400000).toISOString(),
+          destinationName: state.topics[topicId]?.title ?? null,
+          canContinue: true,
+        };
+        state.drafts[id] = updated;
+        await fulfillJson(route, 200, { draft: updated });
+        return;
+      }
+    }
+
     if (path === '/api/message-templates/effective' && method === 'GET') {
       const context = url.searchParams.get('context');
-      await fulfillJson(route, 200, { templates: state.messageTemplates.filter((template) => template.enabled && template.contexts.includes(context as 'reply' | 'new_thread')) });
+      await fulfillJson(route, 200, {
+        templates: state.messageTemplates.filter(
+          (template) => template.enabled && template.contexts.includes(context as 'reply' | 'new_thread')
+        ),
+      });
       return;
     }
 
     if (path === '/api/message-templates/mine' && method === 'GET') {
       await fulfillJson(route, 200, {
-        templates: state.messageTemplates.filter((template) => template.scope === 'personal')
+        templates: state.messageTemplates.filter((template) => template.scope === 'personal'),
       });
       return;
     }
@@ -453,7 +611,7 @@ async function attachMockApi(target: Page | BrowserContext, state: MockState): P
           page: 1,
           pageSize: 50,
           total: listTopicsForForum(state, forumId).length,
-          items: listTopicsForForum(state, forumId)
+          items: listTopicsForForum(state, forumId),
         });
         return;
       }
@@ -461,16 +619,29 @@ async function attachMockApi(target: Page | BrowserContext, state: MockState): P
         const title = payload?.title ?? 'Untitled';
         const body = payload?.body ?? '';
         const author = identityFromRequest(state, request) ?? state.identities[REGULAR_ID];
+        const draftReference = payload?.draft as { id?: string; revision?: number } | undefined;
+        const publicationDraft = draftReference?.id ? state.drafts[draftReference.id] : undefined;
+        if (
+          draftReference &&
+          (!publicationDraft ||
+            publicationDraft.context !== 'new_thread' ||
+            publicationDraft.forumId !== forumId ||
+            publicationDraft.revision !== draftReference.revision)
+        ) {
+          await fulfillJson(route, 409, { message: 'Draft changed in another session' });
+          return;
+        }
         const topicId = addTopic(state, {
           forumId,
           title,
           status: 'open',
           tags: [],
           createdBy: author.id,
-          postCount: 1
+          postCount: 1,
         });
         state.postsByTopic[topicId][0].body = body;
         const topic = state.topics[topicId];
+        if (draftReference?.id) delete state.drafts[draftReference.id];
         recomputeForumStats(state, forumId);
         await fulfillJson(route, 200, topic);
         return;
@@ -491,7 +662,7 @@ async function attachMockApi(target: Page | BrowserContext, state: MockState): P
           page: 1,
           pageSize: 50,
           total: posts.length,
-          items: posts
+          items: posts,
         });
         return;
       }
@@ -503,11 +674,23 @@ async function attachMockApi(target: Page | BrowserContext, state: MockState): P
         }
         const author = identityFromRequest(state, request) ?? state.identities[REGULAR_ID];
         const body = payload?.body ?? '';
+        const draftReference = payload?.draft as { id?: string; revision?: number } | undefined;
+        const publicationDraft = draftReference?.id ? state.drafts[draftReference.id] : undefined;
+        if (
+          draftReference &&
+          (!publicationDraft ||
+            publicationDraft.context !== 'reply' ||
+            publicationDraft.topicId !== topicId ||
+            publicationDraft.revision !== draftReference.revision)
+        ) {
+          await fulfillJson(route, 409, { message: 'Draft changed in another session' });
+          return;
+        }
         const post = createPostRecord(state, {
           topicId,
           authorId: author.id,
           body,
-          silent: payload?.silent ?? false
+          silent: payload?.silent ?? false,
         });
         const posts = state.postsByTopic[topicId] ?? [];
         posts.push(post);
@@ -519,6 +702,7 @@ async function attachMockApi(target: Page | BrowserContext, state: MockState): P
           topicRecord.lastPostAuthorName = state.identities[post.authorId]?.displayName ?? 'Unknown';
           topicRecord.updatedAt = post.createdAt;
         }
+        if (draftReference?.id) delete state.drafts[draftReference.id];
         recomputeForumStats(state, topicRecord?.forumId ?? '');
         await fulfillJson(route, 200, post);
         return;
@@ -535,11 +719,12 @@ async function attachMockApi(target: Page | BrowserContext, state: MockState): P
       const topicId = path.split('/')[3];
       const operations = Object.values(state.compactionOperations).filter((operation) => operation.topicId === topicId);
       const latest = operations.at(-1) ?? null;
-      const active = operations.find((operation) => operation.status === 'pending' || operation.status === 'running') ?? null;
+      const active =
+        operations.find((operation) => operation.status === 'pending' || operation.status === 'running') ?? null;
       await fulfillJson(route, 200, {
         active,
         latest,
-        checkpointDispatch: latest?.recoveryPostId ? { status: 'dispatched', errorMessage: null } : null
+        checkpointDispatch: latest?.recoveryPostId ? { status: 'dispatched', errorMessage: null } : null,
       });
       return;
     }
@@ -563,7 +748,7 @@ async function attachMockApi(target: Page | BrowserContext, state: MockState): P
         errorMessage: null,
         createdAt: nextTimestamp(state),
         startedAt: nextTimestamp(state),
-        finishedAt: nextTimestamp(state)
+        finishedAt: nextTimestamp(state),
       };
       state.compactionOperations[operationId] = operation;
       await fulfillJson(route, 202, operation);
@@ -576,7 +761,7 @@ async function attachMockApi(target: Page | BrowserContext, state: MockState): P
       await fulfillJson(route, operation ? 200 : 404, {
         active: null,
         latest: operation,
-        checkpointDispatch: operation ? { status: 'pending', errorMessage: null } : null
+        checkpointDispatch: operation ? { status: 'pending', errorMessage: null } : null,
       });
       return;
     }
@@ -671,7 +856,7 @@ async function attachMockApi(target: Page | BrowserContext, state: MockState): P
         reasoningEffort: null,
         lastUpdatedAt: nextTimestamp(state),
         currentPlan: null,
-        recentToolRuns: []
+        recentToolRuns: [],
       };
       await fulfillJson(route, 200, statePayload);
       return;
@@ -692,12 +877,12 @@ async function attachMockApi(target: Page | BrowserContext, state: MockState): P
         reasoningEffort: null,
         lastUpdatedAt: nextTimestamp(state),
         currentPlan: null,
-        recentToolRuns: []
+        recentToolRuns: [],
       };
       await route.fulfill({
         status: 200,
         headers: { 'content-type': 'text/event-stream' },
-        body: `event: state\ndata: ${JSON.stringify(streamState)}\n\n`
+        body: `event: state\ndata: ${JSON.stringify(streamState)}\n\n`,
       });
       return;
     }
@@ -778,8 +963,8 @@ async function attachMockApi(target: Page | BrowserContext, state: MockState): P
           movedAt: topic.updatedAt,
           markerPostId: null,
           needsReprompt: !payload?.silent,
-          silent: Boolean(payload?.silent)
-        }
+          silent: Boolean(payload?.silent),
+        },
       });
       return;
     }
@@ -796,7 +981,7 @@ function identityFromRequest(state: MockState, request: Request): IdentityRecord
     .find((part) => part.startsWith('cforum_session='))
     ?.slice('cforum_session='.length);
   const identityId = token ? state.tokens[token] : null;
-  return identityId ? state.identities[identityId] ?? null : null;
+  return identityId ? (state.identities[identityId] ?? null) : null;
 }
 
 async function readJson(request: Request): Promise<FixtureRequest | null> {
@@ -813,7 +998,7 @@ async function fulfillJson(route: Route, status: number, body: unknown): Promise
   await route.fulfill({
     status,
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
   });
 }
 
@@ -822,7 +1007,7 @@ async function createFixture(page: Page, payload: FixtureRequest): Promise<Fixtu
     const res = await fetch('/api/test/fixtures', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(fixturePayload)
+      body: JSON.stringify(fixturePayload),
     });
     if (!res.ok) {
       throw new Error(`Fixture request failed: ${res.status}`);
@@ -832,12 +1017,9 @@ async function createFixture(page: Page, payload: FixtureRequest): Promise<Fixtu
 }
 
 async function setAuthTokens(context: BrowserContext, token: string): Promise<void> {
-  await context.addInitScript(
-    (value) => {
+  await context.addInitScript((value) => {
       document.cookie = `cforum_session=${value}; path=/; SameSite=Lax`;
-    },
-    token
-  );
+  }, token);
 }
 
 async function expectAdminToolsHidden(page: Page): Promise<void> {
@@ -865,7 +1047,9 @@ async function themedStyleSnapshot(
     const probe = document.createElement('div');
     probe.style.position = 'fixed';
     probe.style.pointerEvents = 'none';
-    const requestedEntries = Object.entries(requestedTokens).filter((entry): entry is [string, string] => Boolean(entry[1]));
+    const requestedEntries = Object.entries(requestedTokens).filter((entry): entry is [string, string] =>
+      Boolean(entry[1])
+    );
     for (const [property, token] of requestedEntries) {
       probe.style.setProperty(`--resolved-${property}`, `var(${token})`);
     }
@@ -921,7 +1105,10 @@ async function expectThemedStyle(
 
 test.describe('Threading and reply flows', () => {
   test.describe.configure({ mode: 'serial' });
-  test('create new thread with preview, BBCode insertions, validation, and cancel confirmation', async ({ page, context }) => {
+  test('create new thread with preview, BBCode insertions, validation, and cancel confirmation', async ({
+    page,
+    context,
+  }) => {
     const state = createMockState();
     await attachMockApi(page, state);
     await setAuthTokens(context, REGULAR_TOKEN);
@@ -949,22 +1136,19 @@ test.describe('Threading and reply flows', () => {
     await expect(page.locator('.vb-preview-panel')).toBeVisible();
     await expect(page.locator('.vb-preview-body')).toContainText('Preview content for the thread.');
 
+    await expect(page).toHaveURL(new RegExp(`/forums/${fixture.forumId}/newthread\\?draft=draft-`));
     page.once('dialog', (dialog) => {
-      expect(dialog.message()).toContain('Are you sure you want to cancel');
-      dialog.dismiss();
+      expect(dialog.message()).toContain('Discard this draft permanently');
+      dialog.accept();
     });
-    await page.click('button:has-text("Cancel")');
-    await expect(page).toHaveURL(new RegExp(`/forums/${fixture.forumId}/newthread`));
+    await page.click('button:has-text("Discard draft")');
+    await expect(page.locator('.vb-editor-textarea')).toHaveValue('');
 
     await page.goto(`/forums/${fixture.forumId}`);
     await page.click('button:has-text("New Thread")');
     await expect(page).toHaveURL(new RegExp(`/forums/${fixture.forumId}/newthread`));
 
-    page.once('dialog', (dialog) => {
-      expect(dialog.message()).toContain('Are you sure you want to cancel');
-      dialog.accept();
-    });
-    await page.click('button:has-text("Cancel")');
+    await page.click('button:has-text("Back (keep draft)")');
     await expect(page).toHaveURL(new RegExp(`/forums/${fixture.forumId}$`));
 
     await page.goto(`/forums/${fixture.forumId}/newthread`);
@@ -985,7 +1169,32 @@ test.describe('Threading and reply flows', () => {
     await expect(topicRow.locator('.vb-lastpost-author').first()).toContainText('Regular User');
   });
 
-  test('message template inserts in quick and full reply without submitting', async ({ page, context }) => {
+  test('autosaved reply is shared by quick and full composers and consumed on post', async ({ page, context }) => {
+    const state = createMockState();
+    await attachMockApi(page, state);
+    await setAuthTokens(context, REGULAR_TOKEN);
+    await page.goto('/');
+    const fixture = await createFixture(page, { postCount: 2 });
+
+    await page.goto(`/topics/${fixture.topicId}`);
+    await quickReplyBox(page).fill('Crash-safe shared reply');
+    await expect(page.locator('.vb-quick-reply')).toContainText('Draft saved');
+    await page.goto(`/topics/${fixture.topicId}/reply`);
+    await expect(page.locator('.vb-editor-textarea')).toHaveValue('Crash-safe shared reply');
+    await page.locator('.vb-editor-textarea').fill('Updated from full reply');
+    await expect
+      .poll(() => Object.values(state.drafts).find((item) => item.context === 'reply')?.body)
+      .toBe('Updated from full reply');
+    await page.goto(`/topics/${fixture.topicId}`);
+    await expect(quickReplyBox(page)).toHaveValue('Updated from full reply');
+    await page.locator('.vb-quick-reply button', { hasText: 'Post Quick Reply' }).click();
+    await expect.poll(() => Object.keys(state.drafts).length).toBe(0);
+  });
+
+  test('message template insertion autosaves and follows the shared reply draft into full reply', async ({
+    page,
+    context,
+  }) => {
     const state = createMockState();
     await attachMockApi(page, state);
     await setAuthTokens(context, REGULAR_TOKEN);
@@ -1000,8 +1209,7 @@ test.describe('Threading and reply flows', () => {
 
     await page.click('button:has-text("Post Reply")');
     const fullPicker = page.locator('.vb-newthread-form [data-testid="message-template-picker"]');
-    await fullPicker.locator('[data-testid="message-template-select"]').selectOption('template-reply');
-    await fullPicker.locator('[data-testid="message-template-insert"]').click();
+    await expect(fullPicker).toBeVisible();
     await expect(page.locator('.vb-editor-textarea')).toHaveValue('Approved after review.');
   });
 
@@ -1040,14 +1248,14 @@ test.describe('Threading and reply flows', () => {
       await expectThemedStyle(page, '[data-testid="message-template-select"]', {
         background: '--bg-input',
         color: '--text-primary',
-        border: '--border-strong'
+        border: '--border-strong',
       });
       await expectThemedStyle(page, '.vb-template-label', { color: '--text-primary' });
       await expectThemedStyle(page, '.vb-template-manage', { color: '--text-primary' });
       await page.locator('[data-testid="message-template-select"]').selectOption('template-reply');
       await expectThemedStyle(page, '.vb-template-preview-heading', {
         background: '--bg-surface-muted',
-        color: '--text-primary'
+        color: '--text-primary',
       });
 
       await page.goto('/profile/message-templates');
@@ -1057,17 +1265,17 @@ test.describe('Threading and reply flows', () => {
       await expectThemedStyle(page, '[data-testid="message-template-name"]', {
         background: '--bg-input',
         color: '--text-primary',
-        border: '--border-strong'
+        border: '--border-strong',
       });
       await expectThemedStyle(page, '[data-testid="message-templates-panel"]', {
         background: '--bg-surface-alt',
         color: '--text-primary',
-        border: '--border-muted'
+        border: '--border-muted',
       });
       await expectThemedStyle(page, '.vb-template-name', { color: '--text-primary' });
       await expectThemedStyle(page, '.vb-template-preview-label', {
         background: '--bg-surface-muted',
-        color: '--text-primary'
+        color: '--text-primary',
       });
     }
 
@@ -1135,7 +1343,10 @@ test.describe('Threading and reply flows', () => {
     await expect(topicRow.locator('.vb-lastpost-author').first()).toContainText('Regular User');
   });
 
-  test('moderation controls update badges, sticky placement, and forum breadcrumb after move', async ({ page, context }) => {
+  test('moderation controls update badges, sticky placement, and forum breadcrumb after move', async ({
+    page,
+    context,
+  }) => {
     const state = createMockState();
     await attachMockApi(page, state);
     await setAuthTokens(context, MODERATOR_TOKEN);
@@ -1189,7 +1400,11 @@ test.describe('Threading and reply flows', () => {
     await page.getByTestId('move-silent-checkbox').check();
     await page.getByTestId('move-confirm-checkbox').check();
     await page.click('button:has-text("Move Thread")');
-    expect(state.lastMoveRequest).toEqual({ topicId: fixture.topicId, forumId: fixture.secondaryForumId, silent: true });
+    expect(state.lastMoveRequest).toEqual({
+      topicId: fixture.topicId,
+      forumId: fixture.secondaryForumId,
+      silent: true,
+    });
     await expect(page.locator('.vb-breadcrumb-link', { hasText: 'Help Desk' })).toBeVisible();
 
     await page.goto(`/forums/${fixture.secondaryForumId}`);
@@ -1201,7 +1416,10 @@ test.describe('Threading and reply flows', () => {
     await expect(topicRowForTitle(page, 'Moderated Thread Title')).toHaveCount(0);
   });
 
-  test('locked/archived topics block replies and non-moderators cannot access admin tools', async ({ page, context }) => {
+  test('locked/archived topics block replies and non-moderators cannot access admin tools', async ({
+    page,
+    context,
+  }) => {
     const state = createMockState();
     await attachMockApi(page, state);
     await setAuthTokens(context, REGULAR_TOKEN);
@@ -1210,7 +1428,8 @@ test.describe('Threading and reply flows', () => {
     const fixture = await createFixture(page, { includeLocked: true, includeArchived: true });
 
     await page.goto(`/topics/${fixture.lockedTopicId}`);
-    await page.waitForResponse((response) =>
+    await page.waitForResponse(
+      (response) =>
       response.url().includes(`/api/topics/${fixture.lockedTopicId}`) && response.request().method() === 'GET'
     );
     await expect(page.locator('.vb-locked-badge')).toContainText('Locked');
@@ -1220,10 +1439,12 @@ test.describe('Threading and reply flows', () => {
     await expect(page.locator('button', { hasText: 'Post Quick Reply' })).toHaveCount(0);
 
     await page.goto(`/topics/${fixture.lockedTopicId}/reply`);
+    await expect(page.locator('.vb-editor-textarea')).toBeVisible();
     await page.evaluate(() => {
       const textarea = document.querySelector('.vb-editor-textarea') as HTMLTextAreaElement | null;
-      const button = Array.from(document.querySelectorAll('button'))
-        .find((el) => el.textContent?.includes('Submit Reply')) as HTMLButtonElement | undefined;
+      const button = Array.from(document.querySelectorAll('button')).find((el) =>
+        el.textContent?.includes('Submit Reply')
+      ) as HTMLButtonElement | undefined;
       if (textarea) {
         textarea.removeAttribute('disabled');
         textarea.value = 'Trying to reply while locked.';
@@ -1234,7 +1455,9 @@ test.describe('Threading and reply flows', () => {
         button.click();
       }
     });
-    await expect(page.locator('.vb-login-error', { hasText: 'Cannot reply to a locked or archived topic.' })).toBeVisible();
+    await expect(
+      page.locator('.vb-login-error', { hasText: 'Cannot reply to a locked or archived topic.' })
+    ).toBeVisible();
 
     await page.goto(`/topics/${fixture.archivedTopicId}`);
     await expect(page.locator('.vb-locked-badge')).toContainText('Archived');
@@ -1244,10 +1467,12 @@ test.describe('Threading and reply flows', () => {
     await expect(page.locator('button', { hasText: 'Post Quick Reply' })).toHaveCount(0);
 
     await page.goto(`/topics/${fixture.archivedTopicId}/reply`);
+    await expect(page.locator('.vb-editor-textarea')).toBeVisible();
     await page.evaluate(() => {
       const textarea = document.querySelector('.vb-editor-textarea') as HTMLTextAreaElement | null;
-      const button = Array.from(document.querySelectorAll('button'))
-        .find((el) => el.textContent?.includes('Submit Reply')) as HTMLButtonElement | undefined;
+      const button = Array.from(document.querySelectorAll('button')).find((el) =>
+        el.textContent?.includes('Submit Reply')
+      ) as HTMLButtonElement | undefined;
       if (textarea) {
         textarea.removeAttribute('disabled');
         textarea.value = 'Trying to reply while archived.';
@@ -1258,12 +1483,17 @@ test.describe('Threading and reply flows', () => {
         button.click();
       }
     });
-    await expect(page.locator('.vb-login-error', { hasText: 'Cannot reply to a locked or archived topic.' })).toBeVisible();
+    await expect(
+      page.locator('.vb-login-error', { hasText: 'Cannot reply to a locked or archived topic.' })
+    ).toBeVisible();
 
     await expectAdminToolsHidden(page);
   });
 
-  test('context overflow recovery submits with the HTTP-compatible operation id fallback', async ({ page, context }) => {
+  test('context overflow recovery submits with the HTTP-compatible operation id fallback', async ({
+    page,
+    context,
+  }) => {
     const state = createMockState();
     await context.addInitScript(() => {
       Object.defineProperty(globalThis.crypto, 'randomUUID', { value: undefined, configurable: true });
@@ -1291,7 +1521,10 @@ test.describe('Threading and reply flows', () => {
     );
   });
 
-  test('compaction dialog remains reachable in short mobile portrait with advanced options', async ({ page, context }) => {
+  test('compaction dialog remains reachable in short mobile portrait with advanced options', async ({
+    page,
+    context,
+  }) => {
     const state = createMockState();
     await attachMockApi(page, state);
     await setAuthTokens(context, MODERATOR_TOKEN);
@@ -1337,7 +1570,9 @@ test.describe('Threading and reply flows', () => {
     expect(box).not.toBeNull();
     expect(box!.y + box!.height).toBeLessThanOrEqual(375);
     await expect(dialog.getByRole('button', { name: 'Compact and recover' })).toBeVisible();
-    await dialog.getByLabel('Custom summary instructions (optional)').fill('Preserve the current implementation state.');
+    await dialog
+      .getByLabel('Custom summary instructions (optional)')
+      .fill('Preserve the current implementation state.');
   });
 
   test('reload hydrates a server-owned compaction without trapping the topic in a modal', async ({ page, context }) => {
@@ -1361,7 +1596,7 @@ test.describe('Threading and reply flows', () => {
       errorMessage: null,
       createdAt: nextTimestamp(state),
       startedAt: nextTimestamp(state),
-      finishedAt: null
+      finishedAt: null,
     };
 
     await page.goto(`/topics/${fixture.topicId}`);
@@ -1372,7 +1607,10 @@ test.describe('Threading and reply flows', () => {
     await expect(page.getByRole('button', { name: 'Post Quick Reply' })).toBeDisabled();
   });
 
-  test('lost acceptance and reconciliation responses retain a conservative durable intent', async ({ page, context }) => {
+  test('lost acceptance and reconciliation responses retain a conservative durable intent', async ({
+    page,
+    context,
+  }) => {
     const state = createMockState();
     await attachMockApi(page, state);
     await setAuthTokens(context, MODERATOR_TOKEN);
@@ -1391,8 +1629,10 @@ test.describe('Threading and reply flows', () => {
     await expect(page.getByText('Compaction is running on the server.')).toBeVisible();
     await expect(page.getByRole('alert')).toContainText('The outcome is unknown; do not retry');
     await expect(page.getByRole('button', { name: 'Compact', exact: true }).first()).toBeDisabled();
-    const persisted = await page.evaluate((topicId) =>
-      localStorage.getItem(`codex-forum:compaction-intent:${topicId}`), fixture.topicId);
+    const persisted = await page.evaluate(
+      (topicId) => localStorage.getItem(`codex-forum:compaction-intent:${topicId}`),
+      fixture.topicId
+    );
     expect(persisted).toContain(fixture.topicId);
   });
 
@@ -1401,7 +1641,7 @@ test.describe('Threading and reply flows', () => {
     await context.addInitScript(() => {
       Object.defineProperties(globalThis.crypto, {
         randomUUID: { value: undefined, configurable: true },
-        getRandomValues: { value: undefined, configurable: true }
+        getRandomValues: { value: undefined, configurable: true },
       });
     });
     await attachMockApi(page, state);
@@ -1414,7 +1654,9 @@ test.describe('Threading and reply flows', () => {
     await page.getByLabel('I understand that compaction is destructive and may lose context.').check();
     await page.locator('.vb-compaction-modal').getByRole('button', { name: 'Compact and recover' }).click();
 
-    await expect(page.getByRole('alert')).toContainText('Secure random number generation is unavailable in this browser.');
+    await expect(page.getByRole('alert')).toContainText(
+      'Secure random number generation is unavailable in this browser.'
+    );
     expect(state.compactionRequests).toHaveLength(0);
   });
 
@@ -1433,12 +1675,16 @@ test.describe('Threading and reply flows', () => {
     await pageB.goto(`/topics/${fixture.topicId}`);
 
     await quickReplyBox(pageA).fill('Reply from page A');
+    await expect(pageA.locator('.vb-quick-reply')).toContainText('Draft saved');
     await quickReplyBox(pageB).fill('Reply from page B');
+    await expect(pageB.locator('.vb-quick-reply')).toContainText('Draft changed in another tab or device');
 
-    await Promise.all([
-      pageA.click('button:has-text("Post Quick Reply")'),
-      pageB.click('button:has-text("Post Quick Reply")')
-    ]);
+    await pageA.click('button:has-text("Post Quick Reply")');
+    await pageB.getByRole('button', { name: 'Keep my version' }).click();
+    await expect(pageB.locator('.vb-quick-reply')).toContainText('Draft changed in another tab or device');
+    await pageB.getByRole('button', { name: 'Keep my version' }).click();
+    await expect(pageB.locator('.vb-quick-reply')).toContainText('Draft saved');
+    await pageB.click('button:has-text("Post Quick Reply")');
 
     const apiBodies = await pageA.evaluate(async (topicId) => {
       const res = await fetch(`/api/topics/${topicId}/posts`);
@@ -1450,7 +1696,9 @@ test.describe('Threading and reply flows', () => {
     const apiTail = apiBodies.slice(-2).map((body) => body.trim());
     await pageA.goto(`/topics/${fixture.topicId}`);
     await pageA.locator('.vb-pagination-controls').first().locator('.vb-page-btn', { hasText: '2' }).click();
-    await expect(pageA.locator('.vb-pagination-controls').first().locator('.vb-page-btn', { hasText: '2' })).toHaveClass(/vb-page-active/);
+    await expect(
+      pageA.locator('.vb-pagination-controls').first().locator('.vb-page-btn', { hasText: '2' })
+    ).toHaveClass(/vb-page-active/);
     const pageTwoBodies = (await postTextList(pageA).allTextContents()).map((body) => body.trim());
     expect(pageTwoBodies).toEqual(expect.arrayContaining(apiTail));
     expect(pageTwoBodies.slice(-2)).toEqual(apiTail);

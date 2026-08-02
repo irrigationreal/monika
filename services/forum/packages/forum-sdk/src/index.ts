@@ -48,6 +48,10 @@ import type {
   LoginResponseDto,
   MatrixBridgeStatusDto,
   MatrixRoomMappingDto,
+  MessageDraftDto,
+  MessageDraftListResponseDto,
+  MessageDraftResponseDto,
+  MessageDraftWriteRequest,
   MessageTemplateDto,
   MessageTemplateListResponseDto,
   MessageTemplateReorderRequest,
@@ -179,6 +183,10 @@ export type {
   VerifyResponseDto,
   MatrixBridgeStatusDto,
   MatrixRoomMappingDto,
+  MessageDraftDto,
+  MessageDraftListResponseDto,
+  MessageDraftResponseDto,
+  MessageDraftWriteRequest,
   MessageTemplateDto,
   MessageTemplateListResponseDto,
   MessageTemplateReorderRequest,
@@ -304,6 +312,30 @@ function createApi({
       json<IdentityDto>(`/identities/${identityId}`, {
         method: 'PATCH',
         body: JSON.stringify(updates),
+      }),
+    listDrafts: () => json<MessageDraftListResponseDto>('/drafts'),
+    getDraft: (id: string) => json<MessageDraftResponseDto>(`/drafts/${encodeURIComponent(id)}`),
+    listForumDrafts: (forumId: string) =>
+      json<MessageDraftListResponseDto>(`/forums/${encodeURIComponent(forumId)}/drafts`),
+    getReplyDraft: (topicId: string) => json<MessageDraftResponseDto>(`/topics/${encodeURIComponent(topicId)}/draft`),
+    saveReplyDraft: (topicId: string, input: MessageDraftWriteRequest) =>
+      json<MessageDraftResponseDto>(`/topics/${encodeURIComponent(topicId)}/draft`, {
+        method: 'PUT',
+        body: JSON.stringify(input),
+      }),
+    createNewThreadDraft: (forumId: string, input: MessageDraftWriteRequest) =>
+      json<MessageDraftResponseDto>(`/forums/${encodeURIComponent(forumId)}/drafts`, {
+        method: 'POST',
+        body: JSON.stringify(input),
+      }),
+    updateDraft: (id: string, input: MessageDraftWriteRequest) =>
+      json<MessageDraftResponseDto>(`/drafts/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        body: JSON.stringify(input),
+      }),
+    deleteDraft: (id: string, revision: number) =>
+      json<{ ok: boolean }>(`/drafts/${encodeURIComponent(id)}?revision=${String(revision)}`, {
+        method: 'DELETE',
       }),
     listEffectiveMessageTemplates: (context: MessageTemplateDto['contexts'][number], forumId: string) =>
       json<MessageTemplateListResponseDto>(
@@ -752,6 +784,7 @@ export function createForumSdk(options?: ForumSdkOptions) {
         robotMode?: 'auto' | 'mention' | 'off';
         autoCompactEnabled?: boolean;
         silent?: boolean;
+        draft?: { id: string; revision: number };
       }
     ) => json<TopicDto>(`/forums/${forumId}/topics`, { method: 'POST', body: JSON.stringify(payload) }),
     getTopic: (topicId: string) => json<TopicDto>(`/topics/${topicId}`),
@@ -813,12 +846,13 @@ export function createForumSdk(options?: ForumSdkOptions) {
       payload: {
         body: string;
         parentPostId?: string | null;
-        model?: string;
-        reasoningEffort?: string;
+        model?: string | null;
+        reasoningEffort?: string | null;
         autoCompactEnabled?: boolean;
         autoCompactRevision?: number;
         attachmentsPending?: boolean;
         silent?: boolean;
+        draft?: { id: string; revision: number };
       }
     ) => json<PostDto>(`/topics/${topicId}/posts`, { method: 'POST', body: JSON.stringify(payload) }),
     dispatchPost: (postId: string, payload: { model?: string | null; reasoningEffort?: string | null } = {}) =>

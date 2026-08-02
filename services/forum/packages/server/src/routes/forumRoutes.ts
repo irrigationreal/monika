@@ -1,4 +1,8 @@
-import { CreateCompactionRequestSchema } from '@irrigationreal/codex-forum-contracts';
+import {
+  CreateCompactionRequestSchema,
+  CreatePostRequestSchema,
+  CreateTopicRequestSchema,
+} from '@irrigationreal/codex-forum-contracts';
 
 import {
   mapCompactionOperationToDto,
@@ -7,6 +11,7 @@ import {
 } from '../mappers/dto';
 import { CompactionConflictError, CompactionNotFoundError } from '../services/compactionService';
 import { serializePost, serializeTopic } from '../utils/serializers';
+import { parseBody } from '../utils/validation';
 
 import type { FastifyInstance } from 'fastify';
 
@@ -339,24 +344,19 @@ export function registerForumRoutes({
       if (!canCreateTopic(forum, identity)) {
         throw app.httpErrors.forbidden('Posting not allowed in this forum');
       }
-      const body = request.body as {
-        title?: string;
-        body?: string;
-        model?: string | null;
-        reasoningEffort?: string | null;
-        robotMode?: string | null;
-        autoCompactEnabled?: boolean;
-        attachmentsPending?: boolean;
-        silent?: boolean;
-      };
-      if (!body?.title || !body?.body) {
-        throw app.httpErrors.badRequest('title and body are required');
+      const body = parseBody(app, CreateTopicRequestSchema, request.body);
+      if (body.draft && user.authType !== 'session') {
+        throw app.httpErrors.forbidden('Private drafts require a browser session');
       }
-
       const robotMode = resolveRobotMode(body.robotMode ?? null);
       if (body.autoCompactEnabled !== undefined) requireAdmin(request);
       const deferRobot = Boolean(body.attachmentsPending) && !body.silent;
-      const { topic, post } = store.createTopic({
+      const shouldDispatchRobot =
+        !body.silent && !deferRobot && robotMode !== 'off' && (robotMode !== 'mention' || hasRobotMention(body.body));
+      let creation: ReturnType<ForumStore['createTopic']>;
+      try {
+        creation = store.runInTransaction(() => {
+          const created = store.createTopic({
         forumId,
         title: body.title,
         body: body.body,
@@ -364,7 +364,9 @@ export function registerForumRoutes({
         silent: Boolean(body.silent) || deferRobot,
         robotMode,
         autoCompactEnabled: body.autoCompactEnabled ?? false,
+            draft: body.draft,
       });
+          const { topic, post } = created;
       store.upsertTopicSubscription({ identityId: user.identityId, topicId: topic.id, mode: 'watching' });
       store.upsertTopicRead({
         identityId: user.identityId,
@@ -372,13 +374,8 @@ export function registerForumRoutes({
         lastReadPostId: post.id,
         lastReadAt: post.created_at,
       });
-
       const session = store.ensureSession({ topicId: topic.id });
       store.createSessionMessage(session.id, 'user', body.body, 'public');
-
-      const shouldDispatchRobot =
-        !body.silent && !deferRobot && robotMode !== 'off' && (robotMode !== 'mention' || hasRobotMention(body.body));
-
       if (shouldDispatchRobot) {
         store.createPostDispatch({
           topicId: topic.id,
@@ -388,10 +385,24 @@ export function registerForumRoutes({
           model: body.model?.trim() || null,
           reasoningEffort: body.reasoningEffort?.trim() || null,
         });
-        postDispatchService?.wake();
       }
+          return created;
+        });
+      } catch (error) {
+        if (error instanceof Error && error.message === 'draft changed in another session')
+          throw app.httpErrors.conflict(error.message);
+        throw error;
+      }
+      const { topic, post } = creation;
 
-      // Dispatch webhook for topic creation
+      if (shouldDispatchRobot) {
+        try {
+          postDispatchService?.wake();
+        } catch (error) {
+          request.log.error({ err: error, topicId: topic.id }, 'Failed to wake post dispatch after topic commit');
+        }
+      }
+      try {
       webhookService.dispatch('topic.created', {
         topic: {
           id: topic.id,
@@ -409,6 +420,9 @@ export function registerForumRoutes({
           createdAt: post.created_at,
         },
       });
+      } catch (error) {
+        request.log.error({ err: error, topicId: topic.id }, 'Failed to enqueue topic webhook after commit');
+      }
 
       return serializeTopicWithPublicLineage(topic, request);
     }
@@ -456,7 +470,8 @@ export function registerForumRoutes({
     requireTopicVisible(topicId, request);
     if (!compactionService) throw app.httpErrors.serviceUnavailable('Compaction service is unavailable');
     const parsed = CreateCompactionRequestSchema.safeParse(request.body);
-    if (!parsed.success) throw app.httpErrors.badRequest(parsed.error.issues[0]?.message ?? 'Invalid compaction request');
+    if (!parsed.success)
+      throw app.httpErrors.badRequest(parsed.error.issues[0]?.message ?? 'Invalid compaction request');
     try {
       const operation = await compactionService.enqueue({
         operationId: parsed.data.operationId,
@@ -628,7 +643,8 @@ export function registerForumRoutes({
           model: launchModel,
           reasoningEffort: launchReasoningEffort,
           lastUpdatedAt: robotState?.last_updated_at ?? null,
-          lastTurnError: robotState?.last_error_message && robotState.last_error_at
+          lastTurnError:
+            robotState?.last_error_message && robotState.last_error_at
             ? {
                 message: robotState.last_error_message,
                 at: robotState.last_error_at,
@@ -863,20 +879,10 @@ export function registerForumRoutes({
       const user = requireScope(getCurrentUser(request), 'write');
 
       const { topicId } = request.params as { topicId: string };
-      const body = request.body as {
-        body?: string;
-        parentPostId?: string | null;
-        model?: string | null;
-        reasoningEffort?: string | null;
-        autoCompactEnabled?: boolean;
-        autoCompactRevision?: number;
-        attachmentsPending?: boolean;
-        silent?: boolean;
-      };
-      if (!body?.body) {
-        throw app.httpErrors.badRequest('body is required');
+      const body = parseBody(app, CreatePostRequestSchema, request.body);
+      if (body.draft && user.authType !== 'session') {
+        throw app.httpErrors.forbidden('Private drafts require a browser session');
       }
-
       const topic = store.getTopic(topicId);
       if (!topic) {
         throw app.httpErrors.notFound('topic not found');
@@ -921,7 +927,11 @@ export function registerForumRoutes({
         robotMode !== 'off' &&
         (robotMode !== 'mention' || hasRobotMention(body.body ?? ''));
 
-      const post = store.createPost({
+      let post: ReturnType<ForumStore['createPost']>;
+      const committedNotifications: { identityId: string; payload: unknown }[] = [];
+      try {
+        post = store.runInTransaction(() => {
+          const created = store.createPost({
         topicId,
         body: body.body,
         parentPostId: body.parentPostId ?? null,
@@ -929,6 +939,7 @@ export function registerForumRoutes({
         autoCompactEnabled: changingAutoCompact ? body.autoCompactEnabled : undefined,
         autoCompactRevision: changingAutoCompact ? body.autoCompactRevision : undefined,
         silent: Boolean(body.silent) || deferRobot,
+            draft: body.draft,
       });
       if (!store.getTopicSubscription(user.identityId, topicId)) {
         store.upsertTopicSubscription({ identityId: user.identityId, topicId, mode: 'watching' });
@@ -936,26 +947,53 @@ export function registerForumRoutes({
       store.upsertTopicRead({
         identityId: user.identityId,
         topicId,
-        lastReadPostId: post.id,
-        lastReadAt: post.created_at,
+            lastReadPostId: created.id,
+            lastReadAt: created.created_at,
       });
-
       const session = store.ensureSession({ topicId });
       store.createSessionMessage(session.id, 'user', body.body, 'public');
-
       if (shouldDispatchRobot) {
         store.createPostDispatch({
           topicId,
-          postId: post.id,
+              postId: created.id,
           sessionId: session.id,
           mode: 'auto',
           model: body.model?.trim() || null,
           reasoningEffort: body.reasoningEffort?.trim() || null,
         });
-        postDispatchService?.wake();
+          }
+          const subscriptions = store.listTopicSubscriptions(topicId, 'watching');
+          for (const subscription of subscriptions) {
+            if (subscription.identity_id === user.identityId) continue;
+            const notification = store.createNotification({
+              identityId: subscription.identity_id,
+              type: 'post.created',
+              actorId: user.identityId,
+              topicId,
+              postId: created.id,
+              payload: { topicId, postId: created.id },
+            });
+            committedNotifications.push({ identityId: subscription.identity_id, payload: notification });
+          }
+          return created;
+        });
+      } catch (error) {
+        if (error instanceof Error && error.message === 'draft changed in another session')
+          throw app.httpErrors.conflict(error.message);
+        throw error;
       }
 
-      // Dispatch webhook for post creation
+      if (shouldDispatchRobot) {
+        try {
+          postDispatchService?.wake();
+        } catch (error) {
+          request.log.error(
+            { err: error, topicId, postId: post.id },
+            'Failed to wake post dispatch after reply commit'
+          );
+        }
+      }
+      try {
       webhookService.dispatch('post.created', {
         post: {
           id: post.id,
@@ -966,19 +1004,18 @@ export function registerForumRoutes({
           createdAt: post.created_at,
         },
       });
-
-      const subscriptions = store.listTopicSubscriptions(topicId, 'watching');
-      for (const subscription of subscriptions) {
-        if (subscription.identity_id === user.identityId) continue;
-        const notification = store.createNotification({
-          identityId: subscription.identity_id,
-          type: 'post.created',
-          actorId: user.identityId,
-          topicId,
-          postId: post.id,
-          payload: { topicId, postId: post.id },
-        });
-        emitNotification(subscription.identity_id, notification);
+      } catch (error) {
+        request.log.error({ err: error, topicId, postId: post.id }, 'Failed to enqueue post webhook after commit');
+      }
+      for (const notification of committedNotifications) {
+        try {
+          emitNotification(notification.identityId, notification.payload);
+        } catch (error) {
+          request.log.error(
+            { err: error, topicId, postId: post.id, identityId: notification.identityId },
+            'Failed to emit committed post notification'
+          );
+        }
       }
 
       return serializePost(post);

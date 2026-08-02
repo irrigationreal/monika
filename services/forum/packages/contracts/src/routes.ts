@@ -968,6 +968,71 @@ export const apiRoutes: ApiRoute[] = [
     response: { schema: schemas.UserPostHistoryResponseDtoSchema }
   },
 
+  // Private autosaved drafts (browser-session only)
+  {
+    method: 'get',
+    path: '/drafts',
+    summary: 'List my private drafts',
+    tags: ['drafts'],
+    response: { schema: schemas.MessageDraftListResponseDtoSchema },
+  },
+  {
+    method: 'get',
+    path: '/drafts/{id}',
+    summary: 'Get my private draft',
+    tags: ['drafts'],
+    request: { params: stringParam('id') },
+    response: { schema: schemas.MessageDraftResponseDtoSchema },
+  },
+  {
+    method: 'get',
+    path: '/forums/{forumId}/drafts',
+    summary: 'List my new-thread drafts for a forum',
+    tags: ['drafts'],
+    request: { params: stringParam('forumId') },
+    response: { schema: schemas.MessageDraftListResponseDtoSchema },
+  },
+  {
+    method: 'get',
+    path: '/topics/{topicId}/draft',
+    summary: 'Get my reply draft',
+    tags: ['drafts'],
+    request: { params: stringParam('topicId') },
+    response: { schema: schemas.MessageDraftResponseDtoSchema },
+  },
+  {
+    method: 'put',
+    path: '/topics/{topicId}/draft',
+    summary: 'Autosave my reply draft',
+    tags: ['drafts'],
+    request: { params: stringParam('topicId'), body: { schema: schemas.MessageDraftWriteRequestSchema } },
+    response: { schema: schemas.MessageDraftResponseDtoSchema },
+  },
+  {
+    method: 'post',
+    path: '/forums/{forumId}/drafts',
+    summary: 'Create my new-thread draft',
+    tags: ['drafts'],
+    request: { params: stringParam('forumId'), body: { schema: schemas.MessageDraftWriteRequestSchema } },
+    response: { schema: schemas.MessageDraftResponseDtoSchema },
+  },
+  {
+    method: 'put',
+    path: '/drafts/{id}',
+    summary: 'Autosave my new-thread draft',
+    tags: ['drafts'],
+    request: { params: stringParam('id'), body: { schema: schemas.MessageDraftWriteRequestSchema } },
+    response: { schema: schemas.MessageDraftResponseDtoSchema },
+  },
+  {
+    method: 'delete',
+    path: '/drafts/{id}',
+    summary: 'Delete my private draft',
+    tags: ['drafts'],
+    request: { params: stringParam('id'), query: schemas.MessageDraftRevisionQuerySchema },
+    response: { schema: okSchema },
+  },
+
   // Message templates
   {
     method: 'get', path: '/message-templates/effective', summary: 'List effective message templates', tags: ['message-templates'],
