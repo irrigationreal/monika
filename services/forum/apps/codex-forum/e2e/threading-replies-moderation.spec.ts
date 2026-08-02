@@ -1131,6 +1131,12 @@ test.describe('Threading and reply flows', () => {
     await page.click('.vb-editor-btn[title="Insert Link"]');
     await expect(page.locator('.vb-editor-textarea')).toHaveValue(/\[URL=/);
 
+    const editor = page.locator('.vb-editor-textarea');
+    await editor.fill('prefix value suffix');
+    await editor.evaluate((element: HTMLTextAreaElement) => element.setSelectionRange(7, 12));
+    await page.click('.vb-editor-btn[title="Code"]');
+    await expect(editor).toHaveValue(['prefix ', '```', 'value', '```', ' suffix'].join('\n'));
+
     await page.fill('.vb-editor-textarea', 'Preview content for the thread.');
     await page.click('button:has-text("Show Preview")');
     await expect(page.locator('.vb-preview-panel')).toBeVisible();
@@ -1199,6 +1205,43 @@ test.describe('Threading and reply flows', () => {
     await deleteDialog.getByRole('button', { name: 'Delete draft', exact: true }).click();
     await expect(draftCard).toHaveCount(0);
     expect(Object.keys(state.drafts)).toHaveLength(0);
+  });
+
+  test('fenced code blocks form one themed shell across light, dark, and narrow layouts', async ({ page, context }) => {
+    const state = createMockState();
+    await attachMockApi(page, state);
+    await setAuthTokens(context, REGULAR_TOKEN);
+    await page.goto('/');
+    const fixture = await createFixture(page, { postCount: 1 });
+    const firstPost = state.postsByTopic[fixture.topicId]?.[0];
+    if (!firstPost) throw new Error('Code-block fixture post unavailable');
+    firstPost.body = ['````markdown', '```js', 'console.log("inside")', '```', '````'].join('\n');
+
+    await page.goto(`/topics/${fixture.topicId}`);
+    const block = page.locator('.vb-code-block');
+    await expect(block).toHaveCount(1);
+    await expect(block.locator('.vb-code-content')).toContainText('```js');
+    await expect(block.locator('.vb-code-content')).toContainText('console.log("inside")');
+
+    for (const theme of ['classic-dark', 'classic-light']) {
+      await page.evaluate((themeKey) => document.documentElement.setAttribute('data-theme', themeKey), theme);
+      await expectThemedStyle(page, '.vb-code-block', {
+        background: '--bg-code',
+        color: '--text-code',
+        border: '--border-default',
+      });
+      await expectThemedStyle(page, '.vb-code-toolbar', { background: '--bg-code' });
+      await expectThemedStyle(page, 'pre.vb-code', { background: '--bg-code', color: '--text-code' });
+      await expect(block.locator('.vb-code-content')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+    }
+
+    await page.setViewportSize({ width: 390, height: 800 });
+    const blockBox = await block.boundingBox();
+    const contentBox = await page.locator('.vb-post-content').first().boundingBox();
+    expect(blockBox).not.toBeNull();
+    expect(contentBox).not.toBeNull();
+    if (!blockBox || !contentBox) throw new Error('Code-block responsive layout boxes unavailable');
+    expect(blockBox.width).toBeLessThanOrEqual(contentBox.width + 1);
   });
 
   test('autosaved reply is shared by quick and full composers and consumed on post', async ({ page, context }) => {

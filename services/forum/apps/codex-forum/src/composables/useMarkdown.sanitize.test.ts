@@ -171,11 +171,105 @@ describe('useMarkdown sanitizer', () => {
     expect(html).not.toContain('™');
   });
 
-  it('preserves code block toolbar and copy button', () => {
+  it('preserves code block toolbar, semantic content class, and copy button', () => {
     const html = renderContent(['```js', 'console.log("hi")', '```'].join('\n'));
     expect(html).toContain('class="vb-code-block"');
     expect(html).toContain('class="vb-code-toolbar"');
+    expect(html).toContain('class="vb-code-content language-javascript"');
     expect(html).toContain('class="vb-code-copy"');
     expect(html).toContain('>Copy<');
+  });
+
+  it('lets a longer outer fence contain shorter backtick fences literally', () => {
+    const html = renderContent(['````markdown', '```js', 'console.log("inside")', '```', '````'].join('\n'));
+    expect(html.match(/class="vb-code-block"/g)).toHaveLength(1);
+    expect(html).toContain('```js');
+    expect(html).toContain('console.log(&quot;inside&quot;)');
+  });
+
+  it('supports tilde fences and closing runs longer than their opener', () => {
+    const tildeHtml = renderContent(['~~~markdown', '```js', 'inside', '```', '~~~~'].join('\n'));
+    expect(tildeHtml.match(/class="vb-code-block"/g)).toHaveLength(1);
+    expect(tildeHtml).toContain('```js');
+
+    const backtickHtml = renderContent(['```text', 'inside', '`````'].join('\n'));
+    expect(backtickHtml.match(/class="vb-code-block"/g)).toHaveLength(1);
+    expect(backtickHtml).toContain('inside');
+  });
+
+  it('does not greedily combine adjacent fenced blocks or require blank boundary lines', () => {
+    const html = renderContent([
+      '```text',
+      'first',
+      '```',
+      'between',
+      '```text',
+      'second',
+      '```'
+    ].join('\n'));
+    expect(html.match(/class="vb-code-block"/g)).toHaveLength(2);
+    expect(html).toContain('<p>between</p>');
+    expect(html).not.toMatch(/<p>\s*<div class="vb-code-block"/);
+  });
+
+  it('keeps immediate prose outside the restored block element', () => {
+    const html = renderContent(['```text', 'code', '```', 'after'].join('\n'));
+    expect(html).toContain('</div>\n<p>after</p>');
+    expect(html).not.toMatch(/<p>\s*<div class="vb-code-block"/);
+  });
+
+  it('keeps BBCode code tags literal inside Markdown fences', () => {
+    const html = renderContent(['```text', '[code]literal[/code]', '```'].join('\n'));
+    expect(html.match(/class="vb-code-block"/g)).toHaveLength(1);
+    expect(html).toContain('[code]literal[/code]');
+    expect(html).not.toContain('VBCODEBLOCKPLACEHOLDER');
+  });
+
+  it('does not pair a BBCode opener inside a fence with a closer outside it', () => {
+    const html = renderContent(['```text', '[code]literal', '```', 'after[/code]'].join('\n'));
+    expect(html.match(/class="vb-code-block"/g)).toHaveLength(1);
+    expect(html).toContain('[code]literal');
+    expect(html).toContain('<p>after[/code]</p>');
+  });
+
+  it('keeps Markdown fence syntax literal inside BBCode code blocks', () => {
+    const html = renderContent(['[code]', '```text', 'literal', '```', '[/code]', 'after'].join('\n'));
+    expect(html.match(/class="vb-code-block"/g)).toHaveLength(1);
+    expect(html).toContain('```text');
+    expect(html).toContain('<p>after</p>');
+  });
+
+  it('keeps fence-like lines literal until a compatible outer closer arrives', () => {
+    const html = renderContent(['`````markdown', '````', 'still inside', '~~~', '`````'].join('\n'));
+    expect(html.match(/class="vb-code-block"/g)).toHaveLength(1);
+    expect(html).toContain('````');
+    expect(html).toContain('~~~');
+    expect(html).toContain('still inside');
+  });
+
+  it('renders unclosed streamed fences provisionally through the current end of input', () => {
+    const source = ['```html', '<img src="https://example.com/x.png" onerror="alert(1)">', '```'].join('\n');
+    const openingCompleteAt = source.indexOf('\n') + 1;
+
+    for (let end = openingCompleteAt; end <= source.length; end += 1) {
+      const html = renderContent(source.slice(0, end));
+      expect(html).toContain('class="vb-code-block"');
+      expect(html).not.toMatch(/<img\b/i);
+    }
+  });
+
+  it('supports indented CRLF fences without changing their literal content', () => {
+    const html = renderContent('  ````text\r\n  ```\r\n  value\r\n  ```\r\n  ````');
+    expect(html.match(/class="vb-code-block"/g)).toHaveLength(1);
+    expect(html).toContain('  ```\r\n  value\r\n  ```');
+  });
+
+  it('keeps an indented fenced block inside its Markdown list item', () => {
+    const html = renderContent(['- before', '', '  ```text', '  code', '  ```', '', '  after'].join('\n'));
+    expect(html.match(/class="vb-code-block"/g)).toHaveLength(1);
+    expect(html).toContain('<li>');
+    expect(html).toContain('before');
+    expect(html).toContain('after');
+    expect(html).not.toMatch(/<p>\s*<div class="vb-code-block"/);
   });
 });
