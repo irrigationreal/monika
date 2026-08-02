@@ -445,9 +445,10 @@ the old RP ID unusable. `CODEX_FORUM_WEBAUTHN_RP_NAME` controls only the display
 credentials are discoverable, and user verification is mandatory.
 
 Each password login, invite registration, or verification creates an independent random opaque session. Only its SHA-256
-hash is stored. Browsers receive an HttpOnly, `SameSite=Lax`, path `/` cookie; it is also `Secure` whenever
-`CODEX_FORUM_BASE_URL` uses HTTPS. Logout removes only that session. Password and passkey changes deliberately revoke
-other sessions.
+hash is stored. Authenticated identity responses expose the signed-in account's own username so password managers can
+associate password creation and changes; public profile responses do not expose it. Browsers receive an HttpOnly,
+`SameSite=Lax`, path `/` cookie; it is also `Secure` whenever `CODEX_FORUM_BASE_URL` uses HTTPS. Logout removes only
+that session. Password and passkey changes deliberately revoke other sessions.
 
 The first-party browser SDK is same-origin by design: JSON, uploads, and EventSource use the browser cookie, and URLs
 never contain session secrets. Every unsafe request that supplies `Origin` must match the configured base origin
@@ -465,6 +466,11 @@ passkey authentication, except that a freshly verified account with neither a pa
 first passkey. An account cannot remove its final passkey unless global password login is enabled and it has a password.
 A passwordless user can create a new password only from a recent passkey-authenticated session while the global password
 gate is on.
+
+Both WebAuthn challenge-start endpoints are POSTs because they create one-time server state. Their request contract is an
+empty JSON object (`{}`) with `Content-Type: application/json`; clients must not issue an untyped bodyless POST. The
+first-party JSON SDK normalizes bodyless POST operations to `{}` automatically. This keeps empty-operation wire contracts
+deterministic through Fastify and strict reverse proxies while preserving POST semantics for challenge creation.
 
 The authentication migration deliberately refuses to proceed if `external_identities` contains any rows. Before
 deploying, inventory and unlink or otherwise migrate every legacy external identity, back up SQLite, then restart. The

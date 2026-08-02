@@ -123,7 +123,7 @@ describe('Auth route access controls', () => {
 
   it('makes both passkey login endpoints honor disabled authentication', async () => {
     const app = await buildApp({ enableAuth: false });
-    const options = await app.inject({ method: 'POST', url: '/auth/webauthn/login/options' });
+    const options = await app.inject({ method: 'POST', url: '/auth/webauthn/login/options', payload: {} });
     expect(options.statusCode).toBe(403);
     const verify = await app.inject({
       method: 'POST',
@@ -138,13 +138,13 @@ describe('Auth route access controls', () => {
 
   it('protects passkey profile routes while keeping usernameless login options public', async () => {
     const app = await buildApp();
-    const options = await app.inject({ method: 'POST', url: '/auth/webauthn/login/options' });
+    const options = await app.inject({ method: 'POST', url: '/auth/webauthn/login/options', payload: {} });
     expect(options.statusCode).toBe(200);
     expect(options.json()).toMatchObject({ challengeId: expect.any(String), options: { rpId: expect.any(String) } });
 
     const list = await app.inject({ method: 'GET', url: '/me/webauthn/credentials' });
     expect(list.statusCode).toBe(401);
-    const enroll = await app.inject({ method: 'POST', url: '/me/webauthn/register/options' });
+    const enroll = await app.inject({ method: 'POST', url: '/me/webauthn/register/options', payload: {} });
     expect(enroll.statusCode).toBe(401);
     const remove = await app.inject({ method: 'DELETE', url: '/me/webauthn/credentials/other-users-key' });
     expect(remove.statusCode).toBe(401);
@@ -212,12 +212,16 @@ describe('Auth route access controls', () => {
       payload: { username: 'multi-device', password: 'password123' },
     });
     expect(login.statusCode).toBe(200);
+    expect(login.json()).toMatchObject({ identity: { username: 'multi-device' } });
     expect(store.getAuthSession('existing-device')).not.toBeNull();
     const cookie = login.headers['set-cookie'];
     expect(cookie).toBeTypeOf('string');
     const currentToken = (cookie as string).match(/cforum_session=([^;]+)/)?.[1];
     expect(currentToken).toBeTruthy();
     expect(store.getAuthSession(currentToken as string)).not.toBeNull();
+
+    const me = await app.inject({ method: 'GET', url: '/auth/me', headers: { cookie: cookie as string } });
+    expect(me.json()).toMatchObject({ identity: { username: 'multi-device' } });
 
     const logout = await app.inject({ method: 'POST', url: '/auth/logout', headers: { cookie: cookie as string } });
     expect(logout.statusCode).toBe(200);

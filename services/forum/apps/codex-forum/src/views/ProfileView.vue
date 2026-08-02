@@ -545,8 +545,19 @@ onMounted(async () => {
             </li>
           </ul>
           <div v-else class="vb-hint">No passkeys enrolled.</div>
+          <div class="vb-form-field" style="margin-top: 10px">
+            <label for="passkey-name">Passkey name</label>
+            <input
+              id="passkey-name"
+              v-model="passkeyName"
+              class="vb-text-input"
+              name="passkeyName"
+              type="text"
+              autocomplete="off"
+              placeholder="e.g. MacBook Pro"
+            />
+          </div>
           <div class="vb-form-actions" style="margin-top: 10px">
-            <input v-model="passkeyName" type="text" placeholder="Passkey name" />
             <button class="vb-btn" type="button" @click="enrollPasskey">Add passkey</button>
             <button
               v-if="currentUser.hasPassword && passkeys.length"
@@ -557,36 +568,103 @@ onMounted(async () => {
               Remove password
             </button>
           </div>
-          <div
+          <form
             v-if="!currentUser.hasPassword && state.passwordLoginEnabled.value"
-            class="vb-form-actions"
-            style="margin-top: 10px"
+            autocomplete="on"
+            @submit.prevent="createPassword"
           >
-            <input v-model="newPassword" type="password" placeholder="New password" />
-            <input v-model="confirmNewPassword" type="password" placeholder="Confirm password" />
-            <button class="vb-btn" type="button" @click="createPassword">Create password</button>
-          </div>
+            <div v-if="currentUser.username" class="vb-form-field" style="margin-top: 10px">
+              <label for="create-password-username">Account username</label>
+              <input
+                id="create-password-username"
+                :value="currentUser.username"
+                class="vb-text-input"
+                name="username"
+                type="text"
+                autocomplete="username"
+                readonly
+              />
+            </div>
+            <div class="vb-form-field" style="margin-top: 10px">
+              <label for="create-password">New password</label>
+              <input
+                id="create-password"
+                v-model="newPassword"
+                class="vb-text-input"
+                name="newPassword"
+                type="password"
+                autocomplete="new-password"
+              />
+            </div>
+            <div class="vb-form-field" style="margin-top: 10px">
+              <label for="confirm-created-password">Confirm password</label>
+              <input
+                id="confirm-created-password"
+                v-model="confirmNewPassword"
+                class="vb-text-input"
+                name="confirmPassword"
+                type="password"
+                autocomplete="new-password"
+              />
+            </div>
+            <div class="vb-form-actions" style="margin-top: 10px">
+              <button class="vb-btn" type="submit">Create password</button>
+            </div>
+          </form>
         </div>
       </div>
       <div v-if="currentUser?.hasPassword && state.passwordLoginEnabled.value" class="vb-card" style="margin-top: 12px">
         <div class="vb-card-header">Change Password</div>
-        <div class="vb-card-body">
-          <div class="vb-form-row">
-            <label>Current password</label>
-            <input v-model="currentPassword" type="password" autocomplete="current-password" />
+        <form class="vb-card-body" autocomplete="on" @submit.prevent="changePassword">
+          <div v-if="currentUser.username" class="vb-form-row">
+            <label for="change-password-username">Account username</label>
+            <input
+              id="change-password-username"
+              :value="currentUser.username"
+              class="vb-text-input"
+              name="username"
+              type="text"
+              autocomplete="username"
+              readonly
+            />
           </div>
           <div class="vb-form-row">
-            <label>New password</label>
-            <input v-model="newPassword" type="password" autocomplete="new-password" />
+            <label for="current-password">Current password</label>
+            <input
+              id="current-password"
+              v-model="currentPassword"
+              class="vb-text-input"
+              name="currentPassword"
+              type="password"
+              autocomplete="current-password"
+            />
           </div>
           <div class="vb-form-row">
-            <label>Confirm new password</label>
-            <input v-model="confirmNewPassword" type="password" autocomplete="new-password" />
+            <label for="new-password">New password</label>
+            <input
+              id="new-password"
+              v-model="newPassword"
+              class="vb-text-input"
+              name="newPassword"
+              type="password"
+              autocomplete="new-password"
+            />
+          </div>
+          <div class="vb-form-row">
+            <label for="confirm-new-password">Confirm new password</label>
+            <input
+              id="confirm-new-password"
+              v-model="confirmNewPassword"
+              class="vb-text-input"
+              name="confirmNewPassword"
+              type="password"
+              autocomplete="new-password"
+            />
           </div>
           <div class="vb-form-actions">
-            <button class="vb-btn" :disabled="isSaving" type="button" @click="changePassword">Update Password</button>
+            <button class="vb-btn" :disabled="isSaving" type="submit">Update Password</button>
           </div>
-        </div>
+        </form>
       </div>
     </div>
   </section>
@@ -679,7 +757,7 @@ onMounted(async () => {
   display: block;
   font-weight: bold;
   margin-bottom: 6px;
-  color: var(--brand-accent);
+  color: var(--text-primary);
 }
 
 .vb-form-row input:not([type='checkbox']):not([type='radio']),

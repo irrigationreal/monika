@@ -1039,6 +1039,7 @@ export const AdminCancelDeployOnFinishResponseDtoSchema: z.ZodType<AdminCancelDe
 export const AuthIdentityDtoSchema: z.ZodType<AuthIdentityDto> = z.object({
   id: z.string(),
   displayName: z.string(),
+  username: optionalNullableString,
   kind: IdentityKindSchema,
   parentIdentityId: optionalNullableString,
   avatarUrl: optionalNullableString,
@@ -1081,6 +1082,7 @@ export const VerifyResponseDtoSchema: z.ZodType<VerifyResponseDto> = z.object({
   identity: AuthIdentityDtoSchema,
 });
 
+export const EmptyJsonRequestSchema = z.object({}).strict();
 export const WebAuthnOptionsResponseDtoSchema = z.object({
   challengeId: z.string(),
   options: z.record(z.unknown()),

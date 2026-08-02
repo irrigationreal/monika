@@ -840,6 +840,7 @@ export interface AdminCancelDeployOnFinishResponseDto {
 export interface AuthIdentityDto {
   id: string;
   displayName: string;
+  username?: string | null;
   kind: IdentityDto['kind'];
   parentIdentityId?: string | null;
   avatarUrl?: string | null;

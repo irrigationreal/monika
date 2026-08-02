@@ -24,6 +24,7 @@ export function buildOpenApiDocument(options?: OpenApiBuildOptions): unknown {
     const requestBody =
       route.request?.body
         ? {
+          required: true,
           content: {
             [bodyContentType]: {
               schema: route.request.body.schema

@@ -114,7 +114,7 @@ export function registerAuthRoutes({
 
       issueBrowserSession(reply, store, identity.id, 'password');
       const identityDto = mapIdentityToDto(mapIdentityRowToDomain(identity));
-      return { identity: { ...identityDto, hasPassword: true } };
+      return { identity: { ...identityDto, username: identity.username, hasPassword: true } };
     }
   );
 
@@ -141,6 +141,7 @@ export function registerAuthRoutes({
     return {
       identity: {
         ...identityDto,
+        username: identity.username,
         hasPrivateEmail: Boolean(identity.private_email),
         hasPassword: Boolean(identity.password_hash),
       },
@@ -396,7 +397,7 @@ export function registerAuthRoutes({
 
         issueBrowserSession(reply, store, identity.id, 'password');
         const identityDto = mapIdentityToDto(mapIdentityRowToDomain(identity));
-        return { identity: { ...identityDto, hasPassword: true } };
+        return { identity: { ...identityDto, username: identity.username, hasPassword: true } };
       }
 
       // Invite code present but missing credentials
@@ -421,7 +422,7 @@ export function registerAuthRoutes({
       }
 
       return {
-        identity: { ...identityDto, hasPassword: false },
+        identity: { ...identityDto, username: identity.username, hasPassword: false },
         verifyUrl: link.url,
         expiresAt: link.expiresAt,
         emailSent: !!body.email,
@@ -444,7 +445,7 @@ export function registerAuthRoutes({
 
     issueBrowserSession(reply, store, identity.id, 'verification');
     const identityDto = mapIdentityToDto(mapIdentityRowToDomain(identity));
-    return { identity: { ...identityDto, hasPassword: Boolean(identity.password_hash) } };
+    return { identity: { ...identityDto, username: identity.username, hasPassword: Boolean(identity.password_hash) } };
   });
 
   // Invite endpoints (admin only)

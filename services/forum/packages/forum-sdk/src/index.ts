@@ -446,8 +446,10 @@ export function createForumSdk(options?: ForumSdkOptions) {
 
   async function json<T>(path: string, init?: RequestInit): Promise<T> {
     const token = storage.getAuthToken();
+    const method = (init?.method ?? 'GET').toUpperCase();
+    const body = init?.body ?? (method === 'POST' ? JSON.stringify({}) : undefined);
     const headers: Record<string, string> = {};
-    if (init?.body) {
+    if (body !== undefined) {
       headers['Content-Type'] = 'application/json';
     }
     if (token) {
@@ -467,6 +469,7 @@ export function createForumSdk(options?: ForumSdkOptions) {
         ...(normalizedInitHeaders as Record<string, string>),
       },
       ...restInit,
+      body,
       credentials: restInit.credentials ?? 'same-origin',
     });
     if (!res.ok) {
@@ -574,7 +577,8 @@ export function createForumSdk(options?: ForumSdkOptions) {
             `${baseUrl}/posts/${postId}/attachments/chunked/${startBody.uploadId}/complete`,
             {
               method: 'POST',
-              headers,
+              headers: { ...headers, 'Content-Type': 'application/json' },
+              body: JSON.stringify({}),
             }
           );
 
@@ -587,7 +591,8 @@ export function createForumSdk(options?: ForumSdkOptions) {
           try {
             await fetchImpl(`${baseUrl}/posts/${postId}/attachments/chunked/${startBody.uploadId}/abort`, {
               method: 'POST',
-              headers,
+              headers: { ...headers, 'Content-Type': 'application/json' },
+              body: JSON.stringify({}),
             });
           } catch {
             // ignore abort errors

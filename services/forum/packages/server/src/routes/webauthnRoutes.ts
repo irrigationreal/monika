@@ -6,6 +6,7 @@ import {
 } from '@simplewebauthn/server';
 
 import {
+  EmptyJsonRequestSchema,
   WebAuthnRegistrationVerifyRequestSchema,
   WebAuthnVerifyRequestSchema,
 } from '@irrigationreal/codex-forum-contracts';
@@ -77,8 +78,9 @@ export function registerWebAuthnRoutes({
       bodyLimit: 1024,
       config: { rateLimit: rateLimitingEnabled ? { max: 30, timeWindow: '1 minute' } : false },
     },
-    async () => {
+    async (request) => {
       requireAuthEnabled();
+      parseBody(app, EmptyJsonRequestSchema, request.body);
       const options = await generateAuthenticationOptions({
         rpID: WEBAUTHN_RP_ID,
         userVerification: 'required',
@@ -141,6 +143,7 @@ export function registerWebAuthnRoutes({
       return {
         identity: {
           ...mapIdentityToDto(mapIdentityRowToDomain(identity)),
+          username: identity.username,
           hasPassword: Boolean(identity.password_hash),
         },
       };
@@ -165,6 +168,7 @@ export function registerWebAuthnRoutes({
     },
     async (request) => {
       const auth = requireRecentSession(app, store, access, request);
+      parseBody(app, EmptyJsonRequestSchema, request.body);
       const identity = store.getIdentity(auth.identityId);
       if (!identity) throw app.httpErrors.notFound('User not found');
       const credentials = store.listWebAuthnCredentials(identity.id).map(mapWebAuthnCredentialRowToDomain);

@@ -334,6 +334,7 @@ class MockAuthApi {
     return {
       id: identity.id,
       displayName: identity.displayName,
+      username: identity.username ?? null,
       kind: identity.kind,
       parentIdentityId: identity.parentIdentityId ?? null,
       avatarUrl: identity.avatarUrl,
@@ -341,6 +342,7 @@ class MockAuthApi {
       signature: identity.signature,
       theme: identity.theme,
       hasPrivateEmail: includePrivate ? false : undefined,
+      hasPassword: Boolean(identity.password),
     };
   }
 
@@ -511,9 +513,36 @@ test.describe('Auth registration and profile flows', () => {
     await attachMockApi(page.context(), api);
 
     await page.goto('/');
-    await page.locator('.vb-link-btn', { hasText: 'Log In' }).click();
+    const loginTrigger = page.locator('.vb-welcome-links .vb-link-btn', { hasText: 'Log In' });
+    await loginTrigger.click();
+    const loginDialog = page.getByRole('dialog', { name: 'Log In' });
+    const loginForm = loginDialog.locator('form');
+    const usernameInput = page.locator('#login-username');
+    const passwordInput = page.locator('#login-password');
+    await expect(loginDialog).toBeVisible();
+    await expect(loginForm).toBeVisible();
+    await expect(usernameInput).toBeFocused();
+    await expect(usernameInput).toHaveAttribute('name', 'username');
+    await expect(usernameInput).toHaveAttribute('autocomplete', 'username');
+    await expect(usernameInput).toHaveClass(/vb-text-input/);
+    await expect(passwordInput).toHaveAttribute('name', 'password');
+    await expect(passwordInput).toHaveAttribute('autocomplete', 'current-password');
+    await expect(passwordInput).toHaveClass(/vb-text-input/);
+
+    const cancelButton = loginDialog.getByRole('button', { name: 'Cancel' });
+    const closeButton = loginDialog.getByRole('button', { name: 'Close login dialog' });
+    await cancelButton.focus();
+    await cancelButton.press('Tab');
+    await expect(closeButton).toBeFocused();
+    await closeButton.press('Escape');
+    await expect(loginDialog).toBeHidden();
+    await expect(loginTrigger).toBeFocused();
+    await loginTrigger.click();
+    await expect(usernameInput).toBeFocused();
+
     await page.locator('.vb-modal .vb-btn', { hasText: 'Log In' }).click();
-    await expect(page.locator('.vb-modal .vb-login-error')).toContainText('Please enter username and password');
+    const loginAlert = loginDialog.getByRole('alert');
+    await expect(loginAlert).toContainText('Please enter username and password');
     await expect(page.locator('.vb-welcome')).toContainText('Guest_User');
 
     await page.goto('/register');
@@ -544,8 +573,21 @@ test.describe('Auth registration and profile flows', () => {
     await expect(page.locator('.vb-welcome')).toContainText('Guest_User');
 
     await page.locator('.vb-modal input[type="password"]').fill('supersecret');
-    await page.locator('.vb-modal .vb-btn', { hasText: 'Log In' }).click();
+    await page.locator('.vb-modal input[type="password"]').press('Enter');
     await expect(page.locator('.vb-welcome')).toContainText('Invite Tester');
+    await expect(page.locator('.vb-welcome-links .vb-link-btn', { hasText: 'Log Out' })).toBeFocused();
+
+    await page.locator('.vb-welcome-links a', { hasText: 'User CP' }).click();
+    const passkeyNameInput = page.locator('#passkey-name');
+    await expect(passkeyNameInput).toHaveAttribute('name', 'passkeyName');
+    await expect(passkeyNameInput).toHaveClass(/vb-text-input/);
+    await expect(page.locator('#current-password')).toHaveClass(/vb-text-input/);
+    await expect(page.locator('#new-password')).toHaveClass(/vb-text-input/);
+    await expect(page.locator('#confirm-new-password')).toHaveClass(/vb-text-input/);
+    const changePasswordCard = page.locator('.vb-card', { hasText: 'Change Password' });
+    await expect(changePasswordCard.locator('input[name="username"]')).toHaveAttribute('autocomplete', 'username');
+    await expect(changePasswordCard.locator('form #current-password')).toBeVisible();
+    await expect(changePasswordCard.locator('button[type="submit"]')).toBeVisible();
   });
 
   test('shows verification errors and redirects profile when logged out', async ({ page }) => {
