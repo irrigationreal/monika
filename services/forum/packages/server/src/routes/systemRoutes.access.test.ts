@@ -68,6 +68,17 @@ describe('System route access controls', () => {
     expect(Object.keys(body).sort()).toEqual(['commit', 'date', 'label', 'source']);
   });
 
+  it('does not expose the retired filesystem-path robot attachment route', async () => {
+    const { app } = await buildApp();
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/robot-attachments?topicId=public-topic&path=private-output.txt'
+    });
+
+    expect(res.statusCode).toBe(404);
+  });
+
   it('requires a deploy token for deploy quiescence', async () => {
     const { app } = await buildApp();
 

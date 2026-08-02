@@ -61,6 +61,62 @@ describe('Forum routes access controls', () => {
     return app;
   }
 
+  it('returns only public-safe lineage and hides inaccessible parent topics', async () => {
+    const app = await buildApp();
+    const publicForum = store.createForum('Public', null, null, null, null, 'active', 'public');
+    const membersForum = store.createForum('Members', null, null, null, null, 'active', 'members');
+    const author = store.createIdentityWithPassword('Author', 'member', 'pw-hash', 'author');
+    store.createAuthSession('member-token', author.id);
+    const { topic: parent } = store.createTopic({
+      forumId: membersForum.id,
+      title: 'Private parent',
+      body: 'parent',
+      authorId: author.id,
+    });
+    const parentSession = store.ensureSession({ topicId: parent.id });
+    store.upsertPiSessionLink({
+      piSessionId: 'pi-parent',
+      piSessionPath: '/app/.pi/agent/sessions/private-parent.jsonl',
+      topicId: parent.id,
+      sessionId: parentSession.id,
+      cwd: '/workspace/private-project',
+    });
+    const { topic: child } = store.createTopic({
+      forumId: publicForum.id,
+      title: 'Public child',
+      body: 'child',
+      authorId: author.id,
+    });
+    const childSession = store.ensureSession({ topicId: child.id });
+    store.upsertPiSessionLink({
+      piSessionId: 'pi-child',
+      piSessionPath: '/app/.pi/agent/sessions/public-child.jsonl',
+      topicId: child.id,
+      sessionId: childSession.id,
+      cwd: '/workspace/private-project',
+      parentPiSessionId: 'pi-parent',
+      parentPiSessionPath: '/app/.pi/agent/sessions/private-parent.jsonl',
+      lineageKind: 'handoff',
+      lineageSource: 'forum',
+    });
+
+    const guest = await app.inject({ method: 'GET', url: `/topics/${child.id}` });
+    expect(guest.statusCode).toBe(200);
+    expect(guest.json()).toMatchObject({ lineage: { kind: 'handoff', parentTopicId: null } });
+    expect(guest.json()).not.toHaveProperty('piSession');
+    expect(JSON.stringify(guest.json())).not.toContain('/app/.pi');
+    expect(JSON.stringify(guest.json())).not.toContain('/workspace/private-project');
+
+    const member = await app.inject({
+      method: 'GET',
+      url: `/topics/${child.id}`,
+      headers: { authorization: 'Bearer member-token' },
+    });
+    expect(member.statusCode).toBe(200);
+    expect(member.json()).toMatchObject({ lineage: { kind: 'handoff', parentTopicId: parent.id } });
+    expect(member.json()).not.toHaveProperty('piSession');
+  });
+
   it('returns public post content to guests without trace fields', async () => {
     const app = await buildApp();
     const forum = store.createForum('Forum', null, null, null, null, 'active', 'public');

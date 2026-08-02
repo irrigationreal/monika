@@ -1,11 +1,10 @@
 import { timingSafeEqual } from 'node:crypto';
-import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
 import type { ModelCatalogSnapshot } from '../modelCatalog';
 import { DEPLOY_TOKEN } from '../runtimeConfig';
-import { contentTypeForPath, resolveRobotAttachmentPath } from '../utils/attachments';
 import type { AccessHelpers } from '../utils/access';
 
 type HeaderRequest = { headers: Record<string, string | string[] | undefined> };
@@ -20,7 +19,7 @@ export function registerSystemRoutes({
 }: {
   app: FastifyInstance;
   modelCatalog?: { listModels: () => Promise<ModelCatalogSnapshot> } | null;
-  access?: Pick<AccessHelpers, 'getCurrentUser' | 'requireScope' | 'requireTopicVisible'> | null;
+  access?: Pick<AccessHelpers, 'getCurrentUser' | 'requireScope'> | null;
   deploymentStatus?: (() => unknown) | null;
   deployToken?: string | null;
 }): void {
@@ -98,42 +97,6 @@ export function registerSystemRoutes({
       throw app.httpErrors.forbidden('Invalid deploy token');
     }
   }
-
-  app.get('/robot-attachments', async (request, reply) => {
-    const query = request.query as { path?: string; name?: string; topicId?: string };
-    const pathParam = query.path?.toString() ?? '';
-    if (!pathParam) {
-      throw app.httpErrors.badRequest('path is required');
-    }
-
-    const topicId = query.topicId?.toString() ?? '';
-    if (!topicId) {
-      throw app.httpErrors.badRequest('topicId is required');
-    }
-    if (!access?.requireTopicVisible) {
-      throw app.httpErrors.internalServerError('access helpers not available');
-    }
-    // Always enforce topic visibility. This protects against blind file path
-    // guessing for private topics.
-    access.requireTopicVisible(topicId, request);
-
-    const resolvedPath = resolveRobotAttachmentPath(pathParam);
-    if (!resolvedPath) {
-      throw app.httpErrors.forbidden('invalid attachment path');
-    }
-    if (!existsSync(resolvedPath)) {
-      throw app.httpErrors.notFound('attachment file not found');
-    }
-    const stats = statSync(resolvedPath);
-    if (!stats.isFile()) {
-      throw app.httpErrors.notFound('attachment file not found');
-    }
-    const rawName = query.name?.toString() ?? resolvedPath.split('/').pop() ?? 'attachment';
-    const safeName = rawName.replace(/[\r\n"]/g, '');
-    reply.header('Content-Type', contentTypeForPath(resolvedPath));
-    reply.header('Content-Disposition', `inline; filename="${safeName}"`);
-    return reply.send(createReadStream(resolvedPath));
-  });
 
   app.get('/healthz', () => {
     return { ok: true };

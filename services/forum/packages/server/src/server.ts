@@ -77,7 +77,6 @@ import {
   PROMPT_ENHANCER_ENABLED,
   REASONING_EFFORT,
   REDIS_URL,
-  ROBOT_ATTACHMENTS_DIR,
   TRUST_PROXY,
   TTS_AVAILABLE,
   TTS_MAX_CHARS,
@@ -371,10 +370,6 @@ if (!existsSync(AVATARS_DIR)) {
 if (!existsSync(USER_FILES_DIR)) {
   mkdirSync(USER_FILES_DIR, { recursive: true });
 }
-if (!existsSync(ROBOT_ATTACHMENTS_DIR)) {
-  mkdirSync(ROBOT_ATTACHMENTS_DIR, { recursive: true });
-}
-
 // Serve static files from uploads directory.
 // Security note: do NOT expose the entire uploads root publicly.
 // Only avatars are served as static assets; other uploads must go through authenticated routes.

@@ -140,6 +140,30 @@ export function registerRobotRoutes({
     return identity?.kind === 'admin';
   }
 
+  function serializeAdminSession(session: NonNullable<ReturnType<ForumStore['getSession']>>) {
+    const link = store.getPiSessionLinkByTopic(session.topic_id);
+    return {
+      id: session.id,
+      topicId: session.topic_id,
+      createdAt: session.created_at,
+      updatedAt: session.updated_at,
+      status: session.status,
+      piSession: link
+        ? {
+            id: link.pi_session_id,
+            path: link.pi_session_path,
+            cwd: link.cwd,
+            parentId: link.parent_pi_session_id,
+            parentPath: link.parent_pi_session_path,
+            lineageKind: link.lineage_kind,
+            lineageSource: link.lineage_source,
+            importedAt: link.imported_at,
+            lastImportRunId: link.last_import_run_id,
+          }
+        : null,
+    };
+  }
+
   app.get('/topics/:topicId/state', async (request) => {
     const { topicId } = request.params as { topicId: string };
     requireTopicVisible(topicId, request);
@@ -560,13 +584,7 @@ export function registerRobotRoutes({
     if (!session) {
       return null;
     }
-    return {
-      id: session.id,
-      topicId: session.topic_id,
-      createdAt: session.created_at,
-      updatedAt: session.updated_at,
-      status: session.status,
-    };
+    return serializeAdminSession(session);
   });
 
   app.get('/sessions/:sessionId', async (request) => {
@@ -577,13 +595,7 @@ export function registerRobotRoutes({
       return null;
     }
     requireTopicVisible(session.topic_id, request);
-    return {
-      id: session.id,
-      topicId: session.topic_id,
-      createdAt: session.created_at,
-      updatedAt: session.updated_at,
-      status: session.status,
-    };
+    return serializeAdminSession(session);
   });
 
   app.get('/sessions/:sessionId/inspector', async (request) => {
@@ -598,13 +610,7 @@ export function registerRobotRoutes({
     const toolRuns = store.listToolRunsBySession(sessionId, 50);
     const plans = store.listPlansBySession(sessionId, 50);
     return {
-      session: {
-        id: session.id,
-        topicId: session.topic_id,
-        createdAt: session.created_at,
-        updatedAt: session.updated_at,
-        status: session.status,
-      },
+      session: serializeAdminSession(session),
       messages: messages.map((msg) => ({
         id: msg.id,
         sessionId: msg.session_id,

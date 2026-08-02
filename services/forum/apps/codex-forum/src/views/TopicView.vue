@@ -187,7 +187,9 @@ const canCompact = computed(
 const autoRun = computed(() => state.topicAutoRun.value);
 const showAutoRunPanel = computed(() => isAdmin.value && showAdminPanel.value && Boolean(routeTopicId.value));
 const showRobotStatePanel = computed(() => isAdmin.value && topicRobotMode.value && topicRobotMode.value !== 'off');
-const showSessionInspectorPanel = computed(() => topicRobotMode.value && topicRobotMode.value !== 'off');
+const showSessionInspectorPanel = computed(
+  () => isAdmin.value && topicRobotMode.value && topicRobotMode.value !== 'off'
+);
 const autoRunEnabled = ref(false);
 const autoRunContext = ref('');
 const autoRunWorker = ref<'echs'>('echs');
@@ -544,15 +546,11 @@ const quickReplyWillDispatchRobot = computed(() => {
 
 const quickReplyWillSteerRobot = computed(() => showRobotBusyNotice.value && quickReplyWillDispatchRobot.value);
 const sessionContext = computed(() => state.sessionContext.value);
-const topicPiSession = computed(
-  () => ((state.selectedTopic.value as any)?.piSession ?? null) as Record<string, any> | null
-);
+const topicLineage = computed(() => state.selectedTopic.value?.lineage ?? null);
+const piSessionDiagnostics = computed(() => state.sessionInfo.value?.piSession ?? null);
 const topicLineageLabel = computed(() => {
-  const session = topicPiSession.value;
-  if (!session?.parentId && !session?.parentPath) return null;
-  const kind = String(session.lineageKind ?? '')
-    .trim()
-    .toLowerCase();
+  const kind = topicLineage.value?.kind;
+  if (!kind) return null;
   if (kind === 'handoff') return 'Handoff from parent session';
   if (kind === 'delegate') return 'Delegate fork from parent session';
   if (kind === 'sleep') return 'Sleep fork from parent session';
@@ -2158,25 +2156,12 @@ onUnmounted(() => {
       <div class="vb-lineage-summary">
         <strong>{{ topicLineageLabel }}</strong>
         <router-link
-          v-if="topicPiSession?.['parentTopicId']"
+          v-if="topicLineage?.parentTopicId"
           class="vb-lineage-link"
-          :to="`/topics/${topicPiSession['parentTopicId']}`"
+          :to="`/topics/${topicLineage.parentTopicId}`"
           >Open parent thread</router-link
         >
-        <span v-if="topicPiSession?.['lineageSource']" class="vb-context-model"
-          >· {{ topicPiSession['lineageSource'] }}</span
-        >
       </div>
-      <details>
-        <summary>Details</summary>
-        <div v-if="topicPiSession?.['parentId']"><strong>Parent session:</strong> {{ topicPiSession['parentId'] }}</div>
-        <div v-if="topicPiSession?.['parentPath']">
-          <strong>Parent path:</strong> {{ topicPiSession['parentPath'] }}
-        </div>
-        <div v-if="topicPiSession?.['id']"><strong>Current session:</strong> {{ topicPiSession['id'] }}</div>
-        <div v-if="topicPiSession?.['path']"><strong>Current path:</strong> {{ topicPiSession['path'] }}</div>
-        <div v-if="topicPiSession?.['cwd']"><strong>CWD:</strong> {{ topicPiSession['cwd'] }}</div>
-      </details>
     </div>
 
     <div class="vb-controls">
@@ -3238,6 +3223,19 @@ onUnmounted(() => {
           <div><strong>Session:</strong> {{ state.sessionInfo.value.id }}</div>
           <div><strong>Status:</strong> {{ state.sessionInfo.value.status }}</div>
           <div><strong>Started:</strong> {{ state.formatDate(state.sessionInfo.value.createdAt) }}</div>
+          <template v-if="piSessionDiagnostics">
+            <div><strong>Canonical Pi session:</strong> {{ piSessionDiagnostics.id }}</div>
+            <div><strong>Session path:</strong> {{ piSessionDiagnostics.path }}</div>
+            <div v-if="piSessionDiagnostics.cwd"><strong>CWD:</strong> {{ piSessionDiagnostics.cwd }}</div>
+            <div v-if="piSessionDiagnostics.parentId"><strong>Parent session:</strong> {{ piSessionDiagnostics.parentId }}</div>
+            <div v-if="piSessionDiagnostics.parentPath"><strong>Parent path:</strong> {{ piSessionDiagnostics.parentPath }}</div>
+            <div v-if="piSessionDiagnostics.lineageKind"><strong>Lineage:</strong> {{ piSessionDiagnostics.lineageKind }}</div>
+            <div v-if="piSessionDiagnostics.lineageSource"><strong>Lineage source:</strong> {{ piSessionDiagnostics.lineageSource }}</div>
+            <div><strong>Imported:</strong> {{ state.formatDate(piSessionDiagnostics.importedAt) }}</div>
+            <div v-if="piSessionDiagnostics.lastImportRunId">
+              <strong>Import run:</strong> {{ piSessionDiagnostics.lastImportRunId }}
+            </div>
+          </template>
         </div>
 
         <div class="vb-tool-list">

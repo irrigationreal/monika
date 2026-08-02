@@ -164,6 +164,11 @@ export interface ChatTypingDto {
   isTyping: boolean;
 }
 
+export interface TopicLineageDto {
+  kind: 'handoff' | 'delegate' | 'sleep' | 'parent';
+  parentTopicId?: string | null;
+}
+
 export interface TopicDto {
   id: string;
   forumId: string;
@@ -189,6 +194,8 @@ export interface TopicDto {
   lastPostAuthorId?: string | null;
   lastPostAuthorName?: string | null;
   lastPostAt?: string | null;
+  /** Public-safe semantic lineage. Canonical Pi identifiers and paths are admin-only session diagnostics. */
+  lineage?: TopicLineageDto | null;
 }
 
 export interface TopicMoveDto {
@@ -734,12 +741,26 @@ export interface TopicAutoRunDto {
   updatedAt?: string | null;
 }
 
+export interface PiSessionDiagnosticsDto {
+  id: string;
+  path: string;
+  cwd?: string | null;
+  parentId?: string | null;
+  parentPath?: string | null;
+  lineageKind?: string | null;
+  lineageSource?: string | null;
+  importedAt: string;
+  lastImportRunId?: string | null;
+}
+
 export interface SessionDto {
   id: string;
   topicId: string;
   createdAt: string;
   updatedAt: string;
   status: 'active' | 'paused' | 'completed' | 'error';
+  /** Canonical Pi storage diagnostics. Present only on admin-authorized session endpoints. */
+  piSession?: PiSessionDiagnosticsDto | null;
 }
 
 export interface SessionMessageDto {
