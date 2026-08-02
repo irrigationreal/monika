@@ -103,6 +103,9 @@ const canModerate = computed(() => state.canModerate.value);
 const isAdmin = computed(() => state.currentUser.value?.kind === 'admin');
 const isRobotBusy = computed(() => state.isRobotBusy.value);
 const showStopRobotConfirm = ref(false);
+const showDiscardDraftConfirm = ref(false);
+const discardDraftPending = ref(false);
+const discardDraftError = ref('');
 const topicRobotMode = computed(() => state.selectedTopic.value?.robotMode ?? null);
 const autoCompactEnabled = ref(false);
 const robotControlPending = computed(() => state.robotControlPending.value);
@@ -1599,8 +1602,24 @@ async function abandonQuickReplyAttachments(): Promise<void> {
   clearReplyFiles();
 }
 
+function requestDiscardQuickDraft(): void {
+  discardDraftError.value = '';
+  showDiscardDraftConfirm.value = true;
+}
+
 async function confirmDiscardQuickDraft(): Promise<void> {
-  if (window.confirm('Discard this draft permanently?')) await autosavedReply.discard();
+  if (discardDraftPending.value) return;
+  discardDraftPending.value = true;
+  discardDraftError.value = '';
+  try {
+    await autosavedReply.discard();
+    showDiscardDraftConfirm.value = false;
+  } catch (err) {
+    discardDraftError.value = err instanceof Error ? err.message : 'Failed to discard draft.';
+    showDiscardDraftConfirm.value = false;
+  } finally {
+    discardDraftPending.value = false;
+  }
 }
 
 async function reply(): Promise<void> {
@@ -1956,6 +1975,8 @@ watch(
   routeTopicId,
   async (topicId) => {
     showStopRobotConfirm.value = false;
+    showDiscardDraftConfirm.value = false;
+    discardDraftError.value = '';
     stopCompactionPolling();
     compactionRequestGeneration += 1;
     if (showCompactionModal.value) {
@@ -2111,9 +2132,22 @@ onUnmounted(() => {
     message="This will stop the current response and cancel queued or delegated work for this session. Partial output will remain visible, but work already performed cannot be undone."
     confirm-label="Stop robot"
     cancel-label="Keep running"
+    pending-label="Stopping…"
     :pending="robotControlPending"
     @confirm="confirmStopRobot"
     @cancel="showStopRobotConfirm = false"
+  />
+
+  <ConfirmationDialog
+    :open="showDiscardDraftConfirm"
+    title="Discard draft?"
+    message="This permanently deletes the saved draft and clears this editor. This cannot be undone."
+    confirm-label="Discard draft"
+    cancel-label="Keep editing"
+    pending-label="Discarding…"
+    :pending="discardDraftPending"
+    @confirm="confirmDiscardQuickDraft"
+    @cancel="showDiscardDraftConfirm = false"
   />
 
   <div v-if="showCompactionModal" class="vb-modal-overlay vb-compaction-modal-overlay">
@@ -3121,11 +3155,12 @@ onUnmounted(() => {
           :expires-at="autosavedReply.expiresAt.value"
           :conflict="Boolean(autosavedReply.remoteDraft.value)"
           @retry="autosavedReply.resume()"
-          @discard="confirmDiscardQuickDraft"
+          @discard="requestDiscardQuickDraft"
           @use-saved="autosavedReply.useSavedVersion()"
           @keep-mine="autosavedReply.keepMyVersion()"
           @copy-mine="autosavedReply.copyMyText()"
         />
+        <div v-if="discardDraftError" class="vb-form-error" role="alert">{{ discardDraftError }}</div>
         <textarea
           ref="quickReplyTextareaRef"
           v-model="replyBody"

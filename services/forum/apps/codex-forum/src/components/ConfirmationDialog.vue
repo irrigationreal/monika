@@ -9,10 +9,12 @@ const props = withDefaults(
     confirmLabel: string;
     cancelLabel?: string;
     pending?: boolean;
+    pendingLabel?: string;
   }>(),
   {
     cancelLabel: 'Cancel',
     pending: false,
+    pendingLabel: 'Working…',
   }
 );
 
@@ -125,7 +127,7 @@ onBeforeUnmount(() => {
           :disabled="pending"
           @click="emit('confirm')"
         >
-          {{ pending ? 'Stopping…' : confirmLabel }}
+          {{ pending ? pendingLabel : confirmLabel }}
         </button>
         <button
           ref="cancelRef"

@@ -118,7 +118,8 @@ Authenticated browser users receive private server-side autosave for quick repli
 composers share one draft per account/topic; new threads may have multiple ID-addressed drafts. Drafts contain only
 literal title/body text—never attachments, model/reasoning, silent mode, robot settings, or preview state—and expire 30
 days after their last material edit. Opening or saving identical content does not renew retention. Publishing atomically
-consumes the exact saved revision; ordinary navigation preserves it and explicit discard deletes it.
+consumes the exact saved revision; ordinary navigation preserves it. Explicit discard and deletion from **My Drafts**
+require the forum's accessible confirmation dialog before permanently deleting the saved revision.
 
 `/profile/drafts` lists only the signed-in user's drafts. Draft endpoints reject API keys and impersonation tokens, have
 no administrator browsing surface, use `Cache-Control: no-store`, and never project draft content into posts, search,

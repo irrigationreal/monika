@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 
+import ConfirmationDialog from '../components/ConfirmationDialog.vue';
 import { api } from '../lib/apiClient';
 
 import type { MessageDraftDto } from '../lib/apiClient';
@@ -8,6 +9,8 @@ import type { MessageDraftDto } from '../lib/apiClient';
 const drafts = ref<MessageDraftDto[]>([]);
 const query = ref('');
 const error = ref('');
+const draftPendingDelete = ref<MessageDraftDto | null>(null);
+const deletePending = ref(false);
 const filtered = computed(() => {
   const needle = query.value.trim().toLowerCase();
   return drafts.value.filter(
@@ -31,8 +34,15 @@ function link(draft: MessageDraftDto) {
 async function loadDrafts(): Promise<void> {
   drafts.value = (await api.listDrafts()).drafts;
 }
-async function remove(draft: MessageDraftDto): Promise<void> {
-  if (!window.confirm('Delete this draft permanently?')) return;
+function requestRemove(draft: MessageDraftDto): void {
+  error.value = '';
+  draftPendingDelete.value = draft;
+}
+async function confirmRemove(): Promise<void> {
+  const draft = draftPendingDelete.value;
+  if (!draft || deletePending.value) return;
+  deletePending.value = true;
+  error.value = '';
   try {
     await api.deleteDraft(draft.id, draft.revision);
     drafts.value = drafts.value.filter((item) => item.id !== draft.id);
@@ -48,6 +58,9 @@ async function remove(draft: MessageDraftDto): Promise<void> {
       }
     }
     error.value = err instanceof Error ? err.message : 'Failed to delete draft.';
+  } finally {
+    deletePending.value = false;
+    draftPendingDelete.value = null;
   }
 }
 async function copy(draft: MessageDraftDto): Promise<void> {
@@ -62,6 +75,18 @@ onMounted(async () => {
 });
 </script>
 <template>
+  <ConfirmationDialog
+    :open="draftPendingDelete !== null"
+    title="Delete draft?"
+    message="This permanently deletes the saved draft. This cannot be undone."
+    confirm-label="Delete draft"
+    cancel-label="Keep draft"
+    pending-label="Deleting…"
+    :pending="deletePending"
+    @confirm="confirmRemove"
+    @cancel="draftPendingDelete = null"
+  />
+
   <section class="vb-section">
     <div class="vb-table-header">My Drafts</div>
     <div class="vb-drafts-panel">
@@ -95,7 +120,7 @@ onMounted(async () => {
           <div class="vb-draft-actions">
             <router-link v-if="draft.canContinue" class="vb-small-btn" :to="link(draft)">Continue editing</router-link>
             <button type="button" class="vb-small-btn" @click="copy(draft)">Copy text</button>
-            <button type="button" class="vb-small-btn vb-btn-danger" @click="remove(draft)">Delete</button>
+            <button type="button" class="vb-small-btn vb-btn-danger" @click="requestRemove(draft)">Delete</button>
           </div>
         </article>
       </template>
