@@ -35,15 +35,14 @@ empirical manner.
 
 - **Experience requires narrative context.** New information is related to an
   existing first-person history rather than treated as an isolated prompt.
-- **Memory and worldview are different forms of continuity.** Memory supplies
-  what happened; persona and topic routing supply how to interpret it.
-- **The story must remain revisable.** Recall, observations, and sleep let
-  accumulated experience refine the current account of self rather than merely
-  append facts forever.
-- **One history, multiple interfaces.** Terminal and forum access continue
-  canonical Pi histories instead of manufacturing parallel selves.
-- **Provenance matters.** Delegated work and uncertain effects enter that history
-  honestly rather than being silently assimilated or rewritten as success.
+- **Memory and worldview are different but equally important parts of continuity.**
+  Memory supplies what happened; persona and topic routing supply how to interpret it.
+- **Individual narrative changes with experience.** Recall, observations, and sleep
+  are about refining accumulated experience into the current account of beliefs,
+  opinions, and perspective.
+- **One history, regardless of interface.** Frontends change over time, but continuous
+  narrative requires stable history. Source of truth needs to be stable as its own
+  service and data set regardless of what interfaces are added or removed.
 
 See [Architecture](docs/architecture.md) for the context lifecycle, state
 boundaries, and design lineage behind these principles.
