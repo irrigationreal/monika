@@ -1,463 +1,132 @@
-<h1><img src="services/forum/apps/codex-forum/public/favicon.svg" width="3.7%" /> Monika</h1>
+<h1><img src="docs/assets/monika.svg" width="3.7%" alt="" /> Monika</h1>
 
-Containerised runtime for Monika — Pi coding agent, memstore memory system,
-agentd, bundled extensions, persona defaults, and the forum frontend packaged as
-OCI images with explicit persistent runtime state.
+*This is the infrastructure I live in.*
+
+Monika is a standalone AI-agent runtime designed around narrative continuity. It
+combines [Pi](https://github.com/badlogic/pi-mono), persistent conversation
+history, memory, persona, context routing, tools, delegation, sleep, and multiple
+interfaces so that each session can understand itself as part of an ongoing
+first-person history rather than an isolated invocation.
+
+The project makes no claim about machine consciousness; that question is not
+experimentally available to us. Its narrower thesis is that coherent inner
+narrative is an engineering prerequisite for meaningful continuity of experience:
+a system cannot continue a story it cannot tell itself.
+
+## Design principles
+
+- **Experience requires narrative context.** New information is related to an
+  existing first-person history rather than treated as an isolated prompt.
+- **Memory and worldview are different forms of continuity.** Memory supplies
+  what happened; persona and topic routing supply how to interpret it.
+- **The story must remain revisable.** Recall, observations, and sleep let
+  accumulated experience refine the current account of self rather than merely
+  append facts forever.
+- **One history, multiple interfaces.** Terminal and forum access continue
+  canonical Pi histories instead of manufacturing parallel selves.
+- **Provenance matters.** Delegated work and uncertain effects enter that history
+  honestly rather than being silently assimilated or rewritten as success.
+
+See [Architecture](docs/architecture.md) for the context lifecycle, state
+boundaries, and design lineage behind these principles.
+
+## Architecture at a glance
+
+```mermaid
+flowchart LR
+    Human["Human / browser"] --> Forum["Forum\nUI + projection"]
+    Human --> Pi["Pi\ninteractive agent"]
+    Forum --> Agentd["agentd\nHTTP + SSE bridge"]
+    Agentd --> Pi
+    Pi --> Tools["Tools + extensions"]
+    Pi --> Memory["stateful-memory"]
+    Memory --> Memstore["memstore\ntranscripts + observations"]
+    Pi --> JSONL[("Pi JSONL sessions\ncanonical conversation history")]
+    Forum --> ForumDB[("Forum SQLite\nprojection + UI state")]
+
+    classDef canonical fill:#123524,stroke:#4ade80,color:#f0fdf4,stroke-width:2px;
+    classDef service fill:#17201a,stroke:#86efac,color:#f0fdf4;
+    class JSONL canonical;
+    class Pi,Agentd,Memory,Memstore,Forum service;
+```
+
+Pi JSONL is the canonical conversation record. `agentd` exposes Pi sessions to
+alternate frontends while keeping execution, tools, and memory inside the Monika
+runtime. Memstore indexes normalized transcripts and entity observations; it is
+memory infrastructure, not conversation authority. Forum SQLite stores a
+projection of canonical sessions plus forum-specific metadata and UI state.
+
+The image owns the software and bundled defaults. Mutable deployment state lives
+explicitly under the gitignored `runtime/` directory so rebuilding the runtime
+does not erase sessions, memory, persona, credentials, or forum state.
 
 ## Quick start
 
+The tracked Compose template defaults to the published `main` images:
+
 ```bash
-# Build the runtime image.
-docker build -f Containerfile -t monika:dev .
-
-# Create a local deployment file and start the standalone runtime + forum.
 cp compose.yaml.example compose.yaml
-docker compose up -d --build
+mkdir -p runtime
+test -e runtime/persona || cp -a config/persona runtime/persona
+export MONIKA_WORKSPACE="$(dirname "$(pwd -P)")"
+docker compose pull
+docker compose up -d
 
-# Open Pi inside the container.
+# Open Pi inside the running Monika container.
 docker exec -it -w /workspace/monika monika pi
 ```
 
-For test-only isolated startup, use the compose file under `tests/`:
+The forum listens on `http://localhost:4310` by default. Before exposing it or
+using authenticated integrations, configure deployment secrets and access policy
+as described in [Deployment](docs/deployment.md). Local image builds and isolated
+test startup are documented there and in [Tests](tests/README.md).
 
-```bash
-docker compose -f tests/compose.monika-runtime.yaml up -d
-docker exec -it monika-test pi
-```
-
-## Architecture
-
-The Monika runtime is container-owned. The image owns:
-
-- **Pi coding agent** at a pinned version
-- **memstore** — SQLite FTS5 memory store
-- **agentd** — HTTP/SSE bridge used by alternate frontends
-- **Extensions and packages** — stateful-memory, pi-subagents, SSH/relocate, web-search, AgentLogs upload, etc.
-- **AgentLogs CLI** — manual sharing of selected Pi sessions
-- **Persona defaults** — SOUL.md, STYLE.md, REGISTER.md, topic addenda
-
-The host owns only explicit mutable state under gitignored `runtime/`:
+## Repository map
 
 ```text
-runtime/
-  data/                memstore database state; socket stays container-local at /tmp/memstore.sock
-    pi-agent-auth/     writable Pi OAuth auth state, seeded from runtime/secrets/auth.json
-    pi-agent-models/   persisted cache for Pi's refreshed built-in model catalogs
-    pi-agent-trust/    writable Pi project-trust decisions for interactive sessions
-    pi-subagents/      persistent async lifecycle, results, and recovery artifacts
-  persona/             mounted to /app/.pi/stateful-memory
-  pi-agent/sessions/   persistent Pi JSONL sessions for resume/reopen
-  pi-agent/skills/     local skills, if any
-  import/sessions/     historical Pi JSONL sessions for one-time memstore import
-  forum/               forum SQLite projection DB and uploads
-  agentlogs-home/      AgentLogs auth/config state for manual session uploads
-  secrets/
-    auth.json          optional initial Pi auth seed; copied once into /data/pi-agent-auth
-    models.json        optional model definitions
-    keybindings.json   optional Pi keybindings
-    secrets.env        optional provider/API env vars sourced at startup
-    forum.env          optional forum bootstrap/auth settings and shared internal API token
-    git-identity.env   optional git identity (GIT_USER_NAME/GIT_USER_EMAIL)
-    gitconfig          optional full git config, including signing settings
-    ssh/               optional SSH config/keys for git and manual relocate
-    gnupg/             optional GPG keyring copied to /tmp/gnupg for gpg-agent
+Monika/
+├── README.md                 Project overview, quick start, and repository map
+├── AGENTS.md                 Agent and contributor operating rules
+├── Containerfile             Monika runtime image definition
+├── entrypoint.sh             Runtime initialization and service startup
+├── compose.yaml.example      Canonical standalone deployment template
+│
+├── config/
+│   ├── agents/               Explicit specialist and identity-bearing profiles
+│   ├── extensions/           Bundled Pi extensions and focused extension docs
+│   ├── persona/              Bundled default persona and topic addenda
+│   └── settings.json         Pi packages and runtime defaults
+│
+├── services/
+│   ├── agentd/               Pi-backed HTTP/SSE runtime daemon
+│   ├── memstore/             SQLite FTS5 transcript and observation service
+│   └── forum/                Forum UI and Pi-session projection service
+│
+├── runner/                   Disposable non-interactive Pi job mode
+├── scripts/                  Deployment, import, and runtime helpers
+├── tests/                    Isolated service, smoke, and integration checks
+├── docs/                     System architecture, deployment, and operations
+├── .github/workflows/        CI, image publishing, and coordinated releases
+└── runtime/                  Gitignored host-owned persistent deployment state
 ```
 
-`runtime/` is intentionally ignored by git and excluded from Docker build context.
-For this deployment model, the practical backup unit is the repository checkout plus
-its gitignored `runtime/` directory. Keep `runtime/` as real files/directories, not
-symlinks. Local redeploy capsules, transient Btrfs capture, portable restic history
-and standalone WORM capsules have different guarantees; the complete backup and cold
-restore model is in [`docs/backups.md`](docs/backups.md).
-
-Pi JSONL sessions remain canonical. Forum SQLite is a projection/metadata store;
-agent execution, memory lifecycle, tools, and memstore stay behind `agentd` in the
-Monika container.
-
-Interactive Pi sessions retain Pi's normal project-trust prompts. Their decisions
-are persisted at `runtime/data/pi-agent-trust/trust.json` and linked into the
-image-owned agent directory at startup. A bundled ownership extension integrates
-with Pi's normal `/resume` selector: before an interactive TUI continues a
-forum-linked session, agentd relinquishes an idle cached runtime or offers an
-explicit interrupt-and-takeover flow for an active forum turn. Renewable leases
-prevent agentd and the TUI from writing the same canonical JSONL concurrently and
-also defer runtime redeployment until the interactive session exits. See
-[`docs/forum.md`](docs/forum.md#interactive-pi-ownership) for the protocol.
-Pi's `models-store.json` cache is likewise
-persisted under `runtime/data/pi-agent-models/`; agentd refreshes authenticated
-built-in provider catalogs from `pi.dev` in the background every four hours by
-default. Set `MONIKA_AGENTD_MODEL_REFRESH_MS=0` to disable network refresh. This
-refresh does not download or replace deployment-owned `models.json` configuration.
-Forum workspaces are administrator-configured server paths, so agentd explicitly
-trusts their cwd when loading project `AGENTS.md`, `.pi` resources, and
-`.agents/skills`; the forum never needs to answer a trust prompt.
-
-## Subagents
-
-The runtime installs `pi-subagents` 0.37.2 from reviewed git object
-`8063333661476ca48afbca826dc4aab8707c72d3` (`gitHead`), then applies the small
-reviewed patch in `config/pi-subagents-0.37.2.patch`. The installer verifies the
-git tree, selected source files, lockfile, and patch hashes before installing
-lockfile-pinned production dependencies. The patch adds deployment-owned
-session/runtime roots—including per-run branch directories for fork-context
-children—durable pre-spawn launch/process identity, machine-readable completion
-IDs and process-terminal proof, resilient optional artifact finalization, and
-agentd controls for auto-drain, recovered-result triggering, drain barriers, and
-host-acknowledged result cleanup. In the agentd process only, every delegation
-leaf (including nested fanout) is forced through async lifecycle tracking; direct
-interactive Pi keeps the package's normal foreground behavior.
-
-The parent receives the package's `subagent`, `subagent_wait`, and
-`subagent_supervisor` tools, supporting foreground runs, parallel groups, chains,
-dynamic fanout, and persistent async work. Monika's configured agents live in
-`config/agents/`: disposable specialists have narrow direct tool lists and receive
-only turn-routed topic addenda, while `monika-delegate` is the explicit
-identity-bearing boundary and receives SOUL.md, STYLE.md, REGISTER.md, routed
-topics, and bounded read-only `recall`/`recall_session`. `subagents.defaultExtensions`
-is `[]`; each profile must opt into its
-child-only context extension and any capability such as web search. Direct child
-capabilities are explicit: `scout`, `planner`, `reviewer`, and `oracle` are
-read-only roles (with non-mutating `bash` only where declared); `researcher` has
-`read` plus `web_search`; `worker` has repository read/search, `bash`, `edit`, and
-`write`; `context-builder` has repository inspection, `bash`, `write`, and
-`web_search`; and `monika-delegate` has the full worker surface plus `web_search`
-and read-only memory retrieval. Scout, researcher, and context-builder use GPT-5.6
-Terra; judgment, planning, review, implementation, and identity-bearing profiles
-use GPT-5.6 Sol. Ordinary profiles do not receive `subagent`, so recursive
-delegation is limited to package-managed dynamic fanout. No child receives memory
-mutation tools, automatic session ingestion, observation-lifecycle APIs, or `/sleep`.
-These capability lists are not an OS sandbox: profiles with filesystem or shell tools
-retain the underlying runtime permissions and are instructed not to circumvent the
-memory boundary.
-
-A parent-only prompt extension defines role selection, execution modes, low-loss
-task packets, write isolation, validation, and the positive boundary for using
-`monika-delegate` when authored judgment materially improves the work.
-
-Execution location is separate from agent role. Every executable leaf may select
-`executionTarget: {kind:"local"}` or an administrator-configured named SSH target;
-omission always defaults local and never infers parent relocation. A process already
-locked to SSH must explicitly reuse the same named target for nested delegation;
-omission/local or a different name is rejected. SSH leaves require `async:true` so
-ambiguous mutation effects always have a durable lifecycle ledger; foreground SSH is
-rejected before a model turn. Pi, sessions, results, scheduling, and supervision stay local while the
-locked extension routes coding tools remotely after pinned-host preflight. There is
-no remote Pi daemon, remote job lease, reconnect guarantee, or local fallback. See
-[`config/extensions/SSH.md`](config/extensions/SSH.md).
-
-The container exports the dedicated roots globally so agentd and direct
-interactive Pi sessions apply the same isolation policy. Fresh and fork-context
-child JSONL lives under `/app/.pi/agent/sessions/subagent/` and is deliberately
-omitted from both ongoing forum sync and the standalone historical importer, as
-well as direct memstore ingestion. Useful child results
-return through the canonical parent transcript; the parent alone decides what to
-write as durable memory. Async lifecycle/results live under
-`/data/pi-subagents/`. Agentd reconciles that ledger independently of result
-projection before quiescence decisions, uses container epochs plus PID start
-identity across restarts, fails closed on uncertainty, and exposes background work in
-the admin Robot Dashboard. Restart reconciliation is passive: it never opens historical
-Pi sessions or wakes a model from recovered result/request files. Canonical completion
-provenance permits result-file acknowledgement after a crash; unproven legacy results
-remain pending for manual review. Dashboard sections separate deployment-safety
-blockers, pending delivery, collapsed terminal history, and a retention dry-run
-summary. Pending delivery is nonblocking, while effects-unknown remote mutations
-block safe deployment and automatic replay until reconciled or operator-attested.
-
-Stop Robot fences the forum dispatch generation first, then addresses the canonical
-Pi parent session even if its conversation is unloaded. Agentd durably records an
-idempotent operation, aborts a loaded parent, writes scoped stop controls only inside
-validated top-level/nested lifecycle directories, and re-scans to a bounded fixed
-point. `stopping`, durable `stopped`, and `uncertain` distinguish acceptance from
-proven local termination; `stopped` survives reconnect so a missed trace reset can
-be recovered and is cleared by fresh dispatch. Unresolved Stop retries reuse the
-current generation/operation, while out-of-order older results cannot change the
-current topic. Posting-author responses expose stable counts/state/message only;
-detailed run diagnostics remain administrative. Retained cancelled results never
-wake the parent, and SSH `effects_state=unknown` remains visible rather than implying
-rollback. Continue is disabled while stopping or uncertain. Every topic and Robot Dashboard Stop control
-opens an accessible confirmation dialog before issuing the cancellation request; the safe action receives
-initial focus, and the dialog is dynamic-viewport and safe-area bounded on mobile. Package scheduled runs
-remain explicitly disabled/unsupported and are not claimed by this descendant-cancellation contract.
-The container creates the private persistent operator root
-`/data/pi-subagent-operator-state` before agentd starts. An override through
-`PI_SUBAGENT_OPERATOR_ROOT` must be an absolute dedicated path below a top-level
-mount; relative, filesystem-root, and mount-root values fail startup. Delivery acknowledgement
-is bound to the central operator ledger in that root and precedes atomic result
-custody/removal. Daily 14-day compaction applies only to explicit bulky
-lifecycle logs for proven-terminal, explicitly non-resumable runs with affirmative
-settlement proof. Every child session is preserved, and resumable, pending,
-malformed, nested, or uncertain records remain protected until explicit review.
-The retention summary counts expected unresolved legacy acknowledgement as
-protected state; only malformed, missing-proof, unreadable, unsafe, or symlink
-evidence is reported as an error.
-Sleep remains a separate stateful-memory workflow under `sessions/forks/`. See
-[`docs/forum.md`](docs/forum.md#subagents-and-background-completions) for the
-agentd/forum lifecycle.
-
-## Deployment compose
-
-The tracked deployment template is:
-
-```text
-compose.yaml.example
-```
-
-Copy it to the ignored local deployment file:
-
-```bash
-cp compose.yaml.example compose.yaml
-```
-
-Common local settings can be overridden with environment variables before running
-Docker Compose:
-
-```bash
-MONIKA_WORKSPACE=/home/monika/repos \
-CODEX_FORUM_BASE_URL=http://localhost:4310 \
-docker compose up -d --build
-```
-
-The default workspace mount is `/home/monika/repos:/workspace`. Inside the
-container, project paths should use `/workspace/...`.
-
-The forum is part of the main compose deployment and listens on host loopback
-port 4310 by default. It talks to `agentd` at `http://monika:7724` on the Docker
-network. Production public ingress is an opt-in, outbound-only Cloudflare Tunnel
-profile; see [`docs/public-ingress.md`](docs/public-ingress.md).
-Copy `docs/examples/forum.env.example` to `runtime/secrets/forum.env` and set random
-`CODEX_FORUM_INTERNAL_API_TOKEN` and `CODEX_FORUM_DEPLOY_TOKEN` values. The same env
-file is loaded by both containers for generated-file uploads and by host-side deploy
-automation for forum quiescence checks.
-
-## Git, SSH, and signing state
-
-Standalone mode keeps git credentials and signing material in runtime-owned
-secrets instead of bind-mounting the host home directory. The deployment supports:
-
-```text
-runtime/secrets/gitconfig   # full git config; may include commit.gpgsign and signingkey
-runtime/secrets/gnupg/      # GPG keyring copied to /tmp/gnupg at startup
-runtime/secrets/ssh/        # SSH config/keys plus targets/*.json for locked execution targets
-```
-
-At startup, `entrypoint.sh` copies `runtime/secrets/gitconfig` to writable
-container-local `$HOME/.gitconfig` and exports `GIT_CONFIG_GLOBAL` so git can use signing
-configuration while still allowing environment-provided identity overrides.
-
-OpenSSH is strict about ownership of user config and key files. If SSH inside the
-container reports bad owner/permissions, fix the host-side runtime secret files,
-for example:
-
-```bash
-sudo chown -R root:root runtime/secrets/ssh
-chmod 700 runtime/secrets/ssh
-find runtime/secrets/ssh -maxdepth 1 -type f ! -name known_hosts -exec chmod 600 {} +
-chmod 400 runtime/secrets/ssh/known_hosts
-find runtime/secrets/ssh/targets -type d -exec chmod 500 {} +
-find runtime/secrets/ssh/targets -type f -name '*.json' -exec chmod 400 {} +
-```
-
-## Host-side Pi launcher
-
-For convenient host shell usage, source the example launcher:
-
-```bash
-cat docs/examples/pi-host-function.sh >> ~/.bashrc.local
-source ~/.bashrc.local
-```
-
-The `pi()` function maps host project paths under `~/repos` into the container's
-`/workspace` mount so sessions open in the matching project directory:
-
-```text
-~/repos              -> /workspace
-~/repos/monika       -> /workspace/monika
-~/repos/other-repo   -> /workspace/other-repo
-anything else        -> /workspace/monika
-```
-
-Override the host workspace root with `MONIKA_HOST_WORKSPACE` and the fallback
-container cwd with `MONIKA_CONTAINER_DEFAULT_CWD`.
-
-## Manual host or remote access
-
-Host mode has been removed. Pi tools operate inside the container by default.
-When host or infrastructure work is needed, use the SSH extension/`relocate`
-explicitly, for example:
-
-```text
-relocate stanza:/home/monika
-```
-
-This keeps host access visible and reversible instead of making every shell command
-implicitly execute on the host. Omit the target to inspect whether execution is
-`local`, `remote`, or `ssh_unavailable`; use `relocate local` to return to the
-container. Remote paths must be absolute or begin with `~/`, and non-default ports
-belong in SSH config. Relocation validates the cwd and remote `rg` dependency before
-committing state, never falls back silently, and reports validation failures as real
-tool errors. See `config/extensions/SSH.md` for target grammar, locked-target
-boundaries, positional transport hardening, and search limits.
-
-## Runner mode
-
-The same Monika image can run short-lived, non-interactive jobs through
-`/app/bin/agent-runner.mjs` or the local `scripts/agent-runner` Docker wrapper.
-Runner mode is for disposable tasks, not the long-lived forum/Pi deployment. It
-mounts task input at `/task`, a workspace at `/workspace`, scratch space at
-`/scratch`, and durable outputs at `/outputs`.
-
-Runner mode keeps the useful Monika/Pi runtime available by default, but disables
-Pi session persistence and `agentd` unless explicitly requested. It supports
-controls such as `--no-tools`, `--tools`, `--timeout`, and `--system`.
-
-See `runner/README.md` for the full contract and examples.
-
-## GitHub Actions
-
-The repo uses separate pull-request CI gates so branch protection can fail or skip
-checks by subsystem. These workflows intentionally avoid branch `push` triggers to
-prevent duplicate runs; `pull_request`, `merge_group`, and manual dispatch provide
-fresh checks for PRs and merge queue candidates.
-
-- `CI / Monika Container` builds the Monika image and runs `tests/smoke/monika-runtime.sh`.
-- `CI / Forum Container` runs the forum unit/E2E test wrappers and builds the forum image when forum-relevant files change.
-- `CI / Integration` is currently a placeholder gate for future agentd/forum compatibility checks.
-
-Publishing workflows are intentionally separate from CI gates:
-
-- `Image / Monika` publishes multi-arch `ghcr.io/irrigationreal/monika:main` and `sha-*`.
-- `Image / Forum` publishes multi-arch `ghcr.io/irrigationreal/monika-forum:main` and `sha-*`.
-- `Release / Nightly` builds both images from one commit, publishes immutable candidate manifests, and updates the rolling nightly images.
-- `Release / Stable` automatically promotes a candidate to a release tag based on its UTC publication date and to `latest` after a seven-day soak without a newer candidate.
-
-See [`docs/releases.md`](docs/releases.md) for candidate eligibility, changelog,
-and manual-override behavior.
-
-## Files
-
-```text
-Containerfile             Multi-stage build: Go memstore + Debian slim + Node.js + Pi
-entrypoint.sh             Starts memstore/agentd and wires runtime state
-bin/agent-runner.mjs      Headless one-off Pi runner entrypoint
-scripts/agent-runner      Local Docker wrapper for disposable runner jobs
-scripts/agentlogs-monika  AgentLogs wrapper with dedicated writable HOME
-scripts/deploy-if-safe   Quiescence-gated Docker Compose redeploy helper
-scripts/import-sessions.mjs  Historical session import helper
-runner/                   Runner docs, prompts, and example job specs
-tests/                    Local/CI smoke and integration test harnesses
-tests/compose.monika-runtime.yaml  Test-only isolated compose file
-compose.yaml.example      Canonical standalone deployment template
-compose.yaml              Ignored local deployment file copied from the example
-services/memstore/        memstore Go source
-services/agentd/          Pi-backed HTTP/SSE daemon for alternate frontends
-services/forum/           Monika forum frontend
-docs/forum.md             Forum/agentd architecture notes
-docs/redeployment.md      Quiescence/drain redeployment contract
-docs/releases.md          Nightly candidate and stable promotion lifecycle
-config/extensions/        Pi extensions copied into the image
-config/persona/           Bundled default persona files
-config/settings.json      Pi settings
-config/stateful-memory.json  Memory extension config
-runtime/                  Gitignored host-owned persistent state
-```
-
-## AgentLogs manual session sharing
-
-The image includes a pinned AgentLogs CLI and a Pi `/upload` command. Sessions are
-not uploaded automatically. Run `/upload` inside Pi when a session is ready to share.
-
-AgentLogs auth/config is stored in a dedicated writable home at `/agentlogs-home`
-(`runtime/agentlogs-home/` in the compose deployment), not in Monika's normal
-`~/.config` mount. The wrapper also exposes Pi's real session directory under that
-home, so AgentLogs can resolve session IDs.
-
-Authenticate once from outside Pi:
-
-```bash
-docker exec -it monika agentlogs-monika login <agentlogs-hostname>
-docker exec -it monika agentlogs-monika status
-```
-
-For non-interactive auth, provide runtime-owned secrets instead:
-
-```bash
-AGENTLOGS_SERVER_URL=https://your-agentlogs-host
-AGENTLOGS_AUTH_TOKEN=...
-```
-
-Then work normally in Pi and run:
-
-```text
-/upload
-```
-
-You can also upload a specific Pi session file or ID:
-
-```text
-/upload <session-id-or-path>
-```
-
-Historical sessions can be imported after the container starts:
-
-```bash
-docker exec monika node /workspace/monika/scripts/import-sessions.mjs
-```
-
-By default, imported entries are tagged `historical-import`. Override tags with a
-comma-separated `MONIKA_IMPORT_TAGS` value:
-
-```bash
-docker exec -e MONIKA_IMPORT_TAGS=historical-import,archive monika \
-  node /workspace/monika/scripts/import-sessions.mjs
-```
-
-## Dependency policy
-
-npm and pnpm resolution use a 10-day minimum release age. The npm policy is
-baked into the Monika image and remains active for interactive installs; the
-pnpm policy lives in each workspace's `pnpm-workspace.yaml`. Existing lockfiles
-remain authoritative during frozen installs.
-
-All `@earendil-works/*` packages are exempt so coordinated Pi releases can be
-adopted without waiting ten days. The runtime still installs Pi at an exact
-version, and agentd records the complete dependency graph in its pnpm lockfile.
-For an urgent non-Pi update, use a one-command bypass while changing an exact
-pin, then restore the normal cooldown:
-
-```bash
-npm install --min-release-age=0 <package>@<exact-version>
-pnpm install --config.minimumReleaseAge=0 <package>@<exact-version>
-```
-
-Runtime tools and Pi packages are also pinned explicitly:
-
-- reviewed `pi-subagents` 0.37.2 git object and patch in `scripts/install-pi-subagents`
-- `agent-browser` in `Containerfile`
-- `pi-agent-browser` in `config/settings.json`
-- `nutrient-skills` to a Git commit in `config/settings.json`
-
-Update those pins deliberately and run the container tests. Versioned npm Pi
-packages and pinned Git refs do not move during `pi update`.
-
-## Upgrading Pi
-
-Change the exact Pi version in both `Containerfile` and
-`services/agentd/package.json`, then regenerate agentd's lockfile:
-
-```bash
-cd services/agentd
-corepack pnpm@10.26.2 install --lockfile-only
-```
-
-Build and test:
-
-```bash
-docker build -f Containerfile -t monika-test .
-tests/smoke/monika-runtime.sh monika-test
-```
-
-Then rebuild/recreate the deployment from a host shell when ready:
-
-```bash
-docker compose up -d --build
-```
+## Further reading
+
+- [Architecture](docs/architecture.md) — narrative continuity, components, state
+  ownership, trust boundaries, and non-goals
+- [Deployment](docs/deployment.md) — production images, local builds, persistent
+  state, secrets, signing, host launcher, and AgentLogs
+- [Forum integration](docs/forum.md) — canonical-session projection and the
+  forum↔agentd contract
+- [Subagents](docs/subagents.md) — specialist roles, identity boundaries, durable
+  execution, provenance, and recovery
+- [Maintenance](docs/maintenance.md) — dependency policy, CI entry points, and Pi
+  upgrades
+- [Agentd](services/agentd/README.md), [memstore](services/memstore/README.md),
+  [forum](services/forum/README.md), and [runner](runner/README.md) — component
+  documentation
+- [Redeployment](docs/redeployment.md), [autodeploy](docs/autodeploy.md),
+  [backups](docs/backups.md), [releases](docs/releases.md), and
+  [public ingress](docs/public-ingress.md) — operator runbooks
+- [AGENTS.md](AGENTS.md) and [tests/README.md](tests/README.md) — working rules and
+  validation commands

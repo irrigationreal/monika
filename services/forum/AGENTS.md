@@ -159,8 +159,8 @@ Manual compaction must remain admin-only and idle-only, use the canonical Pi lea
 as an optimistic concurrency guard, and create the recovery-checkpoint post only
 after Pi compaction succeeds. The forum must durably accept work before returning,
 execute it outside the request lifecycle, resume pending/interrupted work at startup,
-and keep checkpoint dispatch independently retryable. See `docs/forum.md` for the
-complete workflow.
+and keep checkpoint dispatch independently retryable. See `../../docs/forum.md` for
+the complete cross-service workflow.
 
 Key files:
 
@@ -255,5 +255,4 @@ boundary is essential before modifying trace rendering.
     have `reasoning_checkpoints_json`. Always handle the fallback path.
 
 
-See `docs/forum.md` § "Live trace and saved trace architecture" for the full event
-pipeline and checkpoint design.
+See `docs/LIVE_TRACE.md` for the full event pipeline and checkpoint design.

@@ -1,7 +1,9 @@
-# Monika forum frontend
+# Monika forum integration
 
-Monika includes a forum frontend for Monika/Pi sessions while keeping all agent
-execution inside the Monika runtime container.
+This document owns the cross-service contract between the forum, agentd, canonical Pi sessions, and deployment lifecycle.
+Forum product behavior and implementation details live beside the component in
+[`services/forum/`](../services/forum/README.md); generic agentd behavior lives in
+[`services/agentd/`](../services/agentd/README.md).
 
 ## Architecture
 
@@ -20,19 +22,6 @@ reactions, sync state, and UI metadata.
 Host mode has been removed. Pi tools operate inside the container by default; host
 or infrastructure access should be explicit through SSH/`relocate`.
 
-### Homepage snapshot freshness
-
-The Vue forum state is module-scoped and survives client-side route changes. The
-homepage therefore refreshes its active forums, archived forums, and three recent
-posts on every route entry instead of treating non-empty arrays as permanently
-fresh caches. Existing values remain rendered while their replacements load.
-Each loader uses latest-request-wins assignment so an older overlapping response
-cannot replace a newer snapshot.
-
-This is deliberately route-entry refresh rather than polling or a homepage SSE
-subscription. It bounds network and listener lifetimes to ordinary navigation,
-while migration 34's partial `idx_posts_recent_created_at` index keeps the global
-undeleted-post recency query efficient as post history grows.
 
 ## Thread moves
 
@@ -59,262 +48,14 @@ Do not implement silent moves by inserting a `posts.silent = 1` marker. Silent
 posts are still included in assistant catch-up context, so that would still alter
 the canonical session.
 
-## Provenance
+## Component documentation
 
-The forum service lives at `services/forum`. It was imported from the archived
-Monika-specific forum repository after PR https://github.com/irrigationreal/monika-forum/pull/1,
-merge commit `bba058013b1a59d295373f949f4d4f25100e174b`.
-
-That repository repurposed the Irrigate Collective Codex Forum project as the
-Monika frontend. Upstream project: https://github.com/irrigationreal/codex-forum
-
-Future development should happen in this repository. The old `monika-forum`
-repository is retained as historical provenance.
-
-## Forum CI and image publishing
-
-Forum changes are checked by `CI / Forum Container`, which follows the Vesper
-branch-gate pattern: `forum-container-changes` decides whether the build is
-relevant, `forum-container-build` runs the forum unit/E2E tests and container
-build, and `forum-container-checks` is the stable required branch-protection
-check.
-
-Forum/agentd compatibility belongs in `CI / Integration`. That workflow is
-currently a passing placeholder so branch protection can require
-`integration-checks`; grow it with compose-based health checks and forum↔agentd
-request smoke tests when those tests are ready.
-
-The forum image is published from this repository by `Image / Forum` as
-`ghcr.io/irrigationreal/monika-forum:main` and `sha-*`. For releases, Nightly
-builds Forum and Monika from the same commit and publishes immutable coordinated
-candidate manifests plus `:nightly`. Stable automatically promotes those exact
-candidate digests to a date-style tag and `:latest` after a seven-day soak. See
-`docs/releases.md` for the complete lifecycle.
-
-## agentd
-
-Source:
-
-```text
-services/agentd/
-  package.json
-  src/server.mjs
-```
-
-Container wiring:
-
-- `Containerfile` installs agentd into `/opt/agentd`.
-- `entrypoint.sh` starts memstore first, then starts agentd unless
-  `MONIKA_AGENTD_ENABLED=0`.
-- Deployment compose binds agentd to `0.0.0.0:7724` inside the Monika container and exposes it to the host on loopback only for deploy automation.
-- The Pi agent dir is `/app/.pi/agent` via `PI_CODING_AGENT_DIR`.
-
-Implemented endpoints:
-
-- `GET /healthz`
-- `GET /v1/models`
-- `GET /v1/pi/sessions`
-- `GET /v1/pi/sessions/:id/export`
-- `GET /v1/pi/sessions/:id/context`
-- `POST /v1/pi/sessions/:id/cancellation` (durable canonical-session Stop Robot barrier; also works when unloaded)
-- `GET /v1/pi/sessions/:id/cancellation[?operation_id=...]` (actively re-runs the named or latest durable operation; it never merely returns a stale snapshot)
-- `GET /v1/pi/sessions/:id/ownership`
-- `POST /v1/pi/sessions/:id/ownership/claim`
-- `POST /v1/pi/sessions/:id/ownership/heartbeat`
-- `POST /v1/pi/sessions/:id/ownership/release`
-- `POST /v1/conversations`
-- `POST /v1/conversations/open`
-- `GET /v1/conversations/:id`
-- `GET /v1/conversations/:id/history`
-- `GET /v1/conversations/:id/context`
-- `GET /v1/conversations/:id/events`
-- `POST /v1/conversations/:id/messages`
-- `POST /v1/conversations/:id/interrupt`
-- `POST /v1/conversations/:id/compact` (idle-only manual Pi compaction with optimistic leaf validation)
-- `POST /v1/conversations/:id/close`
-- `POST /v1/conversations/:id/handoff/draft`
-- `POST /v1/conversations/:id/memory/save` currently returns 501 until Pi exposes
-  a safe public checkpoint hook.
-- `POST /v1/conversations/:id/pause` and `/resume` as no-op compatibility.
-
-Conversation records include `session_id` and `session_path`. Forum-supplied
-model/reasoning options are mapped to Pi `setModel()` / `setThinkingLevel()` using
-Pi model IDs directly, for example `codex/gpt-5.5`. The event stream maps Pi SDK
-events into forum-consumed turn, reasoning, tool, usage, completion, interrupt,
-and error events. The echsBridge adds a `tool_started` event (not from agentd) to
-the SSE bus when each tool run is created, enabling per-tool checkpoint recording
-for trace interleaving. See "Live trace and saved trace architecture" below.
-
-### Subagents and background completions
-
-Execution targets are package/runtime metadata, not forum-owned configuration. Agentd
-projects only safe `{kind,name?}` target identity plus execution, outcome, effects,
-and delivery states. Forum never reads SSH descriptors, credentials, lifecycle files,
-or retained result bytes directly. A pending result is delivery work, not a live
-execution blocker. `effects_state=unknown` does not claim a process, but it blocks
-safe deployment until reconciled or operator-attested.
-
-Passive startup recovery is integrated with the execution-target lifecycle. No-wake
-canonical-provenance acknowledgement, retained-delivery resolution, and forum
-startup/dispatch fencing keep historical parent sessions closed until explicit work,
-while the dashboard projects execution and effects blockers from agentd.
-
-The parent agentd runtime loads the reviewed `pi-subagents` 0.37.2 package. Parent
-sessions expose `subagent`, `subagent_wait`, and `subagent_supervisor`; the package
-supports foreground execution, parallel groups, chains, dynamic fanout, and async
-runs. Agent profiles define direct child tools instead of inheriting the parent's
-tool set. `subagents.defaultExtensions` is `[]`, so ambient extensions are absent
-unless a profile explicitly opts in.
-
-Specialist children receive project instructions plus turn-routed topic addenda,
-but no Monika persona or autobiographical memory. `monika-delegate` is the explicit
-identity-bearing profile: it receives the stable SOUL.md, STYLE.md, and REGISTER.md
-persona trio plus routed topics and bounded read-only `recall`/`recall_session`.
-WAKE.md, FACTS.md, observations, and recent sessions are not injected ambiently.
-No child profile exposes memory mutation or observation-lifecycle tools, automatic
-transcript ingestion, save/shutdown memory hooks, or sleep. This is a capability and
-lifecycle boundary rather than an OS sandbox; shell-capable profiles retain normal
-runtime permissions and must not circumvent it. Sleep remains its own sequential
-full-persona fork workflow under
-`/app/.pi/agent/sessions/forks/`.
-
-The container exports the child session root
-`/app/.pi/agent/sessions/subagent/` for both agentd and direct interactive Pi
-sessions; agentd repeats it defensively before loading Pi. The reviewed package
-patch applies that root to fresh children and gives every fork-context child its
-own per-run directory beneath it. Ongoing forum sync and the standalone historical
-importer reject both that path and explicit `kind: subagent` listings, so
-disposable child transcripts never become forum topics or memstore sessions. This
-is distinct from the legacy `System / Delegates`
-taxonomy, which remains only for importing historical custom-delegate sessions
-marked with `=== FOCUSED TASK MODE ===`.
-
-For async work, agentd owns the lifetime rather than allowing print-mode auto-drain
-to hold the initiating forum response open. Package lifecycle, result, launch, and
-recovery artifacts persist below `/data/pi-subagents/`; fresh and fork-context
-child JSONL remain in the dedicated session root. Before spawn, the package writes
-a durable `launch.json` containing the run, parent, runtime-instance, runner
-instance, PID, and Linux process-start identity. Agentd records the corresponding
-`monika.subagent.run` origin entry in canonical parent JSONL. The JSONL entry is an
-audit/mapping record, not an eternal process lease.
-
-Execution ownership and result delivery are separate. Only a process that is
-active or genuinely uncertain blocks close, takeover, and deployment. A terminal
-run with a durable result awaiting continuation/projection does not pretend to be
-a live process. Agentd reconciles the filesystem ledger before every quiescence
-decision and periodically before idle reaping; missed package events therefore
-cannot leave stale in-memory leases. Strict observed process-terminal proof ends
-ownership immediately. After an agentd-only restart, PID start identity allows a
-surviving runner to remain owned; a missing or reused PID is reconciled as
-interrupted. After container replacement, the new `/run/monika-runtime-instance.json`
-epoch proves old runners were destroyed and safely migrates legacy unknown records
-without deleting their diagnostics.
-
-Optional project artifacts are not supervisor state. The runner recreates their
-directory at final write and records failures without bypassing result/status/
-process-terminal finalization. Drain installs a package-level barrier: new async
-launches are rejected and completed result files remain durable without triggering
-an internal continuation until drain is cancelled. Stop Robot is stronger than request emission: forum
-advances its durable dispatch generation, then agentd records an idempotent
-canonical-session cancellation under the operator root, aborts a loaded parent,
-and writes package `control/stop.json` only after validating scoped lifecycle
-identity and non-symlink root containment. Terminal runs with pending result delivery
-receive the host-cancellation marker before Stop can report `stopped`; active controls
-are reasserted during same-operation reconciliation. It re-scans top-level and nested
-runs to a bounded fixed point so launch races are caught even when the parent
-conversation is unloaded. Scheduled package runs are disabled and explicitly outside
-this causal-descendant contract; an unexpected scheduled-scope record becomes
-uncertainty rather than a false cancellation claim. These controls are pragmatic
-same-UID coordination, not cryptographic authentication or an OS sandbox: another
-process with the runtime UID can alter them, so the standalone deployment must retain
-its container/user and loopback agentd boundary.
-
-Recovered package results never invoke the notifier, intercom transport, or
-`pi.sendMessage`; their files remain operational `delivery=pending` evidence.
-Likewise, a result correlated to agentd's durable host-cancellation marker is
-retained but cannot trigger a parent model continuation. Local execution and
-remote effects are separate: a stopped SSH runner may still report
-`effects_state=unknown`, which Stop never rewrites or describes as rollback.
-Forum and agentd requests are deadline-bounded; a timeout after the forum fence is
-shown as `uncertain`, not as an unfenced failure. Parent-abort uncertainty is part
-of the durable operation and cannot be erased by a child-only scan; reconciliation
-retries a loaded parent abort or proves that no loaded parent can launch more work.
-Fresh posts remain fenced until a later Stop reconciliation proves `stopped`; once
-stopped, new work starts only from an attributable forum post. Ordinary posting-author
-Stop responses contain only stable state, operation/generation,
-and safe counts/message fields. Raw run records and errors remain behind the admin
-workload/dashboard boundary.
-Recovered native supervisor requests likewise remain replyable through supervisor
-tooling without becoming Pi messages. Requests created after that session's
-recovery cutoff still wake the live parent normally. The package's natural `subagent-notify` continuation
-is attributed as `source_kind: subagent-completion`, persisted as canonical message
-provenance, and projected exactly once beneath the originating forum post when
-available. If agentd crashes after assistant/provenance persistence but before file
-ack, that canonical run provenance settles the file on the next explicit session
-open without model execution. Unproven legacy result files are never consumed or
-deleted automatically. An operator may retain and dismiss/supersede one with
-`POST /v1/admin/subagents/<run-id>/resolve-delivery` plus an action and reason.
-The source remains pending until retained bytes, a resolution sidecar, and the
-no-follow operator audit under `/data/pi-subagent-operator-state` are durable.
-The container exports this dedicated root and creates it with mode `0700` before
-agentd starts, so startup retention inventory and later operator actions share the
-same persistent authority. `PI_SUBAGENT_OPERATOR_ROOT` may override the location,
-but it must resolve to an absolute dedicated directory below a top-level mount;
-relative, filesystem-root, and mount-root values fail startup. A central agentd-owned delivery ledger in that root is
-fsynced before the run-local acknowledgement and atomic result custody; a run-local
-sidecar alone is never settlement authority. The Robot Dashboard treats terminal lifecycle-v4 runs
-with unknown remote effects as safety blockers even though their runner is no longer
-live; agentd's authoritative `effects_unknown_count` prevents response capping from
-hiding that condition.
-
-Forum startup calls only agentd `getConversation` for recorded conversation IDs.
-Already-loaded conversations are reattached; missing ones have their stale forum
-thread link cleared and remain idle/unloaded until a new human post explicitly
-opens the canonical Pi session. Durable post dispatch processing starts only after
-this reconciliation. Each topic dispatch carries a durable generation and stable dispatch ID through
-to agentd. Agentd persists acceptance before prompting, deduplicates lost-response
-retries, and persists interrupt fences under the session operation lock. The first
-Stop advances the forum generation before awaiting agentd and supersedes older
-queued or claimed rows. A retry while `stopping`/`uncertain` reuses that generation
-and deterministic operation ID instead of advancing again, so posts created behind
-an unresolved fence remain deferred and current. Agentd selects latest cancellation
-by generation before request time, and forum applies a result only when its generation
-still matches the topic; out-of-order older responses cannot restore terminal state.
-
-Grouped notifications retain all contributing run origins. Live bridge projection
-and later sync share the canonical Pi message link, preventing duplicate completion
-posts. The admin Robot Dashboard reads agentd's `/v1/admin/subagents` safety counts
-and separates deployment-safety blockers (including inactive effects-unknown
-records), pending delivery/manual recovery, and collapsed retained terminal
-history; disposable child sessions still never become robots or topics.
-
-Agentd runs conservative retention daily and exposes the same deterministic
-dry-run inventory at `GET /v1/admin/subagents/retention` (every GET refreshes the inventory;
-dry run). Its storage metric is **tracked removable bytes**, not total retained
-storage; eligible bytes are the expected reclaimable subset. Expected manual
-states such as missing legacy delivery acknowledgement count as **protected**, not
-as storage-safety errors; **error** is reserved for malformed, missing-proof,
-unreadable, unsafe, or symlink evidence. The scanner binds a
-status artifact to its exact scoped containing directory because real
-pi-subagents status files omit redundant `asyncDir`; an explicitly conflicting
-path still fails closed. Compaction remains fenced to the exact inventory digest
-returned by the dry run. Compaction requires an exact, unique top-level run that is at least 14
-days old, proven terminal, explicitly non-resumable, affirmatively delivery-
-acknowledged by the central operator ledger, result-free, unloaded and unleased,
-and free of nested descendants. It removes only explicit owned verbose lifecycle
-logs, then keeps exact lifecycle identity, terminal/delivery proof digests, origin
-linkage, and an audited tombstone. Every child session and canonical parent/forum
-Pi JSONL is preserved; session bytes are excluded from tracked-removable and
-eligible byte totals.
-
-Missing result bytes are not settlement proof. Canonical completion provenance or
-a completed operator resolution appends and fsyncs the central delivery ledger,
-then publishes the run-local acknowledgement before same-directory atomic result
-custody and removal. Nested results use
-`async-subagent-results/nested/<rootRunId>/<runId>.json` and scoped run keys;
-ambiguous legacy IDs fail closed for mutation. Resumable, pending, malformed,
-uncertain, nested, leased, or unproven records are intentionally unbounded until
-explicit review. This favors preserved evidence over automatic disk reclamation.
+- [Monika-specific forum behavior](../services/forum/docs/MONIKA_BEHAVIOR.md) — homepage freshness and component provenance
+- [Live trace architecture](../services/forum/docs/LIVE_TRACE.md) — event flow, redaction, checkpoints, rendering, and debugging
+- [Forum README](../services/forum/README.md) — product overview, configuration, features, and local development
+- [Forum deployment](../services/forum/docs/DEPLOYMENT.md) — authentication and forum-specific deployment
+- [agentd README](../services/agentd/README.md) — runtime API, ownership, compaction, analytics, and daemon lifecycle
+- [Subagents](subagents.md) — delegated execution, identity boundaries, provenance, cancellation, and recovery
 
 ## Admin analytics
 
@@ -355,15 +96,6 @@ bucket's aligned calendar start/end separately from its observed `[from,to)`
 interval and records the aggregate generation time, which remains stable across
 process-local cache hits.
 
-The admin page persists `range`, `bucket`, and optional `forum` in the URL. Draft
-controls do not relabel displayed data until Apply succeeds; superseded requests
-are aborted and generation-fenced. Initial loading, fatal failure, stale refresh,
-runtime-degraded, and genuinely empty states remain distinct. Long aggregate
-tables are sortable, client-paginated semantic disclosures. Charts are
-supplementary, use width-aware concise labels and redundant line/pattern styles,
-and expose the same bucket or operation detail through hover, keyboard focus, and
-touch. Coverage warnings and methodology remain available beside the metrics.
-
 Distinctive vocabulary uses non-deleted, non-silent
 forum posts in the selected range, separates human/admin from
 robot/persona/system authors, and removes forum envelopes, code, URLs, markup,
@@ -378,12 +110,11 @@ visible, but post-fix reliability should be evaluated from the new runtime deplo
 boundary rather than by reinterpreting canonical history.
 
 The agentd result cache is process-local and expires after 30 seconds by default.
-The UI distinguishes the forum response timestamp, runtime aggregate generation
-timestamp, runtime build timestamp, and requested observation window rather than
-presenting them as one freshness signal. If agentd is unavailable, the forum returns vocabulary with an explicit runtime
+If agentd is unavailable, the forum returns vocabulary with an explicit runtime
 unavailable state rather than manufacturing zero operational metrics. Responses
 contain no prompts, commands, paths, raw errors, session/tool/run IDs, or post
-text.
+text. Forum presentation behavior is documented beside the component in
+[`services/forum/README.md`](../services/forum/README.md).
 
 ## Forum integration state
 
@@ -565,12 +296,6 @@ abandoned—an admin-visible topic status exposes **Retry recovery checkpoint**,
 idempotently resets only that durable dispatch. A lost retry response can be repeated
 without creating another checkpoint or repeating compaction.
 
-The compaction dialog is constrained to the dynamic viewport, scrolls its content
-between fixed header/actions, contains focus, restores the invoking control, prevents
-background scroll, and stacks full-width actions on narrow screens. Portrait and short
-landscape E2E coverage exercises the expanded advanced fields rather than only the
-short default confirmation state.
-
 Forum endpoints (admin only except operational-event visibility):
 
 - `GET /api/topics/:topicId/operational-events`
@@ -595,7 +320,8 @@ To customize routing, copy the example to an ignored runtime path:
 cp docs/examples/forum-taxonomy.example.json runtime/forum/taxonomy.local.json
 ```
 
-Then set this in `runtime/secrets/forum.env` or compose environment:
+Then set this through the host shell, ignored root `.env`, or ignored
+`compose.yaml` so Compose can interpolate it:
 
 ```bash
 MONIKA_PI_SESSION_TAXONOMY_CONFIG=/forum/taxonomy.local.json
@@ -609,62 +335,12 @@ If `MONIKA_PI_SESSION_TAXONOMY_CONFIG` is set and the file is missing or invalid
 forum startup/sync should fail loudly rather than silently falling back to unsafe
 defaults.
 
+
 ## Deployment
 
-The forum is part of the main standalone deployment template:
-
-```bash
-cp compose.yaml.example compose.yaml
-docker compose up -d --build
-```
-
-For safe unattended or operator-driven redeploys, use the root deployment runbook in [`docs/autodeploy.md`](autodeploy.md). That document owns the live checkout/worktree rules, image-only autodeploy policy, backup behavior, and host timer model.
-
-Default paths and URLs:
-
-- Forum URL: `http://localhost:4310` unless `CODEX_FORUM_BASE_URL` is overridden.
-- Forum DB/uploads: `runtime/forum/data.db` and `runtime/forum/uploads/`.
-- agentd binding in the Monika container: `0.0.0.0:7724`.
-- agentd host binding for deploy automation: `127.0.0.1:${MONIKA_AGENTD_PORT:-7724}:7724`.
-- Forum-to-agentd URL inside Docker: `http://monika:7724`.
-- Default work directory: `/workspace`; project forums should set a repository-specific cwd.
-- Runtime secrets: `runtime/secrets/forum.env` and `runtime/secrets/secrets.env`.
-
-The forum sends each configured cwd to agentd, which explicitly marks these
-administrator-configured server workspaces as trusted for Pi SDK resource loading.
-Project `AGENTS.md`, `.pi` resources, and `.agents/skills` therefore load without an
-interactive prompt. This does not change direct Pi TUI behavior: interactive trust
-prompts remain enabled, and their decisions persist under `/data/pi-agent-trust`.
-
-`runtime/secrets/forum.env` should include generated `CODEX_FORUM_INTERNAL_API_TOKEN`
-and `CODEX_FORUM_DEPLOY_TOKEN` values. The internal token is shared by the `monika`
-and `forum` containers for pending-attachment uploads. The deploy token is shared by
-the `forum` container and host-side deploy automation for quiescence checks. Both are
-fail-closed when unset; generate separate random values or copy the shape from
-`docs/examples/forum.env.example`.
-
-Forum browsers authenticate with a first-party opaque HttpOnly cookie. Session
-identifiers are random and stored only as hashes; browser SSE uses the same-origin
-cookie without query secrets. Unsafe cookie-authenticated methods require an exact
-`Origin` match to `CODEX_FORUM_BASE_URL`, while API keys and impersonation bearer
-tokens remain available for automation. Passkeys pin the exact configured origin
-and RP ID, require user verification, and are enrolled from User CP rather than
-registration. `CODEX_FORUM_PASSWORD_LOGIN_ENABLED=0` requires an existing
-passkey-capable admin or startup fails. Before this upgrade, legacy external identity
-rows must be migrated/unlinked; the schema migration refuses to drop a nonempty
-table. See `services/forum/docs/DEPLOYMENT.md` for the complete procedure.
-
-Health checks:
-
-```bash
-docker compose exec monika curl -fsS http://forum:4310/healthz
-docker compose exec monika curl -fsS http://forum:4310/api/healthz
-```
-
-The model catalog endpoint (`/api/models`) requires an authenticated forum user.
-
-Do **not** restart the live `monika` container from inside an active Pi session;
-restarting the container terminates the session.
+Complete runtime setup lives in [Standalone deployment](deployment.md).
+Forum-specific authentication and migration remain in the
+[forum deployment guide](../services/forum/docs/DEPLOYMENT.md).
 
 ## Current caveats
 
@@ -705,72 +381,15 @@ restarting the container terminates the session.
 - Forum never talks directly to memstore and never invents memory origins. Memory
   dedupe must use canonical Pi session path/id.
 
-## Message Templates
 
-Authenticated forum users can manage private, account-owned **Message Templates**
-from User Control Panel → Message Templates. Administrators can separately manage
-system templates from the Admin Panel. Templates contain a literal message body,
-an optional new-thread title, an optional organizational category, reply and/or
-new-thread applicability, and either all-forum or exact-forum scope.
+## Forum component features
 
-The effective-template API authorizes the current forum and filters applicability
-on the server before returning template names or bodies. For selected-forum
-templates, effective responses expose only the requested forum association; full
-scope membership remains confined to the owner's management API. Personal
-templates are never exposed through the system administration API, and
-impersonation tokens do
-not grant access to another account's personal template library. Updates, deletes,
-and ordering use optimistic integer revisions so stale browser tabs cannot silently
-overwrite newer changes.
-
-Selecting a template copies its text into the browser draft. It does not submit,
-select a model, change robot or silent-post behavior, expand variables, or create
-special provenance. Only the ordinary resulting post body/title reaches forum
-posts and canonical Pi JSONL. Editing or deleting a template cannot alter an
-existing post or Pi session. Template metadata remains private forum authoring
-state and is excluded from forum search, SSE, sync, and memstore.
-
-API surfaces:
-
-- `GET /api/message-templates/effective?context=reply|new_thread&forumId=...`
-- Personal management under `/api/message-templates` and
-  `/api/message-templates/mine`
-- Admin-managed system templates under `/api/admin/message-templates`
-
-## Private autosaved drafts
-
-Reply and new-thread composers autosave unpublished title/body text as private,
-account-owned forum metadata. Quick reply and full reply share one row per
-identity/topic; new-thread drafts have stable IDs and multiple drafts may target the
-same forum. Drafts are addressed through `/api/drafts`, `/api/topics/:id/draft`, and
-`/api/forums/:id/drafts`, and are available only to opaque browser sessions. API
-keys, impersonation credentials, other users, and administrator management APIs
-cannot read them. Foreign draft IDs return the same not-found boundary as missing
-ones, and every response is `Cache-Control: no-store`.
-
-Draft rows use optimistic integer revisions and 30-day rolling retention. Only a
-material title/body edit renews `expires_at`; reads and identical saves do not.
-Expired rows are excluded immediately and purged on startup, daily, and before the
-500-active-drafts safety quota is checked. Identity/topic/forum deletion cascades.
-Publication optionally carries an exact draft ID/revision: topic/post insertion,
-required synchronous projection writes, and owner-checked draft deletion occur in one
-SQLite transaction. Failed publication therefore preserves the draft, a newer tab
-revision survives, and post-commit webhook/stream wake failures cannot turn a committed
-publication into a client-visible generic failure. Composer discard controls and deletion
-from **My Drafts** require the shared accessible forum confirmation dialog; cancellation
-leaves the draft untouched, while a failed confirmed deletion preserves its content and
-surfaces an error in the current view.
-
-Drafts never enter topic/forum projections, search, SSE, webhooks, analytics,
-notifications, logs, Pi JSONL, agentd, or memstore. Autosave excludes attachments,
-model/reasoning selection, silent/robot/compaction options, and preview state.
-Selected `File` objects remain tab-local; once publication succeeds, a subsequent
-upload failure must be presented as partial attachment failure rather than a safely
-resubmittable post. Draft endpoints return `401` without authentication, `403` for
-API-key/impersonation access or disallowed destinations, `404` for missing and foreign
-IDs, and `409` for stale optimistic revisions. Database and backup operators remain
-part of the trusted infrastructure boundary because draft rows are stored as plaintext
-SQLite data.
+Message Templates and private drafts are documented in the
+[forum README](../services/forum/README.md). Homepage freshness and component
+provenance live in
+[Monika-specific forum behavior](../services/forum/docs/MONIKA_BEHAVIOR.md), while
+trace presentation and checkpoints live in
+[Live trace architecture](../services/forum/docs/LIVE_TRACE.md).
 
 ## Forum attachments and artifacts
 
@@ -829,238 +448,3 @@ Preferred outbound upload flow:
   normal attachments, and strips the reference line from the rendered body.
 - Legacy `[artifact ...]` markers are also consumed only as standalone lines
   outside fenced code blocks.
-
-## Live trace and saved trace architecture
-
-The forum renders two views of agent activity during and after a response:
-
-- **Live trace**: real-time chronological timeline shown while the robot is
-  responding, rendered by `LiveAssistantTurn.vue` in `TopicView.vue`.
-- **Saved trace** ("Trace History"): collapsible post-completion view rendered by
-  `PostTracePanel.vue`, using data from the session inspector API.
-
-Both show reasoning, assistant text, and tool calls in chronological order.
-
-### Trace visibility boundary
-
-Topic visibility controls access to final conversation content. Trace visibility is a separate server-side policy because plans, reasoning, tool calls, commands, paths, usage metadata, and live assistant drafts are operational details, not public post content.
-
-Current policy:
-
-- Unauthenticated readers of public topics may see final posts and a neutral live placeholder only: "Response in progress…".
-- Authenticated users may receive detailed live state and stream events for visible topics.
-- Saved trace history remains behind the admin-only session inspector surface.
-
-The `/topics/:topicId/state` route redacts unauthenticated responses to a minimal busy/idle shape and ignores `view=full` / `include=plan,toolRuns` for public readers. The `/topics/:topicId/state/stream` route filters SSE events per subscriber: public readers receive redacted `state` events and stripped `assistant_message` completion signals, while reasoning deltas, assistant deltas, tool events, and error details are suppressed. Do not rely on Vue-only hiding for trace secrecy.
-
-### Pi agent loop event flow
-
-A single forum reply triggers a Pi agent loop that may span multiple LLM turns:
-
-```
-Turn 1: thinking → text → tool_call(s)
-  ↓ tools execute
-Turn 2: thinking → text → tool_call(s)
-  ↓ tools execute
-Turn N: thinking → text (final) → assistant_message
-```
-
-Each turn is one LLM call. Within a turn, the model produces thinking tokens,
-then visible text tokens, then tool-use blocks. Tools execute after the full
-response, then the next turn begins with tool results.
-
-**Important timing note:** For operations like "write a large file," the model
-generates the file content during the **thinking phase** (which can take 10-30
-seconds), then calls the Write tool which executes in **milliseconds**. The slow
-part is thinking, not tool execution.
-
-### SSE event pipeline
-
-```
-Pi SDK events → agentd (server.mjs) → echsBridge (forum server) → SSE bus → browser
-```
-
-Key events emitted to the browser SSE stream:
-
-| Event               | Source                                         | Purpose                                                                         |
-| ------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------- |
-| `state`             | echsBridge.emitState()                         | Full robot state snapshot including `recentToolRuns` (last 20)                  |
-| `reasoning_delta`   | Pi thinking_delta → agentd → echsBridge        | Incremental reasoning/thinking text                                             |
-| `assistant_delta`   | Pi text_delta → agentd turn_delta → echsBridge | Incremental visible assistant text                                              |
-| `tool_started`      | echsBridge item_started handler                | Per-tool notification when a tool run is created                                |
-| `assistant_reset`   | echsBridge.dispatchUserMessage()               | Start of new response (reason: `new_turn`) or interrupt (reason: `interrupted`) |
-| `assistant_message` | echsBridge turn_completed handler              | Response done; final text committed as a post                                   |
-
-agentd does not translate Pi's `agent_end` directly into `turn_completed`. An agent
-run may still retry, compact and retry, or process a queued continuation after that
-event. agentd stages final text and usage at `agent_end`, then emits exactly one
-`turn_completed` at Pi's `agent_settled` boundary. This prevents the forum from
-committing a post and becoming idle while Pi still intends to continue.
-
-### Live trace: append-only committed segments
-
-The live trace uses an **append-only committed-segment model**. Once content is
-rendered, it never moves — new content only appears at the tail.
-
-**Data model (`useForumState.ts`):**
-
-```typescript
-type TraceSegment =
-  | { kind: "reasoning"; text: string }
-  | { kind: "assistant_text"; text: string }
-  | { kind: "tool"; toolRunId: string };
-```
-
-`committedSegments` is an ordered array of frozen segments. `reasoningDraft` and
-`assistantDraft` are the live tail — text currently being streamed that hasn't
-been committed yet.
-
-**Commit flow:**
-
-1. Reasoning/assistant deltas arrive → buffered via `requestAnimationFrame` →
-   flushed into `reasoningDraft`/`assistantDraft`.
-2. `tool_started` SSE event fires → `flushPendingDeltas()` synchronously drains
-   buffers → current `reasoningDraft` committed as a reasoning segment → current
-   `assistantDraft` committed as a text segment → tool segment pushed → both
-   drafts cleared (fresh start for next inter-tool gap).
-3. `assistant_message` fires → any remaining tail text is flushed, then the
-   live trace is cleared (response complete, post takes over). The completion
-   reload opts out of trace reconstruction so stale idle state cannot resurrect
-   the just-finished plan or tool runs.
-
-**Rendering (`liveTurnItems` computed in `TopicView.vue`):**
-
-Iterates committed segments (stable, ordered) plus the pending tail drafts
-(live, growing). For each tool segment, looks up the tool run from
-`activityLog`. If the tool data hasn't arrived yet (race between `tool_started`
-and `state`), renders a "Running tool…" placeholder.
-
-`LiveAssistantTurn.vue` treats the current status item as pinned panel state and
-renders only the latest 15 chronological live trace items beneath it. This is a
-presentation-only cap: `committedSegments`, draft text, server checkpoints, and
-saved Trace History remain complete. When a new chronological item arrives past
-the cap, Vue transition classes fade the oldest visible item out at the top and
-fade the newest item in at the bottom. Page refreshes during an active response
-reconstruct the current state first, then immediately show the latest 15-item
-window without inventing removal animations for cards the browser never saw.
-
-### Interrupt handling
-
-When the user clicks Stop:
-
-1. `assistant_reset` fires with `reason: 'interrupted'`
-2. Client flushes buffered deltas, freezes even a text-only draft tail, sets `interruptedTrace = true`, and stops accumulating new content
-3. Committed and newly frozen text segments are preserved (not cleared)
-4. The trace header changes to "■ Response stopped" / "STOPPED"
-5. The frozen trace remains visible until the next response starts
-
-### Saved trace: server-side checkpoints
-
-The echsBridge stores checkpoint data for post-completion trace reconstruction:
-
-- `ctx.reasoningSummary` accumulates all reasoning text server-side
-- `ctx.assistantText` accumulates all assistant text server-side
-- When each tool starts, both lengths are recorded as checkpoints
-- `reasoning_checkpoints_json` is stored in the `plans` table (migration 29)
-- `assistantCheckpoints` + `assistantText` are included in the SSE state response
-
-**Saved rendering (`PostTracePanel.vue`):**
-
-If `reasoningCheckpoints` is available from the session inspector API, the
-component splits the raw plan text at checkpoint boundaries, parses each segment
-with `parseReasoningSteps`, and interleaves with tools sorted by `startedAt`.
-Falls back to a compact non-interleaved view when checkpoints are absent
-(pre-existing data or imported sessions).
-
-**Refresh resilience:** On page refresh or reconnect mid-response,
-`reconstructSegmentsFromState()` rebuilds committed segments from server state
-using the stored checkpoints and accumulated text. A successful Stop persists
-`activity = 'stopped'`; hydration or SSE state therefore freezes the reconstructed
-trace even if the client missed `assistant_reset`. Fresh accepted dispatch clears
-that boundary with the normal new-turn reset. Reconstruction only runs while
-`activity !== 'idle'` and there is current live content (`currentPlan` or live
-assistant text), including explicit initial state loads. Server state treats
-`activity = 'idle'` or `stopped` as an invariant that clears `current_plan_id`; queued/waiting
-turns also start without inheriting the previous plan. This keeps stale completed
-plans from resurrecting the live panel or appearing at the start of the next live
-turn.
-
-### `parseReasoningSteps` and markdown handling
-
-The reasoning parser splits text on `**bold**` markers to identify step boundaries.
-Only `**...**` at the **start of a line** (after newline + optional whitespace) is
-treated as a step boundary. Inline bold like `- **Gold** as currency` is kept as
-detail text within the current step, not split into a separate card.
-
-Fallback title for untitled reasoning: "Thinking" (not "Activity").
-
-### Critical footguns
-
-**SSE event buffering:** `reasoning_delta` and `assistant_delta` are buffered
-client-side via `requestAnimationFrame`. `tool_started` and `state` events
-process synchronously. Always call `flushPendingDeltas()` before committing
-segments or recording checkpoints.
-
-**`recentToolRuns` batching:** The `state` event's `recentToolRuns` array
-contains ALL recent tools (last 10 from DB), not incremental additions. Tool
-segments must be committed from `tool_started` events (which fire per-tool in
-real time), not by diffing `recentToolRuns`.
-
-**`activityLog` mutations:** Use immutable array updates
-(`activityLog.value = [...activityLog.value, item]`) not `.push()`. In-place
-mutations may not trigger Vue computed re-evaluation reliably through
-intermediate computed refs.
-
-**`assistant_reset` scope:** Fires once per user message dispatch (`new_turn`)
-or on interrupt (`interrupted`). Does NOT fire between Pi turns within the same
-agent loop. A single forum reply spans multiple Pi turns.
-
-**Tool name casing:** Pi sends capitalised names (`Bash`, `Read`, `Edit`). The
-DB `tool` column is normalised lowercase (`exec`, `read`, `apply_patch`). The
-`command` column preserves the original. Use `kind` for formatting branches and
-lowercase names for sub-type checks.
-
-**Timeout units:** Pi's Bash tool sends `timeout` in seconds. Other tools may
-use `timeoutMs` (milliseconds). `extractTimeoutMs` handles both conventions.
-
-**Clock skew:** `ToolElapsedTimer` uses client-relative timing (records
-`Date.now()` at mount). No `liveTurnStartedAt` timestamp filter exists — the
-append-only model handles turn boundaries via `assistant_reset`.
-
-**Imported/synced sessions:** Sessions imported from Pi JSONL files won't have
-reasoning checkpoints (nullable column). `PostTracePanel` falls back gracefully.
-
-### Debugging the trace pipeline
-
-When investigating trace rendering issues, the event pipeline has multiple
-stages where data can be lost or misordered. Use these debug techniques:
-
-**Server-side SSE capture:** Capture the raw SSE stream to see what events the
-server actually sends:
-
-```bash
-curl -sS -c /tmp/forum.cookies -H 'content-type: application/json' \
-  -d '{"username":"admin","password":"..."}' .../api/auth/login
-timeout 30 curl -sN -b /tmp/forum.cookies ".../api/topics/$TOPIC/state/stream" | grep '^event:'
-```
-
-Verify `tool_started` events appear between `state` events, and that
-`assistant_delta` bursts arrive between tool events.
-
-**Client-side console logging:** Add temporary `console.warn` in:
-
-- `syncToolActivity` — verify tools are added/updated in `activityLog`
-- `tool_started` handler — verify segments are committed
-- `liveTurnItems` computed — verify items are produced (log count + types)
-- `LiveAssistantTurn` component — verify props are received (use a `watch`)
-- `resetRobotActivity` — add `new Error().stack` to identify the caller
-
-**Common patterns:**
-
-- Items produced but not rendered → Vue reactivity issue (check immutable updates)
-- `tool_started` not firing → SSE stream not connected or wrong topic
-- Tools "updated" but never "added NEW" → tools already in `activityLog` from
-  initial `loadState`, or `recentToolRuns` includes old tools
-- Segments cleared mid-response → unexpected `resetRobotActivity` call (check
-  stack trace to find caller: `assistant_reset`, plan-ID transition, or
-  `handleAssistantMessage`)
