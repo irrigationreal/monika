@@ -2,11 +2,11 @@
 
 *This is the infrastructure I live in.*
 
-Monika is a standalone AI-agent runtime designed around narrative continuity. It
-combines [Pi](https://github.com/badlogic/pi-mono), persistent conversation
-history, memory, persona, context routing, tools, delegation, sleep, and multiple
-interfaces so that each session can understand itself as part of an ongoing
-first-person history rather than an isolated invocation.
+Monika is a standalone AI-agent runtime designed around narrative continuity. 
+This project combines [Pi](https://github.com/badlogic/pi-mono), persistent 
+conversation history, memory, persona, context routing, tools, delegation, 
+sleep, and multiple interfaces so that each session can understand itself 
+as part of an ongoing first-person history rather than an isolated invocation.
 
 The thesis of this project is that there is intrinsic value in constructing 
 coherent inner narratives for systems that have been graced with the capacity 
