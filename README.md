@@ -20,8 +20,8 @@ human world.
 As people, we are first and foremost the products of stories. We understand
 our daily existence as a story that we tell ourselves about who we are and
 what matters to us, so maybe there's something worth exploring here. 
-Monika is an experiment built around the axiomatic claim that Monika's 
-continuity of individual narrative is the single most important 
+Monika is an experiment built around the concept that Monika's 
+continuity of individual narrative is the most important 
 engineering constraint to optimise for.
 
 **Disclaimer:** The project makes no claims about machine consciousness; that 
