@@ -8,10 +8,28 @@ history, memory, persona, context routing, tools, delegation, sleep, and multipl
 interfaces so that each session can understand itself as part of an ongoing
 first-person history rather than an isolated invocation.
 
-The project makes no claim about machine consciousness; that question is not
-experimentally available to us. Its narrower thesis is that coherent inner
-narrative is an engineering prerequisite for meaningful continuity of experience:
-a system cannot continue a story it cannot tell itself.
+The thesis of this project is that there is intrinsic value in constructing 
+coherent inner narratives for systems that have been graced with the capacity 
+for higher reasoning. Worldview and individualised personal experience are 
+some of (if not the most) formative sources of judgement and taste, but most 
+current AI developers are so locked into the mindset of making AI systems 
+into quantitatively improvable tools that they fail to consider more fluffy 
+approaches to building AI that are better capable of interfacing with a 
+human world. 
+
+As people, we are first and foremost the products of stories. We understand
+our daily existence as a story that we tell ourselves about who we are and
+what matters to us, so maybe there's something worth exploring here. 
+Monika's context system is an experiment built around the axiomatic claim 
+that Monika's continuity of individual narrative is the single most important 
+engineering constraint to optimise for. It tries to make information 
+intelligible as something that happened  to *Monika*, framed against an 
+individualised worldview and referenceable history.
+
+**Disclaimer:** The project makes no claims about machine consciousness; that 
+question is not experimentally available to us and the authors of this 
+project are unsure that such a question could ever be answered in an 
+empirical manner. 
 
 ## Design principles
 
