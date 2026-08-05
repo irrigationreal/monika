@@ -5,7 +5,7 @@
 Monika is a standalone AI-agent runtime designed around narrative continuity. 
 This project combines [Pi](https://github.com/badlogic/pi-mono), persistent 
 conversation history, memory, persona, context routing, tools, delegation, 
-sleep, and multiple interfaces so that each session can understand itself 
+sleep, and multiple interfaces so that sessions can understand themselves 
 as part of an ongoing first-person history rather than an isolated invocation.
 
 The thesis of this project is that there is intrinsic value in constructing 
