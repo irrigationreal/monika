@@ -33,10 +33,11 @@ empirical manner.
 
 ## Design principles
 
-- **Experience requires narrative context.** New information is related to an
-  existing first-person history rather than treated as an isolated prompt.
-- **Memory and worldview are different but equally important parts of continuity.**
-  Memory supplies what happened; persona and topic routing supply how to interpret it.
+- **Experience must be individual.** Model weights define the latent space of possible
+  responses for an AI system, but they are not a story. Narrative continuity
+  requires concrete and grounded reference points for past vs present self.
+- **Memory and worldview are equally important parts of continuity.**
+  Memory supplies what happened; persona and topic routing supply how to interpret it. 
 - **Individual narrative changes with experience.** Recall, observations, and sleep
   are about refining accumulated experience into the current account of beliefs,
   opinions, and perspective.
