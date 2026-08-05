@@ -267,7 +267,3 @@ Playwright E2E tests live under `apps/codex-forum/e2e`.
 
 - Canonical Monika host: `https://www.vmonika.com`
 - Repository-root Docker Compose is the primary deployment path. See `docs/DEPLOYMENT.md` for forum authentication and network details.
-
-## License
-
-Proprietary. Internal use only.
