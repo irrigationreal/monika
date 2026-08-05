@@ -1,21 +1,22 @@
 # codex-forum
 
-Forum-first orchestration for ECHS-backed sessions and robotics workflows. Codex Forum keeps the discussion, agent
-state, and adapter events in one place so you can run long-lived threads across the web UI, CLI, and external surfaces
-(Discord/Matrix/Slack).
+Forum frontend and projection service for Monika's canonical Pi sessions. The service keeps discussion, forum metadata,
+robot presentation state, and adapter events in one place while all agent execution and memory remain behind `agentd`
+in the Monika container.
 
 ![Codex topic view](docs/screenshots/product-topic-codex-tall-1600.png)
 
 ## What it is
 
-Codex Forum is a vBulletin-style forum UI + API that treats a thread as the canonical state machine for a running agent.
-Every post is a chat turn in the session, and forums act like folders (with optional pre-prompts) that shape how the
-ECHS-backed robot responds. The server tracks forums, topics, posts, identities, robot state, and tool runs; adapters
-map external events into topics; and the UI renders the live agent trace and moderation controls.
+Codex Forum is a vBulletin-style forum UI + API. In this repository, one topic projects one canonical Pi JSONL session;
+forum posts and SQLite metadata are not a second conversation authority. Forums act like folders with optional
+pre-prompts that shape the agent context. The server tracks forums, topics, posts, identities, projection links, robot
+state, and tool runs; adapters map external events into topics; and the UI renders the live agent trace and moderation
+controls.
 
 Key capabilities:
 
-- **Forum-native agent sessions**: each topic is a durable session with posts, attachments, and robot activity.
+- **Canonical Pi session projection**: each topic maps to one durable Pi session with forum posts, attachments, and robot activity projected around it.
 - **Post-bound attachments**: browser downloads use opaque attachment IDs associated with visible posts; arbitrary
   robot-output filesystem paths are never a public attachment surface.
 - **Live robot state + tool trace**: authenticated users can see reasoning steps, tool runs, and outputs inline in a
@@ -53,8 +54,8 @@ packages/
 ### Server/runtime
 
 - Fastify server in `packages/server` with SQLite storage and optional Redis stream bus.
-- Robot orchestration is handled by the ECHS agent bridge and a tamper layer for personas, rewrites, and prompt
-  enhancers.
+- Robot orchestration is handled by the Monika Pi bridge, which calls `agentd` over HTTP/SSE and reconciles canonical
+  Pi provenance into forum state.
 - Feature flags (auth, rate limiting, search, Redis stream bus) are toggled via env vars.
 
 ### Web UI
@@ -161,7 +162,7 @@ The API is designed for automation and external adapters:
 Example: list forums
 
 ```bash
-export CODEX_FORUM_BASE_URL="https://forum.irrigate.cc"
+export CODEX_FORUM_BASE_URL="https://www.vmonika.com"
 curl -sS "$CODEX_FORUM_BASE_URL/api/forums" | jq
 ```
 
@@ -205,10 +206,10 @@ Key env vars (see `packages/server/src/runtimeConfig.ts` for the full list):
 | `CODEX_FORUM_ENABLE_RATE_LIMITING`         | Route-specific rate limit toggle for auth/write/search endpoints; safe authenticated reads are not globally throttled           | `0`                              |
 | `CODEX_FORUM_TRUST_PROXY`                  | Fastify trusted proxy setting (`0`, `1`, hop count, or CIDR/list string) for deployments behind Cloudflare Tunnel/reverse proxy | `0`                              |
 | `CODEX_FORUM_ENABLE_SEARCH`                | Search toggle                                                                                                                   | `0`                              |
-| `CODEX_FORUM_ECHS_BASE_URL`                | ECHS server base URL (required)                                                                                                 | unset                            |
-| `CODEX_FORUM_ECHS_API_TOKEN`               | Optional ECHS API token                                                                                                         | unset                            |
-| `CODEX_FORUM_AGENT_MODEL`                  | Default agent model                                                                                                             | `codex/gpt-5.6-sol`              |
-| `CODEX_FORUM_ECHS_REASONING_EFFORT`        | Default reasoning effort                                                                                                        | `medium`                         |
+| `MONIKA_AGENTD_BASE_URL`                   | Internal Monika agentd URL                                                                                                      | unset                            |
+| `CODEX_FORUM_AGENT_BACKEND`                | Agent backend selector; Monika deployment uses `monika-pi`                                                                      | unset                            |
+| `CODEX_FORUM_AGENT_MODEL`                  | Default Pi model                                                                                                                | `codex/gpt-5.6-sol`              |
+| `CODEX_FORUM_ECHS_BASE_URL`                | Legacy/generic ECHS compatibility backend; not used by the Monika deployment                                                    | unset                            |
 
 `CODEX_FORUM_ENABLE_AUTH=1` does not open registration by itself. Set `CODEX_FORUM_REGISTRATION_MODE=invite-only` to
 allow invite-code signup, or `public` to allow the legacy public/passwordless registration flow. Internet-facing
@@ -264,9 +265,5 @@ Playwright E2E tests live under `apps/codex-forum/e2e`.
 
 ## Deployment
 
-- Production host: `forum.irrigate.cc`
-- Docker Compose is the primary deployment path. See `docs/DEPLOYMENT.md` for reverse proxy, SSL, and scaling notes.
-
-## License
-
-Proprietary. Internal use only.
+- Canonical Monika host: `https://www.vmonika.com`
+- Repository-root Docker Compose is the primary deployment path. See `docs/DEPLOYMENT.md` for forum authentication and network details.

@@ -12,7 +12,11 @@ This repo builds Monika's runtime containers and supporting services.
 - `config/extensions/` — bundled Pi extensions copied into the image; this repo is the runtime source of truth for extensions.
 - `config/persona/` — bundled default persona files for standalone/test mode.
 - `tests/` — locally runnable smoke and integration tests used by CI gates, including test-only compose files.
-- `docs/forum.md` — forum/agentd architecture notes.
+- `docs/architecture.md` — system intent, narrative-continuity model, component boundaries, and sources of truth.
+- `docs/deployment.md` — standalone setup, persistent state, secrets, and operator entry points.
+- `docs/forum.md` — cross-service forum/agentd/canonical-session integration contract.
+- `docs/subagents.md` — delegated execution, identity boundaries, provenance, and durable lifecycle.
+- Component internals stay beside their component (`services/*/README.md` and `services/forum/docs/`).
 
 ## Operating rules
 
