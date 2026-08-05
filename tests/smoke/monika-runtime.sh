@@ -204,6 +204,86 @@ if [ "$PI_VERSION" != "0.82.1" ]; then
 fi
 pass "pi CLI pin active: ${PI_VERSION}"
 
+# Validate the exact image-owned JavaScript extension copies before exercising
+# either Pi loading path. A malformed ambient extension otherwise remains
+# latent until an operator needs the direct CLI during recovery.
+docker exec "$CONTAINER_NAME" sh -eu -c '
+  find /app/.pi/agent/extensions -type f \( -name "*.js" -o -name "*.mjs" \) -print0 \
+    | sort -z \
+    | xargs -0 -r -n1 node --check
+'
+pass "bundled JavaScript extensions pass syntax validation"
+
+# Agentd supplies explicit extension factories, while the emergency CLI path
+# discovers ambient extensions from PI_CODING_AGENT_DIR. Start Pi's direct RPC
+# mode and require a state response; malformed ambient extensions fail before
+# this handshake. Terminate the probe explicitly because extensions may own
+# long-lived watchers even after a non-interactive model turn completes.
+docker exec -i "$CONTAINER_NAME" node - <<'NODE_DIRECT_PI'
+const { spawn } = require('node:child_process');
+
+const pi = spawn('pi', [
+  '--mode', 'rpc',
+  '--no-session',
+  '--no-context-files',
+  '--no-skills',
+  '--no-prompt-templates',
+  '--no-themes',
+  '--provider', 'mock-openai',
+  '--model', 'schema-smoke',
+], { stdio: ['pipe', 'pipe', 'pipe'] });
+
+let stdout = '';
+let stderr = '';
+let settled = false;
+let killTimeout;
+const timeout = setTimeout(() => finish(new Error(`direct Pi RPC startup timed out; stderr=${stderr}`)), 20_000);
+
+function finish(error) {
+  if (settled) return;
+  settled = true;
+  clearTimeout(timeout);
+  pi.kill('SIGTERM');
+  killTimeout = setTimeout(() => pi.kill('SIGKILL'), 2_000);
+  if (error) {
+    console.error(error.message);
+    process.exitCode = 1;
+  }
+}
+
+pi.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+pi.stdout.on('data', (chunk) => {
+  stdout += chunk.toString();
+  while (stdout.includes('\n')) {
+    const newline = stdout.indexOf('\n');
+    const line = stdout.slice(0, newline);
+    stdout = stdout.slice(newline + 1);
+    if (!line) continue;
+    let message;
+    try { message = JSON.parse(line); } catch { continue; }
+    if (message.type === 'response' && message.command === 'get_state') {
+      if (message.success !== true || message.data?.model?.id !== 'schema-smoke') {
+        finish(new Error(`direct Pi RPC returned invalid state: ${line}`));
+      } else {
+        finish();
+      }
+    }
+  }
+});
+pi.on('error', (error) => finish(error));
+pi.on('exit', (code, signal) => {
+  clearTimeout(killTimeout);
+  if (!settled) {
+    settled = true;
+    clearTimeout(timeout);
+    console.error(`direct Pi exited before RPC readiness: code=${code} signal=${signal}; stderr=${stderr}`);
+    process.exitCode = 1;
+  }
+});
+pi.stdin.write(`${JSON.stringify({ id: 'smoke-get-state', type: 'get_state' })}\n`);
+NODE_DIRECT_PI
+pass "direct Pi CLI loads ambient extensions and reaches RPC readiness"
+
 docker exec -i "$CONTAINER_NAME" node - <<'NODE_SUBAGENTS_PIN'
 const fs = require('node:fs');
 const { createHash } = require('node:crypto');
