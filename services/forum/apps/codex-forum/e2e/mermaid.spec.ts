@@ -45,8 +45,18 @@ test('renders a themed diagram in a permissionless sandbox and exports sanitized
   await expect(frame).toHaveAttribute('sandbox', '');
   await expect(frame).toHaveAttribute('title', 'Forum pipeline');
   await expect(frame).toHaveAttribute('src', /^data:text\/html;charset=UTF-8;base64,/);
-  await expect(block.getByRole('button', { name: 'Open full size' })).toBeEnabled();
+  const openButton = block.getByRole('button', { name: 'Open full size' });
+  await expect(openButton).toBeEnabled();
   await expect(block.getByRole('button', { name: 'Download SVG' })).toBeEnabled();
+
+  const popupPromise = page.waitForEvent('popup');
+  await openButton.click();
+  const popup = await popupPromise;
+  await popup.waitForLoadState('domcontentloaded');
+  expect(popup.url()).toMatch(/^blob:/);
+  await expect(popup.locator('svg')).toHaveCount(1);
+  expect(await popup.content()).not.toMatch(/<script|<foreignObject|\son\w+=|javascript:/i);
+  await popup.close();
 
   const downloadPromise = page.waitForEvent('download');
   await block.getByRole('button', { name: 'Download SVG' }).click();
