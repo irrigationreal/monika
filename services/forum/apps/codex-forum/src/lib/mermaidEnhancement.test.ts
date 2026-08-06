@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderContent } from '../composables/useMarkdown';
 import {
+  accessibleTitleForMermaidSvg,
   enhanceMermaidDirective,
   mermaidConfigForCurrentTheme,
   parseSandboxedMermaidResult,
@@ -103,6 +104,20 @@ describe('Mermaid enhancement boundary', () => {
     expect(replacement && unobserved.has(replacement)).toBe(true);
     root.remove();
     vi.unstubAllGlobals();
+  });
+
+  it('uses sanitized SVG accessibility metadata for the frame title', () => {
+    expect(
+      accessibleTitleForMermaidSvg(
+        '<svg xmlns="http://www.w3.org/2000/svg"><title>  Forum   pipeline </title><desc>Details</desc></svg>'
+      )
+    ).toBe('Forum pipeline');
+    expect(
+      accessibleTitleForMermaidSvg(
+        '<svg xmlns="http://www.w3.org/2000/svg"><desc>A request travels through the forum.</desc></svg>'
+      )
+    ).toBe('A request travels through the forum.');
+    expect(accessibleTitleForMermaidSvg('<svg xmlns="http://www.w3.org/2000/svg"></svg>')).toBe('Mermaid diagram');
   });
 
   it('removes active content and external links from exported SVG', () => {
