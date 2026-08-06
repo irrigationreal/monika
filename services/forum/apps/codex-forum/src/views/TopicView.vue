@@ -2660,7 +2660,7 @@ onUnmounted(() => {
                     <div class="vb-multipost-segment-header">
                       <a class="vb-segment-link" :href="`#${segmentAnchorId(post.id, segIdx)}`">#</a>
                     </div>
-                    <div class="vb-post-text vb-rendered-content" v-html="renderPost(segment.body)"></div>
+                    <div v-enhance-mermaid class="vb-post-text vb-rendered-content" v-html="renderPost(segment.body)"></div>
                     <div v-if="personaSignature(segment.personaKey)" class="vb-post-signature">
                       <div class="vb-signature-line"></div>
                       <div
@@ -2775,7 +2775,7 @@ onUnmounted(() => {
                 :src="ttsUrlForPost(post.id) ?? undefined"
                 preload="none"
               ></audio>
-              <div class="vb-post-text vb-rendered-content" v-html="renderPost(post.body)"></div>
+              <div v-enhance-mermaid class="vb-post-text vb-rendered-content" v-html="renderPost(post.body)"></div>
               <div v-if="visibleAttachmentsForPost(post.id).length > 0" class="vb-post-attachments">
                 <div class="vb-attachments-header">Attachments</div>
                 <ul class="vb-attachments-list">

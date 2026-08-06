@@ -62,6 +62,8 @@ packages/
 
 - Vue 3 app in `apps/codex-forum` with classic forum UI.
 - Topic view exposes live reasoning + tool runs and supports inline moderation.
+- Completed `mermaid` fences render all built-in Mermaid diagram types in an isolated, website-themed sandbox with
+  source access and sanitized SVG open/download actions.
 - Developer Portal provides API documentation for logged-in users and API key + impersonation token management for
   admins.
 
@@ -121,6 +123,13 @@ run of the same marker in its content—for example, use four backticks around t
 The composer Code button calculates this delimiter length from the selection automatically. Unclosed fences extend to
 the current end of input, so partial robot responses remain literal and use the same deterministic renderer as completed
 posts. Code contents are HTML-escaped and bypass Markdown, BBCode, and typographic-ligature processing.
+
+A completed fence whose first info-string token is `mermaid` is progressively enhanced into a website-themed diagram.
+The full Mermaid package supplies all built-in diagram grammars. Diagrams render in permissionless sandbox frames,
+retain a source disclosure and failure fallback, and provide sanitized SVG open/download actions. Forum rendering limits
+apply without rejecting or rewriting stored post source. Author-controlled Mermaid initialization/configuration is
+blocked while normal diagram syntax and `accTitle`/`accDescr` remain available. See `docs/MERMAID.md` for supported
+surfaces, limits, security boundaries, export behavior, and upgrade validation.
 
 ## Private autosaved drafts
 

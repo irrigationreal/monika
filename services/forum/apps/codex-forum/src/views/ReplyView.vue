@@ -743,7 +743,7 @@ onMounted(async () => {
 
             <div v-if="showPreview" class="vb-preview-panel">
               <div class="vb-preview-header">Preview</div>
-              <div class="vb-preview-body vb-rendered-content" v-html="previewHtml"></div>
+              <div v-enhance-mermaid class="vb-preview-body vb-rendered-content" v-html="previewHtml"></div>
             </div>
           </div>
         </div>
@@ -841,8 +841,8 @@ onMounted(async () => {
               <li>You <strong>may</strong> use Markdown and BBCode formatting</li>
             </ul>
             <div class="vb-bbcode-legend">
-              <strong>Formatting:</strong> Markdown fences for code; [B]bold[/B], [I]italic[/I], [U]underline[/U], [URL]link[/URL],
-              [IMG]image[/IMG], [QUOTE]quote[/QUOTE], and legacy [CODE]code[/CODE]
+              <strong>Formatting:</strong> Markdown fences for code and <code>```mermaid</code> diagrams; [B]bold[/B], [I]italic[/I],
+              [U]underline[/U], [URL]link[/URL], [IMG]image[/IMG], [QUOTE]quote[/QUOTE], and legacy [CODE]code[/CODE]
             </div>
           </div>
         </div>

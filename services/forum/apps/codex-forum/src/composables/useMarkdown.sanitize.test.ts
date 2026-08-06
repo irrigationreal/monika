@@ -272,4 +272,35 @@ describe('useMarkdown sanitizer', () => {
     expect(html).toContain('after');
     expect(html).not.toMatch(/<p>\s*<div class="vb-code-block"/);
   });
+
+  it('emits an inert enhancement target for a completed mermaid fence', () => {
+    const html = renderContent(['```mermaid', 'flowchart LR', '  A --> B', '```'].join('\n'));
+    expect(html).toContain('class="vb-mermaid-block"');
+    expect(html).toContain('data-mermaid-state="pending"');
+    expect(html).toContain('<code>flowchart LR\n  A --&gt; B</code>');
+    expect(html).not.toContain('<svg');
+    expect(html).not.toContain('<iframe');
+  });
+
+  it('recognizes mermaid as the first info token while preserving other fences', () => {
+    const mermaid = renderContent(['```mermaid title=example', 'sequenceDiagram', '```'].join('\n'));
+    const similar = renderContent(['```mermaidish', 'flowchart LR', '```'].join('\n'));
+    expect(mermaid).toContain('class="vb-mermaid-block"');
+    expect(similar).toContain('class="vb-code-block"');
+    expect(similar).not.toContain('class="vb-mermaid-block"');
+  });
+
+  it('keeps an unclosed streamed mermaid fence as literal code until its closer arrives', () => {
+    const html = renderContent(['```mermaid', 'flowchart LR', '  A --> B'].join('\n'));
+    expect(html).toContain('class="vb-code-block"');
+    expect(html).not.toContain('class="vb-mermaid-block"');
+  });
+
+  it('rejects oversized mermaid rendering while retaining escaped source', () => {
+    const source = `<script>${'x'.repeat(20_000)}</script>`;
+    const html = renderContent(['```mermaid', source, '```'].join('\n'));
+    expect(html).toContain('data-mermaid-state="rejected"');
+    expect(html).toContain('&lt;script&gt;');
+    expect(html).not.toMatch(/<script\b/i);
+  });
 });

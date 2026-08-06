@@ -420,3 +420,109 @@ pre.vb-code .hljs {
   padding: 1px 2px;
   border-radius: 2px;
 }
+
+.vb-mermaid-block {
+  margin: var(--spacing-md) 0;
+  overflow: hidden;
+  border: 1px solid var(--border-default);
+  border-radius: 3px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+}
+
+.vb-mermaid-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 34px;
+  padding: 5px 7px;
+  border-bottom: 1px solid var(--border-default);
+  background: var(--bg-surface-alt);
+}
+
+.vb-mermaid-label {
+  margin-right: auto;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: bold;
+}
+
+.vb-mermaid-toolbar button {
+  padding: 4px 8px;
+  border: 1px solid var(--border-default);
+  border-radius: 3px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.vb-mermaid-toolbar button:hover:not(:disabled) {
+  border-color: var(--brand-primary);
+  color: var(--brand-primary-light);
+}
+
+.vb-mermaid-toolbar button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.vb-mermaid-render {
+  overflow: auto;
+  padding: var(--spacing-md);
+  background: var(--bg-surface);
+}
+
+.vb-mermaid-render:empty { display: none; }
+
+.vb-mermaid-render iframe {
+  display: block;
+  width: 100%;
+  max-height: 70vh;
+  border: 0;
+  background: transparent;
+}
+
+.vb-mermaid-status {
+  margin: 0;
+  padding: 8px var(--spacing-md);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.vb-mermaid-block[data-mermaid-state="rendered"] .vb-mermaid-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.vb-mermaid-block[data-mermaid-state="error"] .vb-mermaid-status,
+.vb-mermaid-block[data-mermaid-state="rejected"] .vb-mermaid-status {
+  color: var(--status-error);
+  background: var(--status-error-bg);
+}
+
+.vb-mermaid-source {
+  border-top: 1px solid var(--border-default);
+  background: var(--bg-code);
+}
+
+.vb-mermaid-source summary {
+  padding: 7px var(--spacing-md);
+  color: var(--text-code);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.vb-mermaid-source pre.vb-code {
+  margin: 0;
+  border-radius: 0;
+}

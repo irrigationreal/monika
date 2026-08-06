@@ -155,6 +155,34 @@ type CodeBlockReplacement = {
   token: string;
 };
 
+export const MERMAID_MAX_SOURCE_CHARS = 20_000;
+
+function renderMermaidBlockHtml(rawSource: string): string {
+  const source = escapeHtml(rawSource);
+  const oversized = rawSource.length > MERMAID_MAX_SOURCE_CHARS;
+  const state = oversized ? 'rejected' : 'pending';
+  const status = oversized
+    ? `Diagram source exceeds the ${MERMAID_MAX_SOURCE_CHARS.toLocaleString()} character rendering limit.`
+    : 'Diagram waiting to render…';
+
+  return [
+    `<figure class="vb-mermaid-block" data-mermaid-state="${state}">`,
+    '  <figcaption class="vb-mermaid-toolbar">',
+    '    <span class="vb-mermaid-label">Mermaid</span>',
+    '    <button class="vb-mermaid-open" type="button" disabled>Open full size</button>',
+    '    <button class="vb-mermaid-download" type="button" disabled>Download SVG</button>',
+    '    <button class="vb-mermaid-copy" type="button">Copy source</button>',
+    '  </figcaption>',
+    '  <div class="vb-mermaid-render" aria-label="Mermaid diagram"></div>',
+    `  <p class="vb-mermaid-status" role="status">${escapeHtml(status)}</p>`,
+    `  <details class="vb-mermaid-source"${oversized ? ' open' : ''}>`,
+    '    <summary>Diagram source</summary>',
+    `    <pre class="vb-code"><code>${source}</code></pre>`,
+    '  </details>',
+    '</figure>'
+  ].join('');
+}
+
 type InlineCodeReplacement = {
   html: string;
   token: string;
@@ -274,6 +302,7 @@ function compatibleFenceIndent(opening: string, closing: string): boolean {
 }
 
 interface MarkdownFenceBlock {
+  closed: boolean;
   code: string;
   end: number;
   indent: string;
@@ -336,6 +365,7 @@ function findNextMarkdownFence(text: string, from: number): MarkdownFenceBlock |
     }
 
     return {
+      closed: closingLine !== null,
       code: text.slice(codeStart, codeEnd),
       end: closingLine?.contentEnd ?? text.length,
       indent,
@@ -395,7 +425,11 @@ function replaceCodeBlocksWithPlaceholders(text: string): { text: string; replac
     result += text.slice(copiedThrough, block.start);
     const token = `${tokenPrefix}${String(replacements.length)}TOKEN`;
     if (markdownFirst && markdown) {
-      replacements.push({ token, html: renderCodeBlockHtml(markdown.code, markdown.info) });
+      const language = normalizeCodeLanguage(markdown.info);
+      const html = language === 'mermaid' && markdown.closed
+        ? renderMermaidBlockHtml(markdown.code)
+        : renderCodeBlockHtml(markdown.code, markdown.info);
+      replacements.push({ token, html });
       result = appendBlockPlaceholder(result, markdown.indent, token);
       copiedThrough = markdown.end;
       position = markdown.resumeAt;
