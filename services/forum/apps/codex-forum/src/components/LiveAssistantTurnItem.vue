@@ -22,6 +22,7 @@
 
       <div
         v-if="item.type === 'assistant_text'"
+        v-enhance-mermaid
         class="vb-live-turn-assistant vb-rendered-content"
         v-html="renderMarkdown(item.text ?? '')"
       ></div>

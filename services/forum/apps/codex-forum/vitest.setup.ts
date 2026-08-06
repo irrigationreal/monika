@@ -4,6 +4,9 @@ import { config } from '@vue/test-utils';
 config.global.stubs = {
   // Add global stubs here if needed
 };
+config.global.directives = {
+  'enhance-mermaid': {},
+};
 
 // Mock window.matchMedia for tests
 Object.defineProperty(window, 'matchMedia', {

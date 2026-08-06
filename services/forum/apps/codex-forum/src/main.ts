@@ -1,6 +1,7 @@
 import { createApp, type Component } from 'vue';
 
 import App from './App.vue';
+import { enhanceMermaidDirective } from './lib/mermaidEnhancement';
 import { router } from './router';
 
 // Import CSS in correct order: theme variables, base styles, components, posts, responsive
@@ -68,4 +69,7 @@ document.addEventListener('click', async (event) => {
   }
 });
 
-createApp(App as unknown as Component).use(router).mount('#app');
+createApp(App as unknown as Component)
+  .directive('enhance-mermaid', enhanceMermaidDirective)
+  .use(router)
+  .mount('#app');
