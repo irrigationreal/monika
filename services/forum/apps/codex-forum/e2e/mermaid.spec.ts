@@ -43,6 +43,7 @@ test('renders a themed diagram in a permissionless sandbox and exports sanitized
   await expect(block).toHaveAttribute('data-mermaid-state', 'rendered', { timeout: 20_000 });
   const frame = block.locator('.vb-mermaid-render iframe');
   await expect(frame).toHaveAttribute('sandbox', '');
+  await expect(frame).toHaveAttribute('title', 'Forum pipeline');
   await expect(frame).toHaveAttribute('src', /^data:text\/html;charset=UTF-8;base64,/);
   await expect(block.getByRole('button', { name: 'Open full size' })).toBeEnabled();
   await expect(block.getByRole('button', { name: 'Download SVG' })).toBeEnabled();
@@ -92,6 +93,25 @@ test('renders identical diagrams independently and rerenders them for website th
     .poll(async () => blocks.nth(0).locator('iframe').getAttribute('src'), { timeout: 20_000 })
     .not.toBe(firstSource);
   await expect(blocks.nth(1)).toHaveAttribute('data-mermaid-state', 'rendered');
+});
+
+test('renders representative built-in grammar families from lazy-loaded Mermaid chunks', async ({ page }) => {
+  const sources = [
+    'sequenceDiagram\n  Browser->>Forum: Render',
+    'classDiagram\n  Animal <|-- Duck',
+    'stateDiagram-v2\n  [*] --> Ready',
+    'erDiagram\n  USER ||--o{ POST : writes',
+    'mindmap\n  root((Forum))\n    Mermaid',
+    'journey\n  title Diagram journey\n  section Render\n    Parse source: 5: Browser',
+    'architecture-beta\n  group api(cloud)[API]\n  service web(server)[Web] in api',
+  ];
+  await mountMarkdownFixture(page, sources.map(mermaidFence).join('\n\n'));
+
+  const blocks = page.locator('.vb-mermaid-block');
+  await expect(blocks).toHaveCount(sources.length);
+  for (let index = 0; index < sources.length; index += 1) {
+    await expect(blocks.nth(index)).toHaveAttribute('data-mermaid-state', 'rendered', { timeout: 40_000 });
+  }
 });
 
 test('does not allow architecture parsing to pollute the host Object prototype', async ({ page }) => {

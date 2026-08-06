@@ -142,6 +142,18 @@ export function parseSandboxedMermaidResult(markup: string): SandboxedMermaidRes
   };
 }
 
+export function accessibleTitleForMermaidSvg(svg: string): string {
+  const parsed = new DOMParser().parseFromString(svg, 'image/svg+xml');
+  const root = parsed.documentElement;
+  if (root.tagName.toLowerCase() !== 'svg' || parsed.querySelector('parsererror')) return 'Mermaid diagram';
+
+  const normalize = (value: string | null | undefined): string => value?.replace(/\s+/g, ' ').trim() ?? '';
+  const title = normalize(root.querySelector('title')?.textContent);
+  const ariaLabel = normalize(root.getAttribute('aria-label'));
+  const description = normalize(root.querySelector('desc')?.textContent);
+  return (title || ariaLabel || description || 'Mermaid diagram').slice(0, 200);
+}
+
 export function sanitizeMermaidSvgForExport(svg: string): string {
   const clean = DOMPurify.sanitize(svg, {
     USE_PROFILES: { html: true, svg: true, svgFilters: true },
@@ -191,7 +203,7 @@ function mountSandboxFrame(block: HTMLElement, result: SandboxedMermaidResult, e
   const iframe = document.createElement('iframe');
   iframe.setAttribute('sandbox', '');
   iframe.src = controlledSandboxUrl(exportSvg);
-  iframe.title = 'Mermaid diagram';
+  iframe.title = accessibleTitleForMermaidSvg(exportSvg);
   iframe.style.height = `${String(result.heightPx)}px`;
   target.replaceChildren(iframe);
 }
@@ -243,6 +255,7 @@ async function renderBlock(block: HTMLElement): Promise<void> {
     if (!block.isConnected || sourceForBlock(block) !== sourceAtStart) return;
     if (themeRevisionAtStart !== themeRevision) {
       block.dataset['mermaidState'] = 'pending';
+      setStatus(block, 'Diagram waiting to rerender for the active theme…');
       queueBlock(block);
       return;
     }
@@ -332,6 +345,7 @@ function resetForTheme(block: HTMLElement): void {
   });
   exportSvgByBlock.delete(block);
   block.dataset['mermaidState'] = 'pending';
+  setStatus(block, 'Diagram waiting to rerender for the active theme…');
   queueBlock(block);
 }
 

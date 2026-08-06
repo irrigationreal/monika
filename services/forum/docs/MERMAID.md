@@ -40,7 +40,8 @@ Each rendered section displays at most ten diagrams. Individual source is limite
 configured for at most 200 edges. Content exceeding a presentation limit remains saved and readable as escaped source;
 the limits govern browser rendering, not post persistence.
 
-Every diagram provides:
+Rendered frames use Mermaid's sanitized `accTitle`, `aria-label`, or `accDescr` as their accessible title, in that
+order, with “Mermaid diagram” as the fallback. Every diagram also provides:
 
 - A collapsible source view.
 - Copy source.
@@ -76,6 +77,7 @@ Changes to this integration should cover:
 - Fence boundaries, nested fences, indentation, CRLF input, and incomplete streaming fences.
 - Escaping, malformed diagrams, configuration-directive rejection, and size/count limits.
 - Multiple and identical diagrams without ID collisions.
+- Representative lazy-loaded grammar families, including architecture diagrams.
 - Permissionless sandbox validation and known Mermaid injection payloads.
 - Export sanitization.
 - Light/dark website theme changes.
