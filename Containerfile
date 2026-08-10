@@ -120,8 +120,10 @@ RUN mkdir -p /tmp/pi-prebuild/.pi/agent && \
     pi --version 2>/dev/null || true && \
     rm -rf /tmp/pi-prebuild /tmp/pi-settings.json
 
-# Project license material shipped with the runtime distribution.
+# Project and separately licensed source notices shipped with the runtime
+# distribution. Dependency-level image compliance is tracked separately.
 COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/licenses/monika/
+COPY config/extensions/claude-code-use.LICENSE /usr/share/licenses/monika/claude-code-use-MIT.txt
 
 # memstore binary
 COPY --from=memstore-build /memstore /usr/local/bin/memstore

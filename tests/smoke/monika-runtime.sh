@@ -198,13 +198,14 @@ endsection
 
 section "Runtime checks"
 LICENSE_DIR=/usr/share/licenses/monika
-for file in LICENSE THIRD_PARTY_NOTICES.md; do
+for file in LICENSE THIRD_PARTY_NOTICES.md claude-code-use-MIT.txt; do
   if ! docker exec "$CONTAINER_NAME" test -s "$LICENSE_DIR/$file"; then
     echo "$file missing or empty from $LICENSE_DIR"
     exit 1
   fi
 done
 docker exec "$CONTAINER_NAME" grep -q "GNU AFFERO GENERAL PUBLIC LICENSE" "$LICENSE_DIR/LICENSE"
+docker exec "$CONTAINER_NAME" grep -q "Copyright (c) 2026 Ben Vargas" "$LICENSE_DIR/claude-code-use-MIT.txt"
 pass "project AGPL license and third-party notices present"
 OCI_LICENSE=$(docker inspect -f '{{ index .Config.Labels "org.opencontainers.image.licenses" }}' "$CONTAINER_NAME")
 if [ "$OCI_LICENSE" != "AGPL-3.0-or-later" ]; then

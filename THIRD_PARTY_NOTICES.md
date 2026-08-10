@@ -4,6 +4,14 @@ Monika is copyright (c) 2026 Irrigate Collective and is licensed under the
 GNU Affero General Public License version 3 or later, except for the separately
 licensed material identified below.
 
+## Claude Code Use extension
+
+`config/extensions/claude-code-use.ts` incorporates portions of
+`@benvargas/pi-claude-code-use` from Ben Vargas's `pi-packages` repository at
+commit `384e595`. That upstream material is licensed under the MIT License,
+copyright (c) 2026 Ben Vargas. The complete original terms are retained in
+`config/extensions/claude-code-use.LICENSE`.
+
 ## Forum configuration packages
 
 The following directories are licensed separately under the MIT License:
