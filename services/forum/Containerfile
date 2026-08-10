@@ -89,12 +89,20 @@ ARG MONIKA_BUILD_DATE
 LABEL org.opencontainers.image.revision=$MONIKA_BUILD_COMMIT
 LABEL org.opencontainers.image.source=$MONIKA_BUILD_SOURCE
 LABEL org.opencontainers.image.created=$MONIKA_BUILD_DATE
+LABEL org.opencontainers.image.licenses="AGPL-3.0-or-later"
 
 # Create non-root user for security
 RUN groupadd --gid 1001 codex && \
     useradd --uid 1001 --gid 1001 -m codex
 
 WORKDIR /app
+
+# Project and separately licensed source notices shipped with the runtime
+# distribution. Dependency-level image compliance is tracked separately.
+COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/licenses/monika-forum/
+COPY packages/eslint-config/LICENSE /usr/share/licenses/monika-forum/eslint-config-MIT.txt
+COPY packages/typescript-config/LICENSE /usr/share/licenses/monika-forum/typescript-config-MIT.txt
+COPY apps/codex-forum/src/vendor/dither-charts/NOTICE /usr/share/licenses/monika-forum/dither-charts-MIT.txt
 
 # Copy the pnpm-deployed server with production-only dependencies.
 # This includes workspace packages (core, contracts, adapters) in node_modules

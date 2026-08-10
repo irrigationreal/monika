@@ -286,3 +286,12 @@ Playwright E2E tests live under `apps/codex-forum/e2e`.
 
 - Canonical Monika host: `https://www.vmonika.com`
 - Repository-root Docker Compose is the primary deployment path. See `docs/DEPLOYMENT.md` for forum authentication and network details.
+
+## License
+
+Copyright (c) 2026 Irrigate Collective.
+
+Except for the separately identified components in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md), the Monika Forum service is
+licensed under the [GNU Affero General Public License version 3 or
+later](LICENSE).

@@ -14,6 +14,7 @@ ARG MONIKA_BUILD_DATE=""
 LABEL org.opencontainers.image.revision=$MONIKA_BUILD_COMMIT
 LABEL org.opencontainers.image.source=$MONIKA_BUILD_SOURCE
 LABEL org.opencontainers.image.created=$MONIKA_BUILD_DATE
+LABEL org.opencontainers.image.licenses="AGPL-3.0-or-later"
 
 ENV MONIKA_BUILD_COMMIT=$MONIKA_BUILD_COMMIT \
     MONIKA_BUILD_DATE=$MONIKA_BUILD_DATE
@@ -118,6 +119,9 @@ RUN mkdir -p /tmp/pi-prebuild/.pi/agent && \
     HOME=/tmp/pi-prebuild PI_CODING_AGENT_DIR=/tmp/pi-prebuild/.pi/agent \
     pi --version 2>/dev/null || true && \
     rm -rf /tmp/pi-prebuild /tmp/pi-settings.json
+
+# Project license material shipped with the runtime distribution.
+COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/licenses/monika/
 
 # memstore binary
 COPY --from=memstore-build /memstore /usr/local/bin/memstore

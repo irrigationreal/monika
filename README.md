@@ -146,3 +146,11 @@ Monika/
   [public ingress](docs/public-ingress.md) — operator runbooks
 - [AGENTS.md](AGENTS.md) and [tests/README.md](tests/README.md) — working rules and
   validation commands
+
+## License
+
+Copyright (c) 2026 Irrigate Collective.
+
+Except for the separately identified components in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md), Monika is licensed under the
+[GNU Affero General Public License version 3 or later](LICENSE).

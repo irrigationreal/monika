@@ -116,3 +116,8 @@ const routes = [
   },
 ];
 ```
+
+## License
+
+This package and all files in this directory are copyright Kevin Hallmark and
+licensed under the MIT License. See [`LICENSE`](./LICENSE).
