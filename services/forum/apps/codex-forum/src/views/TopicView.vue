@@ -81,7 +81,9 @@ const expandedInspectorTools = ref(new Set<string>());
 const showInspectorMessages = ref(false);
 const showScrollTop = ref(false);
 const isReplying = ref(false);
+const isPublishingReply = ref(false);
 const isUploadingReply = ref(false);
+const allowQuickReplyNavigation = ref(false);
 const replyFiles = ref<File[]>([]);
 const publishedReplyPostId = ref<string | null>(null);
 const publishedReplyNeedsDispatch = ref(false);
@@ -1515,6 +1517,7 @@ async function saveEdit(): Promise<void> {
 }
 
 function quotePost(post: PostDto): void {
+  if (isPublishingReply.value) return;
   if (state.isTopicLocked()) {
     state.setError('Cannot reply to a locked or archived topic.');
     return;
@@ -1550,6 +1553,7 @@ async function handleDelete(postId: string): Promise<void> {
 }
 
 async function applyQuickReplyTemplate(template: MessageTemplateDto, replace: boolean): Promise<void> {
+  if (isPublishingReply.value) return;
   await applyTemplateToTextarea({
     body: replyBody,
     textarea: quickReplyTextareaRef,
@@ -1603,12 +1607,13 @@ async function abandonQuickReplyAttachments(): Promise<void> {
 }
 
 function requestDiscardQuickDraft(): void {
+  if (isPublishingReply.value) return;
   discardDraftError.value = '';
   showDiscardDraftConfirm.value = true;
 }
 
 async function confirmDiscardQuickDraft(): Promise<void> {
-  if (discardDraftPending.value) return;
+  if (isPublishingReply.value || discardDraftPending.value) return;
   discardDraftPending.value = true;
   discardDraftError.value = '';
   try {
@@ -1623,17 +1628,19 @@ async function confirmDiscardQuickDraft(): Promise<void> {
 }
 
 async function reply(): Promise<void> {
-  if (!replyBody.value.trim() || compactionFence.value) return;
+  if (isReplying.value || !autosavedReply.hydrated.value || !replyBody.value.trim() || compactionFence.value) return;
   isReplying.value = true;
+  isPublishingReply.value = true;
   let postCreated = false;
   try {
     const draftReference = await autosavedReply.flush();
     if (autosavedReply.status.value === 'conflict') {
       throw new Error('Resolve the draft conflict before posting.');
     }
+    const submittedBody = replyBody.value;
     autosavedReply.pause();
     const attachmentsPending = replyFiles.value.length > 0;
-    const post = await state.createPost(replyBody.value.trim(), {
+    const post = await state.createPost(submittedBody.trim(), {
       model: effectiveSelectedModel.value,
       ...(supportsReasoning.value ? { reasoningEffort: selectedReasoning.value } : {}),
       ...(isAdmin.value
@@ -1646,7 +1653,9 @@ async function reply(): Promise<void> {
       ...(draftReference ? { draft: draftReference } : {}),
     });
     postCreated = true;
-    replyBody.value = '';
+    if (replyBody.value === submittedBody) replyBody.value = '';
+    autosavedReply.resetAfterPublication();
+    isPublishingReply.value = false;
     publishedReplyPostId.value = post.id;
     publishedReplyNeedsDispatch.value = attachmentsPending;
     if (replyFiles.value.length > 0) await finishQuickReplyAttachments();
@@ -1658,6 +1667,7 @@ async function reply(): Promise<void> {
     const lastIndex = state.sortedPosts.value.length;
     const nextQuery = buildPageQuery(lastPage);
     state.setPage(lastPage);
+    allowQuickReplyNavigation.value = true;
     await router.push({ query: nextQuery, hash: `#${lastIndex}` });
     await nextTick();
     scrollToAnchor('smooth');
@@ -1671,6 +1681,8 @@ async function reply(): Promise<void> {
           : 'Failed to post reply.'
     );
   } finally {
+    allowQuickReplyNavigation.value = false;
+    isPublishingReply.value = false;
     isReplying.value = false;
     isUploadingReply.value = false;
   }
@@ -1950,6 +1962,10 @@ watch(
 );
 
 async function guardQuickDraftNavigation(): Promise<boolean> {
+  if (isPublishingReply.value && !allowQuickReplyNavigation.value) {
+    state.setError('Wait for the reply to finish posting before leaving this topic.');
+    return false;
+  }
   if (publishedReplyPostId.value) {
     state.setError('Finish or abandon the published reply’s attachment recovery before leaving this topic.');
     return false;
@@ -1961,6 +1977,10 @@ async function guardQuickDraftNavigation(): Promise<boolean> {
 
 onBeforeRouteLeave(() => guardQuickDraftNavigation());
 onBeforeRouteUpdate(async (to, from) => {
+  if (isPublishingReply.value && !allowQuickReplyNavigation.value) {
+    state.setError('Wait for the reply to finish posting before leaving this topic.');
+    return false;
+  }
   if (to.params['topicId'] === from.params['topicId']) return true;
   if (!(await guardQuickDraftNavigation())) return false;
   if (replyFiles.value.length > 0) {
@@ -3166,6 +3186,7 @@ onUnmounted(() => {
           v-model="replyBody"
           rows="6"
           placeholder="Type your reply here..."
+          :disabled="isPublishingReply"
         ></textarea>
         <div class="vb-reply-attachments">
           <label class="vb-attachment-label">Attachments:</label>
@@ -3247,6 +3268,7 @@ onUnmounted(() => {
             state.loading.value ||
             isReplying ||
             isUploadingReply ||
+            !autosavedReply.hydrated.value ||
             Boolean(publishedReplyPostId) ||
             compactionFence ||
             !replyBody.trim()

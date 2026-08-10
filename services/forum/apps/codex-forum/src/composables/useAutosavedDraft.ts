@@ -25,17 +25,22 @@ export function useAutosavedDraft(input: {
   const remoteDraft = ref<MessageDraftDto | null>(null);
   const status = ref<DraftSaveStatus>('idle');
   const hydrated = ref(false);
-  const suspended = ref(false);
+  const publicationSuspended = ref(false);
   const loadError = ref<string | null>(null);
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let maxTimer: ReturnType<typeof setTimeout> | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let retryCount = 0;
   let inFlight: Promise<void> | null = null;
+  let inactiveFlush: Promise<void> | null = null;
+  let inactiveFlushPending = false;
   let pending = false;
   let generation = 0;
+  let lifecycleGeneration = 0;
   let activeContextId: string | null = input.contextId.value;
   let activeDraftId: string | null = input.initialDraftId?.value ?? null;
+  let inactive = document.visibilityState !== 'visible' || !document.hasFocus();
+  let reconciling = false;
   const acknowledged = ref('');
 
   const snapshot = (): DraftSnapshot => ({ title: input.title?.value ?? null, body: input.body.value });
@@ -44,6 +49,8 @@ export function useAutosavedDraft(input: {
   const expiresAt = computed(() => draft.value?.expiresAt ?? null);
   const reference = computed(() => (draft.value ? { id: draft.value.id, revision: draft.value.revision } : undefined));
   const dirty = computed(() => hydrated.value && signature() !== acknowledged.value);
+  const pageIsActive = () => document.visibilityState === 'visible' && document.hasFocus();
+  const publicationIsSuspended = () => publicationSuspended.value;
 
   function clearTimers(): void {
     if (debounceTimer) clearTimeout(debounceTimer);
@@ -52,7 +59,7 @@ export function useAutosavedDraft(input: {
     debounceTimer = maxTimer = retryTimer = null;
   }
   function schedule(): void {
-    if (!hydrated.value || suspended.value || !dirty.value) return;
+    if (!hydrated.value || publicationSuspended.value || inactive || reconciling || !dirty.value) return;
     pending = true;
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => void save(), 1500);
@@ -103,6 +110,7 @@ export function useAutosavedDraft(input: {
         : signature({ title: input.title ? '' : null, body: '' });
       status.value = response.draft ? 'saved' : 'idle';
     } catch (error) {
+      if (myGeneration !== generation || activeContextId !== contextId) return;
       loadError.value = error instanceof Error ? error.message : 'The requested draft could not be loaded.';
       classify(error);
     } finally {
@@ -112,14 +120,17 @@ export function useAutosavedDraft(input: {
       }
     }
   }
-  async function save(): Promise<void> {
+  async function save(allowInactive = false): Promise<void> {
     clearTimers();
-    if (!hydrated.value || suspended.value) return;
+    if (!hydrated.value || publicationSuspended.value) return;
     pending = true;
+    if (allowInactive) inactiveFlushPending = true;
     if (inFlight) return inFlight;
     const operation = (async () => {
-      while (pending && !suspended.value) {
+      while (pending && !publicationSuspended.value) {
+        if ((inactive || reconciling) && !inactiveFlushPending) break;
         pending = false;
+        inactiveFlushPending = false;
         await performSave();
         if (['conflict', 'auth', 'too_large'].includes(status.value)) pending = false;
       }
@@ -137,6 +148,8 @@ export function useAutosavedDraft(input: {
     const myGeneration = generation;
     const value = snapshot();
     const valueSignature = signature(value);
+    const baseDraftId = draft.value?.id ?? null;
+    const baseDraftRevision = draft.value?.revision ?? null;
     if (valueSignature === acknowledged.value) return;
     status.value = 'saving';
     try {
@@ -149,7 +162,7 @@ export function useAutosavedDraft(input: {
         return;
       }
       const payload = {
-        expectedRevision: draft.value?.revision ?? 0,
+        expectedRevision: baseDraftRevision ?? 0,
         title: value.title,
         body: value.body,
       };
@@ -173,36 +186,46 @@ export function useAutosavedDraft(input: {
       if (myGeneration !== generation || activeContextId !== contextId) return;
       if (isConflict(error)) {
         status.value = 'conflict';
+        const conflictBaseIsCurrent = () =>
+          myGeneration === generation &&
+          activeContextId === contextId &&
+          (draft.value?.id ?? null) === baseDraftId &&
+          (draft.value?.revision ?? null) === baseDraftRevision;
         try {
-          const latest = draft.value
-            ? (await api.getDraft(draft.value.id)).draft
+          const latest = baseDraftId
+            ? (await api.getDraft(baseDraftId)).draft
             : input.context === 'reply'
               ? (await api.getReplyDraft(contextId)).draft
               : null;
-          if (myGeneration !== generation || activeContextId !== contextId) return;
+          if (!conflictBaseIsCurrent()) return;
           remoteDraft.value = latest;
         } catch {
+          if (!conflictBaseIsCurrent()) return;
           remoteDraft.value = null;
         }
       } else classify(error);
     }
   }
   async function flush(): Promise<{ id: string; revision: number } | undefined> {
+    if (!hydrated.value) throw new Error('Draft is still loading.');
     clearTimers();
-    await save();
+    await save(true);
     return reference.value;
   }
   async function flushForNavigation(): Promise<boolean> {
     if (!hydrated.value || !dirty.value) return true;
     // Publication pauses autosave before clearing the editor and navigating.
-    if (suspended.value) return true;
+    if (publicationSuspended.value) return true;
     await flush();
     return !dirty.value;
   }
   async function discard(): Promise<void> {
-    suspended.value = true;
+    publicationSuspended.value = true;
+    reconciling = false;
+    ++lifecycleGeneration;
     clearTimers();
     pending = false;
+    inactiveFlushPending = false;
     try {
       if (inFlight) await inFlight;
       ++generation;
@@ -216,7 +239,9 @@ export function useAutosavedDraft(input: {
       status.value = 'idle';
       loadError.value = null;
     } finally {
-      suspended.value = false;
+      publicationSuspended.value = false;
+      inactive = !pageIsActive();
+      schedule();
     }
   }
   function useSavedVersion(): void {
@@ -233,21 +258,45 @@ export function useAutosavedDraft(input: {
     remoteDraft.value = null;
     acknowledged.value = '__conflict__';
     status.value = 'idle';
-    await save();
+    await save(true);
   }
   async function copyMyText(): Promise<void> {
     await navigator.clipboard.writeText([input.title?.value, input.body.value].filter(Boolean).join('\n\n'));
   }
   function pause(): void {
-    suspended.value = true;
+    publicationSuspended.value = true;
+    reconciling = false;
+    ++lifecycleGeneration;
     clearTimers();
+    pending = false;
+    inactiveFlushPending = false;
   }
   function resume(): void {
-    suspended.value = false;
+    publicationSuspended.value = false;
+    if (pageIsActive() && inactive) void activate();
+    else schedule();
+  }
+  function resetAfterPublication(): void {
+    ++generation;
+    ++lifecycleGeneration;
+    clearTimers();
+    pending = false;
+    inactiveFlushPending = false;
+    inactiveFlush = null;
+    retryCount = 0;
+    draft.value = null;
+    remoteDraft.value = null;
+    if (input.context === 'new_thread') activeDraftId = null;
+    acknowledged.value = signature({ title: input.title ? '' : null, body: '' });
+    status.value = 'idle';
+    loadError.value = null;
+    publicationSuspended.value = false;
+    inactive = !pageIsActive();
+    reconciling = false;
     schedule();
   }
   function scheduleRetry(): void {
-    if (retryCount >= 3 || suspended.value) return;
+    if (retryCount >= 3 || publicationSuspended.value || inactive || reconciling) return;
     const delays = [2000, 5000, 15000];
     const delay = delays[retryCount] ?? 15000;
     retryCount += 1;
@@ -265,38 +314,106 @@ export function useAutosavedDraft(input: {
   function isConflict(error: unknown): boolean {
     return Boolean(error && typeof error === 'object' && 'status' in error && error.status === 409);
   }
-  async function revalidate(): Promise<void> {
+  async function revalidate(allowInactive = false): Promise<void> {
     const contextId = activeContextId;
-    if (!contextId || !hydrated.value || suspended.value || status.value === 'saving') return;
+    if (
+      !contextId ||
+      !hydrated.value ||
+      publicationSuspended.value ||
+      (!allowInactive && inactive) ||
+      status.value === 'saving'
+    )
+      return;
     if (input.context === 'new_thread' && !draft.value) return;
     const myGeneration = generation;
+    const baseId = draft.value?.id ?? null;
+    const baseRevision = draft.value?.revision ?? null;
+    const baseAcknowledged = acknowledged.value;
+    let latest: MessageDraftDto | null;
     try {
-      const latest = draft.value
-        ? (await api.getDraft(draft.value.id)).draft
+      latest = baseId
+        ? (await api.getDraft(baseId)).draft
         : input.context === 'reply'
           ? (await api.getReplyDraft(contextId)).draft
           : null;
-      if (myGeneration !== generation || activeContextId !== contextId) return;
-      if (latest?.revision !== draft.value?.revision || latest?.id !== draft.value?.id) {
-        remoteDraft.value = latest;
-        status.value = 'conflict';
-      }
     } catch (error) {
       const code = error && typeof error === 'object' && 'status' in error ? Number(error.status) : 0;
-      if (code === 404 && myGeneration === generation && activeContextId === contextId) {
-        remoteDraft.value = null;
-        status.value = 'conflict';
-      }
+      if (code !== 404) return;
+      latest = null;
     }
+    if (
+      myGeneration !== generation ||
+      activeContextId !== contextId ||
+      publicationIsSuspended() ||
+      draft.value?.id !== (baseId ?? undefined) ||
+      draft.value?.revision !== (baseRevision ?? undefined) ||
+      acknowledged.value !== baseAcknowledged
+    )
+      return;
+    const latestRevision = latest?.revision ?? null;
+    const latestId = latest?.id ?? null;
+    if (latestRevision === baseRevision && latestId === baseId) return;
+    if (dirty.value) {
+      remoteDraft.value = latest;
+      status.value = 'conflict';
+      return;
+    }
+    draft.value = latest;
+    remoteDraft.value = null;
+    input.body.value = latest?.body ?? '';
+    if (input.title) input.title.value = latest?.title ?? '';
+    acknowledged.value = signature();
+    status.value = latest ? 'saved' : 'idle';
+  }
+
+  function deactivate(): void {
+    if (inactive) return;
+    inactive = true;
+    reconciling = false;
+    ++lifecycleGeneration;
+    clearTimers();
+    const finalSave = save(true);
+    inactiveFlush = finalSave;
+    void finalSave.finally(() => {
+      if (inactiveFlush === finalSave) inactiveFlush = null;
+    });
+  }
+  function activationIsInvalid(expectedGeneration: number): boolean {
+    return expectedGeneration !== lifecycleGeneration || !pageIsActive() || publicationSuspended.value;
+  }
+  function finishInvalidActivation(expectedGeneration: number): void {
+    if (expectedGeneration === lifecycleGeneration) reconciling = false;
+  }
+  async function activate(): Promise<void> {
+    if (!pageIsActive() || reconciling) return;
+    inactive = false;
+    reconciling = true;
+    const myLifecycleGeneration = ++lifecycleGeneration;
+    const finalSave = inactiveFlush;
+    if (finalSave) await finalSave;
+    if (activationIsInvalid(myLifecycleGeneration)) {
+      finishInvalidActivation(myLifecycleGeneration);
+      return;
+    }
+    await revalidate(true);
+    if (activationIsInvalid(myLifecycleGeneration)) {
+      finishInvalidActivation(myLifecycleGeneration);
+      return;
+    }
+    reconciling = false;
+    schedule();
   }
 
   watch(input.contextId, (nextContextId) => {
     // Start the old-context save synchronously so its snapshot and destination are captured
     // before sibling route watchers clear or hydrate the editor.
-    if (dirty.value && !suspended.value) void save();
+    if (dirty.value && !publicationSuspended.value) void save(true);
     ++generation;
+    ++lifecycleGeneration;
+    reconciling = false;
     clearTimers();
     pending = false;
+    inactiveFlushPending = false;
     retryCount = 0;
     activeContextId = nextContextId;
     activeDraftId = input.initialDraftId?.value ?? null;
@@ -308,22 +425,32 @@ export function useAutosavedDraft(input: {
     status.value = 'idle';
   });
   watch([input.body, ...(input.title ? [input.title] : [])], schedule);
-  const focus = () => {
-    if (status.value === 'offline' || status.value === 'failed') void save();
-    else void revalidate();
+  const visibility = () => {
+    if (pageIsActive()) void activate();
+    else deactivate();
+  };
+  const online = () => {
+    if (pageIsActive()) void activate();
   };
   const beforeUnload = (event: BeforeUnloadEvent) => {
     if (!dirty.value) return;
     event.preventDefault();
   };
-  window.addEventListener('online', focus);
-  window.addEventListener('focus', focus);
+  document.addEventListener('visibilitychange', visibility);
+  window.addEventListener('blur', deactivate);
+  window.addEventListener('focus', visibility);
+  window.addEventListener('online', online);
+  window.addEventListener('pageshow', visibility);
   window.addEventListener('beforeunload', beforeUnload);
   onBeforeUnmount(() => {
     ++generation;
+    ++lifecycleGeneration;
     clearTimers();
-    window.removeEventListener('online', focus);
-    window.removeEventListener('focus', focus);
+    document.removeEventListener('visibilitychange', visibility);
+    window.removeEventListener('blur', deactivate);
+    window.removeEventListener('focus', visibility);
+    window.removeEventListener('online', online);
+    window.removeEventListener('pageshow', visibility);
     window.removeEventListener('beforeunload', beforeUnload);
   });
 
@@ -342,6 +469,7 @@ export function useAutosavedDraft(input: {
     discard,
     pause,
     resume,
+    resetAfterPublication,
     useSavedVersion,
     keepMyVersion,
     copyMyText,

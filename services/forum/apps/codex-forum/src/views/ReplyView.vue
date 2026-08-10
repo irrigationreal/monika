@@ -22,6 +22,7 @@ const { renderContent } = useMarkdown();
 const body = ref('');
 const editorTextareaRef = ref<HTMLTextAreaElement | null>(null);
 const isSubmitting = ref(false);
+const isPublishing = ref(false);
 const isUploading = ref(false);
 const errorMessage = ref('');
 const showDiscardDraftConfirm = ref(false);
@@ -79,7 +80,12 @@ const autosavedDraft = useAutosavedDraft({ context: 'reply', contextId: routeTop
 const topicTitle = computed(() => state.selectedTopic.value?.title ?? 'Topic');
 const robotMode = computed(() => state.selectedTopic.value?.robotMode ?? 'auto');
 const canSubmit = computed(
-  () => body.value.trim().length > 0 && !isSubmitting.value && !isUploading.value && !publishedPostId.value
+  () =>
+    autosavedDraft.hydrated.value &&
+    body.value.trim().length > 0 &&
+    !isSubmitting.value &&
+    !isUploading.value &&
+    !publishedPostId.value
 );
 const isRobotBusy = computed(() => state.isRobotBusy.value);
 const willDispatchRobot = computed(() => {
@@ -125,6 +131,7 @@ function formatReasoningLabel(value: string): string {
 }
 
 function insertBBCode(tag: string, defaultText?: string): void {
+  if (isPublishing.value) return;
   const textarea = editorTextareaRef.value;
   if (!textarea) return;
 
@@ -155,6 +162,7 @@ function insertBBCode(tag: string, defaultText?: string): void {
 }
 
 async function applyMessageTemplate(template: MessageTemplateDto, replace: boolean): Promise<void> {
+  if (isPublishing.value) return;
   await applyTemplateToTextarea({ body, textarea: editorTextareaRef, templateBody: template.body, replace });
 }
 
@@ -168,11 +176,13 @@ function updatePreview(): void {
 }
 
 function togglePreview(): void {
+  if (isPublishing.value) return;
   showPreview.value = !showPreview.value;
   if (showPreview.value) updatePreview();
 }
 
 function handlePreviewButton(): void {
+  if (isPublishing.value) return;
   if (!showPreview.value) {
     showPreview.value = true;
     updatePreview();
@@ -274,6 +284,7 @@ async function handleSubmit(): Promise<void> {
 
   errorMessage.value = '';
   isSubmitting.value = true;
+  isPublishing.value = true;
   let postCreated = false;
 
   try {
@@ -281,9 +292,10 @@ async function handleSubmit(): Promise<void> {
     if (autosavedDraft.status.value === 'conflict') {
       throw new Error('Resolve the draft conflict before posting.');
     }
+    const submittedBody = body.value;
     autosavedDraft.pause();
     const attachmentsPending = replyFiles.value.length > 0 && !silentPost.value;
-    const post = await state.createPost(body.value.trim(), {
+    const post = await state.createPost(submittedBody.trim(), {
       silent: silentPost.value,
       model: effectiveSelectedModel.value,
       ...(supportsReasoning.value ? { reasoningEffort: selectedReasoning.value } : {}),
@@ -297,7 +309,9 @@ async function handleSubmit(): Promise<void> {
       ...(draftReference ? { draft: draftReference } : {}),
     });
     postCreated = true;
-    body.value = '';
+    if (body.value === submittedBody) body.value = '';
+    autosavedDraft.resetAfterPublication();
+    isPublishing.value = false;
     publishedPostId.value = post.id;
     publishedTopicId.value = post.topicId;
     publishedNeedsDispatch.value = attachmentsPending;
@@ -307,12 +321,17 @@ async function handleSubmit(): Promise<void> {
 
     const lastPage = state.totalPages.value;
     const lastIndex = state.sortedPosts.value.length;
-    await router.push({
-      name: 'topic.view',
-      params: { topicId: post.topicId },
-      query: { page: String(lastPage) },
-      hash: `#${lastIndex}`,
-    });
+    allowPublishedNavigation.value = true;
+    try {
+      await router.push({
+        name: 'topic.view',
+        params: { topicId: post.topicId },
+        query: { page: String(lastPage) },
+        hash: `#${lastIndex}`,
+      });
+    } finally {
+      allowPublishedNavigation.value = false;
+    }
   } catch (err) {
     if (!postCreated) autosavedDraft.resume();
     errorMessage.value = postCreated
@@ -321,18 +340,20 @@ async function handleSubmit(): Promise<void> {
         ? err.message
         : 'Failed to post reply.';
   } finally {
+    isPublishing.value = false;
     isSubmitting.value = false;
     isUploading.value = false;
   }
 }
 
 function requestDiscardDraft(): void {
+  if (isPublishing.value) return;
   errorMessage.value = '';
   showDiscardDraftConfirm.value = true;
 }
 
 async function confirmDiscardDraft(): Promise<void> {
-  if (discardDraftPending.value) return;
+  if (isPublishing.value || discardDraftPending.value) return;
   discardDraftPending.value = true;
   errorMessage.value = '';
   try {
@@ -347,6 +368,10 @@ async function confirmDiscardDraft(): Promise<void> {
 }
 
 async function guardDraftNavigation(): Promise<boolean> {
+  if (isPublishing.value && !allowPublishedNavigation.value) {
+    errorMessage.value = 'Wait for the reply to finish posting before leaving this page.';
+    return false;
+  }
   if (!allowPublishedNavigation.value && publishedPostId.value) {
     errorMessage.value = 'Finish or abandon the published reply’s attachment recovery before leaving this page.';
     return false;
@@ -357,6 +382,7 @@ async function guardDraftNavigation(): Promise<boolean> {
 }
 
 async function handleCancel(): Promise<void> {
+  if (isPublishing.value) return;
   if (!(await guardDraftNavigation())) return;
   if (routeTopicId.value) {
     await router.push({ name: 'topic.view', params: { topicId: routeTopicId.value } });
@@ -692,7 +718,7 @@ onMounted(async () => {
                 class="vb-editor-textarea"
                 rows="12"
                 placeholder="Enter your reply here. You can use BBCode formatting..."
-                :disabled="state.isTopicLocked()"
+                :disabled="state.isTopicLocked() || isPublishing"
               ></textarea>
               <div class="vb-char-count" :class="{ 'vb-char-warning': bodyCharCount === 0 }">
                 {{ bodyCharCount }} characters
@@ -828,8 +854,8 @@ onMounted(async () => {
                     : 'Submit Reply'
             }}
           </button>
-          <button class="vb-btn" @click="handlePreviewButton">Preview Reply</button>
-          <button class="vb-btn vb-btn-secondary" @click="handleCancel">Back (keep draft)</button>
+          <button class="vb-btn" :disabled="isPublishing" @click="handlePreviewButton">Preview Reply</button>
+          <button class="vb-btn vb-btn-secondary" :disabled="isPublishing" @click="handleCancel">Back (keep draft)</button>
         </div>
 
         <div class="vb-posting-rules">

@@ -137,8 +137,18 @@ Authenticated browser users receive private server-side autosave for quick repli
 composers share one draft per account/topic; new threads may have multiple ID-addressed drafts. Drafts contain only
 literal title/body text—never attachments, model/reasoning, silent mode, robot settings, or preview state—and expire 30
 days after their last material edit. Opening or saving identical content does not renew retention. Publishing atomically
-consumes the exact saved revision; ordinary navigation preserves it. Explicit discard and deletion from **My Drafts**
-require the forum's accessible confirmation dialog before permanently deleting the saved revision.
+consumes the exact saved revision; ordinary navigation preserves it. A successfully published composer resets its consumed
+revision before accepting the next draft. Explicit discard and deletion from **My Drafts** require the forum's accessible
+confirmation dialog before permanently deleting the saved revision.
+
+Ordinary autosave scheduling runs only while the composer document is visible and focused. When it loses visibility or
+window focus, the client stops that scheduling and immediately attempts one final revision-checked save. When the document
+becomes visible and focused again (including after a back/forward-cache restore), it reconciles with the server before
+resuming: an unchanged local editor adopts the latest saved draft automatically, while unsaved local text is preserved
+and shown as a conflict if the saved revision changed elsewhere. Posting remains unavailable until initial draft loading
+finishes, and editor mutations are frozen while publication is in flight. Browser lifecycle events and networks cannot
+guarantee a final request after a crash or forced process termination, so the normal debounced autosave and server-side
+optimistic revision checks remain the durability and conflict-safety boundaries.
 
 `/profile/drafts` lists only the signed-in user's drafts. Draft endpoints reject API keys and impersonation tokens, have
 no administrator browsing surface, use `Cache-Control: no-store`, and never project draft content into posts, search,
