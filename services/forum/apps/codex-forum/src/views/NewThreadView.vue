@@ -24,6 +24,7 @@ const title = ref('');
 const body = ref('');
 const editorTextareaRef = ref<HTMLTextAreaElement | null>(null);
 const isSubmitting = ref(false);
+const isPublishing = ref(false);
 const isUploading = ref(false);
 const errorMessage = ref('');
 const showDiscardDraftConfirm = ref(false);
@@ -68,6 +69,7 @@ const forumName = computed(() => state.selectedForum.value?.name ?? 'Forum');
 
 const canSubmit = computed(() => {
   return (
+    autosavedDraft.hydrated.value &&
     title.value.trim().length >= 3 &&
     body.value.trim().length >= 10 &&
     !isSubmitting.value &&
@@ -104,6 +106,7 @@ function formatBytes(bytes: number): string {
 }
 
 function insertBBCode(tag: string, defaultText?: string): void {
+  if (isPublishing.value) return;
   const textarea = editorTextareaRef.value;
   if (!textarea) return;
 
@@ -135,6 +138,7 @@ function insertBBCode(tag: string, defaultText?: string): void {
 }
 
 async function applyMessageTemplate(template: MessageTemplateDto, replace: boolean): Promise<void> {
+  if (isPublishing.value) return;
   await applyTemplateToTextarea({ body, textarea: editorTextareaRef, templateBody: template.body, replace });
   if (!template.threadTitle) return;
   if (!title.value.trim()) title.value = template.threadTitle;
@@ -152,11 +156,13 @@ function updatePreview(): void {
 }
 
 function togglePreview(): void {
+  if (isPublishing.value) return;
   showPreview.value = !showPreview.value;
   if (showPreview.value) updatePreview();
 }
 
 function handlePreviewButton(): void {
+  if (isPublishing.value) return;
   if (!showPreview.value) {
     showPreview.value = true;
     updatePreview();
@@ -235,15 +241,18 @@ async function handleSubmit(): Promise<void> {
   if (!canSubmit.value) return;
   errorMessage.value = '';
   isSubmitting.value = true;
+  isPublishing.value = true;
   let topicCreated = false;
   try {
     const draftReference = await autosavedDraft.flush();
     if (autosavedDraft.status.value === 'conflict') {
       throw new Error('Resolve the draft conflict before posting.');
     }
+    const submittedTitle = title.value;
+    const submittedBody = body.value;
     autosavedDraft.pause();
     const attachmentsPending = threadFiles.value.length > 0 && !silentPost.value;
-    const topic = await state.createTopic(title.value.trim(), body.value.trim(), {
+    const topic = await state.createTopic(submittedTitle.trim(), submittedBody.trim(), {
       silent: silentPost.value,
       robotMode: robotMode.value,
       ...(isAdmin.value ? { autoCompactEnabled: autoCompactEnabled.value } : {}),
@@ -253,8 +262,10 @@ async function handleSubmit(): Promise<void> {
       ...(draftReference ? { draft: draftReference } : {}),
     });
     topicCreated = true;
-    title.value = '';
-    body.value = '';
+    if (title.value === submittedTitle) title.value = '';
+    if (body.value === submittedBody) body.value = '';
+    autosavedDraft.resetAfterPublication();
+    isPublishing.value = false;
     publishedTopicId.value = topic.id;
     publishedNeedsDispatch.value = attachmentsPending;
     if (threadFiles.value.length > 0) await finishPublishedAttachments();
@@ -267,18 +278,20 @@ async function handleSubmit(): Promise<void> {
         ? err.message
         : 'Failed to create thread.';
   } finally {
+    isPublishing.value = false;
     isSubmitting.value = false;
     isUploading.value = false;
   }
 }
 
 function requestDiscardDraft(): void {
+  if (isPublishing.value) return;
   errorMessage.value = '';
   showDiscardDraftConfirm.value = true;
 }
 
 async function confirmDiscardDraft(): Promise<void> {
-  if (discardDraftPending.value) return;
+  if (isPublishing.value || discardDraftPending.value) return;
   discardDraftPending.value = true;
   errorMessage.value = '';
   try {
@@ -293,6 +306,7 @@ async function confirmDiscardDraft(): Promise<void> {
 }
 
 async function handleCancel(): Promise<void> {
+  if (isPublishing.value) return;
   if (await guardDraftNavigation()) router.back();
 }
 
@@ -327,6 +341,10 @@ async function loadExistingForumDrafts(forumId: string): Promise<void> {
 }
 
 async function guardDraftNavigation(): Promise<boolean> {
+  if (isPublishing.value && !allowPublishedNavigation.value) {
+    errorMessage.value = 'Wait for the thread to finish posting before leaving this page.';
+    return false;
+  }
   if (
     !allowPublishedNavigation.value &&
     publishedTopicId.value &&
@@ -341,6 +359,7 @@ async function guardDraftNavigation(): Promise<boolean> {
 }
 
 async function startFreshAfterLoadError(): Promise<void> {
+  if (isPublishing.value) return;
   const query = { ...route.query };
   delete query['draft'];
   title.value = '';
@@ -474,6 +493,7 @@ onMounted(async () => {
                   class="vb-form-input"
                   placeholder="Enter a descriptive title for your thread"
                   maxlength="255"
+                  :disabled="isPublishing"
                 />
                 <div class="vb-char-count" :class="{ 'vb-char-warning': titleCharCount < 3 }">
                   {{ titleCharCount }} / 255
@@ -523,7 +543,7 @@ onMounted(async () => {
             <div v-if="draftListError" class="vb-form-hint" role="status">{{ draftListError }}</div>
             <div v-if="autosavedDraft.loadError.value" class="vb-template-conflict" role="alert">
               {{ autosavedDraft.loadError.value }}
-              <button type="button" class="vb-small-btn" @click="startFreshAfterLoadError">Start a fresh draft</button>
+              <button type="button" class="vb-small-btn" :disabled="isPublishing" @click="startFreshAfterLoadError">Start a fresh draft</button>
             </div>
             <div v-if="!routeDraftId && existingForumDrafts.length" class="vb-form-hint vb-draft-notice">
               You have {{ existingForumDrafts.length }} existing draft{{ existingForumDrafts.length === 1 ? '' : 's' }}
@@ -556,6 +576,7 @@ onMounted(async () => {
                 class="vb-editor-textarea"
                 rows="15"
                 placeholder="Enter your message here. You can use BBCode formatting..."
+                :disabled="isPublishing"
               ></textarea>
               <div class="vb-char-count" :class="{ 'vb-char-warning': bodyCharCount < 10 && bodyCharCount > 0 }">
                 {{ bodyCharCount }} characters
@@ -680,8 +701,8 @@ onMounted(async () => {
             <span v-if="isSubmitting" class="vb-btn-spinner"></span>
             {{ isUploading ? 'Uploading...' : isSubmitting ? 'Posting...' : 'Submit New Thread' }}
           </button>
-          <button class="vb-btn" @click="handlePreviewButton">Preview Post</button>
-          <button class="vb-btn vb-btn-secondary" @click="handleCancel">Back (keep draft)</button>
+          <button class="vb-btn" :disabled="isPublishing" @click="handlePreviewButton">Preview Post</button>
+          <button class="vb-btn vb-btn-secondary" :disabled="isPublishing" @click="handleCancel">Back (keep draft)</button>
         </div>
 
         <!-- Posting Rules -->
