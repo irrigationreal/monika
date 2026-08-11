@@ -103,3 +103,8 @@ Then extend the appropriate configuration in your project's `tsconfig.json`:
   "exclude": ["node_modules", "dist", "**/*.test.ts"]
 }
 ```
+
+## License
+
+This package and all files in this directory are copyright Kevin Hallmark and
+licensed under the MIT License. See [`LICENSE`](./LICENSE).

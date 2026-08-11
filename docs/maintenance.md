@@ -108,6 +108,22 @@ rather than rebuilding.
 See [`releases.md`](releases.md) for candidate eligibility, digest verification,
 release tags, and manual overrides.
 
+## Licensing and distributed notices
+
+First-party repository content is licensed under AGPL-3.0-or-later except where
+[`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) identifies a separate
+license. Source package manifests carry SPDX identifiers where the format
+supports them. The Monika and Forum images expose the same SPDX identifier
+through their OCI metadata and carry project license texts under
+`/usr/share/licenses/`.
+
+Source dependency records remain canonical in manifests and lockfiles. A
+source or image SBOM is supplementary compliance evidence, not a replacement
+for required license texts, notices, source provision, or other obligations.
+Generate and review SBOMs against exact image digests in a dedicated compliance
+change rather than mixing generated inventories into ordinary licensing or
+feature work.
+
 ## Documentation discipline
 
 System-wide contracts belong in root `docs/`; component behavior belongs beside the

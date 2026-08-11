@@ -8,8 +8,8 @@ Usage: tests/smoke/monika-runtime.sh <image>
 Smoke-test a Monika runtime image in standalone mode.
 
 The test starts an isolated throwaway container, waits for memstore and agentd,
-checks the Pi CLI, runs an agentd turn against a local strict-schema model
-fixture, then drains and closes the runtime.
+verifies shipped project license texts, checks the Pi CLI, runs an agentd turn
+against a local strict-schema model fixture, then drains and closes the runtime.
 USAGE
 }
 
@@ -197,6 +197,23 @@ pass "agentd health endpoint ready after ${ready_after}s"
 endsection
 
 section "Runtime checks"
+LICENSE_DIR=/usr/share/licenses/monika
+for file in LICENSE THIRD_PARTY_NOTICES.md claude-code-use-MIT.txt; do
+  if ! docker exec "$CONTAINER_NAME" test -s "$LICENSE_DIR/$file"; then
+    echo "$file missing or empty from $LICENSE_DIR"
+    exit 1
+  fi
+done
+docker exec "$CONTAINER_NAME" grep -q "GNU AFFERO GENERAL PUBLIC LICENSE" "$LICENSE_DIR/LICENSE"
+docker exec "$CONTAINER_NAME" grep -q "Copyright (c) 2026 Ben Vargas" "$LICENSE_DIR/claude-code-use-MIT.txt"
+pass "project AGPL license and third-party notices present"
+OCI_LICENSE=$(docker inspect -f '{{ index .Config.Labels "org.opencontainers.image.licenses" }}' "$CONTAINER_NAME")
+if [ "$OCI_LICENSE" != "AGPL-3.0-or-later" ]; then
+  echo "Unexpected OCI license label: ${OCI_LICENSE:-<unset>}"
+  exit 1
+fi
+pass "OCI license label is AGPL-3.0-or-later"
+
 PI_VERSION="$(docker exec "$CONTAINER_NAME" pi --version 2>&1)"
 if [ "$PI_VERSION" != "0.82.1" ]; then
   echo "Expected Pi 0.82.1, got: $PI_VERSION"

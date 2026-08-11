@@ -42,6 +42,8 @@ jobs:
 
           if git diff --name-only "$BASE" "${{ github.sha }}" -- \
               'services/forum/Containerfile' \
+              'services/forum/LICENSE' \
+              'services/forum/THIRD_PARTY_NOTICES.md' \
               'services/forum/.dockerignore' \
               'services/forum/package.json' \
               'services/forum/pnpm-lock.yaml' \
@@ -53,7 +55,8 @@ jobs:
               'tests/smoke/forum-runtime.sh' \
               '.github/workflows/ci-forum-container.yml' \
               '.github/workflows/image-forum.yml' \
-            | grep -qvE '\.md$'; then
+            | awk '$0 == "services/forum/THIRD_PARTY_NOTICES.md" || $0 !~ /\.md$/' \
+            | grep -q .; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"

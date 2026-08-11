@@ -8,9 +8,10 @@ Usage: tests/smoke/forum-runtime.sh <image>
 Smoke-test a forum runtime image in standalone mode.
 
 The test starts an isolated throwaway container, waits for /healthz, verifies
-static frontend serving, checks that representative dev-only packages (vitest,
-vite, typescript, eslint, playwright) are absent from node_modules, and confirms
-runtime-critical packages (tsx, fastify, better-sqlite3, sharp) are present.
+static frontend serving, verifies shipped project and third-party license texts,
+checks that representative dev-only packages (vitest, vite, typescript, eslint,
+playwright) are absent from node_modules, and confirms runtime-critical packages
+(tsx, fastify, better-sqlite3, sharp) are present.
 USAGE
 }
 
@@ -126,6 +127,28 @@ else
   fail "GET / did not return HTML"
   exit 1
 fi
+endsection
+
+# ── Verify license material ─────────────────────────────────────────────────
+
+section "Verify license material"
+LICENSE_DIR=/usr/share/licenses/monika-forum
+for file in LICENSE THIRD_PARTY_NOTICES.md eslint-config-MIT.txt typescript-config-MIT.txt dither-charts-MIT.txt; do
+  if docker exec "$CONTAINER_NAME" test -s "$LICENSE_DIR/$file"; then
+    pass "$file present"
+  else
+    fail "$file missing or empty from $LICENSE_DIR"
+    exit 1
+  fi
+done
+docker exec "$CONTAINER_NAME" grep -q "GNU AFFERO GENERAL PUBLIC LICENSE" "$LICENSE_DIR/LICENSE"
+pass "AGPL license text is readable"
+OCI_LICENSE=$(docker inspect -f '{{ index .Config.Labels "org.opencontainers.image.licenses" }}' "$CONTAINER_NAME")
+if [ "$OCI_LICENSE" != "AGPL-3.0-or-later" ]; then
+  fail "unexpected OCI license label: ${OCI_LICENSE:-<unset>}"
+  exit 1
+fi
+pass "OCI license label is AGPL-3.0-or-later"
 endsection
 
 # ── Verify dev packages absent ──────────────────────────────────────────────
