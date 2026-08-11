@@ -66,7 +66,6 @@ describe('ECHS subagent completion projection', () => {
       reasoningEffort: null,
       currentTurnId: 'newer-turn',
       turnStartedAt: Date.now(),
-      lastAssistantAt: null,
       lastUsage: null,
       totalInputTokens: 0,
       totalOutputTokens: 0,
@@ -90,7 +89,7 @@ describe('ECHS subagent completion projection', () => {
       data: { message_id: 'completion-turn', ...completionMetadata },
     });
     // A newer post remains the context's most recent user post. Completion
-    // ownership must stay frozen to the provenance captured at turn_started.
+    // ownership comes from the item itself, never mutable turn-start state.
     context.lastUserPostId = newerPost.id;
     const completionEvent = {
       event: 'item_completed',
@@ -134,19 +133,20 @@ describe('ECHS subagent completion projection', () => {
         runId: 'run-1', originPostId: originPost.id, originTopicId: topic.id,
       }],
     };
-    const imported = (sync as any).importExported(exported, exported.session);
+    const imported = await (sync as any).importExported(exported, exported.session);
     expect(imported).toBe(0);
     expect(db.prepare("select count(*) as count from posts where body = 'Background result'").get()).toEqual({ count: 1 });
 
-    // A crash after canonical commit but before result-file acknowledgement can
-    // regenerate a new assistant Pi message. Run identity still deduplicates it.
+    // A second canonical outward Pi message retains its own utterance identity,
+    // even when it references the same background run.
     (bridge as any).handleEvent('conversation-1', {
       ...completionEvent,
       data: { ...completionEvent.data, pi_message_id: 'completion-a2' },
     });
     await vi.waitFor(() => {
-      expect(store.getPiMessageLink('pi-parent', 'completion-a2')?.post_id).toBe(projected[0].id);
+      expect(store.getPiMessageLink('pi-parent', 'completion-a2')?.post_id).toBeTruthy();
     });
-    expect(db.prepare("select count(*) as count from posts where body = 'Background result'").get()).toEqual({ count: 1 });
+    expect(store.getPiMessageLink('pi-parent', 'completion-a2')?.post_id).not.toBe(projected[0].id);
+    expect(db.prepare("select count(*) as count from posts where body = 'Background result'").get()).toEqual({ count: 2 });
   });
 });

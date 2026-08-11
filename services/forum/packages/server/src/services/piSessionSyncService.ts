@@ -4,6 +4,8 @@ import Database from 'better-sqlite3';
 
 import { EchsClient } from '../echsClient';
 import { ForumStore } from '../store';
+
+import { AssistantProjectionService, parseLegacyAttachmentMarkers } from './assistantProjectionService';
 import { classifyPiSession } from './piSessionClassifier';
 import { isSubagentPiSession, omitSubagentPiSessions } from './piSessionPolicy';
 
@@ -52,13 +54,18 @@ export type PiEntry = {
 
 export type PiMessageProvenance = {
   entryId?: string | null;
+  version?: number | null;
   parentId?: string | null;
   timestamp?: string | null;
   piMessageId: string;
-  origin: string;
+  origin?: string | null;
   topicId?: string | null;
   postId?: string | null;
   messageKind?: string | null;
+  utteranceId?: string | null;
+  executionOrigins?: Array<Record<string, unknown>> | null;
+  continuation?: Record<string, unknown> | null;
+  attachmentRefs?: Array<Record<string, unknown>> | null;
   source_kind?: string | null;
   sourceKind?: string | null;
   run_id?: string | null;
@@ -191,11 +198,7 @@ function provenanceOriginTopicId(value: PiMessageProvenance | undefined): string
 }
 
 function stripArtifactMarkers(text: string): string {
-  return text
-    .replace(/^\s*\[artifact\s+[^\]]+\]\s*$/gim, '')
-    .replace(/^\s*\[forum-attachment\s+[^\]]+\]\s*$/gim, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+  return parseLegacyAttachmentMarkers(text, 'legacy-strip').text;
 }
 
 function parseJsonObject(input: string | null): Record<string, unknown> {
@@ -329,13 +332,20 @@ export class PiSessionSyncService {
   private lastRunStats: PiSyncHealth['lastRunStats'] = null;
   private readonly client: EchsClient;
   private readonly store: ForumStore;
+  private readonly assistantProjections: AssistantProjectionService;
 
   constructor(
     private readonly db: Database.Database,
-    options: { agentdBaseUrl: string; apiToken?: string | null; intervalMs: number }
+    options: {
+      agentdBaseUrl: string;
+      apiToken?: string | null;
+      intervalMs: number;
+      assistantProjections?: AssistantProjectionService;
+    }
   ) {
     this.client = new EchsClient({ baseUrl: options.agentdBaseUrl, apiToken: options.apiToken ?? null });
     this.store = new ForumStore(db);
+    this.assistantProjections = options.assistantProjections ?? new AssistantProjectionService(this.store);
     this.intervalMs = options.intervalMs;
   }
 
@@ -403,7 +413,7 @@ export class PiSessionSyncService {
         try {
           const exported = (await this.client.exportPiSession(summary.id)) as ExportedSession | null;
           if (!exported) continue;
-          importedPosts += this.importExported(exported, summary);
+          importedPosts += await this.importExported(exported, summary);
           checked += 1;
         } catch (err) {
           console.warn('[pi-sync] session failed:', summary.id, err instanceof Error ? err.message : err);
@@ -709,15 +719,13 @@ export class PiSessionSyncService {
     return !Number.isFinite(importedAt) || mtime > importedAt;
   }
 
-  private importExported(exported: ExportedSession, summary: PiSessionSummary): number {
+  private async importExported(exported: ExportedSession, summary: PiSessionSummary): Promise<number> {
     // Defense in depth: manual sync/export callers must not create topics for
     // pi-subagents child sessions even if a listing omitted kind metadata.
     if (isSubagentPiSession(summary) || isSubagentPiSession(exported.session)) return 0;
-    return this.db.transaction(() => {
-      const classification = classifyPiSession(exported.session, exported.entries);
-      const target = this.ensureSession(exported, summary, classification);
-      return this.importMessages(exported, target, summary);
-    })();
+    const classification = classifyPiSession(exported.session, exported.entries);
+    const target = this.db.transaction(() => this.ensureSession(exported, summary, classification))();
+    return this.importMessages(exported, target, summary);
   }
 
   private ensureIdentity(displayName: string, kind: string, avatarUrl: string | null): string {
@@ -964,7 +972,7 @@ export class PiSessionSyncService {
           continue;
         }
         const summary = exported.session;
-        this.importExported(exported, summary);
+        await this.importExported(exported, summary);
         processed += related.length;
       } catch (err) {
         for (const anomaly of related) this.bumpAnomalyRetry(anomaly, err instanceof Error ? err.message : String(err));
@@ -1200,7 +1208,7 @@ export class PiSessionSyncService {
     }
   }
 
-  private importMessages(exported: ExportedSession, target: SyncTarget, summary: PiSessionSummary): number {
+  private async importMessages(exported: ExportedSession, target: SyncTarget, summary: PiSessionSummary): Promise<number> {
     const { topicId, sessionId } = target;
     const hadIndexedHead = Boolean(this.db.prepare('select 1 from pi_session_heads where pi_session_id = ?').get(exported.session.id));
     const hadMessageLinks = Boolean(this.db.prepare('select 1 from pi_message_links where pi_session_id = ? limit 1').get(exported.session.id));
@@ -1266,7 +1274,10 @@ export class PiSessionSyncService {
       if (!isPostMessage) continue;
 
       const rawText = entry.text ?? '';
-      const text = entry.role === 'assistant' ? stripArtifactMarkers(rawText) : rawText;
+      const legacyAttachments = entry.role === 'assistant'
+        ? parseLegacyAttachmentMarkers(rawText, entry.id)
+        : { text: rawText, handoffs: [] };
+      const text = legacyAttachments.text;
       if (!text.trim()) continue;
       const directProvenance = provenance.get(entry.id);
       const sourceKind = provenanceSourceKind(directProvenance);
@@ -1298,6 +1309,32 @@ export class PiSessionSyncService {
         originPostId: explicitPost?.id ?? explicitPostId,
         originTopicId: provenanceTopicId ?? topicId,
       } : {};
+      const canonicalOutward = entry.role === 'assistant'
+        && (directProvenance?.messageKind === 'assistant_outward'
+          || directProvenance?.messageKind === 'assistant_terminal');
+      if (canonicalOutward || (entry.role === 'assistant' && legacyAttachments.handoffs.length > 0)) {
+        const before = this.store.getAssistantProjection(exported.session.id, entry.id);
+        const continuation = directProvenance?.continuation ?? (subagentCompletion ? directProvenance : null);
+        const projection = (await this.assistantProjections.project({
+          piSessionId: exported.session.id,
+          piMessageId: entry.id,
+          utteranceId: directProvenance?.utteranceId ?? entry.id,
+          topicId,
+          sessionId,
+          rawText,
+          parentPostId: undefined,
+          continuation,
+          attachmentRefs: directProvenance?.attachmentRefs ?? [],
+          origin: directProvenance?.executionOrigins?.[0] ?? null,
+          completion: null,
+        })).projection;
+        if (!before) {
+          count += 1;
+          if (projection.status === 'projected') bumpedAt = nowIso();
+        }
+        continue;
+      }
+
       const existingRunLink = subagentCompletion && completionRunIds.length > 0
         ? this.db.prepare(
           `select post_id from pi_message_links

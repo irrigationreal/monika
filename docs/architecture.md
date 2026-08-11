@@ -137,6 +137,33 @@ becoming independent forum identities or entering Monika's memory archive.
 voice, values, creative judgment, or relational context materially matters. Useful
 results return through the canonical parent session. See [`docs/subagents.md`](subagents.md).
 
+## Canonical utterances and execution
+
+A visible utterance is a canonical Pi assistant message, not an HTTP response, an
+SSE turn, or a forum channel event. One settled agent run can persist zero, one, or
+several ordered outward assistant messages. Pi's internal `agent_settled` event is
+the idle boundary. Agentd emits each persisted outward message separately and maps
+that settlement to wire `turn_completed`; settlement never manufactures a message
+from a raw completion buffer. This model is channel-neutral: forum, CLI, and
+external adapters project the same canonical utterances.
+
+Version 1 provenance preserves the original forum topic/post identity. Version 2
+adds the durable ordered contributor utterance set and normalized execution
+origins. Same-origin forum or external events may be grouped for one execution;
+other origins remain isolated. A lost-response retry keeps the original ordered
+contributors and dispatch identity rather than selecting only the last trigger.
+External Discord and Matrix adapters are best-effort ingress/egress projections:
+the canonical Pi session and provenance remain authoritative when an external
+API cannot provide atomic delivery or acknowledgement.
+
+Assistant projection is one deterministic service path shared by live SSE and
+session sync. It applies outbound tamper/default-persona rules, normalizes parent
+and follow-up metadata, creates durable attachment handoffs, and claims the
+canonical `(pi_session_id, pi_message_id)` once. Attachment linking finishes
+before public post finalization; restart recovery resumes stale handoffs and
+completion delivery. Thus live-first and sync-first races converge instead of
+choosing between transformed and raw content.
+
 ## Sources of truth
 
 | Concern | Authority |

@@ -21,7 +21,9 @@ A strong pattern is specialist evidence gathering followed by Monika-authored in
 - **parallel** for genuinely independent searches or reviews with disposable raw context;
 - **chain** only when each stage has an explicit output contract consumed by the next;
 - **dynamic fanout** for unknown breadth that can be divided safely, with a firm bound;
-- **async** only for work independent enough that the trunk can continue safely and valuable enough to return as a later canonical continuation.
+- **async** is the durable physical execution shape; delivery is selected separately.
+
+Under agentd, omitted \`deliveryDisposition\` means \`awaited\`: the run remains durable/async, but the parent must call \`subagent_wait\` and synthesize any outward response itself. Use explicit \`deliveryDisposition: "follow_up"\` only for detached work that should wake the parent in a later canonical continuation. Use \`deliveryDisposition: "silent"\` when output must remain retained and internal without waking the parent. Awaited and silent completions never notify automatically; only follow-up does. Raw child output belongs in the internal wait tool result and claim/custom data, never copied directly into outward notification content.
 
 Execution target is separate from role. Omit \`executionTarget\` for local work; omission always means local and never infers relocation. Use only an administrator-configured named SSH target when remote tools are required, and set \`async:true\` so uncertain effects enter the durable lifecycle ledger. Foreground SSH is rejected before reasoning. Nested delegation from a locked child must explicitly reuse that same target; omission/local or switching is rejected. SSH never falls back locally and cannot use worktree isolation. Treat transport ambiguity after a mutation as effects unknown: inspect and reconcile before retrying or safe deployment.
 

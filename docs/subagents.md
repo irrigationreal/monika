@@ -74,8 +74,8 @@ processing to preserve the result with honest attribution.
 
 ## Durable asynchronous lifecycle
 
-Forum-owned delegation is forced through persistent asynchronous lifecycle
-tracking at every nesting depth. Pi sessions and supervision stay local even when
+Forum-originated delegation is forced through agentd/package-owned persistent
+asynchronous lifecycle tracking at every nesting depth. Pi sessions and supervision stay local even when
 a child routes coding tools to a named SSH target.
 
 Before spawn, the package records durable launch and process identity. Lifecycle,
@@ -97,19 +97,42 @@ container epoch distinguish surviving, interrupted, and destroyed runners across
 agentd restart or container replacement. Optional project artifacts are never
 supervisor authority.
 
-## Canonical completion and forum projection
+## Delivery disposition, claims, and settlement
 
-Agentd records a subagent origin in the canonical parent JSONL. A native package
-completion becomes a parent continuation attributed as `subagent-completion` and
-is projected beneath its originating forum post when available.
+Every run chooses one durable delivery disposition:
 
-Canonical Pi message provenance is the acknowledgement proof. If agentd crashes
-after persisting the assistant continuation but before removing the result file,
-the next explicit session open can settle that file without waking the model or
-creating a duplicate post.
+- `awaited` means the parent synchronously claimed an exact result and must
+  synthesize it into a later visible canonical assistant before settlement;
+- `follow_up` means completion is pending until an explicit parent continuation
+  runs; agentd never wakes a recovered parent automatically;
+- `silent` means no public continuation is expected and fabricated follow-up
+  provenance cannot settle it.
 
-Unproven legacy results remain pending. They are never consumed or deleted merely
-because their content looks plausible.
+A **claim** transfers the exact identity-bound result into parent custody for
+synthesis. It does not prove public delivery. **Settlement** happens later, only
+when canonical Pi provenance binds the exact run/claim to a persisted outward
+assistant item (or the disposition's explicit non-public terminal rule). Result
+bytes and claim sidecars remain retained when any identity, digest, ordering, or
+visibility link is missing.
+
+Agentd records origin and disposition in the canonical parent JSONL. A native
+`follow_up` continuation is item-adjacent, attributed as `subagent-completion`,
+and projected beneath its originating forum post when available. Earlier ordinary
+assistant siblings remain ordinary. Grouped notifications may carry several run
+origins on one continuation without collapsing distinct canonical messages.
+
+If agentd crashes after persisting the assistant continuation but before removing
+the result file, the next **explicit** session open can prove settlement without
+waking the model or creating a duplicate post. Passive startup only inventories
+pending work. The forum exposes a follow-up badge and parent link so delayed
+background output is visibly distinct from the original response.
+
+Nested runs use scoped run keys and per-run result/custody paths. A child with the
+same raw run ID in another scope cannot satisfy, delete, or overwrite its sibling's
+claim. Custody rename/recovery is identity- and digest-bound and preserves a newer
+source generation if a path is swapped concurrently. Unproven legacy results stay
+pending; compatibility artifacts never gain authority because their text looks
+plausible.
 
 ## Stop, drain, and restart
 

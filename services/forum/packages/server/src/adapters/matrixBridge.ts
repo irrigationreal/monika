@@ -1,4 +1,5 @@
 import { MatrixAdapter, type MatrixSurfaceEvent, type MatrixPostEventPayload } from '@irrigationreal/codex-forum-adapters';
+import { originMatchesSurface } from '@irrigationreal/codex-forum-core';
 import type { ForumStore } from '../store';
 import type { StreamBusInterface } from '../streamBus';
 import type { AgentBridge } from '../agentBridge';
@@ -328,16 +329,10 @@ export class MatrixBridge {
     const firstLine = body.split('\n')[0] ?? body;
     const title = firstLine.length > 100 ? firstLine.slice(0, 97) + '...' : firstLine;
 
-    const { topic, post } = this.store.createTopic({
-      forumId,
-      title: title,
-      body: body,
-      authorId: identity.id
-    });
-
-    // Create external ref for event -> topic mapping
-    if (eventId) {
-      this.store.createExternalRef({
+    if (!eventId) return;
+    const { topic } = this.store.createExternalTopicWithDispatch({
+      topic: { forumId, title, body, authorId: identity.id },
+      externalRef: {
         surfaceId: event.surfaceId,
         surfaceKind: 'matrix',
         externalId: eventId,
@@ -345,26 +340,13 @@ export class MatrixBridge {
         scope: roomId,
         scopeKind: 'room',
         mappedForumId: forumId,
-        mappedTopicId: topic.id
-      });
+      },
+      dispatch: Boolean(this.codex && body),
+    });
 
-      // Store the room ID for this thread so we can send replies back
-      this.threadRoomMap.set(eventId, roomId);
-    }
-
+    this.threadRoomMap.set(eventId, roomId);
     console.log(`[MatrixBridge] Created topic ${topic.id} from Matrix event ${eventId}`);
-
-    // Subscribe to topic events for sending robot replies back to Matrix
-    if (eventId) {
-      this.subscribeToTopic(topic.id, roomId, eventId);
-    }
-
-    // Trigger robot response if available
-    if (this.codex && body) {
-      const session = this.store.ensureSession({ topicId: topic.id });
-      this.store.createSessionMessage(session.id, 'user', body, 'public');
-      await this.codex.sendUserMessage(topic.id, body, post.id);
-    }
+    this.subscribeToTopic(topic.id, roomId, eventId);
   }
 
   /**
@@ -394,54 +376,31 @@ export class MatrixBridge {
     const body = payload.body!;
     const title = `Matrix Thread ${threadId.slice(-8)}`;
 
-    const { topic, post } = this.store.createTopic({
-      forumId,
-      title: title,
-      body: body,
-      authorId: identity.id
-    });
-
-    // Create external ref for thread -> topic mapping
-    this.store.createExternalRef({
-      surfaceId: event.surfaceId,
-      surfaceKind: 'matrix',
-      externalId: threadId,
-      kind: 'topic',
-      scope: roomId,
-      scopeKind: 'room',
-      mappedForumId: forumId,
-      mappedTopicId: topic.id
-    });
-
-    // Also map the current event as the first post
-    const eventId = payload.eventId;
-    if (eventId) {
-      this.store.createExternalRef({
+    const { topic } = this.store.createExternalTopicWithDispatch({
+      topic: { forumId, title, body, authorId: identity.id },
+      externalRef: {
         surfaceId: event.surfaceId,
         surfaceKind: 'matrix',
-        externalId: eventId,
+        externalId: threadId,
+        kind: 'topic',
+        scope: roomId,
+        scopeKind: 'room',
+        mappedForumId: forumId,
+      },
+      additionalPostRefs: payload.eventId ? [{
+        surfaceId: event.surfaceId,
+        surfaceKind: 'matrix',
+        externalId: payload.eventId,
         kind: 'post',
         scope: threadId,
         scopeKind: 'thread',
-        mappedTopicId: topic.id,
-        mappedPostId: post.id
-      });
-    }
+      }] : [],
+      dispatch: Boolean(this.codex && body),
+    });
 
-    // Store the room ID for this thread
     this.threadRoomMap.set(threadId, roomId);
-
     console.log(`[MatrixBridge] Created topic ${topic.id} from Matrix thread ${threadId}`);
-
-    // Subscribe to topic events
     this.subscribeToTopic(topic.id, roomId, threadId);
-
-    // Trigger robot response if available
-    if (this.codex && body) {
-      const session = this.store.ensureSession({ topicId: topic.id });
-      this.store.createSessionMessage(session.id, 'user', body, 'public');
-      await this.codex.sendUserMessage(topic.id, body, post.id);
-    }
   }
 
   /**
@@ -454,7 +413,12 @@ export class MatrixBridge {
 
     const unsubscribe = this.bus.subscribe(topicId, (event) => {
       if (event.type === 'assistant_message' && event.data) {
-        const text = (event.data as { text?: string }).text;
+        const data = event.data as { text?: string; origin?: { channelKind?: string; surfaceId?: string | null; scope?: string | null } | null };
+        const origin = data.origin;
+        if (!this.adapter || !originMatchesSurface(origin, {
+          channelKind: 'matrix', surfaceId: this.adapter.surfaceId, scope: threadRootEventId,
+        })) return;
+        const text = data.text;
         if (text) {
           this.sendRobotReplyToMatrix(roomId, threadRootEventId, text).catch((err) => {
             console.error('[MatrixBridge] Failed to send robot reply:', err.message);

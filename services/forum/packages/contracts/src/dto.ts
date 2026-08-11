@@ -224,6 +224,8 @@ export interface PostDto {
    * Silent posts are still visible in the thread, but do not trigger a robot turn.
    */
   silent?: boolean;
+  /** True only for an explicitly projected subagent/follow-up assistant utterance. */
+  followUp?: boolean;
   createdAt: string;
   editedAt?: string | null;
   deletedAt?: string | null;

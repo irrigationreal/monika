@@ -294,6 +294,7 @@ export const PostDtoSchema: z.ZodType<PostDto> = z.object({
   body: z.string(),
   sourceMessageId: optionalNullableString,
   silent: z.boolean().optional(),
+  followUp: z.boolean().optional(),
   createdAt: z.string(),
   editedAt: optionalNullableString,
   deletedAt: optionalNullableString,

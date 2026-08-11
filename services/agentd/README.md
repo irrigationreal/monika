@@ -61,20 +61,30 @@ exposes these conceptual groups:
 - **Pi sessions** — list, export, context, ownership, and durable cancellation;
 - **conversations** — create/open, history/context, SSE events, prompt, interrupt,
   compact, handoff, and close;
+- **artifacts** — legacy descriptor-safe export from canonical allowlisted roots;
 - **administration** — quiescence, drain, subagent workload/repair/retention, and
   privacy-safe aggregate analytics.
 
 Conversation records expose canonical `session_id` and `session_path`. Model and
 thinking settings use Pi model identifiers directly.
 
-## Event lifecycle
+## Event lifecycle and provenance
 
 Agentd maps Pi SDK events into frontend-consumable turn, reasoning, text, tool,
-usage, completion, interruption, and error events. Authoritative completion follows
-Pi settlement and persisted canonical messages rather than assuming an earlier
-text or tool event ended the turn.
+usage, interruption, error, and settlement events. A canonical outward utterance
+is a persisted Pi assistant item, independent of channel. Agentd emits every such
+item separately and in order. Pi's internal `agent_settled` marks the runtime's
+idle boundary; agentd exposes that boundary as wire `turn_completed`, which may
+follow zero, one, or several outward items. It never aggregates a response or
+publishes an unpersisted raw completion buffer.
 
-The forum bridge adds some forum-native events and persists projection checkpoints.
+`monika.message.provenance` v1 carries legacy forum topic/post identity. V2 carries
+the ordered contributor utterance IDs and normalized execution origins used by
+forum and external adapters. Queue/steer mechanics remain prompt facts, not
+utterance identity. Agentd owns canonical claim and settlement; an adapter's
+remote send/ack remains best effort.
+
+The forum bridge adds forum-native events and persists projection checkpoints.
 Those are forum behavior, not agentd's canonical conversation record. See
 [`../../docs/forum.md`](../../docs/forum.md).
 
@@ -101,13 +111,20 @@ through agentd and never inherited by disposable children.
 ## Subagents
 
 Agentd projects the reviewed `pi-subagents` lifecycle into parent sessions,
-quiescence, cancellation, and administrative workload APIs. It reconciles durable
-execution state independently from result delivery and never treats pending result
-projection as a live process.
+quiescence, cancellation, and administrative workload APIs. Versioned artifacts
+separate execution, outcome, effects, and delivery dimensions; no single legacy
+status number owns workflow meaning. It reconciles process state independently
+from result delivery and never treats pending projection as a live process.
 
-Recovered historical results do not open a parent session or wake a model. Canonical
-completion provenance can settle a result on the next explicit open; unproven
-results remain pending for operator review. See
+Delivery disposition is explicit: `awaited`, `follow_up`, or `silent`. A durable
+claim proves exact result custody but not visible delivery; settlement requires
+identity-bound canonical provenance and the disposition's visibility rule. Scoped
+nested run keys and per-run custody paths prevent one descendant from settling or
+deleting another descendant's result.
+
+Recovered historical results do not open a parent session or wake a model. Proven
+pending `follow_up` work can continue on the next explicit open; unproven results
+remain pending for operator review. See
 [`../../docs/subagents.md`](../../docs/subagents.md).
 
 ## Deployment safety
@@ -130,6 +147,15 @@ arguments/results, paths, errors, or canonical identifiers.
 
 The forum authorizes the browser request and resolves its visible linked sessions
 before calling agentd. Agentd does not infer forum tenancy.
+
+## Legacy artifact export
+
+`POST /v1/artifacts/resolve` exists only for compatibility with standalone
+`[artifact ...]` references. Structured pending-attachment refs are primary. The
+compatibility reader opens with `O_NOFOLLOW`, validates the opened descriptor is a
+regular file whose current inode and canonical path remain inside an allowed root,
+and reads bytes from that descriptor. Symlinks, containment escapes, and path
+replacement during validation fail closed.
 
 ## Development
 

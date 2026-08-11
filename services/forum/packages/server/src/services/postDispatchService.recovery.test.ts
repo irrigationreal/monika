@@ -49,10 +49,10 @@ describe('durable post dispatch recovery fence', () => {
   });
 
   it.each([
-    { activity: 'thinking', expectedMode: 'steer' },
+    { activity: 'thinking', expectedMode: 'queue' },
     { activity: 'idle', expectedMode: 'queue' },
   ])(
-    'dispatches an auto reply as $expectedMode while robot activity is $activity',
+    'dispatches an auto reply with no active causal origin as $expectedMode while robot activity is $activity',
     async ({ activity, expectedMode }) => {
       const { topic, session, post } = fixture();
       store.setRobotActivity(topic.id, activity);
@@ -69,6 +69,183 @@ describe('durable post dispatch recovery fence', () => {
       );
     }
   );
+
+  it('queues a web dispatch behind an active Discord causal turn through PostDispatchService and EchsBridge', async () => {
+    const { topic, session, post, author } = fixture();
+    const cwd = await mkdtemp(join(tmpdir(), 'forum-origin-isolation-'));
+    try {
+      db.prepare('update forums set cwd = ? where id = ?').run(cwd, topic.forum_id);
+      store.setSessionAgentThread(session.id, 'echs', 'conversation-1');
+      store.createExternalRef({
+        surfaceId: 'discord:guild-1', surfaceKind: 'discord', externalId: 'discord-event-1', kind: 'post',
+        scope: 'discord-thread-1', scopeKind: 'thread', mappedTopicId: topic.id, mappedPostId: post.id,
+      });
+      store.createPostDispatch({ topicId: topic.id, sessionId: session.id, postId: post.id });
+      const bridge = new EchsBridge(store, { emit: vi.fn(), subscribe: vi.fn() } as any, {
+        model: 'model', workDir: cwd, echs: { baseUrl: 'http://agentd.invalid' },
+      });
+      vi.spyOn((bridge as any).client, 'getConversation')
+        .mockResolvedValueOnce({ conversation_id: 'conversation-1', activity: 'idle' })
+        .mockResolvedValue({ conversation_id: 'conversation-1', activity: 'active' });
+      vi.spyOn(bridge as any, 'ensureSubscribed').mockResolvedValue(undefined);
+      const enqueue = vi.spyOn((bridge as any).client, 'enqueueConversationMessage')
+        .mockImplementation(async (_thread: string, _body: string, opts: any) => ({
+          messageId: opts.dispatchId, threadId: 'conversation-1', deduplicated: false,
+        }));
+      const service = new PostDispatchService(store, bridge as any);
+
+      await processOnce(service);
+      const web = store.createPost({ topicId: topic.id, authorId: author.id, body: 'web follow-up' });
+      const webDispatch = store.createPostDispatch({ topicId: topic.id, sessionId: session.id, postId: web.id });
+      await processOnce(service);
+
+      expect(enqueue.mock.calls.map((call) => call[2]?.mode)).toEqual(['queue', 'queue']);
+      expect(store.getActiveTurnOrigin(topic.id)?.origin_key).toContain('external:discord');
+
+      // The queued web turn actually starts after the Discord turn. A restart
+      // first drops the unproven old origin, then replayed turn_started binds
+      // the durable web dispatch ID atomically.
+      const restartedBridge = new EchsBridge(store, { emit: vi.fn(), subscribe: vi.fn() } as any, {
+        model: 'model', workDir: cwd, echs: { baseUrl: 'http://agentd.invalid' },
+      });
+      vi.spyOn((restartedBridge as any).client, 'getConversation')
+        .mockResolvedValue({ conversation_id: 'conversation-1', activity: 'active' });
+      vi.spyOn(restartedBridge as any, 'ensureSubscribed').mockResolvedValue(undefined);
+      await restartedBridge.reconcileLoadedThreads();
+      expect(store.getActiveTurnOrigin(topic.id)).toBeNull();
+      (restartedBridge as any).handleEvent('conversation-1', {
+        event: 'turn_started', data: { turn_id: webDispatch.id, message_id: webDispatch.id },
+      });
+      expect(store.getActiveTurnOrigin(topic.id)?.origin_key).toContain(`forum:web:${topic.id}`);
+
+      const restartedEnqueue = vi.spyOn((restartedBridge as any).client, 'enqueueConversationMessage')
+        .mockImplementation(async (_thread: string, _body: string, opts: any) => ({
+          messageId: opts.dispatchId, threadId: 'conversation-1', deduplicated: false,
+        }));
+      const restartedService = new PostDispatchService(store, restartedBridge as any);
+      const discord = store.createPost({ topicId: topic.id, authorId: author.id, body: 'discord follow-up' });
+      store.createExternalRef({
+        surfaceId: 'discord:guild-1', surfaceKind: 'discord', externalId: 'discord-event-2', kind: 'post',
+        scope: 'discord-thread-1', scopeKind: 'thread', mappedTopicId: topic.id, mappedPostId: discord.id,
+      });
+      store.createPostDispatch({ topicId: topic.id, sessionId: session.id, postId: discord.id });
+      await processOnce(restartedService);
+      const sameWeb = store.createPost({ topicId: topic.id, authorId: author.id, body: 'same web origin' });
+      store.createPostDispatch({ topicId: topic.id, sessionId: session.id, postId: sameWeb.id });
+      await processOnce(restartedService);
+
+      expect(restartedEnqueue.mock.calls.map((call) => call[2]?.mode)).toEqual(['queue', 'steer']);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed on restart when no turn_started dispatch proof is replayed', async () => {
+    const { topic, session, post, author } = fixture();
+    const cwd = await mkdtemp(join(tmpdir(), 'forum-origin-restart-'));
+    try {
+      db.prepare('update forums set cwd = ? where id = ?').run(cwd, topic.forum_id);
+      store.setSessionAgentThread(session.id, 'echs', 'conversation-1');
+      store.createPostDispatch({ topicId: topic.id, sessionId: session.id, postId: post.id });
+      const firstBridge = new EchsBridge(store, { emit: vi.fn(), subscribe: vi.fn() } as any, {
+        model: 'model', workDir: cwd, echs: { baseUrl: 'http://agentd.invalid' },
+      });
+      vi.spyOn((firstBridge as any).client, 'getConversation').mockResolvedValue({ conversation_id: 'conversation-1', activity: 'idle' });
+      vi.spyOn(firstBridge as any, 'ensureSubscribed').mockResolvedValue(undefined);
+      vi.spyOn((firstBridge as any).client, 'enqueueConversationMessage').mockImplementation(
+        async (_thread: string, _body: string, opts: any) => ({ messageId: opts.dispatchId, threadId: 'conversation-1' })
+      );
+      await processOnce(new PostDispatchService(store, firstBridge as any));
+
+      const secondPost = store.createPost({ topicId: topic.id, authorId: author.id, body: 'same web turn' });
+      store.createPostDispatch({ topicId: topic.id, sessionId: session.id, postId: secondPost.id });
+      const restartedBridge = new EchsBridge(store, { emit: vi.fn(), subscribe: vi.fn() } as any, {
+        model: 'model', workDir: cwd, echs: { baseUrl: 'http://agentd.invalid' },
+      });
+      vi.spyOn((restartedBridge as any).client, 'getConversation').mockResolvedValue({ conversation_id: 'conversation-1', activity: 'active' });
+      vi.spyOn(restartedBridge as any, 'ensureSubscribed').mockResolvedValue(undefined);
+      await restartedBridge.reconcileLoadedThreads();
+      const enqueue = vi.spyOn((restartedBridge as any).client, 'enqueueConversationMessage').mockResolvedValue({
+        messageId: 'second-dispatch', threadId: 'conversation-1', deduplicated: false,
+      });
+
+      await processOnce(new PostDispatchService(store, restartedBridge as any));
+
+      expect(enqueue).toHaveBeenCalledWith('conversation-1', expect.any(String), expect.objectContaining({ mode: 'queue' }));
+      expect(store.getActiveTurnOrigin(topic.id)).toBeNull();
+      (restartedBridge as any).handleEvent('conversation-1', { event: 'turn_completed', data: {} });
+      await vi.waitFor(() => expect(store.getActiveTurnOrigin(topic.id)).toBeNull());
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('uses the last same-origin contributor consistently as trigger and options source', async () => {
+    const { topic, session, post, author } = fixture();
+    const first = store.createPostDispatch({
+      topicId: topic.id, sessionId: session.id, postId: post.id,
+      mode: 'queue', model: 'model-first', reasoningEffort: 'low',
+    });
+    const secondPost = store.createPost({ topicId: topic.id, authorId: author.id, body: 'second contributor' });
+    const second = store.createPostDispatch({
+      topicId: topic.id, sessionId: session.id, postId: secondPost.id,
+      mode: 'steer', model: 'model-trigger', reasoningEffort: 'high',
+    });
+    store.recordActiveTurnOrigin({
+      topicId: topic.id,
+      dispatchId: first.id,
+      generation: first.generation,
+      origin: JSON.parse(first.origin_json),
+    });
+    const agent = { dispatchPostToAgent: vi.fn(async () => {}) };
+    await processOnce(new PostDispatchService(store, agent as any));
+
+    expect(agent.dispatchPostToAgent).toHaveBeenCalledWith(topic.id, secondPost.id, expect.objectContaining({
+      mode: 'steer', model: 'model-trigger', reasoningEffort: 'high', dispatchId: second.id,
+      contributorPostIds: [post.id, secondPost.id],
+    }));
+    expect(store.getPostDispatch(first.id)?.status).toBe('superseded');
+    expect(store.getPostDispatch(second.id)?.status).toBe('dispatched');
+  });
+
+  it('retains the original durable contributor order when a grouped dispatch retries', async () => {
+    const { topic, session, post, author } = fixture();
+    store.createPostDispatch({ topicId: topic.id, sessionId: session.id, postId: post.id });
+    const triggerPost = store.createPost({ topicId: topic.id, authorId: author.id, body: 'group trigger' });
+    const trigger = store.createPostDispatch({ topicId: topic.id, sessionId: session.id, postId: triggerPost.id });
+    const calls: unknown[][] = [];
+    const agent = {
+      dispatchPostToAgent: vi.fn(async (...args: unknown[]) => {
+        calls.push(args);
+        if (calls.length === 1) throw new Error('temporary transport failure');
+      }),
+    };
+    const service = new PostDispatchService(store, agent as any);
+
+    await processOnce(service);
+    db.prepare('update post_dispatches set next_attempt_at = ? where id = ?').run(new Date(0).toISOString(), trigger.id);
+    await processOnce(service);
+
+    expect(calls).toHaveLength(2);
+    expect(calls.map((call) => (call[2] as { contributorPostIds: string[] }).contributorPostIds)).toEqual([
+      [post.id, triggerPost.id],
+      [post.id, triggerPost.id],
+    ]);
+    expect(store.getPostDispatch(trigger.id)?.status).toBe('dispatched');
+  });
+
+  it('does not let an earlier steer mode override a later same-origin queue trigger', async () => {
+    const { topic, session, post, author } = fixture();
+    store.setRobotActivity(topic.id, 'idle');
+    store.createPostDispatch({ topicId: topic.id, sessionId: session.id, postId: post.id, mode: 'steer' });
+    const secondPost = store.createPost({ topicId: topic.id, authorId: author.id, body: 'queue trigger' });
+    store.createPostDispatch({ topicId: topic.id, sessionId: session.id, postId: secondPost.id, mode: 'queue' });
+    const agent = { dispatchPostToAgent: vi.fn(async () => {}) };
+    await processOnce(new PostDispatchService(store, agent as any));
+    expect(agent.dispatchPostToAgent).toHaveBeenCalledWith(
+      topic.id, secondPost.id, expect.objectContaining({ mode: 'queue' })
+    );
+  });
 
   it('dispatches a compaction recovery checkpoint before newer queued surface work', async () => {
     const { topic, session, author } = fixture();
@@ -172,10 +349,15 @@ describe('durable post dispatch recovery fence', () => {
   it('interrupt generation advancement cancels pending work and clears robot state', () => {
     const { topic, session, post } = fixture();
     const dispatch = store.createPostDispatch({ topicId: topic.id, sessionId: session.id, postId: post.id });
+    store.recordActiveTurnOrigin({
+      topicId: topic.id, dispatchId: dispatch.id, generation: dispatch.generation,
+      origin: JSON.parse(dispatch.origin_json),
+    });
 
     expect(store.advanceTopicDispatchGeneration(topic.id)).toMatchObject({ generation: 1, cancelled: 1 });
 
     expect(store.getPostDispatch(dispatch.id)?.status).toBe('superseded');
+    expect(store.getActiveTurnOrigin(topic.id)).toBeNull();
     expect(store.getRobotState(topic.id)?.activity).toBe('idle');
     expect(store.listDuePostDispatches(10)).toEqual([]);
   });
@@ -261,7 +443,7 @@ describe('durable post dispatch recovery fence', () => {
       const bridge = new EchsBridge(store, { emit: vi.fn(), subscribe: vi.fn() } as any, {
         model: 'model', workDir: cwd, echs: { baseUrl: 'http://agentd.invalid' },
       });
-      vi.spyOn((bridge as any).client, 'getConversation').mockResolvedValue({ conversation_id: 'conversation-1', activity: 'idle' });
+      vi.spyOn((bridge as any).client, 'getConversation').mockResolvedValue({ conversation_id: 'conversation-1', activity: 'active' });
       vi.spyOn((bridge as any).client, 'enqueueConversationMessage').mockResolvedValue({
         messageId: post.id,
         threadId: 'conversation-1',
@@ -270,9 +452,11 @@ describe('durable post dispatch recovery fence', () => {
       vi.spyOn(bridge as any, 'ensureSubscribed').mockResolvedValue(undefined);
       vi.spyOn(bridge as any, 'emitState').mockImplementation(() => {});
 
-      await bridge.dispatchPostToAgent(topic.id, post.id, { dispatchId: post.id, generation: 0 });
+      const origin = store.resolveUtteranceOrigin(post.id);
+      await bridge.dispatchPostToAgent(topic.id, post.id, { dispatchId: post.id, generation: 0, origin });
 
       expect(store.getRobotState(topic.id)?.activity).toBe('idle');
+      expect(store.getActiveTurnOrigin(topic.id)).toBeNull();
       expect(store.getSession(session.id)?.last_dispatched_post_id).toBe(post.id);
       expect((bridge as any).activeTurnThreads.size).toBe(0);
     } finally {

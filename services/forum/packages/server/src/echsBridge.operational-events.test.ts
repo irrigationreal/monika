@@ -104,7 +104,6 @@ describe('ECHS operational event ingestion', () => {
       reasoningEffort: null,
       currentTurnId: 'turn-1',
       turnStartedAt: Date.now(),
-      lastAssistantAt: null,
       lastUsage: null,
       totalInputTokens: 0,
       totalOutputTokens: 0,

@@ -67,6 +67,7 @@ export function mapPostRowToDomain(row: PostRow): Post {
     body: row.body,
     sourceMessageId: row.source_message_id,
     silent: Boolean(row.silent),
+    followUp: Boolean(row.follow_up),
     createdAt: row.created_at,
     editedAt: row.edited_at,
     deletedAt: row.deleted_at,

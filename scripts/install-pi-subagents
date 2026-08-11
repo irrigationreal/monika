@@ -49,7 +49,7 @@ readonly pi_args_test_sha256='f8844fe71a7ca7f2337fb42e15e178641f7c0abeca79a1171b
 readonly preflight_test_sha256='9dc214bef34e0fd87611b0cfa88d678fc609bd6fe611073d94294bb2c27378cf'
 readonly scheduled_runs_test_sha256='93e2a1f802616b96d1add13f7ededb19a16e0bfd4890f192185f1db7f4558ec3'
 readonly schemas_test_sha256='862ce9232e80d9984feb0c471da0ddcf340226e014d2735723587f55789bc320'
-readonly patch_sha256='03594026b03d1d7e5e7ffb9b2b18893b6360036f854e7e81f6cbfe3458487929'
+readonly patch_sha256='e954d171158964cad00e7672a67c3908f7b2cb93fcb1f103b2dea7bfd5cae7dc'
 
 if [ "$#" -ne 2 ]; then
   echo "usage: $0 <destination> <patch>" >&2
@@ -135,9 +135,9 @@ git -C "$destination" diff --check
 if [ "${PI_SUBAGENTS_VERIFY_TESTS:-0}" = 1 ]; then
   (cd "$destination" && npm ci --ignore-scripts && \
     node test/support/isolated-test-runner.mjs unit \
-      async-recovery-descriptor.test.ts async-resume.test.ts chain-serializer.test.ts control-channel.test.ts \
-      execution-target.test.ts package-manifest.test.ts pi-args.test.ts preflight.test.ts \
-      scheduled-runs.test.ts schemas.test.ts && \
+      async-recovery-descriptor.test.ts async-resume.test.ts chain-serializer.test.ts control-channel.test.ts result-claim.test.ts subagent-wait.test.ts wait-tool.test.ts \
+      execution-target.test.ts index-child-registration.test.ts notify.test.ts package-manifest.test.ts pi-args.test.ts preflight.test.ts \
+      scheduled-runs.test.ts schemas.test.ts tool-description.test.ts && \
     node test/support/isolated-test-runner.mjs integration \
       async-execution.test.ts fork-context-execution.test.ts result-watcher.test.ts top-level-async.test.ts)
   rm -rf "$destination/node_modules"

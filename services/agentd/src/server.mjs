@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { existsSync, readFileSync, promises as fs } from "node:fs";
 import path from "node:path";
+import { resolveLegacyArtifact } from './artifact-export.mjs';
 import { handlePiEvent } from "./pi-event-bridge.mjs";
 import {
   aggregateAnalytics,
@@ -16,7 +17,6 @@ import {
   ConversationConflictError,
 } from "./compaction-operation.mjs";
 import {
-  appendSubagentCompletionProvenance,
   createProvenanceState,
   discardDispatch,
   extractMessageProvenance,
@@ -109,6 +109,7 @@ const RUNTIME_INSTANCE_FILE =
 process.env.PI_SUBAGENTS_DISABLE_AUTO_DRAIN = "1";
 delete process.env.PI_SUBAGENTS_TRIGGER_RECOVERED_RESULTS;
 process.env.PI_SUBAGENTS_HOST_ACK_RESULTS = "1";
+process.env.PI_SUBAGENTS_DEFAULT_DELIVERY_DISPOSITION = "awaited";
 // Agentd owns forum cancellation. Force every forum-owned leaf, including
 // nested fanout, through the durable async lifecycle; interactive Pi processes
 // do not inherit this agentd-local policy.
@@ -712,25 +713,11 @@ function attachmentBlock(attrs, body) {
 }
 
 async function resolveArtifactForExport(input) {
-  const raw = input?.path ?? input?.file ?? null;
-  if (!raw || typeof raw !== 'string') throw new Error('path is required');
-  const resolved = path.resolve(raw);
-  if (!ARTIFACT_ALLOWED_ROOTS.some((root) => isPathWithin(root, resolved))) throw new Error('artifact path is not allowed');
-  const stat = await fs.stat(resolved);
-  if (!stat.isFile()) throw new Error('artifact path is not a file');
-  if (stat.size <= 0) throw new Error('artifact is empty');
-  if (stat.size > ARTIFACT_EXPORT_MAX_BYTES) throw new Error('artifact exceeds export size limit');
-  const buffer = await fs.readFile(resolved);
-  const filename = String(input?.filename ?? input?.name ?? path.basename(resolved)).replace(/[\r\n"]/g, '');
-  const mimeType = String(input?.mimeType ?? input?.mime ?? guessMimeType(filename));
-  return {
-    path: resolved,
-    filename,
-    mimeType,
-    sizeBytes: stat.size,
-    sha256: sha256Hex(buffer),
-    dataBase64: buffer.toString('base64'),
-  };
+  return resolveLegacyArtifact(input, {
+    allowedRoots: ARTIFACT_ALLOWED_ROOTS,
+    maxBytes: ARTIFACT_EXPORT_MAX_BYTES,
+    guessMimeType,
+  });
 }
 
 async function prepareAttachmentsForPrompt(conv, attachments) {
@@ -1081,29 +1068,6 @@ async function createRuntime(cwd, sessionManager, opts = {}) {
   });
 }
 
-function canonicalAssistantHasVisibleText(conv, piMessageId) {
-  if (!piMessageId) return false;
-  const entry = conv.session.sessionManager
-    .getBranch()
-    .find(
-      (item) =>
-        item.type === "message" &&
-        item.id === piMessageId &&
-        item.message?.role === "assistant",
-    );
-  const content = entry?.message?.content;
-  if (typeof content === "string") return Boolean(content.trim());
-  return (
-    Array.isArray(content) &&
-    content.some(
-      (part) =>
-        part?.type === "text" &&
-        typeof part.text === "string" &&
-        part.text.trim(),
-    )
-  );
-}
-
 async function settleCanonicallyAppliedSubagentResults(conv) {
   const outcomes = await settleCompletedSubagentResults(
     conv.session.sessionManager.getBranch(),
@@ -1111,6 +1075,7 @@ async function settleCanonicallyAppliedSubagentResults(conv) {
       resultsRoot: SUBAGENT_RESULTS_ROOT,
       lifecycleRoot: SUBAGENT_LIFECYCLE_ROOT,
       operatorRoot: SUBAGENT_OPERATOR_ROOT,
+      parentSessionId: conv.piSessionId,
     },
   );
   for (const outcome of outcomes) {
@@ -1122,28 +1087,6 @@ async function settleCanonicallyAppliedSubagentResults(conv) {
   return outcomes;
 }
 
-function applySubagentContinuation(conv) {
-  if (!conv.current || conv.current.sourceKind === "subagent-completion")
-    return;
-  const continuation = conv.subagentLifecycle.continuation();
-  if (!continuation) return;
-  conv.current.sourceKind = "subagent-completion";
-  conv.current.subagentRunId = continuation.runId;
-  conv.current.subagentRunIds = continuation.runIds;
-  conv.current.subagentOrigins = continuation.origins;
-  conv.current.origin = continuation.origin;
-  emit(conv, "subagent_continuation", {
-    source_kind: "subagent-completion",
-    subagent_run_id: continuation.runId,
-    subagent_run_ids: continuation.runIds,
-    subagent_origins: continuation.origins,
-    origin_turn_id: continuation.origin?.turnId ?? null,
-    origin_topic_id: continuation.origin?.topicId ?? null,
-    origin_post_id: continuation.origin?.postId ?? null,
-    thread_id: conv.id,
-  });
-}
-
 async function bindConversation(conv) {
   conv.unsubscribe?.();
   const session = conv.runtime.session;
@@ -1153,32 +1096,16 @@ async function bindConversation(conv) {
   await conv.subagentLifecycle.attach(conv);
   conv.unsubscribe = session.subscribe((event) => {
     conv.subagentLifecycle.handleSessionEvent(event);
-    // Pi emits agent_start before the custom subagent-notify message. Apply
-    // continuation identity as soon as message_start exposes its run IDs.
-    if (event.type === "message_start") applySubagentContinuation(conv);
-    const reconciliation = handleProvenanceEvent(conv, event);
+    const reconciliation = handleProvenanceEvent(conv, event, {
+      consumeCausalMetadata: () => conv.subagentLifecycle.consumeCausalMetadata(),
+    });
     if (reconciliation && conv.current) {
       conv.current.piMessageId = reconciliation.assistantPiMessageId;
+      conv.current.assistantUtterances = reconciliation.assistantUtterances;
       conv.current.userMappings = reconciliation.userMappings;
-      // Keep the package result durable when the completion turn failed or
-      // produced no visible assistant text; restart recovery may then retry it.
-      if (
-        canonicalAssistantHasVisibleText(
-          conv,
-          reconciliation.assistantPiMessageId,
-        )
-      ) {
-        const completionEntryId = appendSubagentCompletionProvenance(
-          conv,
-          reconciliation.assistantPiMessageId,
-          conv.current,
-        );
-        if (completionEntryId)
-          void settleCanonicallyAppliedSubagentResults(conv);
-      }
+      if (reconciliation.assistantUtterances.length) void settleCanonicallyAppliedSubagentResults(conv);
     }
     handlePiEvent(conv, event, emit);
-    if (event.type === "agent_start") applySubagentContinuation(conv);
   });
 }
 
@@ -1294,13 +1221,16 @@ async function openConversation(opts = {}) {
         await closeConversation(conv, 'external-session-advance');
         break;
       }
+      await conv.subagentLifecycle.recoverPendingFollowUps();
       return conv;
     }
 
     const cwd = path.resolve(opts.cwd ?? sessionInfo.cwd ?? DEFAULT_CWD);
     return withRuntimeCreation(async () => {
       const runtime = await createRuntime(cwd, SessionManager.open(sessionInfo.path, undefined, cwd), opts);
-      return conversationFromRuntime(runtime, cwd);
+      const conv = await conversationFromRuntime(runtime, cwd);
+      await conv.subagentLifecycle.recoverPendingFollowUps();
+      return conv;
     });
   });
 }

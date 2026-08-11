@@ -74,6 +74,7 @@ export interface PostRow {
   body: string;
   source_message_id: string | null;
   silent: number;
+  follow_up: number;
   created_at: string;
   edited_at: string | null;
   deleted_at: string | null;
@@ -274,6 +275,16 @@ export interface RobotStateRow {
   last_error_turn_id?: string | null;
 }
 
+export interface ActiveTurnOriginRow {
+  topic_id: string;
+  dispatch_id: string;
+  generation: number;
+  origin_key: string;
+  origin_json: string;
+  accepted_at: string;
+  updated_at: string;
+}
+
 export interface PostDispatchRow {
   id: string;
   topic_id: string;
@@ -283,6 +294,9 @@ export interface PostDispatchRow {
   mode: string;
   generation: number;
   claim_token: string | null;
+  origin_key: string;
+  origin_json: string;
+  contributor_post_ids_json: string;
   model: string | null;
   reasoning_effort: string | null;
   attempt_count: number;
@@ -486,6 +500,45 @@ export interface AttachmentRow {
   storage_path: string;
   sha256: string | null;
   created_at: string;
+}
+
+export interface AssistantProjectionRow {
+  id: string;
+  pi_session_id: string;
+  pi_message_id: string;
+  utterance_id: string;
+  topic_id: string;
+  post_id: string | null;
+  session_message_id: string | null;
+  status: 'pending' | 'linking' | 'projected' | 'failed' | 'needs_manual_review';
+  origin_json: string | null;
+  projection_json: string;
+  completion_payload_json: string | null;
+  completion_state: 0 | 1 | 2;
+  completion_claim_token: string | null;
+  attempt_count: number;
+  claim_token: string | null;
+  next_attempt_at: string | null;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AttachmentHandoffRow {
+  id: string;
+  projection_id: string;
+  ref_entry_id: string;
+  source_kind: 'structured-pending' | 'legacy-marker' | 'legacy-artifact';
+  source_ref_json: string;
+  expected_sha256: string | null;
+  expected_size_bytes: number | null;
+  status: 'pending' | 'linking' | 'linked' | 'failed' | 'needs_manual_review';
+  attempt_count: number;
+  claim_token: string | null;
+  next_attempt_at: string | null;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface MessageDraftRow {

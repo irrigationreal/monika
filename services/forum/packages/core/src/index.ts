@@ -1,4 +1,5 @@
 export * from './domain/ids';
+export * from './domain/utterances';
 export * from './domain/entities';
 export * from './domain/events';
 export * from './domain/surfaces';

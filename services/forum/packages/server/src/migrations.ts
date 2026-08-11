@@ -1519,6 +1519,156 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 42,
+    name: 'utterance-origins-and-durable-assistant-projection',
+    up: (db) => {
+      if (!hasColumn(db, 'post_dispatches', 'origin_key')) {
+        db.prepare("alter table post_dispatches add column origin_key text not null default ''").run();
+      }
+      if (!hasColumn(db, 'post_dispatches', 'origin_json')) {
+        db.prepare("alter table post_dispatches add column origin_json text not null default '{}'").run();
+      }
+      if (!hasColumn(db, 'post_dispatches', 'contributor_post_ids_json')) {
+        db.prepare("alter table post_dispatches add column contributor_post_ids_json text not null default '[]'").run();
+      }
+      if (!hasColumn(db, 'posts', 'follow_up')) {
+        db.prepare('alter table posts add column follow_up integer not null default 0').run();
+      }
+      db.exec(`
+        update post_dispatches
+          set origin_key = 'legacy:' || post_id,
+              origin_json = json_object(
+                'utteranceId', post_id, 'originKind', 'forum', 'channelKind', 'legacy',
+                'topicId', topic_id, 'postId', post_id, 'surfaceId', null,
+                'externalEventId', null, 'scope', null, 'scopeKind', null
+              ),
+              contributor_post_ids_json = json_array(post_id)
+          where origin_key = '';
+
+        create index if not exists idx_post_dispatches_origin_group
+          on post_dispatches(topic_id, generation, status, origin_key, created_at);
+
+        create table assistant_projections (
+          id text primary key,
+          pi_session_id text not null,
+          pi_message_id text not null,
+          utterance_id text not null,
+          topic_id text not null,
+          post_id text,
+          session_message_id text,
+          status text not null check (status in ('pending', 'linking', 'projected', 'failed', 'needs_manual_review')),
+          origin_json text,
+          projection_json text not null,
+          completion_payload_json text,
+          completion_state integer not null default 0 check (completion_state in (0, 1, 2)),
+          completion_claim_token text,
+          attempt_count integer not null default 0,
+          claim_token text,
+          next_attempt_at text,
+          error_message text,
+          created_at text not null,
+          updated_at text not null,
+          unique(pi_session_id, pi_message_id),
+          foreign key (topic_id) references topics(id),
+          foreign key (post_id) references posts(id),
+          foreign key (session_message_id) references session_messages(id)
+        );
+        create index idx_assistant_projections_due on assistant_projections(status, next_attempt_at, created_at);
+
+        create table attachment_handoffs (
+          id text primary key,
+          projection_id text not null,
+          ref_entry_id text not null,
+          source_kind text not null check (source_kind in ('structured-pending', 'legacy-marker', 'legacy-artifact')),
+          source_ref_json text not null,
+          expected_sha256 text,
+          expected_size_bytes integer,
+          status text not null check (status in ('pending', 'linking', 'linked', 'failed', 'needs_manual_review')),
+          attempt_count integer not null default 0,
+          claim_token text,
+          next_attempt_at text,
+          error_message text,
+          created_at text not null,
+          updated_at text not null,
+          unique(projection_id, ref_entry_id),
+          foreign key (projection_id) references assistant_projections(id) on delete cascade
+        );
+        create index idx_attachment_handoffs_due on attachment_handoffs(status, next_attempt_at, created_at);
+      `);
+    },
+  },
+  {
+    version: 43,
+    name: 'active-turn-origins-and-pending-attachment-reservations',
+    up: (db) => {
+      db.exec(`
+        create table active_turn_origins (
+          topic_id text primary key,
+          dispatch_id text not null,
+          generation integer not null,
+          origin_key text not null,
+          origin_json text not null,
+          accepted_at text not null,
+          updated_at text not null,
+          foreign key (topic_id) references topics(id) on delete cascade
+        );
+
+        create table pending_attachment_reservations (
+          pending_attachment_id text primary key,
+          topic_id text not null,
+          projection_id text not null,
+          handoff_id text not null,
+          created_at text not null,
+          updated_at text not null,
+          foreign key (topic_id) references topics(id) on delete cascade,
+          foreign key (projection_id) references assistant_projections(id) on delete cascade
+        );
+        create index idx_pending_attachment_reservations_projection
+          on pending_attachment_reservations(projection_id);
+
+        insert or ignore into pending_attachment_reservations
+          (pending_attachment_id, topic_id, projection_id, handoff_id, created_at, updated_at)
+        select
+          coalesce(
+            json_extract(h.source_ref_json, '$.pendingAttachmentId'),
+            json_extract(h.source_ref_json, '$.pending_attachment_id'),
+            json_extract(h.source_ref_json, '$.id')
+          ), p.topic_id, h.projection_id, h.id, h.created_at, h.updated_at
+        from attachment_handoffs h
+        join assistant_projections p on p.id = h.projection_id
+        where h.status = 'linked'
+          and coalesce(
+            json_extract(h.source_ref_json, '$.pendingAttachmentId'),
+            json_extract(h.source_ref_json, '$.pending_attachment_id'),
+            json_extract(h.source_ref_json, '$.id')
+          ) is not null
+        order by h.created_at asc, h.rowid asc;
+
+        update attachment_handoffs
+          set status = 'needs_manual_review', claim_token = null, next_attempt_at = null,
+              error_message = 'Pending attachment is already reserved by another assistant projection.'
+        where status = 'linked'
+          and exists (
+            select 1 from pending_attachment_reservations r
+            where r.pending_attachment_id = coalesce(
+              json_extract(attachment_handoffs.source_ref_json, '$.pendingAttachmentId'),
+              json_extract(attachment_handoffs.source_ref_json, '$.pending_attachment_id'),
+              json_extract(attachment_handoffs.source_ref_json, '$.id')
+            )
+              and r.projection_id <> attachment_handoffs.projection_id
+          );
+
+        update assistant_projections
+          set status = 'needs_manual_review',
+              error_message = 'Pending attachment is already reserved by another assistant projection.'
+        where exists (
+          select 1 from attachment_handoffs h
+          where h.projection_id = assistant_projections.id and h.status = 'needs_manual_review'
+        );
+      `);
+    },
+  },
 ];
 
 export const SCHEMA_VERSION: number = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;

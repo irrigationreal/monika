@@ -54,6 +54,7 @@ export type PostRow = {
   body: string;
   source_message_id: string | null;
   silent: number;
+  follow_up: number;
   created_at: string;
   edited_at: string | null;
   deleted_at: string | null;
@@ -68,6 +69,7 @@ export interface SerializedPost {
   body: string;
   sourceMessageId: string | null;
   silent: boolean;
+  followUp: boolean;
   createdAt: string;
   editedAt: string | null;
   deletedAt: string | null;
@@ -83,6 +85,7 @@ export function serializePost(row: PostRow): SerializedPost {
     body: row.body,
     sourceMessageId: row.source_message_id,
     silent: Boolean(row.silent),
+    followUp: Boolean(row.follow_up),
     createdAt: row.created_at,
     editedAt: row.edited_at,
     deletedAt: row.deleted_at,

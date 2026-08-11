@@ -18,19 +18,20 @@ The `/topics/:topicId/state` route redacts unauthenticated responses to a minima
 
 ### Pi agent loop event flow
 
-A single forum reply triggers a Pi agent loop that may span multiple LLM turns:
+A forum dispatch triggers a Pi agent loop that may span multiple LLM turns and
+persist multiple channel-neutral outward utterances:
 
 ```
 Turn 1: thinking → text → tool_call(s)
   ↓ tools execute
-Turn 2: thinking → text → tool_call(s)
+Turn 2: outward assistant item A → tool_call(s)
   ↓ tools execute
-Turn N: thinking → text (final) → assistant_message
+Turn N: outward assistant item B → Pi agent_settled → wire turn_completed
 ```
 
 Each turn is one LLM call. Within a turn, the model produces thinking tokens,
-then visible text tokens, then tool-use blocks. Tools execute after the full
-response, then the next turn begins with tool results.
+visible text tokens, and tool-use blocks. An outward item is published only after
+its canonical Pi message exists. It is not an aggregate of the loop's text.
 
 **Important timing note:** For operations like "write a large file," the model
 generates the file content during the **thinking phase** (which can take 10-30
@@ -52,13 +53,15 @@ Key events emitted to the browser SSE stream:
 | `assistant_delta`   | Pi text_delta → agentd turn_delta → echsBridge | Incremental visible assistant text                                              |
 | `tool_started`      | echsBridge item_started handler                | Per-tool notification when a tool run is created                                |
 | `assistant_reset`   | echsBridge.dispatchUserMessage()               | Start of new response (reason: `new_turn`) or interrupt (reason: `interrupted`) |
-| `assistant_message` | echsBridge turn_completed handler              | Response done; final text committed as a post                                   |
+| `assistant_message` | canonical item projection completion           | One persisted outward utterance and its handoffs became a forum post            |
 
-agentd does not translate Pi's `agent_end` directly into `turn_completed`. An agent
-run may still retry, compact and retry, or process a queued continuation after that
-event. agentd stages final text and usage at `agent_end`, then emits exactly one
-`turn_completed` at Pi's `agent_settled` boundary. This prevents the forum from
-committing a post and becoming idle while Pi still intends to continue.
+Agentd does not translate Pi's `agent_end` into a synthetic response. An agent run
+may retry, compact and retry, emit several persisted outward items, or emit none.
+Each canonical item is forwarded separately. Pi's internal `agent_settled` marks
+the idle boundary and agentd maps it to wire `turn_completed`. The forum's shared
+live/sync projection service applies the same outbound tamper, persona, parent/follow-up,
+and attachment-handoff semantics before `assistant_message`, so a sync race cannot
+publish raw content while live publishes transformed content.
 
 ### Live trace: append-only committed segments
 
@@ -86,10 +89,11 @@ been committed yet.
    buffers → current `reasoningDraft` committed as a reasoning segment → current
    `assistantDraft` committed as a text segment → tool segment pushed → both
    drafts cleared (fresh start for next inter-tool gap).
-3. `assistant_message` fires → any remaining tail text is flushed, then the
-   live trace is cleared (response complete, post takes over). The completion
-   reload opts out of trace reconstruction so stale idle state cannot resurrect
-   the just-finished plan or tool runs.
+3. Each `assistant_message` fires only after its canonical post/handoffs finalize.
+   Any remaining tail text is flushed and the projected post takes over. The idle
+   boundary separately clears activity; multiple canonical items can arrive before
+   that boundary. Explicit subagent `follow_up` items carry their own parent and
+   badge without relabelling an earlier ordinary item.
 
 **Rendering (`liveTurnItems` computed in `TopicView.vue`):**
 
