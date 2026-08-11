@@ -156,17 +156,64 @@ Implemented in `services/forum`:
   identifiers are returned only by the existing admin-authorized session and
   inspector endpoints.
 
-### Provenance-aware Pi reconciliation
+### Canonical utterances, provenance, and reconciliation
 
 Forum-created, Pi-imported, and hybrid sessions use one reconciliation engine.
 Topic tags are taxonomy, not permanent writer ownership: a session can move
-between forum and Pi CLI while retaining one canonical JSONL history.
+between forum, Pi CLI, and an external adapter while retaining one canonical
+JSONL history. An utterance is channel-neutral and is identified by its persisted
+Pi message ID. One run may persist zero, one, or multiple ordered outward
+assistant utterances before the single idle boundary.
 
-Agentd appends versioned `monika.message.provenance` custom entries for forum
-dispatches and emits the terminal canonical Pi message ID. The live bridge uses
-that ID to link its post directly; `[FORUM TURN]` envelopes and normalized
-body/time matching remain legacy fallbacks. Custom provenance does not enter the
-model context.
+Agentd appends `monika.message.provenance` beside canonical messages. Version 1
+preserves the forum topic/post identity for older clients. Version 2 also carries
+the durable ordered contributor utterance IDs and normalized execution origins.
+The live bridge links by canonical IDs; `[FORUM TURN]` envelopes and normalized
+body/time matching are legacy-only fallbacks. Provenance custom entries do not
+enter model context.
+
+Inbound durable dispatches group only consecutive posts with the same normalized
+origin (channel, surface, and scope). The last post supplies model/mode options,
+while the complete ordered contributor set is retained in provenance across a
+lost-response retry. Different origins never leak into one catch-up envelope.
+The forum also persists the normalized origin of the currently active causal turn.
+Only an exact origin-key match may use Pi steering; Discord, Matrix, and web work
+from any other origin is enqueued as a later follow-up turn. The active origin is
+retained across accepted-dispatch retry/restart and is cleared only when canonical
+settlement, interruption, or idle reconciliation proves that turn ended.
+Discord and Matrix adapters can only offer best-effort behavior at their external
+API boundary; their forum post, external dedupe reference, and local dispatch are
+transactional, but remote acknowledgement or outbound publication is not
+canonical settlement.
+
+Pi's internal `agent_settled` event means the runtime reached the idle boundary;
+it is not a request to aggregate text or publish an unpersisted raw completion.
+Agentd emits each persisted outward item individually, then maps settlement to the
+wire `turn_completed` event, which can follow zero outward items. The forum marks
+activity idle only after this wire boundary, while live text remains an in-progress
+trace rather than a post.
+
+Live SSE and sync call the same deterministic assistant-projection service. The
+service applies outbound tamper and default-persona semantics, strips compatibility
+markers, normalizes parent/follow-up metadata, and claims the canonical
+`(pi_session_id, pi_message_id)` once. `assistant_projections` and
+`attachment_handoffs` stage attachment custody before a post is publicly visible.
+A durable pending-attachment reservation gives each staged source to exactly one
+assistant projection before its handoff can become linked; a competing projection
+is retained as `needs_manual_review` with a conflict anomaly. Projection SQLite
+`rowid` is the canonical arrival order within a Pi session/topic: a later projection
+cannot create its visible post or deliver its completion callback while an earlier
+projection is pending, linking, or retryably failed. Recovery drains ready posts and
+callbacks in that same order. Terminal `needs_manual_review` projections are a
+documented projection gap/anomaly and do not deadlock later canonical items.
+Reservations survive handoff lease recovery and finalization crash windows and are
+removed with their topic. Stale leases, finalization crash windows, and pending forum
+notification delivery resume on startup without one conflicted projection aborting
+other recovery. Live-first and sync-first races therefore converge on the same
+body, metadata, parent, follow-up badge, attachments, and handoff state. A delayed
+result stays at its chronological position in the topic; its “Background follow-up
+to #N” link points back to the numbered origin post rather than moving or nesting
+the result beside that earlier post.
 
 Session export includes the current leaf and active root-to-leaf IDs. The forum
 indexes immutable topology in `pi_entry_index`, records heads in
@@ -175,12 +222,13 @@ Posts that later leave the active branch are preserved and recorded in
 `pi_projection_divergences`, leaving room for future branch browsing without
 deleting forum history.
 
-Unmarked active-branch Pi CLI user and assistant messages are projected after a
-60-second settlement window once the forum robot is idle. Content heuristics are
-not used: terse real input is still conversation. Structural entries, compaction
-summaries, tool results, custom state, and forum-origin intermediate tool-use
-assistant entries are indexed but not emitted as separate posts. New external
-continuations bump the topic once; high-confidence legacy repairs are silent.
+External Pi CLI user and assistant messages have no automatic raw-completion
+shortcut. They project only after the settlement window and an idle robot prove
+the active branch stable. Content heuristics are not used: terse real input is
+still conversation. Structural entries, compaction summaries, tool results,
+custom state, and non-outward tool-use assistant entries are indexed but not
+emitted as separate posts. New external continuations bump the topic once;
+high-confidence legacy repairs are silent.
 
 Posts already linked to canonical Pi are excluded from later catch-up envelopes,
 preventing imported CLI input from being sent back into the same session. Admin
@@ -233,9 +281,11 @@ Pi later recovered through retry or compact-and-retry. A terminal event classifi
 a compatibility fallback for legacy events without structured classification.
 
 Admins can choose **Compact** beside **Handoff** while a topic is idle. The forum
-atomically records a pending compaction operation with a client-owned idempotency key
-and the latest forum-projected canonical Pi leaf, returns `202 Accepted` without first
-waiting on agentd, and lets a forum-owned worker cross that network boundary. The
+atomically records a pending compaction request with a client-owned idempotency key
+and the latest forum-projected canonical Pi leaf, then returns `202 Accepted` without
+waiting on agentd. Agentd remains the authority for the idle gate, expected-leaf
+claim, Pi operation, and canonical settlement; the forum only retries and projects
+the durable request across the network boundary. The
 confirmation modal only remains open until that durable
 acceptance; afterward an in-topic status states that the browser may leave. New
 web posts, handoffs, robot/Director continuations, topic status/deletion, and
@@ -276,7 +326,8 @@ remain governed by the global default, which stays disabled.
 When enabled, Pi owns threshold detection and overflow recovery. Threshold compaction
 summarizes older context near the model limit. On the first context-overflow failure,
 Pi compacts and retries the original request inside the same forum response; agentd
-still commits only at `agent_settled`. Automatic compactions create idempotent
+still commits only when it observes Pi's internal `agent_settled`. Automatic
+compactions create idempotent
 maintenance operational events keyed by the canonical Pi compaction entry, refresh
 the context meter, and never create recovery-checkpoint posts. Summary text remains
 only in canonical Pi JSONL and is not copied into forum SQLite. Automatic failures are
@@ -418,33 +469,30 @@ Pi JSONL as a blob store:
   are inserted into the prompt as bounded phpBB-style attachment blocks.
 - Larger or binary attachments are represented as metadata-only attachment blocks.
 
-Outbound agent artifacts currently support a bridge/fallback marker:
+Structured attachment references are the primary outbound contract:
 
-```text
-[artifact path="/workspace/monika/out.zip" filename="out.zip" mime="application/zip"]
-```
+- Pi extension `forum-attachments.ts` registers
+  `forum_upload_attachment(path, filename?, mimeType?)`. It reads the current
+  topic from `.codex-forum/requester.json`, uploads bytes to the authenticated
+  internal pending endpoint, and appends a versioned
+  `monika.forum.attachment.ref` custom entry containing `pendingAttachmentId`,
+  topic, filename, MIME type, size, SHA-256, and expiry. Pi's custom-entry append
+  result supplies the durable entry ID used as `refEntryId`; it is not invented
+  independently by the extension.
+- Agentd binds structured refs to the next canonical outward assistant provenance.
+  Live and sync feed those refs into the same durable handoff service. Structured
+  and legacy references to the same `pendingAttachmentId` are deduplicated before
+  custody, so one storage file cannot create duplicate attachment rows.
+- Forum route `POST /api/agent/topics/:topicId/pending-attachments` requires the
+  shared internal token and stores a hash-bound, expiring pending object. A post
+  becomes visible only after all handoffs validate topic, expiry, size, SHA-256,
+  and source custody and link the resulting attachment rows.
 
-The forum strips artifact markers from persisted robot post bodies, resolves the
-file through agentd when the forum container cannot see the path directly, copies
-it into normal forum upload storage, and creates a regular forum attachment row.
-agentd exposes `POST /v1/artifacts/resolve` for this, constrained by
-`MONIKA_AGENTD_ARTIFACT_ALLOWED_ROOTS` and `MONIKA_AGENTD_ARTIFACT_EXPORT_MAX_BYTES`.
-Pi session sync strips artifact markers from assistant text before reconciliation/import.
-
-Preferred outbound upload flow:
-
-- Pi extension `forum-attachments.ts` registers `forum_upload_attachment(path, filename?, mimeType?)`.
-- The tool reads `.codex-forum/requester.json` for the current topic id, uploads
-  the local file to the forum internal pending attachment endpoint with the
-  shared `CODEX_FORUM_INTERNAL_API_TOKEN`, and returns the exact standalone
-  `[forum-attachment id="..."]` reference to include in the final response.
-- Forum route `POST /api/agent/topics/:topicId/pending-attachments` requires
-  that shared token via `x-internal-token` (preferred) or `Authorization: Bearer
-...` (compatibility), then stores the file in forum upload storage as a pending
-  attachment with SHA-256 and TTL. If the server token is unset, the route returns
-  a configuration error instead of accepting unauthenticated uploads.
-- Robot post persistence consumes standalone `[forum-attachment id="..."]` lines
-  outside fenced code blocks, links matching pending attachments to the post as
-  normal attachments, and strips the reference line from the rendered body.
-- Legacy `[artifact ...]` markers are also consumed only as standalone lines
-  outside fenced code blocks.
+Standalone `[forum-attachment id="..."]` and `[artifact path="..."]` lines remain
+legacy compatibility inputs outside fenced code blocks; they are never the primary
+identity. The latter may call agentd `POST /v1/artifacts/resolve`, which is bounded
+by allowed roots and maximum bytes. Agentd opens the final file with `O_NOFOLLOW`,
+validates the opened descriptor's inode and canonical containment, and reads from
+that descriptor so symlink and pathname-swap races fail closed. The deterministic
+projection path removes compatibility markers from the visible body in both live
+and sync recovery.

@@ -8,6 +8,7 @@ node_modules/
 /compose.yaml
 /runner-runtime/
 /.codex-forum/
+/.pi-subagents/
 
 # Local forum taxonomy/runtime configuration. Commit docs/examples/*.json instead.
 /runtime/forum/taxonomy*.json

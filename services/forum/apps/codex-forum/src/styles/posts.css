@@ -2470,3 +2470,19 @@
   justify-content: space-between;
   gap: 12px;
 }
+
+.vb-follow-up-origin {
+  display: inline-block;
+  margin: 6px 10px 0;
+  padding: 2px 7px;
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-decoration: none;
+}
+
+.vb-follow-up-origin:hover {
+  color: var(--text-primary);
+  border-color: var(--text-muted);
+}

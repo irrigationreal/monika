@@ -1,4 +1,5 @@
 import { DiscordAdapter, type DiscordSurfaceEvent, type DiscordPostEventPayload, type DiscordTopicEventPayload } from '@irrigationreal/codex-forum-adapters';
+import { originMatchesSurface } from '@irrigationreal/codex-forum-core';
 import type { ForumStore } from '../store';
 import type { StreamBusInterface } from '../streamBus';
 import type { AgentBridge } from '../agentBridge';
@@ -304,24 +305,26 @@ export class DiscordBridge {
         }
       }
 
-      // Create topic in forum
-      const { topic, post } = this.store.createTopic({
-        forumId,
-        title: payload.title ?? 'Untitled Thread',
-        body: payload.body ?? `Thread created from Discord: ${payload.title ?? 'Untitled'}`,
-        authorId: identity.id
-      });
-
-      // Create external ref for thread -> topic mapping
-      this.store.createExternalRef({
-        surfaceId: event.surfaceId,
-        surfaceKind: 'discord',
-        externalId: threadId,
-        kind: 'topic',
-        scope: channelId,
-        scopeKind: 'channel',
-        mappedForumId: forumId,
-        mappedTopicId: topic.id
+      // Publish the topic mapping and optional robot dispatch as one durable unit.
+      // A retried thread event can therefore never observe a mapped first post
+      // whose user message/dispatch was lost in a crash window.
+      const { topic } = this.store.createExternalTopicWithDispatch({
+        topic: {
+          forumId,
+          title: payload.title ?? 'Untitled Thread',
+          body: payload.body ?? `Thread created from Discord: ${payload.title ?? 'Untitled'}`,
+          authorId: identity.id,
+        },
+        externalRef: {
+          surfaceId: event.surfaceId,
+          surfaceKind: 'discord',
+          externalId: threadId,
+          kind: 'topic',
+          scope: channelId,
+          scopeKind: 'channel',
+          mappedForumId: forumId,
+        },
+        dispatch: Boolean(this.codex && payload.body),
       });
 
       console.log(`[DiscordBridge] Created topic ${topic.id} from Discord thread ${threadId}`);
@@ -329,12 +332,6 @@ export class DiscordBridge {
       // Subscribe to topic events for sending robot replies back to Discord
       this.subscribeToTopic(topic.id, threadId);
 
-      // Trigger robot response if available and there's initial content
-      if (this.codex && payload.body) {
-        const session = this.store.ensureSession({ topicId: topic.id });
-        this.store.createSessionMessage(session.id, 'user', payload.body, 'public');
-        await this.codex.sendUserMessage(topic.id, payload.body, post.id);
-      }
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
       console.error('[DiscordBridge] Failed to handle thread create:', err.message);
@@ -351,7 +348,12 @@ export class DiscordBridge {
 
     const unsubscribe = this.bus.subscribe(topicId, (event) => {
       if (event.type === 'assistant_message' && event.data) {
-        const text = (event.data as { text?: string }).text;
+        const data = event.data as { text?: string; origin?: { channelKind?: string; surfaceId?: string | null; scope?: string | null } | null };
+        const origin = data.origin;
+        if (!this.adapter || !originMatchesSurface(origin, {
+          channelKind: 'discord', surfaceId: this.adapter.surfaceId, scope: threadId,
+        })) return;
+        const text = data.text;
         if (text) {
           this.sendRobotReplyToDiscord(threadId, text).catch((err) => {
             console.error('[DiscordBridge] Failed to send robot reply:', err.message);

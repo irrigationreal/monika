@@ -285,6 +285,7 @@ const piSessionSync = MONIKA_PI_SYNC_ENABLED
       agentdBaseUrl: ECHS_BASE_URL,
       apiToken: ECHS_API_TOKEN,
       intervalMs: MONIKA_PI_SYNC_INTERVAL_MS,
+      assistantProjections: codex.assistantProjectionService,
     })
   : null;
 piSessionSync?.start();

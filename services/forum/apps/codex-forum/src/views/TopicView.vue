@@ -2597,6 +2597,11 @@ onUnmounted(() => {
             <span v-if="post.silent" class="vb-post-silent-pill">[Silent]</span>
           </div>
         </div>
+        <a
+          v-if="state.isRobotPost(post) && post.followUp && post.parentPostId && postNumberForPostId(post.parentPostId)"
+          class="vb-follow-up-origin"
+          :href="`#${postNumberForPostId(post.parentPostId)}`"
+        >Background follow-up to #{{ postNumberForPostId(post.parentPostId) }}</a>
         <div
           class="vb-post-body"
           :class="{ 'vb-post-body--multipost': isRobotOrSystemPost(post) && hasMultipostSegments(post.body) }"

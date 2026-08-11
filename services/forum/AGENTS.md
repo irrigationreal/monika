@@ -98,16 +98,22 @@ Do not add new tests unless explicitly instructed, unless the change is large or
 ## Pi session reconciliation
 
 - Forum-created, imported, and hybrid topics all project one canonical Pi JSONL session. Topic tags are taxonomy, not permanent writer ownership.
-- Agentd-authored `monika.message.provenance` custom entries and canonical Pi message IDs are the primary forum-turn identity. Text matching is a legacy fallback.
+- Agentd-authored `monika.message.provenance` custom entries and canonical Pi message IDs are primary. V1 is legacy forum identity; v2 carries ordered contributors and normalized origins. Text matching is a legacy fallback.
+- Canonical utterances are channel-neutral. Persist every outward Pi message separately and in order; Pi's internal `agent_settled` maps to wire `turn_completed` as an idle boundary, not an aggregate/raw-completion publication signal.
+- Group only consecutive durable dispatches with the same normalized origin, and preserve the original contributor order across retry. Never leak one external/forum origin into another origin's envelope.
+- Live and sync must use the same deterministic projection/handoff service so body, metadata, parent, follow-up state, attachment custody, and completion delivery converge in either race order.
 - Sync projects visible messages from the active Pi branch only. Preserve posts that later leave that branch and record divergence; never delete projected history automatically.
-- Real active-branch Pi CLI user and assistant messages belong in the topic after settlement. Do not classify content by how meaningful it looks.
+- Real active-branch Pi CLI user and assistant messages belong in the topic only after settlement and idle gating. Never publish raw completion text or classify content by how meaningful it looks.
 - Exclude posts already present in canonical Pi from later catch-up envelopes or the forum will feed imported CLI messages back into the same session.
 - A `pi_message_links` row with `post_id = null` is unresolved state, not a terminal dedupe marker. Rescans must revisit it.
 
 ## Robot dashboard and nested work
 
-The Robot Dashboard is an admin projection of parent forum jobs plus agentd-owned
-subagent workload. Disposable children must not become robot identities, topics,
+The Robot Dashboard is an admin projection of parent forum requests plus agentd-owned
+subagent workload. Agentd owns `awaited`/`follow_up`/`silent` disposition, exact
+claim versus canonical settlement, and scoped nested custody; the forum only
+projects those facts. Explicit `follow_up` posts retain their origin parent and UI
+badge, while passive recovery never wakes a model. Disposable children must not become robot identities, topics,
 or forum sessions. Fetch execution state through agentd's internal API; never read
 `/data/pi-subagents` from the forum container. Treat `uncertain` and an unavailable
 workload endpoint as operationally visible/fail-closed states. Present deployment-
@@ -242,10 +248,12 @@ boundary is essential before modifying trace rendering.
    `current_plan_id === null`; completion, interruption, startup cleanup, and
    queued-turn paths must not preserve a previous turn's plan as live state.
 
-11. **Completion suppresses reconstruction.** `assistant_message` is authoritative:
-   once the final post is committed, the live trace must disappear. Completion
-   reloads, initial idle loads, and queued/waiting states without live plan/text
-   must not reconstruct committed segments from stale plan/tool state.
+11. **Canonical-item completion is not turn idle.** Each `assistant_message` is
+   authoritative for one persisted outward item, and one agent settlement may emit
+   several. Queue/coalesce post reloads without dropping an arrival during an
+   in-flight reload. Clear the completed item's live trace, but do not force robot
+   activity idle; wait for the subsequent server `state` emitted at the wire
+   `turn_completed` boundary. Completion reloads must not reconstruct stale trace.
 
 12. **`parseReasoningSteps` only splits at line starts.** Inline bold like
    `- **Gold** as currency` is NOT a step boundary. Only `**...**` at the start

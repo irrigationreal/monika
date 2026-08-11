@@ -34,8 +34,9 @@ tests/forum/e2e.sh
 See `tests/forum/README.md` for the split between Vitest, mocked Playwright E2E,
 and opt-in live backend canaries. Forum unit coverage verifies that dedicated
 subagent child paths are omitted from both normal sync and direct import paths,
-and that live and historical async completion continuations project once beneath
-their recorded origin without a fake user post.
+and that channel-neutral canonical utterances project individually; live-first and
+sync-first races converge on identical transformed body, metadata, parent, follow-up,
+and attachment handoff state without a fake user post.
 
 ## Agentd tests
 
@@ -54,14 +55,15 @@ runtime-instance roots; tests must never inherit the live `/data/pi-subagents`
 root. The subagent lifecycle tests use temporary files and injected process
 inspection—no Docker timing, sleeps, model calls, or live state. They cover
 passive restart recovery with zero recovered Pi messages/transcript writes,
-structurally validated canonical completion acknowledgement, audited manual
-delivery resolution, durable origin and pre-spawn launch capture,
-event-independent convergence of stale loaded leases, strict process-terminal
-proof, container-epoch legacy migration, same-runtime PID/start-identity survival
-and death, fail-closed traversal, audited quarantine, grouped completion
-attribution, canonical-session Stop Robot cancellation for loaded/unloaded parents,
-scoped top-level/nested fixed-point discovery, idempotent operation recovery,
-symlink-safe control markers, preserved effects uncertainty, explicit scheduled-run
+structurally validated canonical settlement after exact claim, explicit
+`awaited`/`follow_up`/`silent` delivery, audited manual delivery resolution,
+durable origin and pre-spawn launch capture, event-independent convergence of
+stale loaded leases, strict process-terminal proof, container-epoch legacy
+migration, same-runtime PID/start-identity survival and death, fail-closed
+traversal, audited quarantine, grouped item-adjacent follow-up attribution,
+canonical-session Stop Robot cancellation for loaded/unloaded parents, scoped
+nested custody and top-level/nested fixed-point discovery, idempotent operation
+recovery, symlink-safe control records, preserved effects uncertainty, explicit scheduled-run
 non-support, runtime-root isolation, scoped nested result paths, delivery
 acknowledgements, stale-inventory rejection, and conservative
 14-day compaction that protects resumable/unproven history. Analytics coverage
@@ -156,8 +158,10 @@ request, streaming response parsing, and agentd turn lifecycle without contactin
 an external provider. This catches invalid strict tool schemas during image CI;
 real-provider canaries remain separate because they require secrets, network
 availability, and quota. Provider-independent agentd lifecycle coverage also
-lives in `services/agentd/test/`, including the distinction between Pi's
-`agent_end` and authoritative `agent_settled` completion. Retention fixtures match
+lives in `services/agentd/test/`, including separate ordered outward messages, the distinction between Pi's
+`agent_end` and idle-only `agent_settled`, v1/v2 origin provenance, durable grouped
+retry contributors, mixed structured/legacy attachment dedupe, and no-follow
+legacy artifact descriptor/TOCTOU checks. Retention fixtures match
 real package status files by omitting redundant `asyncDir`; tests verify that the
 scanner supplies the scoped containing path while conflicting explicit paths fail
 closed.

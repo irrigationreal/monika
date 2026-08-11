@@ -1,5 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
 
+import type { UtteranceOrigin } from '@irrigationreal/codex-forum-core';
+
 export interface EchsClientOptions {
   baseUrl: string;
   apiToken?: string | null;
@@ -366,7 +368,14 @@ export class EchsClient {
       generation?: number;
       configure?: Record<string, unknown>;
       attachments?: unknown[];
-      provenance?: { origin: 'forum'; topicId: string; postId: string };
+      provenance?: {
+        origin: 'forum';
+        topicId: string;
+        postId: string;
+        version?: 2;
+        utteranceIds?: string[];
+        executionOrigins?: UtteranceOrigin[];
+      };
     }
   ): Promise<{ messageId: string; threadId?: string | null; compacted?: boolean; deduplicated?: boolean }> {
     const payload: Record<string, unknown> = {

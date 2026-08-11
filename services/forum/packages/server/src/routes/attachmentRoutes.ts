@@ -453,8 +453,8 @@ export function registerAttachmentRoutes({
     return { ok: true };
   });
 
-  // Agent pending attachment upload. These blobs are stored in forum upload storage
-  // before the final robot post, then linked by [forum-attachment id=...] references.
+  // Agent pending attachment upload. The extension appends a canonical
+  // monika.forum.attachment.ref custom entry; `reference` remains legacy-only.
   app.post('/agent/topics/:topicId/pending-attachments', { bodyLimit: MAX_REQUEST_BODY_BYTES }, async (request) => {
     requireInternalAgent(request);
     const { topicId } = request.params as { topicId: string };

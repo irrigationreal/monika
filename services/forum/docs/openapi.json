@@ -4243,6 +4243,9 @@
                           "silent": {
                             "type": "boolean"
                           },
+                          "followUp": {
+                            "type": "boolean"
+                          },
                           "createdAt": {
                             "type": "string"
                           },
@@ -4408,6 +4411,9 @@
                     "silent": {
                       "type": "boolean"
                     },
+                    "followUp": {
+                      "type": "boolean"
+                    },
                     "createdAt": {
                       "type": "string"
                     },
@@ -4532,6 +4538,9 @@
                         "silent": {
                           "type": "boolean"
                         },
+                        "followUp": {
+                          "type": "boolean"
+                        },
                         "createdAt": {
                           "type": "string"
                         },
@@ -4652,6 +4661,9 @@
                     "silent": {
                       "type": "boolean"
                     },
+                    "followUp": {
+                      "type": "boolean"
+                    },
                     "createdAt": {
                       "type": "string"
                     },
@@ -4743,6 +4755,9 @@
                       "nullable": true
                     },
                     "silent": {
+                      "type": "boolean"
+                    },
+                    "followUp": {
                       "type": "boolean"
                     },
                     "createdAt": {
@@ -5261,6 +5276,9 @@
                             "nullable": true
                           },
                           "silent": {
+                            "type": "boolean"
+                          },
+                          "followUp": {
                             "type": "boolean"
                           },
                           "createdAt": {
@@ -6114,6 +6132,7 @@
           }
         ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
@@ -6390,6 +6409,7 @@
           }
         ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
@@ -6618,6 +6638,7 @@
           }
         ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {

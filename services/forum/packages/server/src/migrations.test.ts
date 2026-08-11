@@ -40,6 +40,74 @@ describe('schema migrations', () => {
     });
   });
 
+  it('adds durable utterance origin and projection state', () => {
+    runMigrations(db);
+    const dispatchColumns = db.prepare('pragma table_info(post_dispatches)').all() as Array<{ name: string }>;
+    expect(dispatchColumns.map((column) => column.name)).toEqual(expect.arrayContaining([
+      'origin_key', 'origin_json', 'contributor_post_ids_json',
+    ]));
+    expect(db.prepare("select name from sqlite_master where type = 'table' and name = 'assistant_projections'").get()).toBeTruthy();
+    expect(db.prepare("select name from sqlite_master where type = 'table' and name = 'attachment_handoffs'").get()).toBeTruthy();
+    expect(db.prepare("select name from sqlite_master where type = 'table' and name = 'active_turn_origins'").get()).toBeTruthy();
+    expect(db.prepare("select name from sqlite_master where type = 'table' and name = 'pending_attachment_reservations'").get()).toBeTruthy();
+  });
+
+  it('preserves and assigns custody to an existing linked v42 handoff on upgrade', () => {
+    runMigrations(db, { targetVersion: 42 });
+    const legacyStore = new ForumStore(db);
+    const forum = legacyStore.createForum('Forum');
+    const human = legacyStore.createIdentity('Human', 'human');
+    const robot = legacyStore.createIdentity('Monika', 'robot');
+    const { topic } = legacyStore.createTopic({ forumId: forum.id, title: 'Topic', body: 'Initial', authorId: human.id });
+    const session = legacyStore.ensureSession({ topicId: topic.id });
+    const pending = legacyStore.createPendingAttachment({
+      topicId: topic.id, filename: 'existing.txt', mimeType: 'text/plain', sizeBytes: 4,
+      storagePath: '/tmp/existing.txt', sha256: 'a'.repeat(64), expiresAt: '2099-01-01T00:00:00.000Z',
+    });
+    const projection = legacyStore.beginAssistantProjection({
+      piSessionId: 'pi-session', piMessageId: 'pi-existing-handoff', utteranceId: 'pi-existing-handoff',
+      topicId: topic.id, sessionId: session.id, body: 'Existing', authorId: robot.id,
+      handoffs: [{
+        refEntryId: 'existing-ref', sourceKind: 'structured-pending',
+        sourceRef: { pendingAttachmentId: pending.id },
+      }],
+    });
+    db.prepare("update attachment_handoffs set status = 'linked' where projection_id = ?").run(projection.id);
+
+    runMigrations(db);
+
+    expect(db.prepare('select status from attachment_handoffs where projection_id = ?').get(projection.id))
+      .toEqual({ status: 'linked' });
+    expect(db.prepare('select projection_id from pending_attachment_reservations where pending_attachment_id = ?').get(pending.id))
+      .toEqual({ projection_id: projection.id });
+  });
+
+  it('adopts an existing v41 canonical assistant link when the live event replays after upgrade', () => {
+    runMigrations(db, { targetVersion: 41 });
+    const legacyStore = new ForumStore(db);
+    const forum = legacyStore.createForum('Forum');
+    const human = legacyStore.createIdentity('Human', 'human');
+    const robot = legacyStore.createIdentity('Monika', 'robot');
+    const { topic } = legacyStore.createTopic({ forumId: forum.id, title: 'Topic', body: 'Initial', authorId: human.id });
+    const session = legacyStore.ensureSession({ topicId: topic.id });
+    const message = legacyStore.createSessionMessage(session.id, 'assistant', 'Canonical answer', 'public');
+    const post = legacyStore.createPost({ topicId: topic.id, authorId: robot.id, body: 'Canonical answer', sourceMessageId: message.id });
+    legacyStore.createPiMessageLink({
+      piSessionId: 'pi-session', piMessageId: 'pi-assistant', postId: post.id,
+      sessionMessageId: message.id, role: 'assistant', metadata: { imported: true },
+    });
+
+    runMigrations(db);
+    const store = new ForumStore(db);
+    const projection = store.beginAssistantProjection({
+      piSessionId: 'pi-session', piMessageId: 'pi-assistant', utteranceId: 'pi-assistant',
+      topicId: topic.id, sessionId: session.id, body: 'Canonical answer', authorId: robot.id,
+    });
+    expect(projection.post_id).toBe(post.id);
+    expect(db.prepare("select count(*) as count from posts where body = 'Canonical answer'").get()).toEqual({ count: 1 });
+    expect(store.getPiMessageLink('pi-session', 'pi-assistant')?.post_id).toBe(post.id);
+  });
+
   it('records applied schema versions', () => {
     runMigrations(db);
     const rows = db.prepare('select version from schema_migrations order by version asc').all() as Array<{

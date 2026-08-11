@@ -154,6 +154,7 @@ export function mapPostToDto(post: PostReadModel): PostDto {
     body: post.body,
     ...(post.sourceMessageId !== undefined && { sourceMessageId: post.sourceMessageId }),
     silent: post.silent,
+    followUp: post.followUp,
     createdAt: post.createdAt,
     ...(post.editedAt !== undefined && { editedAt: post.editedAt }),
     ...(post.deletedAt !== undefined && { deletedAt: post.deletedAt }),

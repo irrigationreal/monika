@@ -222,6 +222,31 @@ test('completion notification is attributed only when its natural continuation s
   });
 });
 
+test('awaited claims bind forward while awaited and silent completions never become notifications', async () => {
+  const conv = conversation();
+  const lifecycle = new SubagentLifecycle(); const bus = eventBus(); lifecycle.extension().factory({ events: bus }); await lifecycle.attach(conv);
+  bus.emit('subagent:async-started', start('awaited-1', { deliveryDisposition: 'awaited', runKey: 'top:awaited-1' }));
+  bus.emit('subagent:async-complete', { runId: 'awaited-1', runKey: 'top:awaited-1', deliveryDisposition: 'awaited', success: true });
+  bus.emit('subagent:result-claimed', {
+    version: 1, kind: 'pi-subagents.result-claim', runId: 'awaited-1', runKey: 'top:awaited-1',
+    sessionId: 'parent-session', deliveryDisposition: 'awaited', resultSha256: 'a'.repeat(64), resultSizeBytes: 12,
+    claimedAt: 1, claimEntryId: 'claim-entry-1', claimPath: '/private/path-must-not-propagate',
+  });
+  lifecycle.handleSessionEvent({ type: 'message_start', message: { role: 'custom', customType: 'subagent-notify', details: { runIds: ['awaited-1'] } } });
+  assert.equal(lifecycle.continuation(), null);
+  const causal = lifecycle.consumeCausalMetadata();
+  assert.equal(causal.continuation, null);
+  assert.equal(causal.resultClaims[0].claimEntryId, 'claim-entry-1');
+  assert.equal(causal.resultClaims[0].claim.claimPath, undefined);
+  assert.equal(lifecycle.findRun('awaited-1', 'top:awaited-1').deliveryState, 'claimed-awaiting-synthesis');
+
+  bus.emit('subagent:async-started', start('silent-1', { deliveryDisposition: 'silent' }));
+  bus.emit('subagent:async-complete', { runId: 'silent-1', deliveryDisposition: 'silent', success: true });
+  lifecycle.handleSessionEvent({ type: 'message_start', message: { role: 'custom', customType: 'subagent-notify', details: { runIds: ['silent-1'] } } });
+  assert.equal(lifecycle.continuation(), null);
+  assert.equal(conv.subagents.runs.get('silent-1').deliveryState, 'retained');
+});
+
 test('grouped package notifications retain every run origin on one canonical continuation', async () => {
   const conv = conversation(); const lifecycle = new SubagentLifecycle(); const bus = eventBus(); lifecycle.extension().factory({ events: bus }); await lifecycle.attach(conv);
   for (const [id, postId] of [['run-1', 'post-1'], ['run-2', 'post-2']]) {
@@ -262,6 +287,60 @@ test('restart reconciliation restores canonical mapping and trusts only matching
   });
   await new SubagentLifecycle().attach(second);
   assert.equal(backgroundStatus(second).active_count, 1, 'malformed evidence retains the run lease');
+});
+
+test('restart restores an unmatched canonical awaited claim for exactly one outward assistant', async () => {
+  const conv = conversation(); const asyncDir = '/tmp/async/awaited-restart';
+  conv.session.sessionManager.appendCustomEntry(SUBAGENT_RUN_CUSTOM_TYPE, {
+    version: 2, runId: 'awaited-restart', runKey: 'top:awaited-restart', sessionId: 'parent-session', artifactSessionId: 'parent-session',
+    asyncDir, deliveryDisposition: 'awaited', deliveryState: 'awaiting-claim', claimState: 'unclaimed', origin: {}, startedAt: 1,
+  });
+  const claim = { version: 1, kind: 'pi-subagents.result-claim', runId: 'awaited-restart', runKey: 'top:awaited-restart', sessionId: 'parent-session', deliveryDisposition: 'awaited', resultSha256: 'b'.repeat(64), resultSizeBytes: 44, claimedAt: 2 };
+  const claimEntryId = conv.session.sessionManager.appendCustomEntry('pi-subagents.result-claim', claim);
+  const lifecycle = new SubagentLifecycle(); await lifecycle.attach(conv);
+  lifecycle.handleSessionEvent({ type: 'agent_settled' });
+  const restored = lifecycle.consumeCausalMetadata();
+  assert.deepEqual(restored.resultClaims, [{ claim, claimEntryId }]);
+  assert.deepEqual(lifecycle.consumeCausalMetadata().resultClaims, [], 'one lifecycle cannot attach the claim twice');
+
+  const restarted = new SubagentLifecycle(); await restarted.attach(conv);
+  assert.deepEqual(restarted.consumeCausalMetadata().resultClaims, [{ claim, claimEntryId }], 'a crash before synthesis safely restores the unmatched claim');
+  conv.session.sessionManager.appendCustomEntry('monika.message.provenance', {
+    version: 2, messageKind: 'assistant_outward', piMessageId: 'assistant-1', resultClaims: [{ ...claim, claimEntryId }],
+  });
+  const afterSynthesis = new SubagentLifecycle(); await afterSynthesis.attach(conv);
+  assert.deepEqual(afterSynthesis.consumeCausalMetadata().resultClaims, [], 'canonical synthesis consumes recovery custody exactly once');
+});
+
+test('foreign-session result claims are rejected before causal attribution', async () => {
+  const conv = conversation(); const lifecycle = new SubagentLifecycle(); const bus = eventBus(); lifecycle.extension().factory({ events: bus }); await lifecycle.attach(conv);
+  bus.emit('subagent:async-started', start('foreign-claim', { deliveryDisposition: 'awaited', runKey: 'top:foreign-claim' }));
+  const accepted = lifecycle.onClaimed({ version: 1, kind: 'pi-subagents.result-claim', runId: 'foreign-claim', runKey: 'top:foreign-claim', sessionId: 'other-session', deliveryDisposition: 'awaited', resultSha256: 'c'.repeat(64), resultSizeBytes: 1, claimedAt: 1, claimEntryId: 'foreign-entry' });
+  assert.equal(accepted, false); assert.deepEqual(lifecycle.consumeCausalMetadata().resultClaims, []);
+});
+
+test('pending explicit follow_up recovery stays passive until open reconciliation and emits once', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agentd-follow-up-recover-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const resultsRoot = path.join(root, 'async-subagent-results'); const asyncDir = path.join(root, 'async-subagent-runs', 'follow-restart');
+  await mkdir(resultsRoot, { recursive: true }); await mkdir(asyncDir, { recursive: true });
+  const identity = { lifecycleArtifactVersion: 5, runId: 'follow-restart', sessionId: 'parent-session', asyncDir, deliveryDisposition: 'follow_up' };
+  await writeFile(path.join(asyncDir, 'launch.json'), JSON.stringify({ ...identity, state: 'spawned', runnerProcessInstanceId: 'runner-follow-restart', registeredAt: 1 }));
+  await writeFile(path.join(asyncDir, 'status.json'), JSON.stringify({ ...identity, state: 'complete', execution_state: 'terminal', outcome_state: 'succeeded', effects_state: 'none', delivery_state: 'pending', processTerminal: observedProof('follow-restart'), lastUpdate: 2 }));
+  await writeFile(path.join(resultsRoot, 'follow-restart.json'), JSON.stringify({ ...identity, success: true, summary: 'recovered exact result' }));
+  const conv = conversation(); conv.session.sessionManager.appendCustomEntry(SUBAGENT_RUN_CUSTOM_TYPE, {
+    version: 2, runId: 'follow-restart', runKey: 'top:follow-restart', sessionId: 'parent-session', artifactSessionId: 'parent-session', asyncDir,
+    deliveryDisposition: 'follow_up', deliveryState: 'pending', claimState: 'unclaimed', origin: { postId: 'post-1' }, startedAt: 1,
+  });
+  const lifecycle = new SubagentLifecycle({ lifecycleRoot: root, resultsRoot }); const bus = eventBus(); lifecycle.extension().factory({ events: bus });
+  await lifecycle.attach(conv);
+  assert.deepEqual([...conv.subagents.runs.values()].map((run) => ({ active: run.active, deliveryState: run.deliveryState, deliveryDisposition: run.deliveryDisposition, runKey: run.runKey })), [
+    { active: false, deliveryState: 'unproven', deliveryDisposition: 'follow_up', runKey: 'top:follow-restart' },
+  ]);
+  assert.equal(bus.emitted.some((event) => event.name === 'subagent:async-complete'), false, 'attach/startup remains passive');
+  assert.deepEqual(await lifecycle.recoverPendingFollowUps(), { recovered: 1 });
+  assert.deepEqual(await lifecycle.recoverPendingFollowUps(), { recovered: 0 });
+  const recovered = bus.emitted.filter((event) => event.name === 'subagent:async-complete');
+  assert.equal(recovered.length, 1); assert.equal(recovered[0].data.runKey, 'top:follow-restart'); assert.equal(recovered[0].data.triggerTurn, true);
 });
 
 test('explicit stop uses the public V1 RPC and never mutates lifecycle files', async () => {

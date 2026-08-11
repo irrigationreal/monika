@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 
@@ -36,11 +37,11 @@ export default function forumAttachmentsExtension(pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "forum_upload_attachment",
 		label: "Upload Forum Attachment",
-		description: "Upload a local file into the current forum topic as a pending attachment and return the reference line to include in the final reply.",
+		description: "Upload a local file into the current forum topic and durably bind its structured reference to the next outward assistant message.",
 		promptSnippet: "Upload local files to the current forum topic before returning them as attachments.",
 		promptGuidelines: [
 			"Use forum_upload_attachment when you need to return a generated file to the forum user as an attachment.",
-			"After forum_upload_attachment succeeds, include the returned [forum-attachment id=\"...\"] reference as a standalone line in the final answer so the forum can attach it to the post.",
+			"A successful upload is recorded as structured session data. Do not repeat an attachment marker or URL in the final answer.",
 		],
 		parameters: Type.Object({
 			path: Type.String({ description: "Local path to the file to upload. A leading @ is ignored." }),
@@ -88,18 +89,25 @@ export default function forumAttachmentsExtension(pi: ExtensionAPI) {
 				reference: string;
 				expiresAt: string;
 			};
+			const sha256 = result.sha256 ?? createHash("sha256").update(bytes).digest("hex");
+			const attachmentRef = {
+				version: 1,
+				pendingAttachmentId: result.id,
+				topicId: requester.topicId,
+				filename: result.filename,
+				mimeType: result.mimeType,
+				sizeBytes: result.sizeBytes,
+				sha256,
+				expiresAt: result.expiresAt,
+			};
+			const refEntryId = ctx.sessionManager.appendCustomEntry("monika.forum.attachment.ref", attachmentRef);
 
 			return {
 				content: [{
 					type: "text",
-					text: [
-						`Uploaded ${result.filename} (${result.sizeBytes} bytes) to the current forum topic.`,
-						result.sha256 ? `SHA-256: ${result.sha256}` : null,
-						"Include this standalone line in your final forum reply to attach it:",
-						result.reference,
-					].filter(Boolean).join("\n"),
+					text: `Uploaded ${result.filename} (${result.sizeBytes} bytes). The structured attachment reference is recorded; do not include a marker in the final answer.`,
 				}],
-				details: result,
+				details: { ...attachmentRef, refEntryId, legacyReference: result.reference },
 			};
 		},
 	});

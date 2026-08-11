@@ -1,5 +1,5 @@
 diff --git a/package.json b/package.json
-index 665db5bc269b97a787910f0556df5735ea6c72cb..6b2b8fb7d66dc868a4f52f725b821ce8341dad48 100644
+index 665db5b..6b2b8fb 100644
 --- a/package.json
 +++ b/package.json
 @@ -44,9 +44,9 @@
@@ -16,7 +16,7 @@ index 665db5bc269b97a787910f0556df5735ea6c72cb..6b2b8fb7d66dc868a4f52f725b821ce8
    },
    "pi": {
 diff --git a/src/agents/agents.ts b/src/agents/agents.ts
-index 16019bd02861d8fae6f8259034d57ea333f1a9e4..ef55e451287d74efcc693d76ce635282759e2a97 100644
+index 16019bd..ef55e45 100644
 --- a/src/agents/agents.ts
 +++ b/src/agents/agents.ts
 @@ -20,6 +20,7 @@ export { buildRuntimeName, frontmatterNameForConfig, parsePackageName } from "./
@@ -36,7 +36,7 @@ index 16019bd02861d8fae6f8259034d57ea333f1a9e4..ef55e451287d74efcc693d76ce635282
  	phase?: string;
  	label?: string;
 diff --git a/src/agents/chain-serializer.ts b/src/agents/chain-serializer.ts
-index 5b8b8e8697d50d100e88f6cd4c4ca97f46cece3d..29a4281662d7aa76564abc6992a8ba3797878b3f 100644
+index 5b8b8e8..29a4281 100644
 --- a/src/agents/chain-serializer.ts
 +++ b/src/agents/chain-serializer.ts
 @@ -4,6 +4,7 @@ import { parseFrontmatter } from "./frontmatter.ts";
@@ -98,21 +98,23 @@ index 5b8b8e8697d50d100e88f6cd4c4ca97f46cece3d..29a4281662d7aa76564abc6992a8ba37
  		else if (step.output) lines.push(`output: ${step.output}`);
  		if (step.phase) lines.push(`phase: ${step.phase}`);
 diff --git a/src/api/preflight.ts b/src/api/preflight.ts
-index fe485856b3a0663c48d3adcbda12f478e52ea37d..a3b9fe906457688fcc79610411a0d192deecf300 100644
+index fe48585..09fffeb 100644
 --- a/src/api/preflight.ts
 +++ b/src/api/preflight.ts
-@@ -21,8 +21,9 @@ import { agentDefinitionDigest, AGENT_DEFINITION_PROJECTION_VERSION, launchBindi
+@@ -21,8 +21,11 @@ import { agentDefinitionDigest, AGENT_DEFINITION_PROJECTION_VERSION, launchBindi
  import { ASYNC_DIR, RESULTS_DIR, TEMP_ROOT_DIR } from "../shared/types.ts";
  import { processTerminalCandidatePath, processTerminalPath } from "../runs/background/process-terminal.ts";
  import { nestedResultsPath } from "../runs/shared/nested-events.ts";
 +import { resolveExecutionTarget, type ExecutionTarget, type PublicExecutionTarget } from "../runs/shared/execution-target.ts";
++import { resolveDeliveryDisposition } from "../runs/background/top-level-async.ts";
++import type { DeliveryDisposition } from "../shared/types.ts";
  
 -export const SUBAGENT_LAUNCH_CONTRACT_VERSION = 2 as const;
 +export const SUBAGENT_LAUNCH_CONTRACT_VERSION = 3 as const;
  
  export type SubagentLaunchContractReasonCode =
  	| "missing_agent"
-@@ -31,6 +32,7 @@ export type SubagentLaunchContractReasonCode =
+@@ -31,6 +34,7 @@ export type SubagentLaunchContractReasonCode =
  	| "denied_required_tool"
  	| "invalid_artifact_dir"
  	| "invalid_cwd"
@@ -120,27 +122,32 @@ index fe485856b3a0663c48d3adcbda12f478e52ea37d..a3b9fe906457688fcc79610411a0d192
  	| "unsupported_mode";
  
  export interface SubagentLaunchContractDiagnostic {
-@@ -41,6 +43,7 @@ export interface SubagentLaunchContractDiagnostic {
+@@ -41,6 +45,8 @@ export interface SubagentLaunchContractDiagnostic {
  
  export interface SubagentLaunchContractInput {
  	agent: string;
++	deliveryDisposition?: DeliveryDisposition;
 +	executionTarget?: ExecutionTarget;
  	cwd: string;
  	task?: string;
  	agentScope?: AgentScope;
-@@ -136,6 +139,8 @@ export interface SubagentLaunchContract {
+@@ -136,6 +142,9 @@ export interface SubagentLaunchContract {
  	runId: string;
  	agent: SubagentLaunchContractAgent;
  	context: "fresh" | "fork";
++	deliveryDisposition: DeliveryDisposition;
 +	executionTarget: PublicExecutionTarget;
 +	executionTargetDigest?: string;
  	model?: string;
  	modelCandidates: string[];
  	thinking?: string;
-@@ -205,6 +210,14 @@ function candidateList(inputAgent: string, selected: AgentConfig | undefined, cw
+@@ -205,6 +214,17 @@ function candidateList(inputAgent: string, selected: AgentConfig | undefined, cw
  
  export async function resolveSubagentLaunchContract(input: SubagentLaunchContractInput): Promise<SubagentLaunchContractResult> {
  	const diagnostics: SubagentLaunchContractDiagnostic[] = [];
++	let deliveryDisposition: DeliveryDisposition;
++	try { deliveryDisposition = resolveDeliveryDisposition(input.deliveryDisposition); }
++	catch (error) { return { ok: false, code: "unsupported_mode", message: error instanceof Error ? error.message : String(error), diagnostics }; }
 +	let executionTarget;
 +	try {
 +		executionTarget = resolveExecutionTarget(input.executionTarget);
@@ -152,17 +159,21 @@ index fe485856b3a0663c48d3adcbda12f478e52ea37d..a3b9fe906457688fcc79610411a0d192
  	const effectiveCwd = path.resolve(input.cwd);
  	try {
  		if (!fs.statSync(effectiveCwd).isDirectory()) {
-@@ -326,6 +339,8 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
+@@ -326,6 +346,9 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
  			shadowedCandidates,
  		},
  		context: input.context ?? agent.defaultContext ?? "fresh",
++		deliveryDisposition,
 +		executionTarget: executionTarget.public,
 +		...(executionTarget.kind === "ssh" ? { executionTargetDigest: executionTarget.descriptorDigest } : {}),
  		...(model ? { model } : {}),
  		modelCandidates,
  		...(resolveEffectiveThinking(model, effectiveThinkingConfig) ? { thinking: resolveEffectiveThinking(model, effectiveThinkingConfig) } : {}),
-@@ -379,6 +394,8 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
+@@ -377,8 +400,11 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
+ 		},
+ 		diagnostics,
  		launchContractDigest: launchBindingDigest({
++			deliveryDisposition,
  			task: input.task ?? "",
  			definitionDigest,
 +			executionTarget: executionTarget.public,
@@ -170,7 +181,7 @@ index fe485856b3a0663c48d3adcbda12f478e52ea37d..a3b9fe906457688fcc79610411a0d192
  			...(model ? { model } : {}),
  			modelCandidates,
  			...(resolveEffectiveThinking(model, effectiveThinkingConfig) ? { thinking: resolveEffectiveThinking(model, effectiveThinkingConfig) } : {}),
-@@ -388,7 +405,7 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
+@@ -388,7 +414,7 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
  			inheritSkills: agent.inheritSkills,
  			skills: requestedSkills,
  			tools: toolPlan.effectiveToolAllowlist,
@@ -180,7 +191,7 @@ index fe485856b3a0663c48d3adcbda12f478e52ea37d..a3b9fe906457688fcc79610411a0d192
  			...(outputPath ? { outputPath } : {}),
  			outputMode: input.outputMode ?? "inline",
 diff --git a/src/extension/fanout-child.ts b/src/extension/fanout-child.ts
-index 0da9904892541bbcad9fe91b80fed7f5fe928725..83bab4910134a875ddcf3efc70a87a35c89147df 100644
+index 0da9904..83bab49 100644
 --- a/src/extension/fanout-child.ts
 +++ b/src/extension/fanout-child.ts
 @@ -15,6 +15,13 @@ import { loadConfig } from "./config.ts";
@@ -198,7 +209,7 @@ index 0da9904892541bbcad9fe91b80fed7f5fe928725..83bab4910134a875ddcf3efc70a87a35
  		const baseName = path.basename(parentSessionFile, ".jsonl");
  		const sessionsDir = path.dirname(parentSessionFile);
 diff --git a/src/extension/index.ts b/src/extension/index.ts
-index eff8c2dd2a1d2c6d39dd81b4b912309c5c45035f..b97d1d7007b2ca3b91ce514457957de94dd194a6 100644
+index eff8c2d..b97d1d7 100644
 --- a/src/extension/index.ts
 +++ b/src/extension/index.ts
 @@ -84,6 +84,13 @@ export { loadConfig } from "./config.ts";
@@ -251,7 +262,7 @@ index eff8c2dd2a1d2c6d39dd81b4b912309c5c45035f..b97d1d7007b2ca3b91ce514457957de9
  
  	pi.on("session_shutdown", () => {
 diff --git a/src/extension/rpc.ts b/src/extension/rpc.ts
-index 622ecdd528dd97cb89994ed0432b4463617c91d6..59ab93f1bd5832a5fb616d7faef1de90b5030e10 100644
+index 622ecdd..59ab93f 100644
 --- a/src/extension/rpc.ts
 +++ b/src/extension/rpc.ts
 @@ -180,6 +180,7 @@ function pingData(ctx: ExtensionContext | null) {
@@ -263,7 +274,7 @@ index 622ecdd528dd97cb89994ed0432b4463617c91d6..59ab93f1bd5832a5fb616d7faef1de90
  			nonRecoveringSteer: true,
  			interrupt: true,
 diff --git a/src/extension/schemas.ts b/src/extension/schemas.ts
-index 019eaaa55de92f4fe7ad1f692964d4290fca30bb..882ca6e18b91504c834841ce05147fbfa28b8b31 100644
+index 019eaaa..f3f8d7f 100644
 --- a/src/extension/schemas.ts
 +++ b/src/extension/schemas.ts
 @@ -107,9 +107,28 @@ const ToolBudgetOverride = Type.Object({
@@ -329,8 +340,46 @@ index 019eaaa55de92f4fe7ad1f692964d4290fca30bb..882ca6e18b91504c834841ce05147fbf
  	task: Type.Optional(Type.String({ description: "Task (SINGLE mode, optional for self-contained agents)" })),
  	// Management action (when present, tool operates in management mode)
  	action: Type.Optional(Type.String({
+@@ -289,6 +312,7 @@ const SubagentParamsSchema = Type.Object({
+ 		description: "'fresh' or 'fork' to branch from parent session. Explicit context overrides every child in the invocation. If omitted, each requested agent uses its own defaultContext; agents without defaultContext: 'fork' run fresh.",
+ 	})),
+ 	chainDir: Type.Optional(Type.String({ description: "Persistent chain artifact directory; defaults to user-scoped temp storage." })),
++	deliveryDisposition: Type.Optional(Type.String({ enum: ["awaited", "follow_up", "silent"] })),
+ 	async: Type.Optional(Type.Boolean({ description: "Run in background (default: false, or per config)" })),
+ 	timeoutMs: Type.Optional(Type.Integer({ minimum: 1, description: "Timeout for foreground and async/background runs; foreground defaults to 30m absent call/agent. Alias maxRuntimeMs." })),
+ 	maxRuntimeMs: Type.Optional(Type.Integer({ minimum: 1, description: "Alias timeoutMs for foreground and async/background runs; foreground defaults to 30m absent call/agent." })),
+diff --git a/src/extension/tool-description.ts b/src/extension/tool-description.ts
+index 8c974f0..93f91b3 100644
+--- a/src/extension/tool-description.ts
++++ b/src/extension/tool-description.ts
+@@ -9,7 +9,7 @@ const CUSTOM_TOOL_DESCRIPTION_MAX_BYTES = 50 * 1024;
+ export const SUBAGENT_SAFETY_GUIDANCE = `SAFETY-CRITICAL SUBAGENT GUIDANCE:
+ • Use { action: "list" } before execution and only run executable/non-disabled agents or chains.
+ • Keep execution and management separate: omit action for SINGLE/PARALLEL/CHAIN execution; use action only for list/get/models/create/update/delete/status/grant-spawn-budget/interrupt/stop/resume/append-step/doctor.
+-• Async/background runs: launch with async:true only when work can proceed independently. Do not sleep or poll status just to wait. In an interactive session, normally return control and let Pi wake you; do not call subagent_wait merely to wait. Override that default and call subagent_wait when the current request is run-to-completion — for example, the user asked you to report results back before continuing or a skill must finish in one turn. Headless sessions auto-drain current-session work at agent_end; use subagent_wait when this turn must receive results before it ends.
++• Async/background runs: delivery is separate from durable execution. Interactive Pi defaults to follow_up and wakes the parent. Agentd defaults to awaited and disables auto-drain, so omission there is logically awaited: call subagent_wait for the exact internal result before finishing. Use deliveryDisposition:"follow_up" explicitly only when completion should wake the parent, or "silent" to retain output without waking. Only follow_up notifies. Never copy raw child output directly into outward content.
+ • Child-safety boundary: ordinary child subagents are not orchestrators and must not run subagents. Only explicitly configured fanout children may use the child-safe subagent tool, still bounded by depth/session limits.
+ • Writing/review safety: keep one writer for the same cwd/worktree. Use fresh-context read-only reviewers/validators for independent review, then have the parent synthesize and apply fixes as the sole writer unless an isolated worktree was intentionally requested.
+ • Artifacts/status essentials: chain outputs live under {chain_dir}; async runs expose asyncId/asyncDir with status.json, events.jsonl, output logs, and status via { action: "status", id }. Include output paths and residual risks when reporting results.`;
+@@ -23,6 +23,7 @@ EXECUTION (use exactly ONE mode):
+ • PARALLEL: { tasks: [{agent,task,count?,output?,reads?,progress?}, ...], concurrency?: number, worktree?: true } - concurrent execution (worktree: isolate each task in a git worktree)
+ • Optional context: { context: "fresh" | "fork" } (explicit value overrides every child; when omitted, each requested agent uses its own defaultContext, otherwise "fresh"; inspect agent defaults via { action: "list" })
+ • Fork thinking: model strings accept a thinking suffix (provider/model:off|minimal|low|medium|high|xhigh|max). Forking over a parent transcript that carries signed Anthropic thinking blocks forces thinking off only when a child's effective primary or fallback model resolves to the Anthropic provider or anthropic-messages API; unresolved models are treated conservatively. The result notes affected children, including on failures. Use fresh context when an Anthropic child needs thinking.
++• Optional delivery: { deliveryDisposition: "awaited" | "follow_up" | "silent" }; awaited returns exact output only through subagent_wait, follow_up wakes the parent, and silent retains output without waking. Interactive Pi defaults to follow_up; agentd defaults to awaited with no auto-drain.
+ • Optional timeout: { timeoutMs } or { maxRuntimeMs } sets a run-level max runtime for foreground and async/background runs; foreground defaults to 30 minutes only when neither value nor an agent timeout is provided
+ • Acceptance: omit acceptance for reviewer/read-only calls. Evidence levels end at verified. Use acceptance.review.required to require independent review of a writer result. Never request acceptance:"reviewed"; reviewed is achieved only after an independent reviewer result.
+ • If { action: "list" } shows proactive skill subagent suggestions, consider a small fresh-context fanout for broad tasks where one of those skills would materially help
+@@ -93,7 +94,7 @@ MANAGE / CONTROL:
+ • Opt-in schedule actions: schedule, schedule-list, schedule-status, schedule-cancel. Schedule only explicit delayed runs the user asked for.
+ 
+ ASYNC / WAIT:
+-• async:true detaches background work. Do not sleep or poll just to wait. In an interactive session, normally return control to the user and let Pi wake you on completion; do not call subagent_wait merely to wait. Override that default with subagent_wait only for run-to-completion requests (the user asked for results back this turn, or a skill must finish in one turn). Non-interactive runs (pi -p) auto-drain current-session work at agent_end; call subagent_wait when this turn must receive results before it ends. Otherwise continue useful work or respond.
++• async:true is the durable physical shape. deliveryDisposition controls logical delivery: awaited uses subagent_wait and never auto-notifies; follow_up explicitly wakes the parent; silent retains output and never wakes. Interactive Pi defaults to follow_up; agentd defaults to awaited and disables auto-drain, so agentd must wait for exact results before finishing. Raw child output stays in internal tool/custom data.
+ • Status and artifacts live under asyncId/asyncDir with status.json, events.jsonl, output logs, session files, and { action:"status", id:"..." }.
+ 
+ SAFETY:
 diff --git a/src/intercom/native-supervisor-channel.ts b/src/intercom/native-supervisor-channel.ts
-index 4757eeb96b47fadb24db1185ffb800c88268e746..b61fd1f96bb1475c936e86a4631edc75d22bb4bf 100644
+index 4757eeb..b61fd1f 100644
 --- a/src/intercom/native-supervisor-channel.ts
 +++ b/src/intercom/native-supervisor-channel.ts
 @@ -47,6 +47,7 @@ interface SupervisorRequest {
@@ -434,10 +483,23 @@ index 4757eeb96b47fadb24db1185ffb800c88268e746..b61fd1f96bb1475c936e86a4631edc75
  			poll();
  			poller = setInterval(poll, CHANNEL_POLL_MS);
 diff --git a/src/runs/background/async-execution.ts b/src/runs/background/async-execution.ts
-index 34213ec726de4e45ccdbee671fb994135d9b3f92..b38ce23d23de5aefa7308ea8446c88909f81e165 100644
+index 34213ec..0cec2f0 100644
 --- a/src/runs/background/async-execution.ts
 +++ b/src/runs/background/async-execution.ts
-@@ -58,6 +58,7 @@ import type { SessionLeaseRequest } from "../shared/session-lease.ts";
+@@ -34,6 +34,7 @@ import {
+ 	type AgentContract,
+ 	type ArtifactConfig,
+ 	type Details,
++	type DeliveryDisposition,
+ 	type JsonSchemaObject,
+ 	type MaxOutputConfig,
+ 	type NestedRouteInfo,
+@@ -54,10 +55,12 @@ import { nestedResultsPath, nestedSummaryFromAsyncStatus, resolveInheritedNested
+ import { appendTurnBudgetSystemPrompt, initialTurnBudgetState } from "../shared/turn-budget.ts";
+ import { validateToolBudgetConfig } from "../shared/tool-budget.ts";
+ import type { ImportedAsyncRoot } from "./chain-root-attachment.ts";
++import { resolveDeliveryDisposition } from "./top-level-async.ts";
+ import type { SessionLeaseRequest } from "../shared/session-lease.ts";
  import { finalizeProcessTerminal, readProcessTerminal } from "./process-terminal.ts";
  import { SUBAGENT_PROCESS_TERMINAL_EVENT } from "../../shared/types.ts";
  import { decodeSubagentCapabilityCeiling, resolveCurrentSubagentCapabilityCeiling, SUBAGENT_CAPABILITY_CEILING_ENV, type ResolvedSubagentCapabilityCeiling } from "../shared/capability-ceiling.ts";
@@ -445,16 +507,34 @@ index 34213ec726de4e45ccdbee671fb994135d9b3f92..b38ce23d23de5aefa7308ea8446c8890
  import { agentDefinitionDigest, launchBindingDigest } from "../../shared/launch-contract.ts";
  
  const require = createRequire(import.meta.url);
-@@ -167,6 +168,8 @@ interface AsyncChainParams {
+@@ -124,6 +127,7 @@ interface AsyncExecutionContext {
+ }
+ 
+ interface AsyncChainParams {
++	deliveryDisposition?: DeliveryDisposition;
+ 	chain: ChainStep[];
+ 	task?: string;
+ 	/** Raw caller-facing goal used only by the started event. */
+@@ -166,7 +170,10 @@ interface AsyncChainParams {
+ }
  
  interface AsyncSingleParams {
++	deliveryDisposition?: DeliveryDisposition;
  	agent: string;
 +	executionTarget?: ExecutionTarget;
 +	executionTargetDigest?: string;
  	task?: string;
  	/** Raw caller-facing goal used only by the started event. */
  	goal?: string;
-@@ -405,6 +408,41 @@ function terminateRunnerBeforeProceed(pid: number): void {
+@@ -216,6 +223,7 @@ interface AsyncExecutionResult {
+ }
+ 
+ export interface AsyncRunnerStepBuildParams {
++	deliveryDisposition?: DeliveryDisposition;
+ 	chain: ChainStep[];
+ 	task?: string;
+ 	attachRoot?: ImportedAsyncRoot & { agent: string; outputName?: string; label?: string };
+@@ -405,6 +413,41 @@ function terminateRunnerBeforeProceed(pid: number): void {
  	}
  }
  
@@ -467,11 +547,11 @@ index 34213ec726de4e45ccdbee671fb994135d9b3f92..b38ce23d23de5aefa7308ea8446c8890
 +	return undefined;
 +}
 +
-+function persistLaunchIntent(input: { id: string; asyncDir: string; sessionId?: string; mode: string }): string {
++function persistLaunchIntent(input: { id: string; asyncDir: string; sessionId?: string; mode: string; deliveryDisposition: DeliveryDisposition }): string {
 +	const runnerProcessInstanceId = randomUUID();
 +	const runtime = readRuntimeInstance();
 +	writePrivateAtomicJson(path.join(input.asyncDir, "launch.json"), {
-+		lifecycleArtifactVersion: 1, runId: input.id, sessionId: input.sessionId,
++		lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION, runId: input.id, sessionId: input.sessionId, deliveryDisposition: input.deliveryDisposition,
 +		asyncDir: input.asyncDir, mode: input.mode, state: "registered", runnerProcessInstanceId,
 +		runtimeInstanceId: runtime?.id, runtimeCreatedAt: runtime?.createdAt, registeredAt: Date.now(),
 +	});
@@ -496,7 +576,7 @@ index 34213ec726de4e45ccdbee671fb994135d9b3f92..b38ce23d23de5aefa7308ea8446c8890
  function spawnRunner(cfg: object, suffix: string, cwd: string, onProcessTerminal?: (proof: unknown) => void): { pid?: number; error?: string } {
  	if (!jitiCliPath) {
  		return { error: "upstream jiti for TypeScript execution could not be found; ensure package dependencies are installed" };
-@@ -421,8 +459,19 @@ function spawnRunner(cfg: object, suffix: string, cwd: string, onProcessTerminal
+@@ -421,8 +464,19 @@ function spawnRunner(cfg: object, suffix: string, cwd: string, onProcessTerminal
  
  	fs.mkdirSync(TEMP_ROOT_DIR, { recursive: true });
  	const cfgPath = getAsyncConfigPath(suffix);
@@ -504,11 +584,11 @@ index 34213ec726de4e45ccdbee671fb994135d9b3f92..b38ce23d23de5aefa7308ea8446c8890
 +	const configuredInstanceId = (cfg as { runnerProcessInstanceId?: unknown }).runnerProcessInstanceId;
 +	const runnerProcessInstanceId = typeof configuredInstanceId === "string" ? configuredInstanceId : randomUUID();
  	const launchConfig = { ...cfg, runnerProcessInstanceId };
-+	const launchIdentity = launchConfig as { id?: unknown; asyncDir?: unknown; sessionId?: unknown; resultMode?: unknown };
++	const launchIdentity = launchConfig as { id?: unknown; asyncDir?: unknown; sessionId?: unknown; resultMode?: unknown; deliveryDisposition?: unknown };
 +	const runtime = readRuntimeInstance();
 +	if (typeof launchIdentity.id === "string" && typeof launchIdentity.asyncDir === "string") {
 +		writePrivateAtomicJson(path.join(launchIdentity.asyncDir, "launch.json"), {
-+			lifecycleArtifactVersion: 1, runId: launchIdentity.id, sessionId: launchIdentity.sessionId,
++			lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION, runId: launchIdentity.id, sessionId: launchIdentity.sessionId, deliveryDisposition: launchIdentity.deliveryDisposition,
 +			asyncDir: launchIdentity.asyncDir, mode: launchIdentity.resultMode, state: "registered",
 +			runnerProcessInstanceId, runtimeInstanceId: runtime?.id, runtimeCreatedAt: runtime?.createdAt,
 +			registeredAt: Date.now(),
@@ -517,14 +597,14 @@ index 34213ec726de4e45ccdbee671fb994135d9b3f92..b38ce23d23de5aefa7308ea8446c8890
  	fs.writeFileSync(cfgPath, JSON.stringify(launchConfig));
  	const runner = path.join(path.dirname(fileURLToPath(import.meta.url)), "subagent-runner.ts");
  	const nodeCommand = resolveAsyncRunnerNodeCommand();
-@@ -457,6 +506,20 @@ function spawnRunner(cfg: object, suffix: string, cwd: string, onProcessTerminal
+@@ -457,6 +511,20 @@ function spawnRunner(cfg: object, suffix: string, cwd: string, onProcessTerminal
  		});
  		closeFd(stdoutFd);
  		closeFd(stderrFd);
 +		if (typeof launchIdentity.id === "string" && typeof launchIdentity.asyncDir === "string") {
 +			try {
 +				writePrivateAtomicJson(path.join(launchIdentity.asyncDir, "launch.json"), {
-+					lifecycleArtifactVersion: 1, runId: launchIdentity.id, sessionId: launchIdentity.sessionId,
++					lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION, runId: launchIdentity.id, sessionId: launchIdentity.sessionId, deliveryDisposition: launchIdentity.deliveryDisposition,
 +					asyncDir: launchIdentity.asyncDir, mode: launchIdentity.resultMode, state: "spawned",
 +					runnerProcessInstanceId, runtimeInstanceId: runtime?.id, runtimeCreatedAt: runtime?.createdAt,
 +					pid: proc.pid, processStartTicks: linuxProcessStartTicks(proc.pid), registeredAt: Date.now(), updatedAt: Date.now(),
@@ -538,7 +618,7 @@ index 34213ec726de4e45ccdbee671fb994135d9b3f92..b38ce23d23de5aefa7308ea8446c8890
  		proc.on("error", (error) => {
  			console.error(`[pi-subagents] async spawn failed: ${error.message}`);
  		});
-@@ -695,7 +758,9 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
+@@ -695,7 +763,9 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
  		const effectiveThinking = thinkingOverride ?? a.thinking;
  		const model = applyThinkingSuffix(primaryModel, effectiveThinking, thinkingOverride !== undefined);
  		const agentContract = s.agentContract ?? params.agentContract;
@@ -548,7 +628,7 @@ index 34213ec726de4e45ccdbee671fb994135d9b3f92..b38ce23d23de5aefa7308ea8446c8890
  			parentSessionId: ctx.parentSessionId ?? ctx.currentSessionId,
  			...(params.capabilityCeiling ? { capabilityCeiling: params.capabilityCeiling } : {}),
  			agent: s.agent,
-@@ -728,6 +793,8 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
+@@ -728,6 +798,8 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
  			sessionFile,
  			maxSubagentDepth: resolveChildMaxSubagentDepth(maxSubagentDepth, a.maxSubagentDepth),
  			waitToolEnabled: params.waitToolEnabled,
@@ -557,7 +637,7 @@ index 34213ec726de4e45ccdbee671fb994135d9b3f92..b38ce23d23de5aefa7308ea8446c8890
  			effectiveAcceptance: resolveEffectiveAcceptance({
  				explicit: s.acceptance,
  				agentName: s.agent,
-@@ -763,6 +830,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
+@@ -763,6 +835,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
  	try {
  		const builtSteps = chain.map((s, stepIndex) => {
  			if (isParallelStep(s)) {
@@ -565,22 +645,32 @@ index 34213ec726de4e45ccdbee671fb994135d9b3f92..b38ce23d23de5aefa7308ea8446c8890
  				const parallelBehaviors = s.parallel.map((task) => {
  					const agent = agents.find((candidate) => candidate.name === task.agent)!;
  					return suppressProgressForReadOnlyTask(resolveStepBehavior(agent, buildStepOverrides(task), chainSkills), task.task, originalTask);
-@@ -873,6 +941,7 @@ export function executeAsyncChain(
+@@ -873,6 +946,9 @@ export function executeAsyncChain(
  	id: string,
  	params: AsyncChainParams,
  ): AsyncExecutionResult {
++	try { params = { ...params, deliveryDisposition: resolveDeliveryDisposition(params.deliveryDisposition!) }; }
++	catch (error) { return formatAsyncStartError(params.resultMode ?? "chain", error instanceof Error ? error.message : String(error)); }
 +	if (process.env.PI_SUBAGENTS_HOST_DRAINING === "1") return formatAsyncStartError("chain", "Agent host is draining; async launches are temporarily disabled.");
  	const {
  		chain,
  		agents,
-@@ -964,11 +1033,19 @@ export function executeAsyncChain(
+@@ -913,6 +989,7 @@ export function executeAsyncChain(
+ 	}
+ 
+ 	const built = buildAsyncRunnerSteps(id, {
++		deliveryDisposition: params.deliveryDisposition!,
+ 		chain,
+ 		task: params.task,
+ 		attachRoot: params.attachRoot,
+@@ -964,11 +1041,20 @@ export function executeAsyncChain(
  		return [childIntercomTarget(step.agent, childTargetIndex++)];
  	}) : undefined;
  
 +	let runnerProcessInstanceId: string;
 +	try {
-+		runnerProcessInstanceId = persistLaunchIntent({ id, asyncDir, sessionId: ctx.currentSessionId, mode: resultMode });
-+		ctx.pi.events.emit("subagent:async-registering", { id, sessionId: ctx.currentSessionId, mode: resultMode, asyncDir });
++		runnerProcessInstanceId = persistLaunchIntent({ id, asyncDir, sessionId: ctx.currentSessionId, mode: resultMode, deliveryDisposition: params.deliveryDisposition! });
++		ctx.pi.events.emit("subagent:async-registering", { id, sessionId: ctx.currentSessionId, mode: resultMode, asyncDir, deliveryDisposition: params.deliveryDisposition! });
 +	} catch (error) {
 +		return formatAsyncStartError(resultMode, `Failed to persist async launch intent '${id}': ${error instanceof Error ? error.message : String(error)}`);
 +	}
@@ -590,10 +680,11 @@ index 34213ec726de4e45ccdbee671fb994135d9b3f92..b38ce23d23de5aefa7308ea8446c8890
  			{
  				id,
 +				runnerProcessInstanceId,
++				deliveryDisposition: params.deliveryDisposition!,
  				steps,
  				resultPath: inheritedNestedRoute ? nestedResultsPath(inheritedNestedRoute.rootRunId, id) : path.join(RESULTS_DIR, `${id}.json`),
  				cwd: runnerCwd,
-@@ -1011,10 +1088,12 @@ export function executeAsyncChain(
+@@ -1011,10 +1097,12 @@ export function executeAsyncChain(
  		);
  	} catch (error) {
  		const message = error instanceof Error ? error.message : String(error);
@@ -606,10 +697,29 @@ index 34213ec726de4e45ccdbee671fb994135d9b3f92..b38ce23d23de5aefa7308ea8446c8890
  		return formatAsyncStartError(resultMode, `Failed to start async ${resultMode} '${id}': ${spawnResult.error}`);
  	}
  
-@@ -1130,6 +1209,16 @@ export function executeAsyncSingle(
+@@ -1088,6 +1176,7 @@ export function executeAsyncChain(
+ 		}
+ 		ctx.pi.events.emit(SUBAGENT_ASYNC_STARTED_EVENT, {
+ 			lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
++			deliveryDisposition: params.deliveryDisposition!,
+ 			id,
+ 			pid: spawnResult.pid,
+ 			sessionId: ctx.currentSessionId,
+@@ -1119,7 +1208,7 @@ export function executeAsyncChain(
+ 
+ 	return {
+ 		content: [{ type: "text", text: formatAsyncStartedMessage(`Async ${resultMode}: ${chainDesc} [${id}]`, ctx.interactive === true) }],
+-		details: { mode: resultMode, runId: id, results: [], asyncId: id, asyncDir, workflowGraph, ...(capabilityCeiling ? { capabilityCeiling } : {}), ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs, deadlineAt } : {}), ...(params.turnBudget ? { turnBudget: params.turnBudget } : {}), ...(params.toolBudget ? { toolBudget: params.toolBudget } : {}) },
++		details: { mode: resultMode, runId: id, deliveryDisposition: params.deliveryDisposition!, results: [], asyncId: id, asyncDir, workflowGraph, ...(capabilityCeiling ? { capabilityCeiling } : {}), ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs, deadlineAt } : {}), ...(params.turnBudget ? { turnBudget: params.turnBudget } : {}), ...(params.toolBudget ? { toolBudget: params.toolBudget } : {}) },
+ 	};
+ }
+ 
+@@ -1130,6 +1219,18 @@ export function executeAsyncSingle(
  	id: string,
  	params: AsyncSingleParams,
  ): AsyncExecutionResult {
++	try { params = { ...params, deliveryDisposition: resolveDeliveryDisposition(params.deliveryDisposition!) }; }
++	catch (error) { return formatAsyncStartError("single", error instanceof Error ? error.message : String(error)); }
 +	if (process.env.PI_SUBAGENTS_HOST_DRAINING === "1") return formatAsyncStartError("single", "Agent host is draining; async launches are temporarily disabled.");
 +	let executionTarget;
 +	try {
@@ -623,16 +733,18 @@ index 34213ec726de4e45ccdbee671fb994135d9b3f92..b38ce23d23de5aefa7308ea8446c8890
  	const {
  		agent,
  		agentConfig,
-@@ -1234,6 +1323,8 @@ export function executeAsyncSingle(
+@@ -1233,7 +1334,10 @@ export function executeAsyncSingle(
+ 		inheritedCapabilityCeiling: decodeSubagentCapabilityCeiling(process.env[SUBAGENT_CAPABILITY_CEILING_ENV]),
  	});
  	const launchContractDigest = launchBindingDigest({
++		deliveryDisposition: params.deliveryDisposition!,
  		definitionDigest: agentDefinitionDigest(agentConfig),
 +		executionTarget: executionTarget.public,
 +		executionTargetDigest: executionTarget.kind === "ssh" ? executionTarget.descriptorDigest : undefined,
  		task,
  		...(model ? { model } : {}),
  		modelCandidates,
-@@ -1244,7 +1335,7 @@ export function executeAsyncSingle(
+@@ -1244,7 +1348,7 @@ export function executeAsyncSingle(
  		inheritSkills: agentConfig.inheritSkills,
  		skills: resolvedSkills.map((skill) => skill.name),
  		tools: toolPlan.effectiveToolAllowlist,
@@ -641,23 +753,25 @@ index 34213ec726de4e45ccdbee671fb994135d9b3f92..b38ce23d23de5aefa7308ea8446c8890
  		mcpDirectTools: toolPlan.effectiveMcpTools,
  		...(outputPath ? { outputPath } : {}),
  		outputMode,
-@@ -1262,6 +1353,8 @@ export function executeAsyncSingle(
+@@ -1261,7 +1365,10 @@ export function executeAsyncSingle(
+ 	});
  	const recoveryDescriptor: SteeringRecoveryDescriptor = {
  		version: 1,
++		deliveryDisposition: params.deliveryDisposition!,
  		launchContractDigest,
 +		executionTarget: executionTarget.public,
 +		...(executionTarget.kind === "ssh" ? { executionTargetDigest: executionTarget.descriptorDigest } : {}),
  		sourceRunId: id,
  		...(params.agentContract ? { agentContract: params.agentContract } : {}),
  		agent,
-@@ -1304,13 +1397,22 @@ export function executeAsyncSingle(
+@@ -1304,13 +1411,23 @@ export function executeAsyncSingle(
  	} catch (error) {
  		return formatAsyncStartError("single", `Failed to persist async recovery descriptor for '${id}': ${error instanceof Error ? error.message : String(error)}`);
  	}
 +	let runnerProcessInstanceId: string;
 +	try {
-+		runnerProcessInstanceId = persistLaunchIntent({ id, asyncDir, sessionId: ctx.currentSessionId, mode: "single" });
-+		ctx.pi.events.emit("subagent:async-registering", { id, sessionId: ctx.currentSessionId, mode: "single", asyncDir });
++		runnerProcessInstanceId = persistLaunchIntent({ id, asyncDir, sessionId: ctx.currentSessionId, mode: "single", deliveryDisposition: params.deliveryDisposition! });
++		ctx.pi.events.emit("subagent:async-registering", { id, sessionId: ctx.currentSessionId, mode: "single", asyncDir, deliveryDisposition: params.deliveryDisposition! });
 +	} catch (error) {
 +		return formatAsyncStartError("single", `Failed to persist async launch intent '${id}': ${error instanceof Error ? error.message : String(error)}`);
 +	}
@@ -667,13 +781,14 @@ index 34213ec726de4e45ccdbee671fb994135d9b3f92..b38ce23d23de5aefa7308ea8446c8890
  			{
  				id,
 +				runnerProcessInstanceId,
++				deliveryDisposition: params.deliveryDisposition!,
  				steps: [
  					{
 +						executionTarget,
  						parentSessionId: ctx.parentSessionId ?? ctx.currentSessionId,
  						...(capabilityCeiling ? { capabilityCeiling } : {}),
  						agent,
-@@ -1385,10 +1487,12 @@ export function executeAsyncSingle(
+@@ -1385,10 +1502,12 @@ export function executeAsyncSingle(
  		);
  	} catch (error) {
  		const message = error instanceof Error ? error.message : String(error);
@@ -686,8 +801,24 @@ index 34213ec726de4e45ccdbee671fb994135d9b3f92..b38ce23d23de5aefa7308ea8446c8890
  		return formatAsyncStartError("single", `Failed to start async run '${id}': ${spawnResult.error}`);
  	}
  
+@@ -1431,6 +1550,7 @@ export function executeAsyncSingle(
+ 		}
+ 		ctx.pi.events.emit(SUBAGENT_ASYNC_STARTED_EVENT, {
+ 			lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
++			deliveryDisposition: params.deliveryDisposition!,
+ 			id,
+ 			pid: spawnResult.pid,
+ 			sessionId: ctx.currentSessionId,
+@@ -1450,6 +1570,6 @@ export function executeAsyncSingle(
+ 
+ 	return {
+ 		content: [{ type: "text", text: formatAsyncStartedMessage(`Async: ${agent} [${id}]`, ctx.interactive === true) }],
+-		details: { mode: "single", runId: id, results: [], asyncId: id, asyncDir, launchContractDigest, ...(capabilityCeiling ? { capabilityCeiling } : {}), ...(params.context ? { context: params.context } : {}), ...(timeoutMs !== undefined ? { timeoutMs, deadlineAt } : {}), ...(params.turnBudget ? { turnBudget: params.turnBudget } : {}), ...(params.toolBudget ? { toolBudget: params.toolBudget } : {}) },
++		details: { mode: "single", runId: id, deliveryDisposition: params.deliveryDisposition!, results: [], asyncId: id, asyncDir, launchContractDigest, ...(capabilityCeiling ? { capabilityCeiling } : {}), ...(params.context ? { context: params.context } : {}), ...(timeoutMs !== undefined ? { timeoutMs, deadlineAt } : {}), ...(params.turnBudget ? { turnBudget: params.turnBudget } : {}), ...(params.toolBudget ? { toolBudget: params.toolBudget } : {}) },
+ 	};
+ }
 diff --git a/src/runs/background/async-resume.ts b/src/runs/background/async-resume.ts
-index 595d013a0151508f1c91135575c09d1e63fb98e9..80273d1059d34d7ca4311ff058cf45cd2b0f399c 100644
+index 595d013..80273d1 100644
 --- a/src/runs/background/async-resume.ts
 +++ b/src/runs/background/async-resume.ts
 @@ -1,11 +1,12 @@
@@ -854,7 +985,7 @@ index 595d013a0151508f1c91135575c09d1e63fb98e9..80273d1059d34d7ca4311ff058cf45cd
  		...(recoveryDescriptor ? { recoveryDescriptor } : {}),
  	};
 diff --git a/src/runs/background/async-status.ts b/src/runs/background/async-status.ts
-index 4e259cfbbd112c8c7eb9ed1b04d829fc7c823bc1..310f687bebabc5cbf3797ed686c1c02eff232151 100644
+index 4e259cf..d133698 100644
 --- a/src/runs/background/async-status.ts
 +++ b/src/runs/background/async-status.ts
 @@ -11,10 +11,13 @@ import { flatToLogicalStepIndex, normalizeParallelGroups } from "./parallel-grou
@@ -871,7 +1002,7 @@ index 4e259cfbbd112c8c7eb9ed1b04d829fc7c823bc1..310f687bebabc5cbf3797ed686c1c02e
  	context?: ContextMode;
  	label?: string;
  	phase?: string;
-@@ -63,6 +66,10 @@ export interface AsyncRunSummary {
+@@ -63,6 +66,11 @@ export interface AsyncRunSummary {
  	asyncDir: string;
  	sessionId?: string;
  	state: "queued" | "running" | "complete" | "failed" | "paused" | "stopped";
@@ -879,10 +1010,11 @@ index 4e259cfbbd112c8c7eb9ed1b04d829fc7c823bc1..310f687bebabc5cbf3797ed686c1c02e
 +	outcomeState?: AsyncStatus["outcome_state"];
 +	effectsState?: AsyncStatus["effects_state"];
 +	deliveryState?: AsyncStatus["delivery_state"];
++	deliveryDisposition?: AsyncStatus["deliveryDisposition"];
  	error?: string;
  	activityState?: ActivityState;
  	lastActivityAt?: number;
-@@ -223,6 +230,8 @@ function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string
+@@ -223,6 +231,8 @@ function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string
  		return {
  			index,
  			agent: step.agent,
@@ -891,9 +1023,11 @@ index 4e259cfbbd112c8c7eb9ed1b04d829fc7c823bc1..310f687bebabc5cbf3797ed686c1c02e
  			...(step.context ? { context: step.context } : {}),
  			...(step.label ? { label: step.label } : {}),
  			...(step.phase ? { phase: step.phase } : {}),
-@@ -273,6 +282,10 @@ function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string
+@@ -272,7 +282,12 @@ function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string
+ 		id: status.runId || path.basename(asyncDir),
  		asyncDir,
  		...(status.sessionId ? { sessionId: status.sessionId } : {}),
++		...(status.deliveryDisposition ? { deliveryDisposition: status.deliveryDisposition } : {}),
  		state: status.state,
 +		...(status.execution_state ? { executionState: status.execution_state } : {}),
 +		...(status.outcome_state ? { outcomeState: status.outcome_state } : {}),
@@ -902,7 +1036,7 @@ index 4e259cfbbd112c8c7eb9ed1b04d829fc7c823bc1..310f687bebabc5cbf3797ed686c1c02e
  		...(status.error ? { error: status.error } : {}),
  		activityState,
  		lastActivityAt,
-@@ -423,8 +436,9 @@ function formatActivityFacts(input: { activityState?: ActivityState; lastActivit
+@@ -423,8 +438,9 @@ function formatActivityFacts(input: { activityState?: ActivityState; lastActivit
  function formatStepLine(step: AsyncRunStepSummary): string {
  	const display = step.label ? `${step.label} (${step.agent})` : step.agent;
  	const context = contextModeLabel(step.context);
@@ -913,7 +1047,7 @@ index 4e259cfbbd112c8c7eb9ed1b04d829fc7c823bc1..310f687bebabc5cbf3797ed686c1c02e
  	const activity = formatActivityFacts(step);
  	if (activity) parts.push(activity);
  	const modelThinking = formatModelThinking(step.model, step.thinking);
-@@ -466,7 +480,8 @@ function formatRunHeader(run: AsyncRunSummary): string {
+@@ -466,7 +482,8 @@ function formatRunHeader(run: AsyncRunSummary): string {
  	const activity = formatActivityFacts(run);
  	const pending = run.pendingAppends ? ` | ${run.pendingAppends} pending append${run.pendingAppends === 1 ? "" : "s"}` : "";
  	const context = contextModeLabel(run.context);
@@ -924,7 +1058,7 @@ index 4e259cfbbd112c8c7eb9ed1b04d829fc7c823bc1..310f687bebabc5cbf3797ed686c1c02e
  
  export function formatAsyncRunList(runs: AsyncRunSummary[], heading = "Active async runs"): string {
 diff --git a/src/runs/background/control-channel.ts b/src/runs/background/control-channel.ts
-index 14062eed24bc91fa5e7ddb67f30180d2936101a2..98351a6bb085914f4ad2033824cc07f87ecb0c66 100644
+index 14062ee..98351a6 100644
 --- a/src/runs/background/control-channel.ts
 +++ b/src/runs/background/control-channel.ts
 @@ -51,6 +51,13 @@ export interface StopRequest {
@@ -993,10 +1127,32 @@ index 14062eed24bc91fa5e7ddb67f30180d2936101a2..98351a6bb085914f4ad2033824cc07f8
  			if (consumeInterruptRequest(asyncDir, fsImpl)) opts.onInterrupt();
  			for (const request of consumeSteerRequests(asyncDir, fsImpl)) opts.onSteer?.(request);
 diff --git a/src/runs/background/notify.ts b/src/runs/background/notify.ts
-index 1582ccddcfabc98969c4a607c56fb2f35f6447f4..eac578cfbfadeae4beb6342fa31857db6c7d19f5 100644
+index 1582ccd..5c2ce11 100644
 --- a/src/runs/background/notify.ts
 +++ b/src/runs/background/notify.ts
-@@ -145,6 +145,7 @@ export function formatGroupedCompletion(details: SubagentNotifyDetails[]): strin
+@@ -8,12 +8,7 @@
+ 
+ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+ import { buildCompletionKey, markSeenWithTtl } from "./completion-dedupe.ts";
+-import {
+-	type CompletionBatchConfig,
+-	type CompletionBatcher,
+-	createCompletionBatcher,
+-	resolveCompletionBatchConfig,
+-} from "./completion-batcher.ts";
++import type { CompletionBatchConfig } from "./completion-batcher.ts";
+ import { SUBAGENT_ASYNC_COMPLETE_EVENT, SUBAGENT_FOREGROUND_COMPLETE_EVENT, type ParallelHandoffReference, type SubagentState } from "../../shared/types.ts";
+ 
+ export interface SubagentNotifyDetails {
+@@ -51,6 +46,7 @@ export interface CompletionNotification {
+ 	/** True when an acknowledged grouped intercom relay already delivered this run. */
+ 	intercomDelivered?: boolean;
+ 	parallelHandoff?: ParallelHandoffReference;
++	deliveryDisposition?: import("../../shared/types.ts").DeliveryDisposition;
+ }
+ 
+ interface NotifyTimerApi {
+@@ -145,6 +141,7 @@ export function formatGroupedCompletion(details: SubagentNotifyDetails[]): strin
  
  interface PendingCompletion {
  	key: string;
@@ -1004,7 +1160,7 @@ index 1582ccddcfabc98969c4a607c56fb2f35f6447f4..eac578cfbfadeae4beb6342fa31857db
  	details: SubagentNotifyDetails;
  	triggerTurn: boolean;
  	resolve(accepted: boolean): void;
-@@ -160,8 +161,9 @@ function sendCompletion(pi: Pick<ExtensionAPI, "sendMessage">, items: PendingCom
+@@ -160,8 +157,9 @@ function sendCompletion(pi: Pick<ExtensionAPI, "sendMessage">, items: PendingCom
  				customType: "subagent-notify",
  				content,
  				display: true,
@@ -1015,16 +1171,284 @@ index 1582ccddcfabc98969c4a607c56fb2f35f6447f4..eac578cfbfadeae4beb6342fa31857db
  		);
  		return true;
  	} catch {
-@@ -265,6 +267,7 @@ export default function registerSubagentNotify(
- 		pending.set(key, completion);
+@@ -223,35 +221,11 @@ export default function registerSubagentNotify(
+ 	const pending = new Map<string, Promise<boolean>>();
+ 	const ttlMs = 10 * 60 * 1000;
+ 	const now = options.now ?? Date.now;
+-	const batchConfig = resolveCompletionBatchConfig(options.batchConfig);
+-	const batchers = new Map<string, CompletionBatcher<PendingCompletion>>();
+ 	let disposed = false;
+ 
+-	const settle = (items: PendingCompletion[], accepted: boolean) => {
+-		for (const item of items) {
+-			pending.delete(item.key);
+-			if (accepted) markSeenWithTtl(seen, item.key, now(), ttlMs);
+-			item.resolve(accepted);
+-		}
+-	};
+-	const emit = (items: PendingCompletion[]) => settle(items, sendCompletion(pi, items));
+-	const getBatcher = (result: CompletionNotification) => {
+-		const key = completionBatchKey(result);
+-		let batcher = batchers.get(key);
+-		if (!batcher) {
+-			batcher = createCompletionBatcher<PendingCompletion>({
+-				config: batchConfig,
+-				emit,
+-				...(options.timers ? { timers: options.timers } : {}),
+-				now,
+-			});
+-			batchers.set(key, batcher);
+-		}
+-		return batcher;
+-	};
+-
+ 	const deliver = (result: CompletionNotification): Promise<boolean> => {
+ 		if (disposed || typeof result.sessionId !== "string" || result.sessionId !== state.currentSessionId) return Promise.resolve(false);
++		if ((result.deliveryDisposition ?? "follow_up") !== "follow_up") return Promise.resolve(false);
+ 		if (result.intercomDelivered === true) return Promise.resolve(true);
+ 		const key = buildCompletionKey(result, "notify");
+ 		const seenAt = seen.get(key);
+@@ -259,50 +233,31 @@ export default function registerSubagentNotify(
+ 		if (seenAt !== undefined) seen.delete(key);
+ 		const inFlight = pending.get(key);
+ 		if (inFlight) return inFlight;
+-		const details = buildCompletionDetails(result);
+-		let resolve!: (accepted: boolean) => void;
+-		const completion = new Promise<boolean>((settleCompletion) => { resolve = settleCompletion; });
+-		pending.set(key, completion);
  		const item: PendingCompletion = {
  			key,
+-			details,
 +			runId: String(result.id ?? "unknown"),
- 			details,
++			details: buildCompletionDetails(result),
  			triggerTurn: result.triggerTurn !== false,
- 			resolve,
+-			resolve,
++			resolve: () => {},
+ 		};
+-		if (details.source === "foreground") {
+-			emit([item]);
+-			return completion;
+-		}
+-		const batcher = getBatcher(result);
+-		if (details.status !== "completed") {
+-			batcher.flush();
+-			emit([item]);
+-			return completion;
+-		}
+-		batcher.push(item);
++		const completion = Promise.resolve(sendCompletion(pi, [item])).then((accepted) => {
++			pending.delete(key);
++			if (accepted) markSeenWithTtl(seen, key, now(), ttlMs);
++			return accepted;
++		});
++		pending.set(key, completion);
+ 		return completion;
+ 	};
+ 
+-	const unsubscribeAsync = pi.events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, (data) => {
+-		void deliver(data as CompletionNotification);
+-	});
+-	const unsubscribeForeground = pi.events.on(SUBAGENT_FOREGROUND_COMPLETE_EVENT, (data) => {
+-		void deliver(data as CompletionNotification);
+-	});
+-
++	const unsubscribeAsync = pi.events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, (data) => { void deliver(data as CompletionNotification); });
++	const unsubscribeForeground = pi.events.on(SUBAGENT_FOREGROUND_COMPLETE_EVENT, (data) => { void deliver(data as CompletionNotification); });
+ 	return {
+ 		deliver,
+ 		dispose() {
+ 			if (disposed) return;
+ 			disposed = true;
+-			for (const batcher of batchers.values()) settle(batcher.dispose(), false);
+-			batchers.clear();
+ 			for (const unsubscribe of [unsubscribeAsync, unsubscribeForeground]) {
+-				try {
+-					unsubscribe?.();
+-				} catch {
+-					// The runtime is already shutting down; pending records stay on disk.
+-				}
++				try { unsubscribe?.(); } catch { /* runtime is shutting down */ }
+ 			}
+ 		},
+ 	};
+diff --git a/src/runs/background/result-claim.ts b/src/runs/background/result-claim.ts
+new file mode 100644
+index 0000000..601267f
+--- /dev/null
++++ b/src/runs/background/result-claim.ts
+@@ -0,0 +1,170 @@
++import { createHash } from "node:crypto";
++import * as fs from "node:fs";
++import * as path from "node:path";
++import type { DeliveryDisposition } from "../../shared/types.ts";
++
++export const RESULT_CLAIM_VERSION = 1 as const;
++
++export interface ResultClaimV1 {
++	version: typeof RESULT_CLAIM_VERSION;
++	kind: "pi-subagents.result-claim";
++	runId: string;
++	runKey: string;
++	sessionId: string;
++	deliveryDisposition: "awaited";
++	resultSha256: string;
++	resultSizeBytes: number;
++	claimedAt: number;
++}
++
++export class AwaitedResultPendingError extends Error {
++	readonly resultPath: string;
++
++	constructor(resultPath: string) {
++		super(`Awaited result is not published yet at '${resultPath}'.`);
++		this.name = "AwaitedResultPendingError";
++		this.resultPath = resultPath;
++	}
++}
++
++export type AwaitedResultClaim = {
++	kind: "claimed";
++	claim: ResultClaimV1;
++	claimPath: string;
++	resultPath: string;
++	resultBytes: Buffer;
++	result: Record<string, unknown>;
++	idempotent: boolean;
++} | {
++	kind: "not-claimable";
++	deliveryDisposition: Exclude<DeliveryDisposition, "awaited">;
++};
++
++function readRegularNoFollow(filePath: string): Buffer {
++	let fd: number | undefined;
++	try {
++		fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
++		const stat = fs.fstatSync(fd);
++		if (!stat.isFile()) throw new Error(`Refusing non-regular file '${filePath}'.`);
++		return fs.readFileSync(fd);
++	} finally {
++		if (fd !== undefined) fs.closeSync(fd);
++	}
++}
++
++function parseObject(bytes: Buffer, label: string): Record<string, unknown> {
++	let value: unknown;
++	try {
++		value = JSON.parse(bytes.toString("utf-8"));
++	} catch (error) {
++		throw new Error(`Malformed ${label}: ${error instanceof Error ? error.message : String(error)}`);
++	}
++	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Malformed ${label}: expected an object.`);
++	return value as Record<string, unknown>;
++}
++
++function resolveRunIdentity(asyncDirInput: string, expectedRunId?: string): { asyncDir: string; runId: string; runKey: string; resultPath: string } {
++	const asyncDir = path.resolve(asyncDirInput);
++	const dirStat = fs.lstatSync(asyncDir);
++	if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) throw new Error(`Refusing unsafe async directory '${asyncDir}'.`);
++	const canonicalDir = fs.realpathSync(asyncDir);
++	if (canonicalDir !== asyncDir) throw new Error(`Refusing aliased async directory '${asyncDir}'.`);
++	const runId = path.basename(asyncDir);
++	if (!runId || runId === "." || runId === ".." || (expectedRunId !== undefined && runId !== expectedRunId)) {
++		throw new Error(`Async run identity mismatch for '${asyncDir}'.`);
++	}
++	const parent = path.dirname(asyncDir);
++	if (path.basename(parent) === "async-subagent-runs") {
++		const runtimeRoot = path.dirname(parent);
++		return { asyncDir, runId, runKey: `top:${runId}`, resultPath: path.join(runtimeRoot, "async-subagent-results", `${runId}.json`) };
++	}
++	const rootRunId = path.basename(parent);
++	const nestedRoot = path.dirname(parent);
++	if (path.basename(nestedRoot) !== "nested-subagent-runs" || !rootRunId) throw new Error(`Async directory is outside a recognized run scope: '${asyncDir}'.`);
++	const runtimeRoot = path.dirname(nestedRoot);
++	return {
++		asyncDir,
++		runId,
++		runKey: `nested:${rootRunId}:${runId}`,
++		resultPath: path.join(runtimeRoot, "async-subagent-results", "nested", rootRunId, `${runId}.json`),
++	};
++}
++
++function assertLifecycleRecord(
++	filePath: string,
++	label: string,
++	expected: { runId: string; sessionId: string; disposition: DeliveryDisposition },
++): Record<string, unknown> {
++	const value = parseObject(readRegularNoFollow(filePath), label);
++	if (value.lifecycleArtifactVersion !== 5) throw new Error(`${label} is not a lifecycle v5 artifact.`);
++	if ((value.runId ?? value.id) !== expected.runId) throw new Error(`${label} run identity mismatch.`);
++	if (value.sessionId !== expected.sessionId) throw new Error(`${label} session identity mismatch.`);
++	if (value.deliveryDisposition !== expected.disposition) throw new Error(`${label} delivery disposition mismatch.`);
++	return value;
++}
++
++function sameClaim(a: Record<string, unknown>, b: ResultClaimV1): boolean {
++	const allowed = new Set(["version", "kind", "runId", "runKey", "sessionId", "deliveryDisposition", "resultSha256", "resultSizeBytes", "claimedAt"]);
++	return Object.keys(a).every((key) => allowed.has(key))
++		&& a.version === b.version && a.kind === b.kind && a.runId === b.runId && a.runKey === b.runKey
++		&& a.sessionId === b.sessionId && a.deliveryDisposition === b.deliveryDisposition
++		&& a.resultSha256 === b.resultSha256 && a.resultSizeBytes === b.resultSizeBytes
++		&& typeof a.claimedAt === "number" && Number.isFinite(a.claimedAt);
++}
++
++function createClaimNoFollow(claimPath: string, claim: ResultClaimV1): { claim: ResultClaimV1; idempotent: boolean } {
++	let fd: number | undefined;
++	try {
++		fd = fs.openSync(claimPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0), 0o600);
++		fs.writeFileSync(fd, `${JSON.stringify(claim)}\n`, "utf-8");
++		fs.fsyncSync(fd);
++		return { claim, idempotent: false };
++	} catch (error) {
++		if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
++		const existing = parseObject(readRegularNoFollow(claimPath), "result claim");
++		if (!sameClaim(existing, claim)) throw new Error(`Conflicting result claim at '${claimPath}'.`);
++		return { claim: existing as unknown as ResultClaimV1, idempotent: true };
++	} finally {
++		if (fd !== undefined) fs.closeSync(fd);
++	}
++}
++
++/** Read and identity-bind one exact awaited result, then atomically publish its sidecar. */
++export function claimAwaitedResult(input: { asyncDir: string; runId?: string; sessionId: string; now?: () => number }): AwaitedResultClaim {
++	const identity = resolveRunIdentity(input.asyncDir, input.runId);
++	const statusPath = path.join(identity.asyncDir, "status.json");
++	const launchPath = path.join(identity.asyncDir, "launch.json");
++	const status = parseObject(readRegularNoFollow(statusPath), "status artifact");
++	const disposition = status.deliveryDisposition;
++	if (disposition === "follow_up" || disposition === "silent") return { kind: "not-claimable", deliveryDisposition: disposition };
++	if (disposition !== "awaited") throw new Error("Status artifact has an invalid delivery disposition.");
++	const expected = { runId: identity.runId, sessionId: input.sessionId, disposition };
++	assertLifecycleRecord(statusPath, "status artifact", expected);
++	assertLifecycleRecord(launchPath, "launch artifact", expected);
++	let resultBytes: Buffer;
++	try {
++		resultBytes = readRegularNoFollow(identity.resultPath);
++	} catch (error) {
++		if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new AwaitedResultPendingError(identity.resultPath);
++		throw error;
++	}
++	const result = parseObject(resultBytes, "result artifact");
++	if (result.lifecycleArtifactVersion !== 5 || (result.runId ?? result.id) !== identity.runId || result.sessionId !== input.sessionId
++		|| result.asyncDir !== identity.asyncDir || result.deliveryDisposition !== disposition) {
++		throw new Error("Result artifact identity or disposition mismatch.");
++	}
++	const claim: ResultClaimV1 = {
++		version: RESULT_CLAIM_VERSION,
++		kind: "pi-subagents.result-claim",
++		runId: identity.runId,
++		runKey: identity.runKey,
++		sessionId: input.sessionId,
++		deliveryDisposition: "awaited",
++		resultSha256: createHash("sha256").update(resultBytes).digest("hex"),
++		resultSizeBytes: resultBytes.byteLength,
++		claimedAt: (input.now ?? Date.now)(),
++	};
++	const claimPath = path.join(identity.asyncDir, "result-claim.json");
++	const published = createClaimNoFollow(claimPath, claim);
++	return { kind: "claimed", claim: published.claim, claimPath, resultPath: identity.resultPath, resultBytes, result, idempotent: published.idempotent };
++}
 diff --git a/src/runs/background/result-watcher.ts b/src/runs/background/result-watcher.ts
-index 86e8350db0d1012adf7f64bf722cf492b7259f28..f974e60bea06a4492ab54b6ec1fb9ae7691776af 100644
+index 86e8350..23058e6 100644
 --- a/src/runs/background/result-watcher.ts
 +++ b/src/runs/background/result-watcher.ts
 @@ -65,6 +65,35 @@ type ResultFileData = CompletionNotification & {
@@ -1074,17 +1498,31 @@ index 86e8350db0d1012adf7f64bf722cf492b7259f28..f974e60bea06a4492ab54b6ec1fb9ae7
  		processing.add(file);
  		try {
  			const data = JSON.parse(fsApi.readFileSync(resultPath, "utf-8")) as ResultFileData;
-@@ -142,6 +175,9 @@ export function createResultWatcher(
+@@ -142,6 +175,23 @@ export function createResultWatcher(
  			if (!ownsSession(data.sessionId, epoch)) return;
  
  			const runId = data.runId ?? data.id ?? file.replace(/\.json$/i, "");
++			const deliveryDisposition = data.deliveryDisposition ?? "follow_up";
++			if (deliveryDisposition !== "awaited" && deliveryDisposition !== "follow_up" && deliveryDisposition !== "silent") {
++				throw new Error(`Invalid delivery disposition in '${resultPath}'.`);
++			}
++			if (deliveryDisposition !== "follow_up") {
++				const completionKey = buildCompletionKey(data, `internal-result:${file}`);
++				const lastSeenAt = state.completionSeen.get(completionKey);
++				if (lastSeenAt === undefined || Date.now() - lastSeenAt > completionTtlMs) {
++					markSeenWithTtl(state.completionSeen, completionKey, Date.now(), completionTtlMs);
++					try { pi.events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, { ...data, runId, deliveryDisposition, triggerTurn: false }); }
++					catch (error) { console.error(`Completion observer failed for '${resultPath}':`, error); }
++				}
++				return;
++			}
 +			// Agentd owns cancelled result custody. Retain the bytes, but never turn a
 +			// correlated host-cancelled result into a new parent model turn.
 +			if (hostCancelledResult(data, runId)) return;
  			const hasExplicitNestedChildren = data.nestedChildren !== undefined;
  			let nestedChildren = compactNestedResultChildren(sanitizeNestedResultChildren(data.nestedChildren, resultPath, "nestedChildren"));
  			if (!nestedChildren?.length && !hasExplicitNestedChildren) {
-@@ -160,6 +196,7 @@ export function createResultWatcher(
+@@ -160,6 +210,7 @@ export function createResultWatcher(
  				state.completionSeen.delete(completionKey);
  			} else if (lastSeenAt !== undefined) {
  				if (!ownsSession(data.sessionId, epoch) || !fsApi.existsSync(resultPath)) return;
@@ -1092,7 +1530,7 @@ index 86e8350db0d1012adf7f64bf722cf492b7259f28..f974e60bea06a4492ab54b6ec1fb9ae7
  				try {
  					fsApi.unlinkSync(resultPath);
  				} catch (error) {
-@@ -203,6 +240,14 @@ export function createResultWatcher(
+@@ -203,6 +254,14 @@ export function createResultWatcher(
  				};
  			}), nestedChildren);
  
@@ -1107,7 +1545,7 @@ index 86e8350db0d1012adf7f64bf722cf492b7259f28..f974e60bea06a4492ab54b6ec1fb9ae7
  			const intercomTarget = data.intercomTarget?.trim();
  			let intercomDelivered = false;
  			if (deliverIntercomResults && intercomTarget && triggerTurn) {
-@@ -273,6 +318,7 @@ export function createResultWatcher(
+@@ -273,6 +332,7 @@ export function createResultWatcher(
  				console.error(`Completion observer failed for '${resultPath}':`, error);
  			}
  			if (!ownsSession(data.sessionId, epoch) || !fsApi.existsSync(resultPath)) return;
@@ -1115,7 +1553,7 @@ index 86e8350db0d1012adf7f64bf722cf492b7259f28..f974e60bea06a4492ab54b6ec1fb9ae7
  			try {
  				fsApi.unlinkSync(resultPath);
  			} catch (error) {
-@@ -292,7 +338,7 @@ export function createResultWatcher(
+@@ -292,7 +352,7 @@ export function createResultWatcher(
  		const triggerTurn = pendingTriggerTurn.get(file) !== false;
  		pendingTriggerTurn.delete(file);
  		void handleResult(file, triggerTurn);
@@ -1125,7 +1563,7 @@ index 86e8350db0d1012adf7f64bf722cf492b7259f28..f974e60bea06a4492ab54b6ec1fb9ae7
  	const primeExistingResults = (options: { triggerTurn?: boolean } = {}) => {
  		try {
 diff --git a/src/runs/background/scheduled-runs.ts b/src/runs/background/scheduled-runs.ts
-index 1572598f4863ffe2499db3964e1a0f10e5f2a4bb..831be94696fbef91bf78fc8449860a4619985f99 100644
+index 1572598..831be94 100644
 --- a/src/runs/background/scheduled-runs.ts
 +++ b/src/runs/background/scheduled-runs.ts
 @@ -14,6 +14,7 @@ import {
@@ -1209,10 +1647,18 @@ index 1572598f4863ffe2499db3964e1a0f10e5f2a4bb..831be94696fbef91bf78fc8449860a46
  
  export class ScheduledRunManager {
 diff --git a/src/runs/background/subagent-runner.ts b/src/runs/background/subagent-runner.ts
-index 6efb0bd1638bb4a608ad87db570ee490541fe154..a7dd82c0c17ad09d6b8b612d7f783c13c785e054 100644
+index 6efb0bd..b6e0dc6 100644
 --- a/src/runs/background/subagent-runner.ts
 +++ b/src/runs/background/subagent-runner.ts
-@@ -107,6 +107,7 @@ import { resolveWatchdogConfig } from "../../watchdog/settings.ts";
+@@ -18,6 +18,7 @@ import {
+ 	type AsyncStatus,
+ 	type ChainOutputMap,
+ 	type CostSummary,
++	type DeliveryDisposition,
+ 	type ModelAttempt,
+ 	type NestedRouteInfo,
+ 	type NestedRunSummary,
+@@ -107,6 +108,7 @@ import { resolveWatchdogConfig } from "../../watchdog/settings.ts";
  import { createBoundedByteTail, createBoundedLineReader, formatProtocolOutputLimit, MAX_CHILD_STDERR_BYTES, projectChildLifecycle, type ChildLifecycleAction, type ProtocolOutputLimit } from "../shared/child-protocol.ts";
  import { acquireSessionLease, type SessionLeaseRequest } from "../shared/session-lease.ts";
  import { decodeSubagentCapabilityCeiling, SUBAGENT_CAPABILITY_CEILING_ENV, type ResolvedSubagentCapabilityCeiling } from "../shared/capability-ceiling.ts";
@@ -1220,7 +1666,15 @@ index 6efb0bd1638bb4a608ad87db570ee490541fe154..a7dd82c0c17ad09d6b8b612d7f783c13
  import {
  	CHILD_WATCHDOG_CONFIG_ENV,
  	acceptChildWatchdogEvent,
-@@ -160,6 +161,8 @@ interface SubagentRunConfig {
+@@ -118,6 +120,7 @@ import {
+ } from "../../watchdog/child-status.ts";
+ 
+ interface SubagentRunConfig {
++	deliveryDisposition: DeliveryDisposition;
+ 	id: string;
+ 	steps: RunnerStep[];
+ 	resultPath: string;
+@@ -160,6 +163,8 @@ interface SubagentRunConfig {
  
  interface StepResult {
  	agent: string;
@@ -1229,7 +1683,15 @@ index 6efb0bd1638bb4a608ad87db570ee490541fe154..a7dd82c0c17ad09d6b8b612d7f783c13
  	context?: "fresh" | "fork";
  	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
  	capabilityAudit?: import("../shared/capability-ceiling.ts").SubagentCapabilityAudit;
-@@ -989,6 +992,8 @@ async function runSingleStep(
+@@ -947,6 +952,7 @@ function writeRunLog(
+ /** Context for running a single step */
+ interface SingleStepContext {
+ 	previousOutput: string;
++	deliveryDisposition: DeliveryDisposition;
+ 	outputs?: ChainOutputMap;
+ 	placeholder: string;
+ 	cwd: string;
+@@ -989,6 +995,8 @@ async function runSingleStep(
  	ctx: SingleStepContext,
  ): Promise<{
  	agent: string;
@@ -1238,7 +1700,7 @@ index 6efb0bd1638bb4a608ad87db570ee490541fe154..a7dd82c0c17ad09d6b8b612d7f783c13
  	context?: "fresh" | "fork";
  	agentContract?: import("../../shared/types.ts").AgentContract;
  	launchContractDigest?: string;
-@@ -1202,6 +1207,8 @@ async function runSingleStep(
+@@ -1202,6 +1210,8 @@ async function runSingleStep(
  			toolBudget: step.toolBudget,
  			childWatchdog,
  			waitToolEnabled: step.waitToolEnabled,
@@ -1247,16 +1709,18 @@ index 6efb0bd1638bb4a608ad87db570ee490541fe154..a7dd82c0c17ad09d6b8b612d7f783c13
  		});
  		if (step.definitionDigest) {
  			const toolPlan = resolvePiLaunchToolPlan({
-@@ -1217,6 +1224,8 @@ async function runSingleStep(
+@@ -1216,7 +1226,10 @@ async function runSingleStep(
+ 				inheritedCapabilityCeiling: decodeSubagentCapabilityCeiling(process.env[SUBAGENT_CAPABILITY_CEILING_ENV]),
  			});
  			actualLaunchContractDigest = launchBindingDigest({
++				deliveryDisposition: ctx.deliveryDisposition,
  				definitionDigest: step.definitionDigest,
 +				executionTarget: step.executionTarget?.public ?? { kind: "local" },
 +				executionTargetDigest: step.executionTarget?.kind === "ssh" ? step.executionTarget.descriptorDigest : undefined,
  				task: step.launchBindingTask ?? task,
  				...(candidate ? { model: candidate } : {}),
  				modelCandidates: candidates,
-@@ -1227,7 +1236,7 @@ async function runSingleStep(
+@@ -1227,7 +1240,7 @@ async function runSingleStep(
  				inheritSkills: step.inheritSkills,
  				skills: step.skills,
  				tools: toolPlan.effectiveToolAllowlist,
@@ -1265,7 +1729,7 @@ index 6efb0bd1638bb4a608ad87db570ee490541fe154..a7dd82c0c17ad09d6b8b612d7f783c13
  				mcpDirectTools: toolPlan.effectiveMcpTools,
  				...(step.outputPath ? { outputPath: step.outputPath } : {}),
  				...(step.outputMode ? { outputMode: step.outputMode } : {}),
-@@ -1449,42 +1458,42 @@ async function runSingleStep(
+@@ -1449,42 +1462,42 @@ async function runSingleStep(
  					? (finalResult?.error ? `${finalResult.error}\n${acceptanceFailure}` : acceptanceFailure)
  					: finalResult?.error;
  
@@ -1335,7 +1799,7 @@ index 6efb0bd1638bb4a608ad87db570ee490541fe154..a7dd82c0c17ad09d6b8b612d7f783c13
  		context: step.context,
  		...(step.agentContract ? { agentContract: step.agentContract } : {}),
  		launchContractDigest: actualLaunchContractDigest,
-@@ -1500,7 +1509,7 @@ async function runSingleStep(
+@@ -1500,7 +1513,7 @@ async function runSingleStep(
  		totalCost: costSummaryFromAttempts(modelAttempts),
  		artifactPaths,
  		transcriptPath: transcriptWriter ? artifactPaths?.transcriptPath : undefined,
@@ -1344,7 +1808,7 @@ index 6efb0bd1638bb4a608ad87db570ee490541fe154..a7dd82c0c17ad09d6b8b612d7f783c13
  		interrupted: timedOutAfterAcceptance || stoppedAfterAcceptance || turnBudgetExceeded ? false : finalResult?.interrupted,
  		timedOut: timedOutAfterAcceptance ? true : finalResult?.timedOut,
  		stopped: stoppedAfterAcceptance ? true : finalResult?.stopped,
-@@ -1575,7 +1584,8 @@ function markParallelGroupSetupFailure(input: {
+@@ -1575,7 +1588,8 @@ function markParallelGroupSetupFailure(input: {
  		input.statusPayload.steps[flatTaskIndex].endedAt = input.failedAt;
  		input.statusPayload.steps[flatTaskIndex].durationMs = 0;
  		input.statusPayload.steps[flatTaskIndex].exitCode = 1;
@@ -1354,7 +1818,7 @@ index 6efb0bd1638bb4a608ad87db570ee490541fe154..a7dd82c0c17ad09d6b8b612d7f783c13
  	}
  	input.statusPayload.currentStep = input.groupStartFlatIndex;
  	input.statusPayload.lastUpdate = input.failedAt;
-@@ -1743,6 +1753,8 @@ async function runSubagent(
+@@ -1743,6 +1757,8 @@ async function runSubagent(
  				const transcriptPath = resolveAsyncStepTranscriptPath({ artifactsDir, artifactConfig, runId: id, agent: task.agent, flatIndex: taskFlatIndex, flatStepCount: initialFlatStepCount });
  				initialStatusSteps.push({
  					agent: task.agent,
@@ -1363,7 +1827,7 @@ index 6efb0bd1638bb4a608ad87db570ee490541fe154..a7dd82c0c17ad09d6b8b612d7f783c13
  					...(task.context ? { context: task.context } : {}),
  					phase: task.phase,
  					label: task.label,
-@@ -1768,6 +1780,8 @@ async function runSubagent(
+@@ -1768,6 +1784,8 @@ async function runSubagent(
  			parallelGroups.push({ start: flatStepCount, count: 1, stepIndex });
  			initialStatusSteps.push({
  				agent: `expand:${step.parallel.agent}`,
@@ -1372,7 +1836,7 @@ index 6efb0bd1638bb4a608ad87db570ee490541fe154..a7dd82c0c17ad09d6b8b612d7f783c13
  				...(step.parallel.context ? { context: step.parallel.context } : {}),
  				phase: step.phase ?? step.parallel.phase,
  				label: step.label ?? step.parallel.label ?? `Dynamic fanout (${step.collect.as})`,
-@@ -1786,6 +1800,8 @@ async function runSubagent(
+@@ -1786,6 +1804,8 @@ async function runSubagent(
  			const transcriptPath = resolveAsyncStepTranscriptPath({ artifactsDir, artifactConfig, runId: id, agent: step.agent, flatIndex: stepFlatIndex, flatStepCount: initialFlatStepCount });
  			initialStatusSteps.push({
  				agent: step.agent,
@@ -1381,7 +1845,7 @@ index 6efb0bd1638bb4a608ad87db570ee490541fe154..a7dd82c0c17ad09d6b8b612d7f783c13
  				...(step.context ? { context: step.context } : {}),
  				phase: step.phase,
  				label: step.label,
-@@ -1816,8 +1832,15 @@ async function runSubagent(
+@@ -1816,8 +1836,16 @@ async function runSubagent(
  			step.processTerminal = { version: 1, state: "pending", runId: id, runnerProcessInstanceId: config.runnerProcessInstanceId };
  		}
  	}
@@ -1389,6 +1853,7 @@ index 6efb0bd1638bb4a608ad87db570ee490541fe154..a7dd82c0c17ad09d6b8b612d7f783c13
 +	const runExecutionTarget = publicTargets.size === 1 ? [...publicTargets.values()][0] : undefined;
  	const statusPayload: RunnerStatusPayload = {
  		lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
++		deliveryDisposition: config.deliveryDisposition,
 +		...(runExecutionTarget ? { executionTarget: runExecutionTarget } : {}),
 +		execution_state: "active",
 +		outcome_state: "pending",
@@ -1397,7 +1862,7 @@ index 6efb0bd1638bb4a608ad87db570ee490541fe154..a7dd82c0c17ad09d6b8b612d7f783c13
  		runId: id,
  		...(config.sessionId ? { sessionId: config.sessionId } : {}),
  		mode: config.resultMode ?? (flatSteps.length > 1 ? "chain" : "single"),
-@@ -2725,10 +2748,16 @@ async function runSubagent(
+@@ -2725,10 +2753,16 @@ async function runSubagent(
  	// Portable control inbox: the parent drops control request files here when
  	// it cannot deliver OS signals (e.g. ENOSYS on Windows) or when steering a
  	// live child. Interrupts still route into the same graceful interruptRunner().
@@ -1414,7 +1879,24 @@ index 6efb0bd1638bb4a608ad87db570ee490541fe154..a7dd82c0c17ad09d6b8b612d7f783c13
  		onSteer: (request) => {
  			const targetStep = request.targetIndex !== undefined ? statusPayload.steps[request.targetIndex] : undefined;
  			if (targetStep?.status === "pending") {
-@@ -3269,6 +3298,7 @@ async function runSubagent(
+@@ -2769,6 +2803,7 @@ async function runSubagent(
+ 		JSON.stringify({
+ 			type: "subagent.run.started",
+ 			lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
++			deliveryDisposition: config.deliveryDisposition,
+ 			ts: overallStartTime,
+ 			runId: id,
+ 			mode: statusPayload.mode,
+@@ -3027,7 +3062,7 @@ async function runSubagent(
+ 				appendJsonl(eventsPath, JSON.stringify({ type: "subagent.step.started", ts: taskStartTime, runId: id, stepIndex: fi, agent: task.agent }));
+ 				flushPendingStepSteers(fi);
+ 				const singleResult = await runSingleStep(task, {
+-					previousOutput, placeholder, cwd, sessionEnabled,
++					previousOutput, deliveryDisposition: config.deliveryDisposition, placeholder, cwd, sessionEnabled,
+ 					outputs,
+ 					sessionDir: config.sessionDir ? path.join(config.sessionDir, `dynamic-${stepIndex}-${taskIdx}`) : undefined,
+ 					artifactsDir, artifactConfig, id,
+@@ -3269,6 +3304,7 @@ async function runSubagent(
  					break;
  				}
  				try {
@@ -1422,7 +1904,16 @@ index 6efb0bd1638bb4a608ad87db570ee490541fe154..a7dd82c0c17ad09d6b8b612d7f783c13
  					worktreeSetup = createWorktrees(cwd, `${id}-s${stepIndex}`, group.parallel.length, {
  						agents: group.parallel.map((task) => task.agent),
  						setupHook: config.worktreeSetupHook
-@@ -3489,6 +3519,8 @@ async function runSubagent(
+@@ -3362,7 +3398,7 @@ async function runSubagent(
+ 						flushPendingStepSteers(fi);
+ 
+ 						const singleResult = await runSingleStep(taskForRun, {
+-							previousOutput, placeholder, cwd: taskCwd, sessionEnabled,
++							previousOutput, deliveryDisposition: config.deliveryDisposition, placeholder, cwd: taskCwd, sessionEnabled,
+ 							outputs,
+ 							sessionDir: taskSessionDir,
+ 							artifactsDir, artifactConfig, id,
+@@ -3489,6 +3525,8 @@ async function runSubagent(
  				for (const pr of parallelResults) {
  					results.push({
  						agent: pr.agent,
@@ -1431,7 +1922,16 @@ index 6efb0bd1638bb4a608ad87db570ee490541fe154..a7dd82c0c17ad09d6b8b612d7f783c13
  						context: pr.context,
  						agentContract: pr.agentContract,
  						launchContractDigest: pr.launchContractDigest,
-@@ -3665,6 +3697,8 @@ async function runSubagent(
+@@ -3628,7 +3666,7 @@ async function runSubagent(
+ 
+ 			flushPendingStepSteers(flatIndex);
+ 			const singleResult = await runSingleStep(seqStep, {
+-				previousOutput, placeholder, cwd, sessionEnabled,
++				previousOutput, deliveryDisposition: config.deliveryDisposition, placeholder, cwd, sessionEnabled,
+ 				outputs: statusPayload.mode === "single" ? undefined : outputs,
+ 				sessionDir: config.sessionDir,
+ 				artifactsDir, artifactConfig, id,
+@@ -3665,6 +3703,8 @@ async function runSubagent(
  			const childStopped = singleResult.stopped === true;
  			results.push({
  				agent: singleResult.agent,
@@ -1440,7 +1940,7 @@ index 6efb0bd1638bb4a608ad87db570ee490541fe154..a7dd82c0c17ad09d6b8b612d7f783c13
  				context: singleResult.context,
  				agentContract: singleResult.agentContract,
  				launchContractDigest: singleResult.launchContractDigest,
-@@ -3922,6 +3956,19 @@ async function runSubagent(
+@@ -3922,12 +3962,26 @@ async function runSubagent(
  			statusPayload.error = `Step failed: ${failedStep.agent}`;
  		}
  	}
@@ -1460,10 +1960,18 @@ index 6efb0bd1638bb4a608ad87db570ee490541fe154..a7dd82c0c17ad09d6b8b612d7f783c13
  	writeStatusPayload();
  	appendJsonl(
  		eventsPath,
-@@ -3958,6 +4005,11 @@ async function runSubagent(
+ 		JSON.stringify({
+ 			type: "subagent.run.completed",
+ 			lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
++			deliveryDisposition: config.deliveryDisposition,
+ 			ts: runEndedAt,
+ 			runId: id,
+ 			status: statusPayload.state,
+@@ -3958,6 +4012,12 @@ async function runSubagent(
  	try {
  		writeAtomicJson(resultPath, {
  			lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
++			deliveryDisposition: config.deliveryDisposition,
 +			...(statusPayload.executionTarget ? { executionTarget: statusPayload.executionTarget } : {}),
 +			execution_state: statusPayload.execution_state,
 +			outcome_state: statusPayload.outcome_state,
@@ -1472,21 +1980,279 @@ index 6efb0bd1638bb4a608ad87db570ee490541fe154..a7dd82c0c17ad09d6b8b612d7f783c13
  			id,
  			agent: agentName,
  			mode: resultMode,
+diff --git a/src/runs/background/subagent-wait.ts b/src/runs/background/subagent-wait.ts
+index 18516df..0ecf1d0 100644
+--- a/src/runs/background/subagent-wait.ts
++++ b/src/runs/background/subagent-wait.ts
+@@ -61,6 +61,7 @@ import {
+ 	type SubagentState,
+ } from "../../shared/types.ts";
+ import { formatDuration } from "../../shared/formatters.ts";
++import { AwaitedResultPendingError, claimAwaitedResult, type ResultClaimV1 } from "./result-claim.ts";
+ export { WAIT_TOOL_ENABLED_ENV, resolveWaitToolConfig, type ResolvedWaitToolConfig } from "./wait-config.ts";
+ 
+ /** States that mean a run is still in flight (not yet resolved). */
+@@ -87,6 +88,7 @@ export interface SubagentWaitParams {
+ /** Minimal event-bus surface wait subscribes to (matches pi.events). */
+ export interface WaitEventBus {
+ 	on(channel: string, handler: (data: unknown) => void): () => void;
++	emit?(channel: string, data: unknown): void;
+ }
+ 
+ export interface SubagentWaitDeps {
+@@ -118,6 +120,8 @@ export interface SubagentWaitDeps {
+ 	 * events). Omit in tests that want pure poll behavior.
+ 	 */
+ 	events?: WaitEventBus;
++	/** Publish the canonical parent-session custom entry before claim observation. */
++	publishClaim?: (claim: ResultClaimV1) => string | Promise<string>;
+ }
+ 
+ /** Bus channels that indicate a run changed state or needs attention. */
+@@ -299,14 +303,90 @@ function summarizeTerminalRuns(runs: AsyncRunSummary[], providerFinishedCount =
+ 	return parts.join(", ");
+ }
+ 
+-function result(text: string, isError = false): AgentToolResult<Details> {
++interface PublishedClaim {
++	claim: ResultClaimV1;
++	claimPath: string;
++	resultPath: string;
++	claimEntryId: string;
++	idempotent: boolean;
++	resultText: string;
++}
++
++function result(text: string, isError = false, claims: PublishedClaim[] = []): AgentToolResult<Details> {
+ 	return {
+ 		content: [{ type: "text", text }],
+ 		...(isError ? { isError: true } : {}),
+-		details: { mode: "management", results: [] },
++		details: {
++			mode: "management",
++			results: [],
++			...(claims.length ? { resultClaims: claims.map(({ resultText: _resultText, ...claim }) => claim) } : {}),
++		},
+ 	};
+ }
+ 
++async function publishAwaitedClaims(runs: AsyncRunSummary[], deps: SubagentWaitDeps): Promise<{ claims: PublishedClaim[]; pending: AsyncRunSummary[]; error?: string }> {
++	const claims: PublishedClaim[] = [];
++	const pending: AsyncRunSummary[] = [];
++	for (const run of runs) {
++		if (run.deliveryDisposition !== "awaited") continue;
++		try {
++			const claimed = claimAwaitedResult({ asyncDir: run.asyncDir, runId: run.id, sessionId: deps.state.currentSessionId! });
++			if (claimed.kind !== "claimed") continue;
++			if (!deps.publishClaim) throw new Error("Current session manager cannot publish an awaited result claim.");
++			const claimEntryId = await deps.publishClaim(claimed.claim);
++			if (typeof claimEntryId !== "string" || !claimEntryId) throw new Error("Current session manager returned no result-claim entry identity.");
++			deps.events?.emit?.("subagent:result-claimed", { ...claimed.claim, claimEntryId, claimPath: claimed.claimPath });
++			claims.push({
++				claim: claimed.claim,
++				claimPath: claimed.claimPath,
++				resultPath: claimed.resultPath,
++				claimEntryId,
++				idempotent: claimed.idempotent,
++				resultText: claimed.resultBytes.toString("utf-8"),
++			});
++		} catch (error) {
++			if (error instanceof AwaitedResultPendingError) {
++				pending.push(run);
++				continue;
++			}
++			return { claims, pending, error: error instanceof Error ? error.message : String(error) };
++		}
++	}
++	return { claims, pending };
++}
++
++async function waitForAwaitedClaims(
++	runs: AsyncRunSummary[],
++	signal: AbortSignal | undefined,
++	deps: SubagentWaitDeps,
++	startedAt: number,
++	timeoutMs: number,
++	pollIntervalMs: number,
++): Promise<{ claims: PublishedClaim[]; error?: string }> {
++	const claimsByRunKey = new Map<string, PublishedClaim>();
++	let remaining = runs;
++	while (true) {
++		const published = await publishAwaitedClaims(remaining, deps);
++		for (const claim of published.claims) claimsByRunKey.set(claim.claim.runKey, claim);
++		if (published.error) return { claims: [...claimsByRunKey.values()], error: published.error };
++		if (published.pending.length === 0) return { claims: [...claimsByRunKey.values()] };
++		if (signal?.aborted) return { claims: [...claimsByRunKey.values()], error: "Wait aborted before the exact awaited result was published." };
++		if ((deps.now ?? Date.now)() - startedAt >= timeoutMs) {
++			return { claims: [...claimsByRunKey.values()], error: `Timed out before exact awaited result publication for: ${published.pending.map((run) => run.id).join(", ")}.` };
++		}
++		await waitForWake(pollIntervalMs, signal, deps);
++		remaining = published.pending;
++	}
++}
++
++function withClaimedResults(summary: string, claims: PublishedClaim[]): string {
++	if (claims.length === 0) return summary;
++	const results = claims.map((claim) =>
++		`Awaited result ${claim.claim.runKey} (${claim.claim.resultSha256}, ${claim.claim.resultSizeBytes} bytes):\n${claim.resultText}`
++	).join("\n\n");
++	return `${summary}\n\n${results}`;
++}
++
+ const TRANSCRIPT_TAIL_BYTES = 128 * 1024;
+ const TRANSCRIPT_PREVIEW_LINES = 3;
+ const TRANSCRIPT_PREVIEW_WIDTH = 220;
+@@ -497,6 +577,21 @@ export async function waitForSubagents(
+ 
+ 	let providerActive = providerSnapshot.items;
+ 	if (active.length === 0 && providerActive.length === 0) {
++		if (params.id) {
++			try {
++				const terminalCandidates = allRunsForSession(params, deps).filter((run) => !ACTIVE_STATES.includes(run.state));
++				const exact = terminalCandidates.filter((run) => run.id === params.id);
++				const matches = exact.length ? exact : terminalCandidates;
++				if (matches.length > 1) return result(`Ambiguous subagent run id prefix "${params.id}" matched ${matches.length} terminal runs: ${matches.map((run) => run.id).join(", ")}. Pass a longer id.`, true);
++				if (matches[0]?.deliveryDisposition === "awaited") {
++					const published = await waitForAwaitedClaims(matches, signal, deps, startedAt, timeoutMs, pollIntervalMs);
++					if (published.error) return result(`Awaited result claim failed: ${published.error}`, true, published.claims);
++					return result(withClaimedResults(`Run "${matches[0].id}" is already terminal; exact awaited result claimed.`, published.claims), false, published.claims);
++				}
++			} catch (error) {
++				return result(error instanceof Error ? error.message : String(error), true);
++			}
++		}
+ 		return result(params.id
+ 			? `No active run matched "${params.id}". Nothing to wait for.`
+ 			: "No active async runs or registered provider work in this session. Nothing to wait for.");
+@@ -567,6 +662,14 @@ export async function waitForSubagents(
+ 	} catch (error) {
+ 		return result(error instanceof Error ? error.message : String(error), true);
+ 	}
++	let terminalRuns: AsyncRunSummary[];
++	try {
++		terminalRuns = allRunsForSession(waitParams, deps).filter((run) => !ACTIVE_STATES.includes(run.state) && initialAsyncIds.has(run.id));
++	} catch (error) {
++		return result(error instanceof Error ? error.message : String(error), true);
++	}
++	const published = await waitForAwaitedClaims(terminalRuns, signal, deps, startedAt, timeoutMs, pollIntervalMs);
++	if (published.error) return result(`Awaited result claim failed: ${published.error}`, true, published.claims);
+ 
+ 	const relevantAttention = attention.filter((run) => initialAsyncIds.has(run.id));
+ 	const supervisorAttentionHint = relevantAttention.some(hasSupervisorTool)
+@@ -588,8 +691,9 @@ export async function waitForSubagents(
+ 				: `${initialAsyncIds.size} async run(s) and ${initialProviderIds.size} provider item(s)`;
+ 		const status = relevantAttention.length > 0 ? "attention required" : "done";
+ 		return result(
+-			`Waited ${elapsed} for ${scope}; ${status}.${outcome}${attentionNote} Completion/control events have been observed; inspect status if a notification is not visible yet.`,
++			withClaimedResults(`Waited ${elapsed} for ${scope}; ${status}.${outcome}${attentionNote} Completion/control events have been observed; inspect status if a notification is not visible yet.`, published.claims),
+ 			deps.failOnFailedRuns === true && failedAsyncCount > 0,
++			published.claims,
+ 		);
+ 	}
+ 
+@@ -604,7 +708,8 @@ export async function waitForSubagents(
+ 		? `${relevantAttention.length} of ${initialCount} ${subject} need attention`
+ 		: `${finishedCount} of ${initialCount} ${subject} finished`;
+ 	return result(
+-		`Waited ${elapsed}; ${progress}.${outcome}${attentionNote}${remainder} Relevant completion/control events have been observed; inspect status if a notification is not visible yet.`,
++		withClaimedResults(`Waited ${elapsed}; ${progress}.${outcome}${attentionNote}${remainder} Relevant completion/control events have been observed; inspect status if a notification is not visible yet.`, published.claims),
+ 		deps.failOnFailedRuns === true && failedAsyncCount > 0,
++		published.claims,
+ 	);
+ }
 diff --git a/src/runs/background/top-level-async.ts b/src/runs/background/top-level-async.ts
-index 08a7e77ad917db4c4d105ea38d8ebc51526038b7..0c9c885d1150566c19d4d88dea7a0290520242b6 100644
+index 08a7e77..fb14f3f 100644
 --- a/src/runs/background/top-level-async.ts
 +++ b/src/runs/background/top-level-async.ts
-@@ -9,6 +9,7 @@ export function applyForceTopLevelAsyncOverride<T extends AsyncOverrideParams>(
+@@ -1,7 +1,16 @@
++import type { DeliveryDisposition } from "../../shared/types.ts";
++
+ interface AsyncOverrideParams {
+ 	async?: boolean;
+ 	clarify?: boolean;
+ 	foregroundOnly?: boolean;
++	deliveryDisposition?: DeliveryDisposition;
++}
++
++export function resolveDeliveryDisposition(value: unknown, env: NodeJS.ProcessEnv = process.env): DeliveryDisposition {
++	const selected = value ?? env.PI_SUBAGENTS_DEFAULT_DELIVERY_DISPOSITION ?? "follow_up";
++	if (selected === "awaited" || selected === "follow_up" || selected === "silent") return selected;
++	throw new Error(`Invalid deliveryDisposition '${String(selected)}'; expected awaited, follow_up, or silent.`);
+ }
+ 
+ export function applyForceTopLevelAsyncOverride<T extends AsyncOverrideParams>(
+@@ -9,6 +18,9 @@ export function applyForceTopLevelAsyncOverride<T extends AsyncOverrideParams>(
  	depth: number,
  	forceTopLevelAsync: boolean,
  ): T {
 -	if (params.foregroundOnly || !(depth === 0 && forceTopLevelAsync)) return params;
+-	return { ...params, async: true, clarify: false };
++	const deliveryDisposition = resolveDeliveryDisposition(params.deliveryDisposition);
++	const normalized = params.deliveryDisposition === deliveryDisposition ? params : { ...params, deliveryDisposition };
 +	const hostForcesEveryDepth = process.env.PI_SUBAGENTS_FORCE_ASYNC === "1";
-+	if (!hostForcesEveryDepth && (params.foregroundOnly || !(depth === 0 && forceTopLevelAsync))) return params;
- 	return { ...params, async: true, clarify: false };
++	if (!hostForcesEveryDepth && (normalized.foregroundOnly || !(depth === 0 && forceTopLevelAsync))) return normalized;
++	return { ...normalized, async: true, clarify: false };
  }
+diff --git a/src/runs/background/wait-tool.ts b/src/runs/background/wait-tool.ts
+index 90539d9..5f0aa8b 100644
+--- a/src/runs/background/wait-tool.ts
++++ b/src/runs/background/wait-tool.ts
+@@ -2,6 +2,21 @@ import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-age
+ import { SubagentWaitParams } from "../../extension/schemas.ts";
+ import type { Details, SubagentState } from "../../shared/types.ts";
+ import { resolveWaitToolConfig, waitForSubagents } from "./subagent-wait.ts";
++import type { ResultClaimV1 } from "./result-claim.ts";
++
++export function sameCanonicalResultClaim(value: unknown, claim: ResultClaimV1): boolean {
++	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
++	const candidate = value as Partial<ResultClaimV1>;
++	return candidate.version === claim.version
++		&& candidate.kind === claim.kind
++		&& candidate.runId === claim.runId
++		&& candidate.runKey === claim.runKey
++		&& candidate.sessionId === claim.sessionId
++		&& candidate.deliveryDisposition === claim.deliveryDisposition
++		&& candidate.resultSha256 === claim.resultSha256
++		&& candidate.resultSizeBytes === claim.resultSizeBytes
++		&& candidate.claimedAt === claim.claimedAt;
++}
+ 
+ export function registerWaitTool(pi: ExtensionAPI, state: SubagentState, enabled = resolveWaitToolConfig().enabled): void {
+ 	const tool: ToolDefinition<typeof SubagentWaitParams, Details> = {
+@@ -9,7 +24,7 @@ export function registerWaitTool(pi: ExtensionAPI, state: SubagentState, enabled
+ 		label: "Subagent Wait",
+ 		description: `Block until background work owned by this session changes, then return.
+ 
+-In an interactive chat, do not call this merely to wait: return control to the user and let Pi wake the session on completion. Override that default and call it when the current request is run-to-completion — for example, the user asked you to report results back before continuing or a skill cannot return before its work finishes. Headless runs auto-drain current-session work at agent_end; call this when the current turn must receive results before it ends.
++Interactive Pi defaults to follow_up delivery: normally do not call this merely to wait; return control to the user and let Pi wake the session on completion. Call it when the current request is run-to-completion or delivery is awaited. Agentd sets awaited delivery and disables automatic draining, so an agentd turn that launched work must call subagent_wait for the exact result before finishing. Other headless hosts auto-drain at agent_end unless the host disables that policy.
+ 
+ • { } — return when the first initially active async run or registered provider item finishes, or when a subagent needs attention.
+ • { all: true } — wait for every async run and provider item that was active when the call began.
+@@ -18,8 +33,20 @@ In an interactive chat, do not call this merely to wait: return control to the u
+ 
+ Provider jobs are session-scoped and identified exactly, so replacing one job with another cannot hide a completion. Provider extensions must be explicitly loaded in this process. In a child agent, keep \`subagent_wait\` in the child tool allowlist and load each provider through the agent's extensions or subagentOnlyExtensions; this tool never loads providers or grants tools itself.${enabled ? "" : "\n\nConfigured behavior: subagent_wait is disabled by config.waitTool or PI_SUBAGENT_WAIT_TOOL_ENABLED and returns immediately without blocking."}`,
+ 		parameters: SubagentWaitParams,
+-		execute(_id, params, signal, onUpdate) {
+-			return waitForSubagents(params, signal, { state, events: pi.events, enabled, onUpdate });
++		execute(_id, params, signal, onUpdate, ctx) {
++			return waitForSubagents(params, signal, {
++				state,
++				events: pi.events,
++				enabled,
++				onUpdate,
++				publishClaim: (claim) => {
++					const existing = ctx.sessionManager.getEntries().find((entry) => {
++						if (entry.type !== "custom" || entry.customType !== "pi-subagents.result-claim") return false;
++						return sameCanonicalResultClaim(entry.data, claim);
++					});
++					return existing?.id ?? ctx.sessionManager.appendCustomEntry("pi-subagents.result-claim", claim);
++				},
++			});
+ 		},
+ 	};
+ 	pi.registerTool(tool);
 diff --git a/src/runs/foreground/chain-execution.ts b/src/runs/foreground/chain-execution.ts
-index b288c75f8652d5fb6968b4fb7d0d62f29161f7f4..c527178fc5e8fe3e57e8688f6f9e8a51c5d68775 100644
+index b288c75..c527178 100644
 --- a/src/runs/foreground/chain-execution.ts
 +++ b/src/runs/foreground/chain-execution.ts
 @@ -73,6 +73,7 @@ import { injectSingleOutputInstruction, validateFileOnlyOutputMode } from "../sh
@@ -1522,7 +2288,7 @@ index b288c75f8652d5fb6968b4fb7d0d62f29161f7f4..c527178fc5e8fe3e57e8688f6f9e8a51
  				capabilityCeiling: params.capabilityCeiling,
  				context: params.contextForAgent?.(seqStep.agent),
 diff --git a/src/runs/foreground/execution.ts b/src/runs/foreground/execution.ts
-index 66158ba6419dba544ee3227ac0810cfd4488eccd..86c467420ec2f19e0a236795567b9f0ac6a61a16 100644
+index 66158ba..86c4674 100644
 --- a/src/runs/foreground/execution.ts
 +++ b/src/runs/foreground/execution.ts
 @@ -79,6 +79,7 @@ import { attachContractProjections, isAgentContractV1 } from "../shared/agent-co
@@ -1628,7 +2394,7 @@ index 66158ba6419dba544ee3227ac0810cfd4488eccd..86c467420ec2f19e0a236795567b9f0a
  			acceptance: target.acceptance,
  			capabilityCeiling: target.capabilityCeiling,
 diff --git a/src/runs/foreground/subagent-executor.ts b/src/runs/foreground/subagent-executor.ts
-index b2bb70dc39fea4e741f43f35175f59157f705aa6..ea0cef0b7aa6e3a280f7f2952a6928be7684f1a8 100644
+index b2bb70d..273b307 100644
 --- a/src/runs/foreground/subagent-executor.ts
 +++ b/src/runs/foreground/subagent-executor.ts
 @@ -49,6 +49,7 @@ import { formatSpawnBudget, getSpawnBudgetSnapshot, grantSpawnBudget, preflightS
@@ -1639,7 +2405,24 @@ index b2bb70dc39fea4e741f43f35175f59157f705aa6..ea0cef0b7aa6e3a280f7f2952a6928be
  import { finalizeSingleOutput, injectSingleOutputInstruction, normalizeSingleOutputOverride, resolveSingleOutputPath, validateFileOnlyOutputMode } from "../shared/single-output.ts";
  import { cleanupStructuredOutputRuntime, createStructuredOutputRuntime } from "../shared/structured-output.ts";
  import { compactForegroundDetails, getSingleResultOutput, mapConcurrent, readStatus, resolveChildCwd, sumResultsCost, sumResultsUsage } from "../../shared/utils.ts";
-@@ -128,6 +129,7 @@ const MUTATING_MANAGEMENT_ACTIONS = new Set(["create", "update", "delete", "ejec
+@@ -73,7 +74,7 @@ import { attachRootChildrenToSteps, createNestedRoute, readNestedControlResults,
+ import { resolveSubagentRunId, type ResolvedSubagentRunId } from "../background/run-id-resolver.ts";
+ import { formatNestedRunStatusLines } from "../shared/nested-render.ts";
+ import { inspectSubagentStatus } from "../background/run-status.ts";
+-import { applyForceTopLevelAsyncOverride } from "../background/top-level-async.ts";
++import { applyForceTopLevelAsyncOverride, resolveDeliveryDisposition } from "../background/top-level-async.ts";
+ import {
+ 	cleanupWorktrees,
+ 	createWorktrees,
+@@ -93,6 +94,7 @@ import {
+ 	type ControlConfig,
+ 	type ControlEvent,
+ 	type Details,
++	type DeliveryDisposition,
+ 	type ExtensionConfig,
+ 	type ForegroundRunControl,
+ 	type IntercomEventBus,
+@@ -128,6 +130,7 @@ const MUTATING_MANAGEMENT_ACTIONS = new Set(["create", "update", "delete", "ejec
  interface TaskParam {
  	agent: string;
  	task: string;
@@ -1647,7 +2430,7 @@ index b2bb70dc39fea4e741f43f35175f59157f705aa6..ea0cef0b7aa6e3a280f7f2952a6928be
  	cwd?: string;
  	count?: number;
  	output?: string | boolean;
-@@ -144,6 +146,7 @@ interface TaskParam {
+@@ -144,6 +147,7 @@ interface TaskParam {
  
  export interface SubagentParamsLike {
  	action?: string;
@@ -1655,7 +2438,15 @@ index b2bb70dc39fea4e741f43f35175f59157f705aa6..ea0cef0b7aa6e3a280f7f2952a6928be
  	id?: string;
  	runId?: string;
  	dir?: string;
-@@ -407,6 +410,8 @@ function rememberForegroundRun(state: SubagentState, input: { runId: string; mod
+@@ -160,6 +164,7 @@ export interface SubagentParamsLike {
+ 	worktree?: boolean;
+ 	context?: "fresh" | "fork";
+ 	async?: boolean;
++	deliveryDisposition?: DeliveryDisposition;
+ 	foregroundOnly?: boolean;
+ 	timeoutMs?: number;
+ 	maxRuntimeMs?: number;
+@@ -407,6 +412,8 @@ function rememberForegroundRun(state: SubagentState, input: { runId: string; mod
  				agent: result.agent,
  				index,
  				...(result.context ? { context: result.context } : {}),
@@ -1664,7 +2455,7 @@ index b2bb70dc39fea4e741f43f35175f59157f705aa6..ea0cef0b7aa6e3a280f7f2952a6928be
  				status: resolveSubagentResultStatus({ exitCode: result.exitCode, interrupted: result.interrupted, detached: result.detached }),
  				...foregroundChildActivityFromProgress(result.progress),
  				updatedAt,
-@@ -473,6 +478,8 @@ function updateRememberedForegroundChild(state: SubagentState, input: { runId: s
+@@ -473,6 +480,8 @@ function updateRememberedForegroundChild(state: SubagentState, input: { runId: s
  		agent: input.result.agent,
  		index: input.index,
  		...(input.result.context ? { context: input.result.context } : {}),
@@ -1673,7 +2464,7 @@ index b2bb70dc39fea4e741f43f35175f59157f705aa6..ea0cef0b7aa6e3a280f7f2952a6928be
  		status: input.result.acceptance?.status === "rejected"
  			? "failed"
  			: resolveSubagentResultStatus({ exitCode: input.result.exitCode, interrupted: input.result.interrupted, detached: false }),
-@@ -523,7 +530,7 @@ function updateRememberedForegroundChild(state: SubagentState, input: { runId: s
+@@ -523,7 +532,7 @@ function updateRememberedForegroundChild(state: SubagentState, input: { runId: s
  	});
  }
  
@@ -1682,7 +2473,7 @@ index b2bb70dc39fea4e741f43f35175f59157f705aa6..ea0cef0b7aa6e3a280f7f2952a6928be
  	const requested = (params.id ?? params.runId)?.trim();
  	if (!requested || !state.foregroundRuns?.size || !state.currentSessionId) return undefined;
  	const sessionRuns = [...state.foregroundRuns.values()].filter((run) => run.sessionId === state.currentSessionId);
-@@ -552,6 +559,8 @@ function resolveForegroundResumeTarget(params: SubagentParamsLike, state: Subage
+@@ -552,6 +561,8 @@ function resolveForegroundResumeTarget(params: SubagentParamsLike, state: Subage
  		sessionFile,
  		...(child.model ? { model: child.model } : {}),
  		...(child.thinking ? { thinking: child.thinking } : {}),
@@ -1691,16 +2482,26 @@ index b2bb70dc39fea4e741f43f35175f59157f705aa6..ea0cef0b7aa6e3a280f7f2952a6928be
  		...(child.launchContractDigest ? { launchContractDigest: child.launchContractDigest } : {}),
  		...(child.capabilityCeiling ? { capabilityCeiling: child.capabilityCeiling } : {}),
  	};
-@@ -1353,6 +1362,8 @@ async function resumeAsyncRun(input: {
+@@ -1290,6 +1301,7 @@ async function resumeAsyncRun(input: {
+ 		const normalized = normalizeSkillInput(input.params.skill);
+ 		const parentModel = input.parentModel;
+ 		const result = executeAsyncChain(runId, {
++			deliveryDisposition: resolveDeliveryDisposition(input.params.deliveryDisposition),
+ 			chain,
+ 			task: workflowTask,
+ 			goal,
+@@ -1352,7 +1364,10 @@ async function resumeAsyncRun(input: {
+ 	const availableModels = input.ctx.modelRegistry.getAvailable().map(toModelInfo);
  	const parentModel = input.parentModel;
  	const result = executeAsyncSingle(runId, {
++		deliveryDisposition: resolveDeliveryDisposition(input.params.deliveryDisposition ?? recoveryDescriptor?.deliveryDisposition),
  		agent: target.agent,
 +		executionTarget: recoveryDescriptor?.executionTarget ?? ("executionTarget" in target ? target.executionTarget : undefined),
 +		executionTargetDigest: recoveryDescriptor?.executionTargetDigest ?? ("executionTargetDigest" in target ? target.executionTargetDigest : undefined),
  		task: buildRevivedAsyncTask(target, followUp),
  		goal: followUp,
  		agentConfig: recoveryAgentConfig,
-@@ -1545,6 +1556,33 @@ function validateExecutionInput(
+@@ -1545,6 +1560,33 @@ function validateExecutionInput(
  		};
  	}
  
@@ -1734,7 +2535,7 @@ index b2bb70dc39fea4e741f43f35175f59157f705aa6..ea0cef0b7aa6e3a280f7f2952a6928be
  	const acceptanceErrors = validateExecutionAcceptance(params);
  	if (acceptanceErrors.length > 0) {
  		return {
-@@ -2106,6 +2144,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
+@@ -2106,6 +2148,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
  		const skillOverrides = params.tasks.map((task) => normalizeSkillInput(task.skill));
  		const parallelTasks = params.tasks.map((task, index) => ({
  			agent: task.agent,
@@ -1742,15 +2543,41 @@ index b2bb70dc39fea4e741f43f35175f59157f705aa6..ea0cef0b7aa6e3a280f7f2952a6928be
  			task: shouldForkAgent(contextPolicy, task.agent) ? wrapForkTask(task.task) : task.task,
  			cwd: task.cwd,
  			...(task.model !== undefined ? { model: task.model } : {}),
-@@ -2219,6 +2258,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
+@@ -2120,6 +2163,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
+ 			...(task.acceptance !== undefined ? { acceptance: task.acceptance } : {}),
+ 		}));
+ 		return executeAsyncChain(id, {
++			deliveryDisposition: params.deliveryDisposition!,
+ 			chain: [{
+ 				parallel: parallelTasks,
+ 				concurrency: resolveTopLevelParallelConcurrency(params.concurrency, deps.config.parallel?.concurrency),
+@@ -2165,6 +2209,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
+ 		const rawChain = params.chain as ChainStep[];
+ 		const chain = wrapChainTasksForFork(rawChain, contextPolicy);
+ 		return executeAsyncChain(id, {
++			deliveryDisposition: params.deliveryDisposition!,
+ 			chain,
+ 			task: params.task,
+ 			goal: resolveAsyncEventGoal(params.task, rawChain),
+@@ -2218,7 +2263,9 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
+ 		const maxSubagentDepth = resolveChildMaxSubagentDepth(currentMaxSubagentDepth, a.maxSubagentDepth);
  		const modelOverride = resolveEffectiveSubagentModel(params.model as string | undefined, a.model, parentModel, availableModels, currentProvider, { scope: data.modelScope });
  		return executeAsyncSingle(id, {
++			deliveryDisposition: params.deliveryDisposition!,
  			agent: params.agent!,
 +			executionTarget: params.executionTarget,
  			task: shouldForkAgent(contextPolicy, params.agent!) ? wrapForkTask(params.task ?? "") : (params.task ?? ""),
  			goal: params.task ?? "",
  			agentConfig: a,
-@@ -2491,6 +2531,7 @@ function createParallelWorktreeSetup(
+@@ -2358,6 +2405,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
+ 		const asyncChain = wrapChainTasksForFork(rawAsyncChain, contextPolicy);
+ 		const firstAgent = firstChainAgent(rawAsyncChain);
+ 		return executeAsyncChain(id, {
++			deliveryDisposition: params.deliveryDisposition!,
+ 			chain: asyncChain,
+ 			task: params.task,
+ 			goal: resolveAsyncEventGoal(params.task, rawAsyncChain, firstAgent ? shouldForkAgent(contextPolicy, firstAgent) : false),
+@@ -2491,6 +2539,7 @@ function createParallelWorktreeSetup(
  ): { setup?: WorktreeSetup; errorResult?: AgentToolResult<Details> } {
  	if (!enabled) return {};
  	try {
@@ -1758,7 +2585,7 @@ index b2bb70dc39fea4e741f43f35175f59157f705aa6..ea0cef0b7aa6e3a280f7f2952a6928be
  		return {
  			setup: createWorktrees(cwd, runId, tasks.length, {
  				agents: tasks.map((task) => task.agent),
-@@ -2657,6 +2698,7 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
+@@ -2657,6 +2706,7 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
  			? createStructuredOutputRuntime(task.outputSchema, path.join(input.artifactsDir, "structured-output", input.runId))
  			: undefined;
  		return runSync(input.ctx.cwd, input.agents, task.agent, taskText, {
@@ -1766,15 +2593,25 @@ index b2bb70dc39fea4e741f43f35175f59157f705aa6..ea0cef0b7aa6e3a280f7f2952a6928be
  			parentSessionId: input.ctx.sessionManager.getSessionId() ?? undefined,
  			context: input.contextPolicy.contextForAgent(task.agent),
  			cwd: taskCwd,
-@@ -3225,6 +3267,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
+@@ -2893,6 +2943,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps):
+ 				};
+ 			});
+ 			return executeAsyncChain(id, {
++			deliveryDisposition: params.deliveryDisposition!,
+ 				chain: [{ parallel: parallelTasks, concurrency: parallelConcurrency, worktree: params.worktree }],
+ 				resultMode: "parallel",
+ 				goal: taskTexts[0] ?? "",
+@@ -3224,7 +3275,9 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
+ 				interactive: ctx.hasUI,
  			};
  			return executeAsyncSingle(id, {
++			deliveryDisposition: params.deliveryDisposition!,
  				agent: params.agent!,
 +				executionTarget: params.executionTarget,
  				task: shouldForkAgent(contextPolicy, params.agent!) ? wrapForkTask(task) : task,
  				goal: task,
  				agentConfig,
-@@ -3310,6 +3353,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
+@@ -3310,6 +3363,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
  	let r: Awaited<ReturnType<typeof runSync>>;
  	try {
  		r = await runSync(ctx.cwd, agents, params.agent!, task, {
@@ -1782,7 +2619,7 @@ index b2bb70dc39fea4e741f43f35175f59157f705aa6..ea0cef0b7aa6e3a280f7f2952a6928be
  			parentSessionId: ctx.sessionManager.getSessionId() ?? undefined,
  			context: data.contextPolicy.contextForAgent(params.agent!),
  			cwd: effectiveCwd,
-@@ -3940,6 +3984,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+@@ -3940,6 +3994,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
  		if (spawnPreflight.error) return spawnBudgetErrorResult(spawnPreflight.error, foregroundMode);
  
  		let forkSessionFileForIndex: (idx?: number) => string | undefined = () => undefined;
@@ -1790,7 +2627,7 @@ index b2bb70dc39fea4e741f43f35175f59157f705aa6..ea0cef0b7aa6e3a280f7f2952a6928be
  		let forkThinkingOverrideForIndex: (idx?: number) => AgentConfig["thinking"] | undefined = () => undefined;
  		let prepareForkThinking = (_agentName: string, _index: number, _modelOverride?: string): void => {};
  		const forkThinkingRequirements = new Map<number, boolean>();
-@@ -3970,6 +4015,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+@@ -3970,6 +4025,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
  			};
  			const forkContextResolver = createForkContextResolver(ctx.sessionManager, contextPolicy.usesFork ? "fork" : undefined, {
  				forceThinkingOffForIndex: (index) => forkThinkingRequirements.get(index) ?? true,
@@ -1798,7 +2635,7 @@ index b2bb70dc39fea4e741f43f35175f59157f705aa6..ea0cef0b7aa6e3a280f7f2952a6928be
  			});
  			forkSessionFileForIndex = forkContextResolver.sessionFileForIndex;
  			forkThinkingOverrideForIndex = forkContextResolver.thinkingOverrideForIndex;
-@@ -3979,6 +4025,19 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+@@ -3979,6 +4035,19 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
  		const requestedAsync = effectiveParams.async ?? deps.asyncByDefault;
  		const backgroundRequestedWhileClarifying = (hasChain || hasTasks) && requestedAsync && effectiveParams.clarify === true;
  		const effectiveAsync = requestedAsync && effectiveParams.clarify !== true;
@@ -1818,7 +2655,7 @@ index b2bb70dc39fea4e741f43f35175f59157f705aa6..ea0cef0b7aa6e3a280f7f2952a6928be
  		const foregroundTimeout = resolveForegroundTimeout(
  			effectiveParams,
  			effectiveAsync ? undefined : DEFAULT_FOREGROUND_TIMEOUT_MS,
-@@ -4014,6 +4073,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+@@ -4014,6 +4083,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
  		}
  		const sessionDirForIndex = (idx?: number) =>
  			path.join(sessionRoot, `run-${idx ?? 0}`);
@@ -1827,7 +2664,7 @@ index b2bb70dc39fea4e741f43f35175f59157f705aa6..ea0cef0b7aa6e3a280f7f2952a6928be
  			if (!shouldForkAgent(contextPolicy, agentName)) return undefined;
  			prepareForkThinking(agentName, idx, modelOverride);
 diff --git a/src/runs/shared/dynamic-fanout.ts b/src/runs/shared/dynamic-fanout.ts
-index c6e163be03afb99a0cea1edf181c6e78f13de90b..dadf30216ef0296b59b89d017da9d421324c4462 100644
+index c6e163b..dadf302 100644
 --- a/src/runs/shared/dynamic-fanout.ts
 +++ b/src/runs/shared/dynamic-fanout.ts
 @@ -46,12 +46,13 @@ const DYNAMIC_STEP_KEYS = new Set(["expand", "parallel", "collect", "concurrency
@@ -1847,7 +2684,7 @@ index c6e163be03afb99a0cea1edf181c6e78f13de90b..dadf30216ef0296b59b89d017da9d421
  
 diff --git a/src/runs/shared/execution-target.ts b/src/runs/shared/execution-target.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..1790b52b386a29528c568c44b6695ff38c6e3bf9
+index 0000000..1790b52
 --- /dev/null
 +++ b/src/runs/shared/execution-target.ts
 @@ -0,0 +1,213 @@
@@ -2065,7 +2902,7 @@ index 0000000000000000000000000000000000000000..1790b52b386a29528c568c44b6695ff3
 +	if (targets.some((target) => target?.kind === "ssh")) throw new Error("worktree:true is not supported for SSH execution targets; no worktree was created.");
 +}
 diff --git a/src/runs/shared/parallel-utils.ts b/src/runs/shared/parallel-utils.ts
-index 9a0d8a60884aae0047370e5870743bbc7ba3afbb..a170fdd26ec00265961409cf2c1e4059a14d2356 100644
+index 9a0d8a6..a170fdd 100644
 --- a/src/runs/shared/parallel-utils.ts
 +++ b/src/runs/shared/parallel-utils.ts
 @@ -1,4 +1,5 @@
@@ -2075,7 +2912,7 @@ index 9a0d8a60884aae0047370e5870743bbc7ba3afbb..a170fdd26ec00265961409cf2c1e4059
  	parentSessionId?: string;
  	agent: string;
 diff --git a/src/runs/shared/pi-args.ts b/src/runs/shared/pi-args.ts
-index fafe66da1eda54ffe7a32f4b08644e77630bde90..848e730954712082cd53771f59dd9b770b5bda4b 100644
+index fafe66d..8dedb0a 100644
 --- a/src/runs/shared/pi-args.ts
 +++ b/src/runs/shared/pi-args.ts
 @@ -14,6 +14,7 @@ import { CHILD_WATCHDOG_CONFIG_ENV, encodeChildWatchdogConfig, type ChildWatchdo
@@ -2124,17 +2961,27 @@ index fafe66da1eda54ffe7a32f4b08644e77630bde90..848e730954712082cd53771f59dd9b77
  
  	if (!input.inheritProjectContext) {
  		args.push("--no-context-files");
-@@ -280,7 +281,7 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
+@@ -280,7 +281,17 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
  		args.push(`Task: ${input.task}`);
  	}
  
 -	const env: Record<string, string | undefined> = {};
-+	const env: Record<string, string | undefined> = { ...targetLaunch.env };
++	const env: Record<string, string | undefined> = {
++		...targetLaunch.env,
++		// These policies belong to the top-level agentd runtime whose canonical
++		// session can settle awaited result claims. A spawned Pi owns a different
++		// session, so inheriting them would strand exact child results in host-only
++		// custody. Keep force-async and execution-target locks ambient: those are
++		// safety constraints that intentionally apply at every depth.
++		PI_SUBAGENTS_HOST_ACK_RESULTS: undefined,
++		PI_SUBAGENTS_DEFAULT_DELIVERY_DISPOSITION: undefined,
++		PI_SUBAGENTS_DISABLE_AUTO_DRAIN: undefined,
++	};
  	const piPackageRoot = process.env[PI_CODING_AGENT_PACKAGE_ROOT_ENV] ?? resolvePiPackageRoot();
  	if (piPackageRoot) env[PI_CODING_AGENT_PACKAGE_ROOT_ENV] = piPackageRoot;
  	let toolDiagnosticPath: string | undefined;
 diff --git a/src/shared/fork-context.ts b/src/shared/fork-context.ts
-index b43f170073ec23237c623cecc957a12049720424..b3bfe586088db3b0c1f75909e1c1c8a8fba95057 100644
+index b43f170..b3bfe58 100644
 --- a/src/shared/fork-context.ts
 +++ b/src/shared/fork-context.ts
 @@ -36,6 +36,8 @@ interface ForkableSessionManager {
@@ -2164,7 +3011,7 @@ index b43f170073ec23237c623cecc957a12049720424..b3bfe586088db3b0c1f75909e1c1c8a8
  			const sessionFile = sourceManager.createBranchedSession(leafId);
  			if (!sessionFile) {
 diff --git a/src/shared/launch-contract.ts b/src/shared/launch-contract.ts
-index 3dd5741a525a56d7dd52bb0b30d3c3ed337fd99e..0bbd9b9ca5834606f9e50d0e24c559aa1c54dd61 100644
+index 3dd5741..ed0992a 100644
 --- a/src/shared/launch-contract.ts
 +++ b/src/shared/launch-contract.ts
 @@ -1,9 +1,10 @@
@@ -2175,30 +3022,32 @@ index 3dd5741a525a56d7dd52bb0b30d3c3ed337fd99e..0bbd9b9ca5834606f9e50d0e24c559aa
  
  export const AGENT_DEFINITION_PROJECTION_VERSION = 1 as const;
 -export const LAUNCH_BINDING_PROJECTION_VERSION = 1 as const;
-+export const LAUNCH_BINDING_PROJECTION_VERSION = 2 as const;
++export const LAUNCH_BINDING_PROJECTION_VERSION = 3 as const;
  
  function stableJson(value: unknown): string {
  	if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
-@@ -74,6 +75,8 @@ export function agentDefinitionDigest(agent: AgentConfig): string {
+@@ -74,6 +75,9 @@ export function agentDefinitionDigest(agent: AgentConfig): string {
  
  export interface LaunchBindingInput {
  	definitionDigest: string;
++	deliveryDisposition?: import("./types.ts").DeliveryDisposition;
 +	executionTarget?: PublicExecutionTarget;
 +	executionTargetDigest?: string;
  	/** Caller task; runtime acceptance/output task annotations are explicitly outside the preflight-known subset. */
  	task?: string;
  	model?: string;
-@@ -98,6 +101,8 @@ export function projectLaunchBinding(input: LaunchBindingInput): Record<string,
+@@ -98,6 +102,9 @@ export function projectLaunchBinding(input: LaunchBindingInput): Record<string,
  	return {
  		version: LAUNCH_BINDING_PROJECTION_VERSION,
  		definitionDigest: input.definitionDigest,
++		deliveryDisposition: input.deliveryDisposition === "follow_up" ? undefined : input.deliveryDisposition,
 +		executionTarget: input.executionTarget ?? { kind: "local" },
 +		executionTargetDigest: input.executionTargetDigest,
  		taskDigest: input.task === undefined ? undefined : sha256(input.task),
  		// The ordered candidate set already contains each attempted model; keeping only
  		// this set makes retries correlate to the same preflight binding.
 diff --git a/src/shared/settings.ts b/src/shared/settings.ts
-index b13363e67383f4ca8864d3fcda289ba7722f9acc..c7bf4966e4286bcad5ae0eef9c1ff0aac974ba90 100644
+index b13363e..c7bf496 100644
 --- a/src/shared/settings.ts
 +++ b/src/shared/settings.ts
 @@ -5,6 +5,7 @@
@@ -2226,7 +3075,7 @@ index b13363e67383f4ca8864d3fcda289ba7722f9acc..c7bf4966e4286bcad5ae0eef9c1ff0aa
  	phase?: string;
  	label?: string;
 diff --git a/src/shared/types.ts b/src/shared/types.ts
-index 30a3087b025943e734d7d497a8efc55ec27b2f30..d7fde163d767fe4cf4286c7b812058019aa1d76d 100644
+index 30a3087..a95b5f3 100644
 --- a/src/shared/types.ts
 +++ b/src/shared/types.ts
 @@ -10,6 +10,7 @@ import type { FSWatcher } from "node:fs";
@@ -2237,12 +3086,20 @@ index 30a3087b025943e734d7d497a8efc55ec27b2f30..d7fde163d767fe4cf4286c7b81205801
  
  // ============================================================================
  // Basic Types
-@@ -318,8 +319,12 @@ export interface EffectsProjection {
+@@ -215,6 +216,7 @@ export interface ControlEvent {
+ }
+ 
+ export type SubagentResultStatus = "completed" | "failed" | "paused" | "stopped" | "detached";
++export type DeliveryDisposition = "awaited" | "follow_up" | "silent";
+ export type SubagentRunMode = "single" | "parallel" | "chain";
+ 
+ export interface ParallelHandoffPatch {
+@@ -318,8 +320,12 @@ export interface EffectsProjection {
  	fileMutation?: FileMutationEffect;
  }
  
 -export const SUBAGENT_LIFECYCLE_ARTIFACT_VERSION = 3;
-+export const SUBAGENT_LIFECYCLE_ARTIFACT_VERSION = 4;
++export const SUBAGENT_LIFECYCLE_ARTIFACT_VERSION = 5;
  export type SubagentLifecycleArtifactVersion = typeof SUBAGENT_LIFECYCLE_ARTIFACT_VERSION;
 +export type SubagentExecutionState = "active" | "terminal" | "interrupted" | "uncertain" | "quarantined";
 +export type SubagentOutcomeState = "pending" | "succeeded" | "failed" | "interrupted" | "unknown";
@@ -2251,16 +3108,18 @@ index 30a3087b025943e734d7d497a8efc55ec27b2f30..d7fde163d767fe4cf4286c7b81205801
  
  export type ProcessTerminalState = "pending" | "observed" | "unknown" | "not-started";
  export type ProcessTerminalReason =
-@@ -446,6 +451,8 @@ export interface SteeringNotice {
+@@ -445,7 +451,10 @@ export interface SteeringNotice {
+ 
  export interface SteeringRecoveryDescriptor {
  	version: 1;
++	deliveryDisposition?: DeliveryDisposition;
  	launchContractDigest?: string;
 +	executionTarget?: ExecutionTarget;
 +	executionTargetDigest?: string;
  	sourceRunId: string;
  	agentContract?: AgentContract;
  	agent: string;
-@@ -759,6 +766,9 @@ export interface ProtocolOutputLimit {
+@@ -759,6 +768,9 @@ export interface ProtocolOutputLimit {
  export interface SingleResult {
  	agent: string;
  	task: string;
@@ -2270,9 +3129,20 @@ index 30a3087b025943e734d7d497a8efc55ec27b2f30..d7fde163d767fe4cf4286c7b81205801
  	/** Resolved launch context for this child. */
  	context?: "fresh" | "fork";
  	exitCode: number;
-@@ -1014,6 +1024,10 @@ export interface NestedRouteInfo {
+@@ -876,6 +888,8 @@ export interface Details {
+ 	lifecycleStatus?: {
+ 		processTerminal?: ProcessTerminalV1;
+ 	};
++	deliveryDisposition?: DeliveryDisposition;
++	resultClaims?: Array<Record<string, unknown>>;
+ 	launchContractDigest?: string;
+ 	/** Original launch contract whose persisted session is being revived. */
+ 	sourceLaunchContractDigest?: string;
+@@ -1013,7 +1027,12 @@ export interface NestedRouteInfo {
+ }
  
  export interface AsyncStartedEvent {
++	deliveryDisposition?: DeliveryDisposition;
  	lifecycleArtifactVersion?: SubagentLifecycleArtifactVersion;
 +	execution_state?: SubagentExecutionState;
 +	outcome_state?: SubagentOutcomeState;
@@ -2281,9 +3151,11 @@ index 30a3087b025943e734d7d497a8efc55ec27b2f30..d7fde163d767fe4cf4286c7b81205801
  	id?: string;
  	asyncDir?: string;
  	/** Parent-resolved launch directory, used as a trusted artifact root while this session is live. */
-@@ -1041,6 +1055,11 @@ export interface AsyncStartedEvent {
+@@ -1040,7 +1059,13 @@ export interface AsyncStartedEvent {
+ }
  
  export interface AsyncStatus {
++	deliveryDisposition?: DeliveryDisposition;
  	lifecycleArtifactVersion?: SubagentLifecycleArtifactVersion;
 +	executionTarget?: PublicExecutionTarget;
 +	execution_state?: SubagentExecutionState;
@@ -2293,7 +3165,7 @@ index 30a3087b025943e734d7d497a8efc55ec27b2f30..d7fde163d767fe4cf4286c7b81205801
  	runId: string;
  	sessionId?: string;
  	mode: SubagentRunMode;
-@@ -1080,6 +1099,8 @@ export interface AsyncStatus {
+@@ -1080,6 +1105,8 @@ export interface AsyncStatus {
  	capabilityAudit?: SubagentCapabilityAudit;
  	steps?: Array<{
  		agent: string;
@@ -2302,7 +3174,7 @@ index 30a3087b025943e734d7d497a8efc55ec27b2f30..d7fde163d767fe4cf4286c7b81205801
  		/** Resolved launch context for this child step. */
  		context?: "fresh" | "fork";
  		phase?: string;
-@@ -1201,6 +1222,8 @@ export interface AsyncJobState {
+@@ -1201,6 +1228,8 @@ export interface AsyncJobState {
  
  export interface ForegroundResumeChild {
  	agent: string;
@@ -2311,7 +3183,14 @@ index 30a3087b025943e734d7d497a8efc55ec27b2f30..d7fde163d767fe4cf4286c7b81205801
  	index: number;
  	context?: "fresh" | "fork";
  	sessionFile?: string;
-@@ -1367,6 +1390,9 @@ export const SUBAGENT_RESULT_INTERCOM_DELIVERY_EVENT = "subagent:result-intercom
+@@ -1361,12 +1390,16 @@ export const SUBAGENT_CONTROL_INTERCOM_EVENT = "subagent:control-intercom";
+ export const SUBAGENT_STEERING_NOTICE_EVENT = "subagent:steering-notice";
+ export const SUBAGENT_RESULT_INTERCOM_EVENT = "subagent:result-intercom";
+ export const SUBAGENT_RESULT_INTERCOM_DELIVERY_EVENT = "subagent:result-intercom-delivery";
++export const SUBAGENT_RESULT_CLAIMED_EVENT = "subagent:result-claimed";
+ 
+ // ============================================================================
+ // Execution Options
  // ============================================================================
  
  export interface RunSyncOptions {
@@ -2321,7 +3200,7 @@ index 30a3087b025943e734d7d497a8efc55ec27b2f30..d7fde163d767fe4cf4286c7b81205801
  	/** Session id of the direct parent session for permission-system ask forwarding. */
  	parentSessionId?: string;
  	/** Resolved launch context for this child. */
-@@ -1578,7 +1604,9 @@ export function resolveTempScopeId(options?: {
+@@ -1578,7 +1611,9 @@ export function resolveTempScopeId(options?: {
  
  const MAX_PARALLEL = 8;
  export const MAX_CONCURRENCY = 4;
@@ -2333,7 +3212,7 @@ index 30a3087b025943e734d7d497a8efc55ec27b2f30..d7fde163d767fe4cf4286c7b81205801
  export const ASYNC_DIR = path.join(TEMP_ROOT_DIR, "async-subagent-runs");
  export const CHAIN_RUNS_DIR = path.join(TEMP_ROOT_DIR, "chain-runs");
 diff --git a/src/tui/fleet-status.ts b/src/tui/fleet-status.ts
-index 7b9c65e5177362c09ec97533ec446c871d356267..6ecd6eda91b229f362530a1ced54d81d72e27a17 100644
+index 7b9c65e..6ecd6ed 100644
 --- a/src/tui/fleet-status.ts
 +++ b/src/tui/fleet-status.ts
 @@ -108,9 +108,11 @@ export function collectFleetStatusEntries(state: SubagentState): FleetStatusEntr
@@ -2349,8 +3228,48 @@ index 7b9c65e5177362c09ec97533ec446c871d356267..6ecd6eda91b229f362530a1ced54d81d
  				description: job.description,
  				startedAt: step.startedAt ?? startedAt,
  				tokens: step.tokens?.total ?? (steps.length === 1 ? job.totalTokens?.total ?? 0 : 0),
+diff --git a/test/integration/async-execution.test.ts b/test/integration/async-execution.test.ts
+index 0f2b329..6786f9d 100644
+--- a/test/integration/async-execution.test.ts
++++ b/test/integration/async-execution.test.ts
+@@ -472,6 +472,35 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
+ 		assert.equal(payload.results[0]?.launchContractDigest, preflight.contract.launchContractDigest);
+ 	});
+ 
++	it("persists the agentd awaited default through every lifecycle artifact and event", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
++		const previous = process.env.PI_SUBAGENTS_DEFAULT_DELIVERY_DISPOSITION;
++		process.env.PI_SUBAGENTS_DEFAULT_DELIVERY_DISPOSITION = "awaited";
++		const id = `async-awaited-disposition-${Date.now().toString(36)}`;
++		try {
++			mockPi.onCall({ output: "awaited result" });
++			const launch = executeAsyncSingle(id, {
++				agent: "echo", task: "await this", agentConfig: makeAgent("echo"),
++				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
++				artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
++				shareEnabled: false, sessionRoot: path.join(tempDir, "sessions"), maxSubagentDepth: 2,
++			});
++			assert.equal(launch.details.deliveryDisposition, "awaited");
++			const payload = await readAsyncPayload(id);
++			const asyncDir = launch.details.asyncDir!;
++			const status = JSON.parse(fs.readFileSync(path.join(asyncDir, "status.json"), "utf-8"));
++			const launchArtifact = JSON.parse(fs.readFileSync(path.join(asyncDir, "launch.json"), "utf-8"));
++			const events = fs.readFileSync(path.join(asyncDir, "events.jsonl"), "utf-8").trim().split("\n").map((line) => JSON.parse(line));
++			for (const artifact of [status, launchArtifact, payload]) {
++				assert.equal(artifact.lifecycleArtifactVersion, 5);
++				assert.equal(artifact.deliveryDisposition, "awaited");
++			}
++			assert.equal(events.find((event) => event.type === "subagent.run.started")?.deliveryDisposition, "awaited");
++			assert.equal(events.find((event) => event.type === "subagent.run.completed")?.deliveryDisposition, "awaited");
++		} finally {
++			if (previous === undefined) delete process.env.PI_SUBAGENTS_DEFAULT_DELIVERY_DISPOSITION; else process.env.PI_SUBAGENTS_DEFAULT_DELIVERY_DISPOSITION = previous;
++		}
++	});
++
+ 	it("persists the actual launch digest in async status and result metadata", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+ 		mockPi.onCall({ output: "digest-bound async done" });
+ 		const id = `async-launch-digest-${Date.now().toString(36)}`;
 diff --git a/test/integration/fork-context-execution.test.ts b/test/integration/fork-context-execution.test.ts
-index ebd0f0717c015516fa0c6f18edb61d423d5e99ff..e90e49bfc6bba5e004a2f1a20e640dcfd3b71bd9 100644
+index ebd0f07..e90e49b 100644
 --- a/test/integration/fork-context-execution.test.ts
 +++ b/test/integration/fork-context-execution.test.ts
 @@ -206,8 +206,9 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
@@ -2454,10 +3373,10 @@ index ebd0f0717c015516fa0c6f18edb61d423d5e99ff..e90e49bfc6bba5e004a2f1a20e640dcf
  			assert.notEqual(childSessionFile, path.join(tempDir, "parent-parallel.jsonl"));
  			assert.equal(fs.existsSync(childSessionFile), true);
 diff --git a/test/integration/result-watcher.test.ts b/test/integration/result-watcher.test.ts
-index e91cf0ace0649d18d2d3a1edb8528df993769847..d7f6441ba421f7b53827e7dc91f6506a95f19d83 100644
+index e91cf0a..9ad7592 100644
 --- a/test/integration/result-watcher.test.ts
 +++ b/test/integration/result-watcher.test.ts
-@@ -29,6 +29,81 @@ function createState(): SubagentState {
+@@ -29,6 +29,102 @@ function createState(): SubagentState {
  }
  
  describe("result watcher", () => {
@@ -2536,37 +3455,99 @@ index e91cf0ace0649d18d2d3a1edb8528df993769847..d7f6441ba421f7b53827e7dc91f6506a
 +		}
 +	});
 +
++	it("retains awaited and silent results without invoking notification transport", async () => {
++		for (const deliveryDisposition of ["awaited", "silent"] as const) {
++			const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-result-watcher-${deliveryDisposition}-`));
++			try {
++				const resultPath = path.join(resultsDir, `${deliveryDisposition}.json`);
++				fs.writeFileSync(resultPath, JSON.stringify({ id: deliveryDisposition, runId: deliveryDisposition, sessionId: "session-1", deliveryDisposition, success: true, summary: "internal" }));
++				let notifierCalls = 0;
++				const emitted: Array<{ event: string; data: unknown }> = [];
++				const state = createState(); state.currentSessionId = "session-1";
++				const watcher = createResultWatcher({ events: { on: () => () => {}, emit: (event: string, data: unknown) => emitted.push({ event, data }) } }, state, resultsDir, 60_000, {
++					notifier: { deliver: async () => { notifierCalls++; return true; } },
++				});
++				try { watcher.primeExistingResults(); await new Promise((resolve) => setTimeout(resolve, 100)); }
++				finally { watcher.stopResultWatcher(); }
++				assert.equal(notifierCalls, 0);
++				assert.equal(fs.existsSync(resultPath), true);
++				assert.equal(emitted.filter((entry) => entry.event === "subagent:async-complete").length, 1);
++			} finally { fs.rmSync(resultsDir, { recursive: true, force: true }); }
++		}
++	});
++
  	it("processes deferred session-scoped results after session identity is restored", async () => {
  		const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-session-"));
  		try {
 diff --git a/test/integration/top-level-async.test.ts b/test/integration/top-level-async.test.ts
-index fdadb1b33abf2a2ca682880befbe271c3915d337..a2d695161d431616cae8ac5c436b87528f9dd41c 100644
+index fdadb1b..ae68ecb 100644
 --- a/test/integration/top-level-async.test.ts
 +++ b/test/integration/top-level-async.test.ts
-@@ -35,6 +35,20 @@ describe("force top-level async helper", { skip: !available ? "pi packages not a
- 		assert.equal(next, params);
+@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
+ import { tryImport } from "../support/helpers.ts";
+ 
+ interface TopLevelAsyncModule {
+-	applyForceTopLevelAsyncOverride<T extends { async?: boolean; clarify?: boolean; foregroundOnly?: boolean }>(
++	applyForceTopLevelAsyncOverride<T extends { async?: boolean; clarify?: boolean; foregroundOnly?: boolean; deliveryDisposition?: "awaited" | "follow_up" | "silent" }>(
+ 		params: T,
+ 		depth: number,
+ 		forceTopLevelAsync: boolean,
+@@ -26,18 +26,49 @@ describe("force top-level async helper", { skip: !available ? "pi packages not a
+ 	it("keeps bridge-owned foreground calls attached", () => {
+ 		const params = { async: false, clarify: false, foregroundOnly: true };
+ 		const next = mod!.applyForceTopLevelAsyncOverride(params, 0, true);
+-		assert.equal(next, params);
++		assert.deepEqual(next, { ...params, deliveryDisposition: "follow_up" });
  	});
  
+ 	it("leaves nested calls unchanged", () => {
+ 		const params = { async: false, clarify: true };
+ 		const next = mod!.applyForceTopLevelAsyncOverride(params, 1, true);
+-		assert.equal(next, params);
++		assert.deepEqual(next, { ...params, deliveryDisposition: "follow_up" });
++	});
++
 +	it("forces nested calls only inside an agentd-owned host", () => {
 +		const previous = process.env.PI_SUBAGENTS_FORCE_ASYNC;
 +		process.env.PI_SUBAGENTS_FORCE_ASYNC = "1";
 +		try {
 +			const next = mod!.applyForceTopLevelAsyncOverride({ async: false, clarify: true }, 2, false);
-+			assert.deepEqual(next, { async: true, clarify: false });
++			assert.deepEqual(next, { async: true, clarify: false, deliveryDisposition: "follow_up" });
 +			const formerlyForegroundOnly = mod!.applyForceTopLevelAsyncOverride({ async: false, clarify: true, foregroundOnly: true }, 1, false);
-+			assert.deepEqual(formerlyForegroundOnly, { async: true, clarify: false, foregroundOnly: true });
++			assert.deepEqual(formerlyForegroundOnly, { async: true, clarify: false, foregroundOnly: true, deliveryDisposition: "follow_up" });
 +		} finally {
 +			if (previous === undefined) delete process.env.PI_SUBAGENTS_FORCE_ASYNC;
 +			else process.env.PI_SUBAGENTS_FORCE_ASYNC = previous;
 +		}
-+	});
-+
+ 	});
+ 
  	it("leaves top-level calls unchanged when the feature is off", () => {
  		const params = { async: false, clarify: true };
  		const next = mod!.applyForceTopLevelAsyncOverride(params, 0, false);
+-		assert.equal(next, params);
++		assert.deepEqual(next, { ...params, deliveryDisposition: "follow_up" });
+ 	});
++	it("uses the host default and preserves explicit dispositions through forced nested async", () => {
++		const previousForce = process.env.PI_SUBAGENTS_FORCE_ASYNC;
++		const previousDefault = process.env.PI_SUBAGENTS_DEFAULT_DELIVERY_DISPOSITION;
++		process.env.PI_SUBAGENTS_FORCE_ASYNC = "1";
++		process.env.PI_SUBAGENTS_DEFAULT_DELIVERY_DISPOSITION = "awaited";
++		try {
++			assert.deepEqual(mod!.applyForceTopLevelAsyncOverride({ async: false }, 0, false), { async: true, clarify: false, deliveryDisposition: "awaited" });
++			for (const deliveryDisposition of ["awaited", "follow_up", "silent"] as const) {
++				assert.deepEqual(mod!.applyForceTopLevelAsyncOverride({ async: false, deliveryDisposition }, 3, false), { async: true, clarify: false, deliveryDisposition });
++			}
++			assert.throws(() => mod!.applyForceTopLevelAsyncOverride({ deliveryDisposition: "invalid" as never }, 0, false), /Invalid deliveryDisposition/);
++		} finally {
++			if (previousForce === undefined) delete process.env.PI_SUBAGENTS_FORCE_ASYNC; else process.env.PI_SUBAGENTS_FORCE_ASYNC = previousForce;
++			if (previousDefault === undefined) delete process.env.PI_SUBAGENTS_DEFAULT_DELIVERY_DISPOSITION; else process.env.PI_SUBAGENTS_DEFAULT_DELIVERY_DISPOSITION = previousDefault;
++		}
++	});
++
+ });
 diff --git a/test/support/isolated-test-runner.mjs b/test/support/isolated-test-runner.mjs
 new file mode 100644
-index 0000000000000000000000000000000000000000..81a92658995728b5545095917072ed91dde69c35
+index 0000000..81a9265
 --- /dev/null
 +++ b/test/support/isolated-test-runner.mjs
 @@ -0,0 +1,38 @@
@@ -2609,7 +3590,7 @@ index 0000000000000000000000000000000000000000..81a92658995728b5545095917072ed91
 +	rmSync(root, { recursive: true, force: true });
 +}
 diff --git a/test/unit/async-recovery-descriptor.test.ts b/test/unit/async-recovery-descriptor.test.ts
-index 35fc917c06b0fe9697db867e20780ab69e6208d0..07b2790ca396035bf76544cc1b88982b6de63cd6 100644
+index 35fc917..07b2790 100644
 --- a/test/unit/async-recovery-descriptor.test.ts
 +++ b/test/unit/async-recovery-descriptor.test.ts
 @@ -27,6 +27,20 @@ describe("async recovery descriptor", () => {
@@ -2634,7 +3615,7 @@ index 35fc917c06b0fe9697db867e20780ab69e6208d0..07b2790ca396035bf76544cc1b88982b
  			fs.rmSync(root, { recursive: true, force: true });
  		}
 diff --git a/test/unit/async-resume.test.ts b/test/unit/async-resume.test.ts
-index 7d57683ba43b558239a75a6b4f2dfca55adfb07b..c2bec7af2c020aa0c1975dc386f92a7016086743 100644
+index 7d57683..c2bec7a 100644
 --- a/test/unit/async-resume.test.ts
 +++ b/test/unit/async-resume.test.ts
 @@ -41,6 +41,24 @@ describe("async resume lookup", () => {
@@ -2663,7 +3644,7 @@ index 7d57683ba43b558239a75a6b4f2dfca55adfb07b..c2bec7af2c020aa0c1975dc386f92a70
  		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-resume-ceiling-"));
  		try {
 diff --git a/test/unit/chain-serializer.test.ts b/test/unit/chain-serializer.test.ts
-index c9e4ec4680e9183632f76f0044a4b1ff52f47aad..8181e51318d22c083d172d874ff6e107f163bf52 100644
+index c9e4ec4..8181e51 100644
 --- a/test/unit/chain-serializer.test.ts
 +++ b/test/unit/chain-serializer.test.ts
 @@ -64,6 +64,25 @@ Review the diff
@@ -2693,7 +3674,7 @@ index c9e4ec4680e9183632f76f0044a4b1ff52f47aad..8181e51318d22c083d172d874ff6e107
  		assert.throws(
  			() => parseChain(`---
 diff --git a/test/unit/control-channel.test.ts b/test/unit/control-channel.test.ts
-index 5e14d6591bf330f2700cdbe5a6aec5d0e25bec17..d62d2da82a616a6bb03665b6653d84e93360e341 100644
+index 5e14d65..d62d2da 100644
 --- a/test/unit/control-channel.test.ts
 +++ b/test/unit/control-channel.test.ts
 @@ -52,6 +52,20 @@ describe("control channel: request file", () => {
@@ -2719,7 +3700,7 @@ index 5e14d6591bf330f2700cdbe5a6aec5d0e25bec17..d62d2da82a616a6bb03665b6653d84e9
  		try {
 diff --git a/test/unit/execution-target.test.ts b/test/unit/execution-target.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..2341f60bf08efd5d211def514044cab3075e8222
+index 0000000..2341f60
 --- /dev/null
 +++ b/test/unit/execution-target.test.ts
 @@ -0,0 +1,99 @@
@@ -2823,7 +3804,7 @@ index 0000000000000000000000000000000000000000..2341f60bf08efd5d211def514044cab3
 +  });
 +});
 diff --git a/test/unit/fork-context.test.ts b/test/unit/fork-context.test.ts
-index 69b3685a8e70eeaac84506273feda5d300a87ae8..bb54c6402264d5164111c1b11e247953d8de6633 100644
+index 69b3685..bb54c64 100644
 --- a/test/unit/fork-context.test.ts
 +++ b/test/unit/fork-context.test.ts
 @@ -129,11 +129,12 @@ describe("createForkContextResolver", () => {
@@ -2862,8 +3843,206 @@ index 69b3685a8e70eeaac84506273feda5d300a87ae8..bb54c6402264d5164111c1b11e247953
  		} finally {
  			fs.rmSync(tempDir, { recursive: true, force: true });
  		}
+diff --git a/test/unit/index-child-registration.test.ts b/test/unit/index-child-registration.test.ts
+index 8460439..4392f4e 100644
+--- a/test/unit/index-child-registration.test.ts
++++ b/test/unit/index-child-registration.test.ts
+@@ -263,171 +263,42 @@ describe("subagent extension child mode", () => {
+ 		}
+ 	});
+ 
+-	it("disposes pending completion notifications on session shutdown", () => {
+-		const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-notify-shutdown-"));
+-		const configDir = path.join(agentDir, "extensions", "subagent");
+-		fs.mkdirSync(configDir, { recursive: true });
+-		fs.writeFileSync(path.join(configDir, "config.json"), JSON.stringify({ completionBatch: { enabled: true, debounceMs: 150 } }), "utf-8");
++	it("disposes completion notification listeners on session shutdown", () => {
+ 		const script = String.raw`
+ 			import registerSubagentExtension from "./index.ts";
+-			const pendingTimers = new Map();
+-			const realSetTimeout = globalThis.setTimeout;
+-			const realClearTimeout = globalThis.clearTimeout;
+-			globalThis.setTimeout = (handler) => {
+-				const token = {};
+-				pendingTimers.set(token, handler);
+-				return token;
+-			};
+-			globalThis.clearTimeout = (token) => pendingTimers.delete(token);
+-			const eventListeners = new Map();
++			const listeners = new Map(); const handlers = new Map(); const sent = [];
+ 			const events = {
+-				on(channel, handler) {
+-					let listeners = eventListeners.get(channel);
+-					if (!listeners) eventListeners.set(channel, listeners = new Set());
+-					listeners.add(handler);
+-					return () => listeners.delete(handler);
+-				},
+-				emit(channel, payload) {
+-					for (const handler of [...(eventListeners.get(channel) ?? [])]) handler(payload);
+-				},
+-			};
+-			const handlers = new Map();
+-			const sent = [];
+-			const fakePi = new Proxy({
+-				events,
+-				on(channel, handler) { handlers.set(channel, handler); },
+-				registerTool() {}, registerCommand() {}, registerShortcut() {}, registerMessageRenderer() {},
+-				sendMessage(message) { sent.push(message); }, getSessionName() { return undefined; },
+-			}, { get(target, prop) { return prop in target ? target[prop] : () => undefined; } });
+-			const ctx = {
+-				cwd: process.cwd(), hasUI: false,
+-				ui: { setWidget() {}, requestRender() {}, theme: { fg(_name, text) { return text; }, bg(_name, text) { return text; }, bold(text) { return text; } } },
+-				sessionManager: { getSessionId() { return "notify-shutdown-session"; }, getSessionFile() { return null; }, getEntries() { return []; } },
+-				modelRegistry: { getAvailable() { return []; } },
++				on(channel, handler) { let set = listeners.get(channel); if (!set) listeners.set(channel, set = new Set()); set.add(handler); return () => set.delete(handler); },
++				emit(channel, payload) { for (const handler of [...(listeners.get(channel) ?? [])]) handler(payload); },
+ 			};
+-			registerSubagentExtension(fakePi);
+-			handlers.get("session_start")({}, ctx);
+-			sent.length = 0;
+-			events.emit("subagent:async-complete", {
+-				id: "shutdown-held-completion", agent: "worker", success: true, summary: "Done",
+-				exitCode: 0, timestamp: Date.now(), sessionId: "notify-shutdown-session",
+-			});
+-			if (sent.length !== 0) throw new Error("completion was not queued before shutdown");
+-			const heldTimers = [...pendingTimers.values()];
+-			if (heldTimers.length === 0) throw new Error("completion did not schedule a timer");
++			const pi = new Proxy({ events, on(channel, handler) { handlers.set(channel, handler); }, registerTool() {}, registerCommand() {}, registerShortcut() {}, registerMessageRenderer() {}, sendMessage(message) { sent.push(message); }, getSessionName() {} }, { get(target, prop) { return prop in target ? target[prop] : () => undefined; } });
++			const ctx = { cwd: process.cwd(), hasUI: false, ui: { setWidget() {}, requestRender() {}, theme: { fg(_n,t) { return t; }, bg(_n,t) { return t; }, bold(t) { return t; } } }, sessionManager: { getSessionId() { return "notify-shutdown-session"; }, getSessionFile() { return null; }, getEntries() { return []; } }, modelRegistry: { getAvailable() { return []; } } };
++			registerSubagentExtension(pi); handlers.get("session_start")({}, ctx); sent.length = 0;
+ 			handlers.get("session_shutdown")();
+-			if (pendingTimers.size !== 0) throw new Error("shutdown left completion timers pending");
+-			for (const handler of heldTimers) handler();
++			events.emit("subagent:async-complete", { id: "after-shutdown", agent: "worker", success: true, summary: "Done", sessionId: "notify-shutdown-session", deliveryDisposition: "follow_up" });
+ 			if (sent.length !== 0) throw new Error("stale completion sent after shutdown");
+-			globalThis.setTimeout = realSetTimeout;
+-			globalThis.clearTimeout = realClearTimeout;
+ 		`;
+-
+-		try {
+-			const env = parentToolEnv();
+-			env.PI_CODING_AGENT_DIR = agentDir;
+-			execFileSync(
+-				process.execPath,
+-				["--experimental-strip-types", "--import", "./test/support/register-loader.mjs", "--input-type=module", "--eval", script],
+-				{ cwd: projectRoot, env, stdio: "pipe" },
+-			);
+-		} finally {
+-			fs.rmSync(agentDir, { recursive: true, force: true });
+-		}
++		execFileSync(process.execPath, ["--experimental-strip-types", "--import", "./test/support/register-loader.mjs", "--input-type=module", "--eval", script], { cwd: projectRoot, env: parentToolEnv(), stdio: "pipe" });
+ 	});
+ 
+-	it("disposes pending completion notifications during runtime reload cleanup", () => {
+-		const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-notify-reload-"));
+-		const configDir = path.join(agentDir, "extensions", "subagent");
+-		fs.mkdirSync(configDir, { recursive: true });
+-		fs.writeFileSync(path.join(configDir, "config.json"), JSON.stringify({ completionBatch: { enabled: true, debounceMs: 150 } }), "utf-8");
++	it("keeps a newly registered notifier active after runtime reload cleanup", () => {
+ 		const script = String.raw`
+ 			import registerSubagentExtension from "./index.ts";
+-			const pendingTimers = new Map();
+-			const realSetTimeout = globalThis.setTimeout;
+-			const realClearTimeout = globalThis.clearTimeout;
+-			globalThis.setTimeout = (handler) => {
+-				const token = {};
+-				pendingTimers.set(token, handler);
+-				return token;
+-			};
+-			globalThis.clearTimeout = (token) => pendingTimers.delete(token);
+-			function createRuntime(sessionId) {
+-				const eventListeners = new Map();
+-				const handlers = new Map();
+-				const sent = [];
+-				const events = {
+-					on(channel, handler) {
+-						let listeners = eventListeners.get(channel);
+-						if (!listeners) eventListeners.set(channel, listeners = new Set());
+-						listeners.add(handler);
+-						return () => listeners.delete(handler);
+-					},
+-					emit(channel, payload) {
+-						for (const handler of [...(eventListeners.get(channel) ?? [])]) handler(payload);
+-					},
+-				};
+-				const pi = new Proxy({
+-					events,
+-					on(channel, handler) { handlers.set(channel, handler); },
+-					registerTool() {}, registerCommand() {}, registerShortcut() {}, registerMessageRenderer() {},
+-					sendMessage(message) { sent.push(message); }, getSessionName() { return undefined; },
+-				}, { get(target, prop) { return prop in target ? target[prop] : () => undefined; } });
+-				const ctx = {
+-					cwd: process.cwd(), hasUI: false,
+-					ui: { setWidget() {}, requestRender() {}, theme: { fg(_name, text) { return text; }, bg(_name, text) { return text; }, bold(text) { return text; } } },
+-					sessionManager: { getSessionId() { return sessionId; }, getSessionFile() { return null; }, getEntries() { return []; } },
+-					modelRegistry: { getAvailable() { return []; } },
+-				};
++			function runtime(sessionId) {
++				const listeners = new Map(), handlers = new Map(), sent = [];
++				const events = { on(channel, handler) { let set = listeners.get(channel); if (!set) listeners.set(channel, set = new Set()); set.add(handler); return () => set.delete(handler); }, emit(channel, payload) { for (const handler of [...(listeners.get(channel) ?? [])]) handler(payload); } };
++				const pi = new Proxy({ events, on(channel, handler) { handlers.set(channel, handler); }, registerTool() {}, registerCommand() {}, registerShortcut() {}, registerMessageRenderer() {}, sendMessage(message) { sent.push(message); }, getSessionName() {} }, { get(target, prop) { return prop in target ? target[prop] : () => undefined; } });
++				const ctx = { cwd: process.cwd(), hasUI: false, ui: { setWidget() {}, requestRender() {}, theme: { fg(_n,t) { return t; }, bg(_n,t) { return t; }, bold(t) { return t; } } }, sessionManager: { getSessionId() { return sessionId; }, getSessionFile() { return null; }, getEntries() { return []; } }, modelRegistry: { getAvailable() { return []; } } };
+ 				return { pi, events, handlers, sent, ctx };
+ 			}
+-			const oldRuntime = createRuntime("notify-reload-old");
+-			registerSubagentExtension(oldRuntime.pi);
+-			oldRuntime.handlers.get("session_start")({}, oldRuntime.ctx);
+-			oldRuntime.sent.length = 0;
+-			const timersBeforeOldCompletion = new Set(pendingTimers.keys());
+-			oldRuntime.events.emit("subagent:async-complete", {
+-				id: "reload-held-completion", agent: "worker", success: true, summary: "Old",
+-				exitCode: 0, timestamp: Date.now(), sessionId: "notify-reload-old",
+-			});
+-			if (oldRuntime.sent.length !== 0) throw new Error("old completion was not queued before reload");
+-			const oldCompletionTimers = [...pendingTimers.entries()].filter(([token]) => !timersBeforeOldCompletion.has(token));
+-			if (oldCompletionTimers.length === 0) throw new Error("old completion did not schedule a timer");
+-
+-			const newRuntime = createRuntime("notify-reload-new");
+-			registerSubagentExtension(newRuntime.pi);
+-			newRuntime.handlers.get("session_start")({}, newRuntime.ctx);
+-			for (const [, handler] of oldCompletionTimers) handler();
+-			if (oldRuntime.sent.length !== 0) throw new Error("stale completion sent after runtime cleanup");
+-
+-			const timersBeforeNewCompletion = new Set(pendingTimers.keys());
+-			newRuntime.events.emit("subagent:async-complete", {
+-				id: "reload-new-completion", agent: "reviewer", success: true, summary: "New",
+-				exitCode: 0, timestamp: Date.now(), sessionId: "notify-reload-new",
+-			});
+-			const newCompletionTimers = [...pendingTimers.entries()].filter(([token]) => !timersBeforeNewCompletion.has(token));
+-			if (newCompletionTimers.length === 0) throw new Error("new completion did not schedule a timer");
+-			for (const [token, handler] of newCompletionTimers) {
+-				pendingTimers.delete(token);
+-				handler();
+-			}
+-			if (newRuntime.sent.length !== 1) throw new Error("new notifier was not active after reload cleanup");
+-			newRuntime.handlers.get("session_shutdown")();
+-			globalThis.setTimeout = realSetTimeout;
+-			globalThis.clearTimeout = realClearTimeout;
++			const oldRuntime = runtime("old"); registerSubagentExtension(oldRuntime.pi); oldRuntime.handlers.get("session_start")({}, oldRuntime.ctx);
++			const newRuntime = runtime("new"); registerSubagentExtension(newRuntime.pi); newRuntime.handlers.get("session_start")({}, newRuntime.ctx);
++			oldRuntime.events.emit("subagent:async-complete", { id: "old", agent: "worker", success: true, summary: "Old", sessionId: "old", deliveryDisposition: "follow_up" });
++			newRuntime.events.emit("subagent:async-complete", { id: "new", agent: "worker", success: true, summary: "New", sessionId: "new", deliveryDisposition: "follow_up" });
++			await Promise.resolve();
++			if (oldRuntime.sent.length !== 0 || newRuntime.sent.length !== 1) throw new Error("runtime notifier ownership mismatch");
+ 		`;
+-
+-		try {
+-			const env = parentToolEnv();
+-			env.PI_CODING_AGENT_DIR = agentDir;
+-			execFileSync(
+-				process.execPath,
+-				["--experimental-strip-types", "--import", "./test/support/register-loader.mjs", "--input-type=module", "--eval", script],
+-				{ cwd: projectRoot, env, stdio: "pipe" },
+-			);
+-		} finally {
+-			fs.rmSync(agentDir, { recursive: true, force: true });
+-		}
++		execFileSync(process.execPath, ["--experimental-strip-types", "--import", "./test/support/register-loader.mjs", "--input-type=module", "--eval", script], { cwd: projectRoot, env: parentToolEnv(), stdio: "pipe" });
+ 	});
+ 
+ 	it("registers the main watchdog command and renderer in parent mode", () => {
 diff --git a/test/unit/native-supervisor-channel.test.ts b/test/unit/native-supervisor-channel.test.ts
-index 0805e2a8e9b72f95180ed98301099784915bab52..5121d4c1f62a3c5a4ddd45282246f7e80ac32a33 100644
+index 0805e2a..5121d4c 100644
 --- a/test/unit/native-supervisor-channel.test.ts
 +++ b/test/unit/native-supervisor-channel.test.ts
 @@ -48,7 +48,7 @@ function makeState(sessionId: string | null, ctx: unknown): SubagentState {
@@ -2935,10 +4114,18 @@ index 0805e2a8e9b72f95180ed98301099784915bab52..5121d4c1f62a3c5a4ddd45282246f7e8
  		const currentSessionId = `session-${randomUUID()}`;
  		const staleEmptyChannel = makeEmptyChannel(`run-${randomUUID()}`);
 diff --git a/test/unit/notify.test.ts b/test/unit/notify.test.ts
-index 916128babcfbb3eae11d1bc6d9959df6a2603b24..75c248067b13e82808a4422344bffb55e656a8f4 100644
+index 916128b..5f79401 100644
 --- a/test/unit/notify.test.ts
 +++ b/test/unit/notify.test.ts
-@@ -129,8 +129,9 @@ describe("registerSubagentNotify", () => {
+@@ -105,6 +105,7 @@ function completionResult(overrides: Record<string, unknown> = {}) {
+ 		exitCode: 0,
+ 		timestamp: 123,
+ 		sessionId: "session-a",
++		deliveryDisposition: "follow_up",
+ 		...overrides,
+ 	};
+ }
+@@ -129,8 +130,9 @@ describe("registerSubagentNotify", () => {
  				customType: "subagent-notify",
  				content: "Background task completed: **worker**\n\n(no output)",
  				display: true,
@@ -2949,7 +4136,25 @@ index 916128babcfbb3eae11d1bc6d9959df6a2603b24..75c248067b13e82808a4422344bffb55
  		});
  	});
  
-@@ -177,8 +178,9 @@ describe("registerSubagentNotify", () => {
+@@ -146,13 +148,10 @@ describe("registerSubagentNotify", () => {
+ 		assert.equal(sent.length, 0);
+ 	});
+ 
+-	it("rejects a pending batch when the notifier is disposed", async () => {
+-		const clock = createFakeClock();
+-		const { notifier, sent } = createBatchingPi(clock);
+-		const pending = notifier.deliver(completionResult({ id: "dispose-pending" }));
+-		notifier.dispose();
+-		assert.equal(await pending, false);
+-		clock.advance(1000);
++	it("suppresses awaited and silent delivery", async () => {
++		const { notifier, sent } = createPi("session-a");
++		assert.equal(await notifier.deliver(completionResult({ id: "awaited", deliveryDisposition: "awaited" })), false);
++		assert.equal(await notifier.deliver(completionResult({ id: "silent", deliveryDisposition: "silent" })), false);
+ 		assert.equal(sent.length, 0);
+ 	});
+ 
+@@ -177,8 +176,9 @@ describe("registerSubagentNotify", () => {
  				customType: "subagent-notify",
  				content: "Detached foreground task completed: **reviewer**\n\nRecovered final review",
  				display: true,
@@ -2960,7 +4165,7 @@ index 916128babcfbb3eae11d1bc6d9959df6a2603b24..75c248067b13e82808a4422344bffb55
  		});
  	});
  
-@@ -218,8 +220,9 @@ describe("registerSubagentNotify", () => {
+@@ -218,8 +218,9 @@ describe("registerSubagentNotify", () => {
  				customType: "subagent-notify",
  				content: `Background task completed: **worker** (2/3)\n\n${summary}`,
  				display: true,
@@ -2971,7 +4176,7 @@ index 916128babcfbb3eae11d1bc6d9959df6a2603b24..75c248067b13e82808a4422344bffb55
  		});
  	});
  
-@@ -242,8 +245,9 @@ describe("registerSubagentNotify", () => {
+@@ -242,8 +243,9 @@ describe("registerSubagentNotify", () => {
  				customType: "subagent-notify",
  				content: "Background task completed: **worker**\n\nDone\n\nSession file: /tmp/session.jsonl",
  				display: true,
@@ -2982,7 +4187,7 @@ index 916128babcfbb3eae11d1bc6d9959df6a2603b24..75c248067b13e82808a4422344bffb55
  		}]);
  	});
  
-@@ -266,8 +270,9 @@ describe("registerSubagentNotify", () => {
+@@ -266,8 +268,9 @@ describe("registerSubagentNotify", () => {
  				customType: "subagent-notify",
  				content: "Background task paused: **worker**\n\nPaused after interrupt. Waiting for explicit next action.",
  				display: true,
@@ -2993,17 +4198,123 @@ index 916128babcfbb3eae11d1bc6d9959df6a2603b24..75c248067b13e82808a4422344bffb55
  		});
  	});
  
-@@ -327,7 +332,7 @@ describe("registerSubagentNotify", () => {
- 		assert.match(content, /^Background tasks completed \(3\): \*\*alpha\*\*, \*\*beta\*\*, \*\*gamma\*\*/);
- 		assert.match(content, /1\. alpha\nalpha done/);
- 		assert.match(content, /3\. gamma\ngamma done/);
--		assert.deepEqual(sent[0]!.options, { triggerTurn: true });
-+		assert.deepEqual(sent[0]!.options, { triggerTurn: true, deliverAs: "followUp" });
+@@ -294,100 +297,33 @@ describe("registerSubagentNotify", () => {
+ 		assert.deepEqual(sent, []);
  	});
  
- 	it("ignores successes from other sessions instead of grouping them", () => {
+-	it("emits failed completions immediately even while successes are held", () => {
+-		const clock = createFakeClock();
+-		const { events, sent } = createBatchingPi(clock);
+-
+-		events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, completionResult({ id: "ok-1", agent: "ok-1", summary: "ok-1 done" }));
+-		events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, completionResult({ id: "fail-1", agent: "fail-1", success: false, summary: "boom", exitCode: 1 }));
+-
+-		// The failure must arrive immediately, and the held success must be
+-		// flushed ahead of it rather than waiting on the debounce timer.
+-		assert.equal(sent.length, 2);
+-		assert.match((sent[0]!.message as { content: string }).content, /Background task completed: \*\*ok-1\*\*/);
+-		assert.match((sent[1]!.message as { content: string }).content, /Background task failed: \*\*fail-1\*\*/);
+-
+-		// No deferred emission should arrive later.
+-		clock.advance(1000);
++	it("emits one follow-up message per result without grouping", async () => {
++		const { notifier, sent } = createPi("session-a");
++		await Promise.all([
++			notifier.deliver(completionResult({ id: "g-1", agent: "alpha", summary: "alpha done" })),
++			notifier.deliver(completionResult({ id: "g-2", agent: "beta", summary: "beta done" })),
++		]);
+ 		assert.equal(sent.length, 2);
+-	});
+-
+-	it("groups sibling successes into a single notification after the debounce window", () => {
+-		const clock = createFakeClock();
+-		const { events, sent } = createBatchingPi(clock);
+-
+-		events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, completionResult({ id: "g-1", agent: "alpha", summary: "alpha done", sessionId: "session-a" }));
+-		events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, completionResult({ id: "g-2", agent: "beta", summary: "beta done", sessionId: "session-a" }));
+-		events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, completionResult({ id: "g-3", agent: "gamma", summary: "gamma done", sessionId: "session-a" }));
+-		assert.equal(sent.length, 0);
+-
+-		clock.advance(150);
+-		assert.equal(sent.length, 1);
+-		const content = (sent[0]!.message as { content: string }).content;
+-		assert.match(content, /^Background tasks completed \(3\): \*\*alpha\*\*, \*\*beta\*\*, \*\*gamma\*\*/);
+-		assert.match(content, /1\. alpha\nalpha done/);
+-		assert.match(content, /3\. gamma\ngamma done/);
+-		assert.deepEqual(sent[0]!.options, { triggerTurn: true });
+-	});
+-
+-	it("ignores successes from other sessions instead of grouping them", () => {
+-		const clock = createFakeClock();
+-		const { events, sent } = createBatchingPi(clock, "session-a");
+-
+-		events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, completionResult({ id: "s-1", agent: "alpha", summary: "alpha done", sessionId: "session-a" }));
+-		events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, completionResult({ id: "s-2", agent: "beta", summary: "beta done", sessionId: "session-b" }));
+-		clock.advance(150);
+-
+-		assert.equal(sent.length, 1);
+-		assert.match((sent[0]!.message as { content: string }).content, /^Background task completed: \*\*alpha\*\*/);
+-		assert.doesNotMatch((sent[0]!.message as { content: string }).content, /beta done/);
+-	});
+-
+-	it("does not let another session failure flush held successes", () => {
+-		const clock = createFakeClock();
+-		const { events, sent } = createBatchingPi(clock, "session-a");
+-
+-		events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, completionResult({ id: "held-a-1", agent: "alpha", summary: "alpha done", sessionId: "session-a" }));
+-		events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, completionResult({ id: "fail-b-1", agent: "beta", success: false, summary: "boom", exitCode: 1, sessionId: "session-b" }));
+-		assert.equal(sent.length, 0);
+-
+-		clock.advance(150);
+-		assert.equal(sent.length, 1);
+ 		assert.match((sent[0]!.message as { content: string }).content, /^Background task completed: \*\*alpha\*\*/);
+-		assert.doesNotMatch((sent[0]!.message as { content: string }).content, /boom/);
++		assert.match((sent[1]!.message as { content: string }).content, /^Background task completed: \*\*beta\*\*/);
+ 	});
+ 
+-	it("disposes queued completions without emitting and is idempotent", () => {
+-		const clock = createFakeClock();
+-		const { events, sent, dispose } = createBatchingPi(clock);
+-
+-		events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, completionResult({ id: "dispose-held-1" }));
+-		assert.equal(sent.length, 0);
+-		assert.equal(events.listenerCount(SUBAGENT_ASYNC_COMPLETE_EVENT), 1);
+-		assert.equal(events.listenerCount(SUBAGENT_FOREGROUND_COMPLETE_EVENT), 1);
+-
++	it("dispose removes listeners and is idempotent", () => {
++		const { events, sent, dispose } = createPi("session-a");
+ 		dispose();
+ 		dispose();
+ 		assert.equal(events.listenerCount(SUBAGENT_ASYNC_COMPLETE_EVENT), 0);
+ 		assert.equal(events.listenerCount(SUBAGENT_FOREGROUND_COMPLETE_EVENT), 0);
+-
+-		clock.advance(1000);
++		events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, completionResult({ id: "after-dispose" }));
+ 		assert.equal(sent.length, 0);
+ 	});
+ 
+-	it("does not let a disposed notifier affect another runtime", () => {
+-		const oldClock = createFakeClock();
+-		const oldRegistration = createBatchingPi(oldClock);
+-		oldRegistration.events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, completionResult({ id: "old-owner-held-1" }));
+-
+-		const newClock = createFakeClock();
+-		const newRegistration = createBatchingPi(newClock);
++	it("does not let a disposed notifier affect another runtime", async () => {
++		const oldRegistration = createPi("session-a");
++		const newRegistration = createPi("session-a");
+ 		oldRegistration.dispose();
+-		oldClock.advance(1000);
++		await newRegistration.notifier.deliver(completionResult({ id: "new-owner-1" }));
+ 		assert.equal(oldRegistration.sent.length, 0);
+-
+-		newRegistration.events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, completionResult({ id: "new-owner-1" }));
+-		newClock.advance(150);
+ 		assert.equal(newRegistration.sent.length, 1);
+ 		newRegistration.dispose();
+ 	});
 diff --git a/test/unit/package-manifest.test.ts b/test/unit/package-manifest.test.ts
-index 9c1f0d8ece480b7500fcbc6c5b3d4ea1574b664d..4bd0a03a6bd7525a1420746c8b47d00bf83f80cb 100644
+index 9c1f0d8..4bd0a03 100644
 --- a/test/unit/package-manifest.test.ts
 +++ b/test/unit/package-manifest.test.ts
 @@ -71,7 +71,7 @@ test("published extension APIs use supported package entrypoints", async () => {
@@ -3016,10 +4327,43 @@ index 9c1f0d8ece480b7500fcbc6c5b3d4ea1574b664d..4bd0a03a6bd7525a1420746c8b47d00b
  });
  
 diff --git a/test/unit/pi-args.test.ts b/test/unit/pi-args.test.ts
-index be218b9d076d4f1f82620638282a9dca628037fc..f1f91312dd8e73703a668022b14f1d9ef4b7788e 100644
+index be218b9..3d091f6 100644
 --- a/test/unit/pi-args.test.ts
 +++ b/test/unit/pi-args.test.ts
-@@ -406,6 +406,30 @@ describe("buildPiArgs system prompt mode wiring", () => {
+@@ -42,6 +42,10 @@ const originalEnv = {
+ 	PI_SUBAGENT_PARENT_CAPABILITY_TOKEN: process.env.PI_SUBAGENT_PARENT_CAPABILITY_TOKEN,
+ 	PI_SUBAGENT_PARENT_SESSION: process.env.PI_SUBAGENT_PARENT_SESSION,
+ 	PI_SUBAGENT_RUN_ID: process.env.PI_SUBAGENT_RUN_ID,
++	PI_SUBAGENTS_HOST_ACK_RESULTS: process.env.PI_SUBAGENTS_HOST_ACK_RESULTS,
++	PI_SUBAGENTS_DEFAULT_DELIVERY_DISPOSITION: process.env.PI_SUBAGENTS_DEFAULT_DELIVERY_DISPOSITION,
++	PI_SUBAGENTS_DISABLE_AUTO_DRAIN: process.env.PI_SUBAGENTS_DISABLE_AUTO_DRAIN,
++	PI_SUBAGENTS_FORCE_ASYNC: process.env.PI_SUBAGENTS_FORCE_ASYNC,
+ 	[MCP_DIRECT_CHILD_TOOLS_ENV]: process.env[MCP_DIRECT_CHILD_TOOLS_ENV],
+ 	[TOOL_BUDGET_ZERO_AUTH_ENV]: process.env[TOOL_BUDGET_ZERO_AUTH_ENV],
+ 	[PI_CODING_AGENT_PACKAGE_ROOT_ENV]: process.env[PI_CODING_AGENT_PACKAGE_ROOT_ENV],
+@@ -207,6 +211,21 @@ describe("buildPiArgs session wiring", () => {
+ 		}).env[WAIT_TOOL_ENABLED_ENV], "true");
+ 	});
+ 
++	it("clears top-level host custody policy while preserving nested safety constraints", () => {
++		process.env.PI_SUBAGENTS_HOST_ACK_RESULTS = "1";
++		process.env.PI_SUBAGENTS_DEFAULT_DELIVERY_DISPOSITION = "awaited";
++		process.env.PI_SUBAGENTS_DISABLE_AUTO_DRAIN = "1";
++		process.env.PI_SUBAGENTS_FORCE_ASYNC = "1";
++		const { env } = buildPiArgs({
++			baseArgs: [], task: "nested", sessionEnabled: false,
++			inheritProjectContext: true, inheritSkills: true,
++		});
++		assert.equal(env.PI_SUBAGENTS_HOST_ACK_RESULTS, undefined);
++		assert.equal(env.PI_SUBAGENTS_DEFAULT_DELIVERY_DISPOSITION, undefined);
++		assert.equal(env.PI_SUBAGENTS_DISABLE_AUTO_DRAIN, undefined);
++		assert.equal(process.env.PI_SUBAGENTS_FORCE_ASYNC, "1");
++	});
++
+ 	it("passes child watchdog config only when explicitly provided", () => {
+ 		const withoutWatchdog = buildPiArgs({
+ 			baseArgs: ["-p"],
+@@ -406,6 +425,30 @@ describe("buildPiArgs system prompt mode wiring", () => {
  		assert.ok(!args.includes("--append-system-prompt"));
  	});
  
@@ -3051,7 +4395,7 @@ index be218b9d076d4f1f82620638282a9dca628037fc..f1f91312dd8e73703a668022b14f1d9e
  		const { args, env } = buildPiArgs({
  			baseArgs: ["-p"],
 diff --git a/test/unit/preflight.test.ts b/test/unit/preflight.test.ts
-index 2c577b6c1770b8b2b5e41e5d375e84fe3a08414d..a83c5472a54c3c3b304e8694494a22a05275342d 100644
+index 2c577b6..a83c547 100644
 --- a/test/unit/preflight.test.ts
 +++ b/test/unit/preflight.test.ts
 @@ -111,6 +111,8 @@ Project prompt.
@@ -3063,8 +4407,93 @@ index 2c577b6c1770b8b2b5e41e5d375e84fe3a08414d..a83c5472a54c3c3b304e8694494a22a0
  			assert.equal(result.contract.agent.source, "project");
  			assert.equal(result.contract.agent.definitionProjectionVersion, 1);
  			assert.match(result.contract.agent.definitionDigest, /^[a-f0-9]{64}$/);
+diff --git a/test/unit/result-claim.test.ts b/test/unit/result-claim.test.ts
+new file mode 100644
+index 0000000..39578f0
+--- /dev/null
++++ b/test/unit/result-claim.test.ts
+@@ -0,0 +1,79 @@
++import assert from "node:assert/strict";
++import * as fs from "node:fs";
++import * as os from "node:os";
++import * as path from "node:path";
++import { describe, it } from "node:test";
++import { claimAwaitedResult } from "../../src/runs/background/result-claim.ts";
++
++function fixture(root: string, runId: string, disposition: "awaited" | "follow_up" | "silent" = "awaited", nestedRoot?: string) {
++	const asyncDir = nestedRoot
++		? path.join(root, "nested-subagent-runs", nestedRoot, runId)
++		: path.join(root, "async-subagent-runs", runId);
++	const resultPath = nestedRoot
++		? path.join(root, "async-subagent-results", "nested", nestedRoot, `${runId}.json`)
++		: path.join(root, "async-subagent-results", `${runId}.json`);
++	fs.mkdirSync(asyncDir, { recursive: true });
++	fs.mkdirSync(path.dirname(resultPath), { recursive: true });
++	const common = { lifecycleArtifactVersion: 5, runId, sessionId: "session-1", deliveryDisposition: disposition };
++	fs.writeFileSync(path.join(asyncDir, "launch.json"), JSON.stringify({ ...common, asyncDir }));
++	fs.writeFileSync(path.join(asyncDir, "status.json"), JSON.stringify({ ...common, mode: "single", state: "complete", startedAt: 1 }));
++	const result = { ...common, id: runId, asyncDir, success: true, summary: `exact:${nestedRoot ?? "top"}:${runId}` };
++	fs.writeFileSync(resultPath, JSON.stringify(result));
++	return { asyncDir, resultPath, result };
++}
++
++describe("awaited result claims", () => {
++	it("publishes an exact identity/digest-bound claim and retries idempotently", () => {
++		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-claim-"));
++		try {
++			const run = fixture(root, "run-a");
++			const first = claimAwaitedResult({ asyncDir: run.asyncDir, runId: "run-a", sessionId: "session-1", now: () => 10 });
++			assert.equal(first.kind, "claimed");
++			if (first.kind !== "claimed") return;
++			assert.equal(first.claim.runKey, "top:run-a");
++			assert.equal(first.claim.resultSizeBytes, fs.statSync(run.resultPath).size);
++			assert.equal(first.result.summary, "exact:top:run-a");
++			const retry = claimAwaitedResult({ asyncDir: run.asyncDir, runId: "run-a", sessionId: "session-1", now: () => 99 });
++			assert.equal(retry.kind, "claimed");
++			if (retry.kind === "claimed") {
++				assert.equal(retry.idempotent, true);
++				assert.deepEqual(retry.claim, first.claim);
++			}
++		} finally { fs.rmSync(root, { recursive: true, force: true }); }
++	});
++
++	it("fails closed for swapped bytes, malformed claims, and symlinked result files", () => {
++		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-claim-conflict-"));
++		try {
++			const run = fixture(root, "run-b");
++			claimAwaitedResult({ asyncDir: run.asyncDir, sessionId: "session-1" });
++			fs.writeFileSync(run.resultPath, JSON.stringify({ ...run.result, summary: "swapped" }));
++			assert.throws(() => claimAwaitedResult({ asyncDir: run.asyncDir, sessionId: "session-1" }), /Conflicting result claim/);
++			fs.writeFileSync(path.join(run.asyncDir, "result-claim.json"), "not-json");
++			assert.throws(() => claimAwaitedResult({ asyncDir: run.asyncDir, sessionId: "session-1" }), /Malformed result claim/);
++			fs.rmSync(path.join(run.asyncDir, "result-claim.json"));
++			fs.rmSync(run.resultPath);
++			const outside = path.join(root, "outside.json");
++			fs.writeFileSync(outside, JSON.stringify(run.result));
++			fs.symlinkSync(outside, run.resultPath);
++			assert.throws(() => claimAwaitedResult({ asyncDir: run.asyncDir, sessionId: "session-1" }), /ELOOP|symbolic link|unsafe/i);
++		} finally { fs.rmSync(root, { recursive: true, force: true }); }
++	});
++
++	it("scopes nested keys and never claims follow_up or silent results", () => {
++		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-claim-nested-"));
++		try {
++			const left = fixture(root, "same", "awaited", "root-left");
++			const right = fixture(root, "same", "awaited", "root-right");
++			const leftClaim = claimAwaitedResult({ asyncDir: left.asyncDir, sessionId: "session-1" });
++			const rightClaim = claimAwaitedResult({ asyncDir: right.asyncDir, sessionId: "session-1" });
++			assert.equal(leftClaim.kind === "claimed" ? leftClaim.claim.runKey : "", "nested:root-left:same");
++			assert.equal(rightClaim.kind === "claimed" ? rightClaim.claim.runKey : "", "nested:root-right:same");
++			for (const disposition of ["follow_up", "silent"] as const) {
++				const run = fixture(root, `run-${disposition}`, disposition);
++				assert.deepEqual(claimAwaitedResult({ asyncDir: run.asyncDir, sessionId: "session-1" }), { kind: "not-claimable", deliveryDisposition: disposition });
++				assert.equal(fs.existsSync(path.join(run.asyncDir, "result-claim.json")), false);
++			}
++		} finally { fs.rmSync(root, { recursive: true, force: true }); }
++	});
++});
 diff --git a/test/unit/scheduled-runs.test.ts b/test/unit/scheduled-runs.test.ts
-index a4c9ae4137418f559b3f5d117111704f196b7be3..0ff129fa509adf5c9cccf0e96c97011bdcc76122 100644
+index a4c9ae4..0ff129f 100644
 --- a/test/unit/scheduled-runs.test.ts
 +++ b/test/unit/scheduled-runs.test.ts
 @@ -227,6 +227,18 @@ describe("ScheduledRunManager create/list/status/cancel", () => {
@@ -3087,10 +4516,31 @@ index a4c9ae4137418f559b3f5d117111704f196b7be3..0ff129fa509adf5c9cccf0e96c97011b
  		const harness = freshHarness();
  		// tasks + chain is genuinely ambiguous (both are execution arrays)
 diff --git a/test/unit/schemas.test.ts b/test/unit/schemas.test.ts
-index baee7401e5f43979dea127d706fa2430871b8459..d8b1da5444698c9d97244dbda156970bdf6c68d7 100644
+index baee740..930711f 100644
 --- a/test/unit/schemas.test.ts
 +++ b/test/unit/schemas.test.ts
-@@ -174,6 +174,25 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
+@@ -5,6 +5,7 @@ type JsonSchemaNode = Record<string, unknown>;
+ 
+ interface SubagentParamsSchema {
+ 	properties?: {
++		deliveryDisposition?: { type?: string; enum?: string[]; description?: string };
+ 		context?: {
+ 			type?: string;
+ 			enum?: string[];
+@@ -153,6 +154,12 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
+ 		assert.match(description, /overrides every child/);
+ 	});
+ 
++	it("uses a closed delivery disposition field", () => {
++		const disposition = SubagentParams?.properties?.deliveryDisposition;
++		assert.equal(disposition?.type, "string");
++		assert.deepEqual(disposition?.enum, ["awaited", "follow_up", "silent"]);
++	});
++
+ 	it("includes count and concurrency on top-level parallel mode", () => {
+ 		const taskSchema = SubagentParams?.properties?.tasks?.items?.properties;
+ 		const taskCountSchema = taskSchema?.count;
+@@ -174,6 +181,25 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
  		assert.match(String(concurrencySchema.description ?? ""), /parallel/i);
  	});
  
@@ -3116,7 +4566,7 @@ index baee7401e5f43979dea127d706fa2430871b8459..d8b1da5444698c9d97244dbda156970b
  	it("allows runtime validation of management and control action strings", () => {
  		const actionSchema = SubagentParams?.properties?.action;
  		assert.ok(actionSchema, "action schema should exist");
-@@ -318,7 +337,7 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
+@@ -318,7 +344,7 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
  		assert.ok(SubagentParams, "SubagentParams schema should exist");
  		const schema = SubagentParams as unknown as JsonSchemaNode;
  		const serialized = JSON.stringify(schema);
@@ -3125,8 +4575,100 @@ index baee7401e5f43979dea127d706fa2430871b8459..d8b1da5444698c9d97244dbda156970b
  		assert.equal(serialized.includes('"$ref"'), false);
  		assert.equal(serialized.includes('"$defs"'), false);
  		assert.equal(serialized.split("Optional acceptance policy.").length - 1, 1);
+diff --git a/test/unit/subagent-wait.test.ts b/test/unit/subagent-wait.test.ts
+index e42a778..622b75e 100644
+--- a/test/unit/subagent-wait.test.ts
++++ b/test/unit/subagent-wait.test.ts
+@@ -834,4 +834,87 @@ describe("subagent_wait tool", () => {
+ 			fs.rmSync(root, { recursive: true, force: true });
+ 		}
+ 	});
++	it("claims an already-complete awaited result and returns its exact bytes internally", async () => {
++		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wait-claim-"));
++		try {
++			const asyncRoot = path.join(root, "async-subagent-runs");
++			const resultsDir = path.join(root, "async-subagent-results");
++			const runId = "awaited-run";
++			const asyncDir = path.join(asyncRoot, runId);
++			fs.mkdirSync(asyncDir, { recursive: true });
++			fs.mkdirSync(resultsDir, { recursive: true });
++			const common = { lifecycleArtifactVersion: 5, runId, sessionId: "sess-1", deliveryDisposition: "awaited" };
++			fs.writeFileSync(path.join(asyncDir, "launch.json"), JSON.stringify({ ...common, asyncDir }));
++			writeStatus(asyncRoot, runId, "complete", common);
++			const exact = JSON.stringify({ ...common, id: runId, asyncDir, summary: "exact child output" });
++			fs.writeFileSync(path.join(resultsDir, `${runId}.json`), exact);
++			const published: unknown[] = [];
++			const state = makeState("sess-1");
++			const resultValue = await waitForSubagents({ id: runId }, undefined, {
++				...baseDeps(root, state), asyncDirRoot: asyncRoot, resultsDir,
++				publishClaim: (claim) => { published.push(claim); return "claim-entry-1"; },
++			});
++			assert.equal(resultValue.isError, undefined);
++			assert.match(textOf(resultValue), /exact child output/);
++			assert.equal(published.length, 1);
++			assert.equal(resultValue.details.resultClaims?.length, 1);
++			assert.equal(fs.existsSync(path.join(asyncDir, "result-claim.json")), true);
++		} finally { fs.rmSync(root, { recursive: true, force: true }); }
++	});
++
++	it("reconciles terminal awaited status until the exact result is published", async () => {
++		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wait-result-publication-race-"));
++		try {
++			const asyncRoot = path.join(root, "async-subagent-runs");
++			const resultsDir = path.join(root, "async-subagent-results");
++			const runId = "awaited-race";
++			const asyncDir = path.join(asyncRoot, runId);
++			fs.mkdirSync(asyncDir, { recursive: true });
++			fs.mkdirSync(resultsDir, { recursive: true });
++			const common = { lifecycleArtifactVersion: 5, runId, sessionId: "sess-1", deliveryDisposition: "awaited" };
++			fs.writeFileSync(path.join(asyncDir, "launch.json"), JSON.stringify({ ...common, asyncDir }));
++			writeStatus(asyncRoot, runId, "running", { ...common, pid: 999999 });
++			const exact = JSON.stringify({ ...common, id: runId, asyncDir, summary: "published after terminal status" });
++			let polls = 0;
++			const resultValue = await waitForSubagents({ id: runId }, undefined, {
++				...baseDeps(root, makeState("sess-1")), asyncDirRoot: asyncRoot, resultsDir,
++				sleep: async () => {
++					polls += 1;
++					if (polls === 1) writeStatus(asyncRoot, runId, "complete", common);
++					if (polls === 2) fs.writeFileSync(path.join(resultsDir, `${runId}.json`), exact);
++				},
++				publishClaim: () => "claim-entry-race",
++			});
++			assert.equal(resultValue.isError, undefined);
++			assert.equal(polls, 2, "wait must reconcile once after observing terminal status without a result");
++			assert.match(textOf(resultValue), /published after terminal status/);
++			assert.equal(resultValue.details.resultClaims?.length, 1);
++		} finally { fs.rmSync(root, { recursive: true, force: true }); }
++	});
++
++	it("retains result and claim sidecar when canonical custom-entry append fails", async () => {
++		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wait-claim-fail-"));
++		try {
++			const asyncRoot = path.join(root, "async-subagent-runs");
++			const resultsDir = path.join(root, "async-subagent-results");
++			const runId = "awaited-fail";
++			const asyncDir = path.join(asyncRoot, runId);
++			fs.mkdirSync(asyncDir, { recursive: true });
++			fs.mkdirSync(resultsDir, { recursive: true });
++			const common = { lifecycleArtifactVersion: 5, runId, sessionId: "sess-1", deliveryDisposition: "awaited" };
++			fs.writeFileSync(path.join(asyncDir, "launch.json"), JSON.stringify(common));
++			writeStatus(asyncRoot, runId, "complete", common);
++			const resultPath = path.join(resultsDir, `${runId}.json`);
++			fs.writeFileSync(resultPath, JSON.stringify({ ...common, id: runId, asyncDir, summary: "retain me" }));
++			const resultValue = await waitForSubagents({ id: runId }, undefined, {
++				...baseDeps(root, makeState("sess-1")), asyncDirRoot: asyncRoot, resultsDir,
++				publishClaim: () => { throw new Error("append failed"); },
++			});
++			assert.equal(resultValue.isError, true);
++			assert.match(textOf(resultValue), /append failed/);
++			assert.equal(fs.existsSync(resultPath), true);
++			assert.equal(fs.existsSync(path.join(asyncDir, "result-claim.json")), true);
++		} finally { fs.rmSync(root, { recursive: true, force: true }); }
++	});
++
+ });
 diff --git a/test/unit/temp-paths.test.ts b/test/unit/temp-paths.test.ts
-index 113c46fffda4d477e92c9cd799e19f888006c619..931fa887b26340bf8e3173b60ca52cd4e7b4b79a 100644
+index 113c46f..931fa88 100644
 --- a/test/unit/temp-paths.test.ts
 +++ b/test/unit/temp-paths.test.ts
 @@ -58,7 +58,9 @@ describe("shared temp paths", () => {
@@ -3140,3 +4682,96 @@ index 113c46fffda4d477e92c9cd799e19f888006c619..931fa887b26340bf8e3173b60ca52cd4
  		assert.equal(path.basename(RESULTS_DIR), "async-subagent-results");
  		assert.equal(path.basename(ASYNC_DIR), "async-subagent-runs");
  		assert.equal(path.basename(CHAIN_RUNS_DIR), "chain-runs");
+diff --git a/test/unit/tool-description.test.ts b/test/unit/tool-description.test.ts
+index ae380cf..45590aa 100644
+--- a/test/unit/tool-description.test.ts
++++ b/test/unit/tool-description.test.ts
+@@ -50,11 +50,13 @@ describe("registered subagent tool description", () => {
+ 		assert.doesNotMatch(description, /only for foreground runs/i);
+ 		assert.doesNotMatch(description, /omit for async\/background runs/i);
+ 		assert.match(description, /SAFETY-CRITICAL SUBAGENT GUIDANCE/);
+-		assert.match(description, /Do not sleep or poll status just to wait/i);
+-		assert.match(description, /use subagent_wait/i);
+-		assert.match(description, /interactive session.*normally return control/i);
+-		assert.match(description, /Headless sessions auto-drain current-session work at agent_end/i);
+-		assert.doesNotMatch(description, /MUST call subagent_wait/i);
++		assert.match(description, /deliveryDisposition/);
++		assert.match(description, /awaited.*subagent_wait/i);
++		assert.match(description, /Interactive Pi defaults to follow_up/i);
++		assert.match(description, /Agentd defaults to awaited and disables auto-drain/i);
++		assert.match(description, /follow_up.*wake/i);
++		assert.match(description, /silent.*without waking/i);
++		assert.match(description, /Only follow_up notifies/i);
+ 		assert.match(description, /ordinary child subagents are not orchestrators/i);
+ 		assert.match(description, /keep one writer/i);
+ 		assert.match(description, /view: "fleet"/);
+@@ -98,10 +100,12 @@ describe("registered subagent tool description", () => {
+ 		assert.match(description, /CHAIN/);
+ 		assert.match(description, /action without execution fields/i);
+ 		assert.match(description, /subagent_wait/i);
+-		assert.match(description, /interactive session.*normally return control/i);
+-		assert.match(description, /Non-interactive runs.*auto-drain current-session work at agent_end/i);
+-		assert.doesNotMatch(description, /MUST call subagent_wait/i);
+-		assert.match(description, /Do not sleep or poll/i);
++		assert.match(description, /deliveryDisposition/);
++		assert.match(description, /awaited.*never auto-notifies/i);
++		assert.match(description, /Interactive Pi defaults to follow_up/i);
++		assert.match(description, /agentd defaults to awaited and disables auto-drain/i);
++		assert.match(description, /follow_up.*wakes/i);
++		assert.match(description, /silent.*never wakes/i);
+ 		assert.match(description, /ordinary child subagents are not orchestrators/i);
+ 		assert.match(description, /one writer/i);
+ 		assert.match(description, /omit acceptance for reviewer\/read-only calls/i);
+diff --git a/test/unit/wait-tool.test.ts b/test/unit/wait-tool.test.ts
+new file mode 100644
+index 0000000..609392f
+--- /dev/null
++++ b/test/unit/wait-tool.test.ts
+@@ -0,0 +1,47 @@
++import assert from "node:assert/strict";
++import { describe, it } from "node:test";
++import { registerWaitTool, sameCanonicalResultClaim } from "../../src/runs/background/wait-tool.ts";
++import type { ResultClaimV1 } from "../../src/runs/background/result-claim.ts";
++
++const claim: ResultClaimV1 = {
++	version: 1,
++	kind: "pi-subagents.result-claim",
++	runId: "run-a",
++	runKey: "top:run-a",
++	sessionId: "session-a",
++	deliveryDisposition: "awaited",
++	resultSha256: "abc123",
++	resultSizeBytes: 42,
++	claimedAt: 1234,
++};
++
++describe("wait-tool canonical claim reuse", () => {
++	it("documents agentd awaited/no-auto-drain without changing interactive defaults", () => {
++		let registered: { description: string } | undefined;
++		const pi = {
++			events: { on: () => () => {} },
++			registerTool(tool: { description: string }) { registered = tool; },
++		} as never;
++		registerWaitTool(pi, {} as never);
++		assert.match(registered?.description ?? "", /Interactive Pi defaults to follow_up/);
++		assert.match(registered?.description ?? "", /Agentd sets awaited delivery and disables automatic draining/);
++	});
++
++	it("reuses only entries matching every canonical claim field", () => {
++		assert.equal(sameCanonicalResultClaim({ ...claim }, claim), true);
++		for (const [field, replacement] of [
++			["version", 2],
++			["kind", "other"],
++			["runId", "run-b"],
++			["runKey", "top:run-b"],
++			["sessionId", "session-b"],
++			["deliveryDisposition", "follow_up"],
++			["resultSha256", "def456"],
++			["resultSizeBytes", 43],
++			["claimedAt", 1235],
++		] as const) {
++			assert.equal(sameCanonicalResultClaim({ ...claim, [field]: replacement }, claim), false, field);
++		}
++		assert.equal(sameCanonicalResultClaim(null, claim), false);
++	});
++});

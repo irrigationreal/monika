@@ -56,12 +56,22 @@ packages/
 - Fastify server in `packages/server` with SQLite storage and optional Redis stream bus.
 - Robot orchestration is handled by the Monika Pi bridge, which calls `agentd` over HTTP/SSE and reconciles canonical
   Pi provenance into forum state.
+- A canonical utterance is channel-neutral. One agent run may persist zero, one, or several ordered assistant messages;
+  Pi's internal `agent_settled` is idle-only, and agentd maps it to wire `turn_completed`; neither asks the forum to publish a raw aggregate.
+- Provenance v1 preserves legacy forum post identity. V2 adds the durable ordered contributor set and normalized origin.
+  Same-origin events can group; retries retain that original order and never absorb a different origin.
+- Live SSE and background sync share one deterministic projection/handoff service, including outbound tamper, default
+  persona, parent/follow-up metadata, attachment dedupe, crash recovery, and exactly-once Pi-message claiming.
+- Discord/Matrix adapters are best effort beyond the local transaction boundary. Forum SQLite cannot turn a remote
+  send or acknowledgement into canonical Pi settlement.
 - Feature flags (auth, rate limiting, search, Redis stream bus) are toggled via env vars.
 
 ### Web UI
 
 - Vue 3 app in `apps/codex-forum` with classic forum UI.
-- Topic view exposes live reasoning + tool runs and supports inline moderation.
+- Topic view exposes live reasoning + tool runs and supports inline moderation. Explicit delayed `follow_up` subagent
+  continuations render beneath their origin with a **Follow-up** badge; `awaited` work stays part of the claiming parent
+  synthesis and `silent` work creates no public continuation.
 - Completed `mermaid` fences render all built-in Mermaid diagram types in an isolated, website-themed sandbox with
   source access and sanitized SVG open/download actions.
 - Developer Portal provides API documentation for logged-in users and API key + impersonation token management for
@@ -265,9 +275,9 @@ For full deployment guidance, see `docs/DEPLOYMENT.md`.
 - The UI and browser SDK use same-origin first-party cookie sessions for JSON, uploads, and EventSource. API keys and
   impersonation tokens are bearer credentials for automation; bearer-authenticated SSE requires a caller-provided
   authorization-capable EventSource transport and never uses query-string credentials.
-- Manual **Compact and recover** is an admin-only durable job: the forum returns `202 Accepted`, resumes pending or
-  interrupted work after restart using the canonical expected-leaf guard, exposes active/latest state across reloads,
-  and creates the recovery checkpoint only after Pi compaction succeeds. A failed checkpoint dispatch can be retried
+- Manual **Compact and recover** is an admin-only durable request projection: the forum returns `202 Accepted`, resumes
+  pending or interrupted requests after restart, and exposes state across reloads. Agentd owns the idle/expected-leaf
+  claim and Pi settlement; the forum creates a recovery checkpoint only after canonical compaction succeeds. A failed checkpoint dispatch can be retried
   independently without repeating compaction. The mobile dialog is dynamic-viewport bounded and internally scrollable.
 - Canonical parent-session automatic compaction is a default-off, admin-controlled topic setting. The forum persists the
   policy and sends it to agentd; Pi performs native threshold and overflow-retry compaction. Automatic compaction

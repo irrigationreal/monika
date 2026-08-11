@@ -162,6 +162,7 @@ let pendingReasoningDelta = '';
 let pendingAssistantDelta = '';
 let flushHandle: number | null = null;
 let assistantMessagePending = false;
+let assistantMessageReloadQueued = false;
 let topicLoadCounter = 0;
 let forumsLoadCounter = 0;
 let archivedForumsLoadCounter = 0;
@@ -1031,9 +1032,13 @@ export function useForumState() {
       if (isActiveTopic(topicId)) void loadOperationalEvents(topicId);
     });
     stream.addEventListener('assistant_message', () => {
+      // A single Pi settlement may publish multiple canonical assistant items.
+      // Coalesce bursts, but remember arrivals during an in-flight snapshot so
+      // the later item cannot be lost behind the first reload.
+      assistantMessageReloadQueued = true;
       if (assistantMessagePending) return;
       assistantMessagePending = true;
-      void handleAssistantMessage().finally(() => {
+      void drainAssistantMessageReloads().finally(() => {
         assistantMessagePending = false;
       });
     });
@@ -1058,17 +1063,18 @@ export function useForumState() {
     });
   }
 
+  async function drainAssistantMessageReloads(): Promise<void> {
+    while (assistantMessageReloadQueued) {
+      assistantMessageReloadQueued = false;
+      await handleAssistantMessage();
+    }
+  }
+
   async function handleAssistantMessage(): Promise<void> {
-    // Commit any remaining pending tail before clearing
+    // The canonical item is now represented by a post. Clear its live trace,
+    // but retain the server's activity until a later state/turn-completed
+    // boundary says the whole agent run is idle.
     flushPendingDeltas();
-    const rText = reasoningDraft.value;
-    if (rText) {
-      committedSegments.value = [...committedSegments.value, { kind: 'reasoning', text: rText }];
-    }
-    const aText = assistantDraft.value;
-    if (aText) {
-      committedSegments.value = [...committedSegments.value, { kind: 'assistant_text', text: aText }];
-    }
     clearCompletedAssistantTurnTrace();
     if (selectedTopicId.value) {
       const topicId = selectedTopicId.value;
@@ -1080,14 +1086,7 @@ export function useForumState() {
         loadSessionInspector(),
       ]);
       if (!isActiveTopic(topicId)) return;
-      // assistant_message is authoritative — the turn is done. A state reload
-      // can race with server cleanup and still include the just-finished plan,
-      // tool runs, assistant text, or non-idle activity. Keep the completed
-      // reply in the post list and make the live trace disappear locally.
       clearCompletedAssistantTurnTrace();
-      if (robotState.value) {
-        robotState.value = { ...robotState.value, activity: 'idle' };
-      }
     }
   }
 
@@ -1108,6 +1107,7 @@ export function useForumState() {
     pendingAssistantDelta = '';
     pendingReasoningDelta = '';
     assistantMessagePending = false;
+    assistantMessageReloadQueued = false;
     reconnectDelayMs = 2000;
   }
 

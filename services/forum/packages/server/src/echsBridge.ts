@@ -1,21 +1,28 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { basename, extname, isAbsolute, join, relative, resolve } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { EchsClient } from './echsClient';
 import { InMemoryMessageTamperLayer } from './messageTamper';
+import { AssistantProjectionService } from './services/assistantProjectionService';
+import { AttachmentHandoffService } from './services/attachmentHandoffService';
 import { renderPersonaIndexMarkdown, safePersonaKey } from './personaPrompt';
-import { buildTtsStoragePath, extractRobotTtsMarker, generateTtsMp3 } from './tts';
+import { buildTtsStoragePath, generateTtsMp3 } from './tts';
 import { truncateText } from './utils/automation';
+
+import { normalizedOriginKey } from '@irrigationreal/codex-forum-core';
 
 import type {
   MessageTamperContext,
   MessageTamperLayer,
   MessageTamperPlugin,
   MessageTamperTrailEntry,
+  UtteranceOrigin,
 } from '@irrigationreal/codex-forum-core';
 import type { RobotStopResultDto } from '@irrigationreal/codex-forum-contracts';
 
+import type { AssistantProjectionRow } from './db';
+import type { AssistantProjectionInput } from './services/assistantProjectionService';
 import type { EchsCancellationResult, EchsConversationRecord, EchsEvent, EchsSubagentRetention, EchsSubagentWorkload } from './echsClient';
 import type { ForumStore } from './store';
 import type { StreamBusInterface } from './streamBus';
@@ -202,153 +209,8 @@ function clampPositiveInt(value: number | null | undefined, fallback: number): n
   return Math.floor(value);
 }
 
-type ContinuationMetadata = {
-  sourceKind: 'subagent-completion';
-  runId: string | null;
-  runIds: string[];
-  origins: Array<{ runId: string | null; turnId: string | null; postId: string | null; topicId: string | null }>;
-  originTurnId: string | null;
-  originPostId: string | null;
-  originTopicId: string | null;
-};
-
-function readSubagentCompletionMetadata(...values: unknown[]): ContinuationMetadata | null {
-  for (const value of values) {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
-    const data = value as Record<string, unknown>;
-    const sourceKind = data['sourceKind'] ?? data['source_kind'];
-    if (sourceKind !== 'subagent-completion') continue;
-    const stringOrNull = (candidate: unknown): string | null =>
-      typeof candidate === 'string' && candidate.trim() ? candidate.trim() : null;
-    const runId = stringOrNull(data['runId'] ?? data['run_id']);
-    const rawRunIds = data['runIds'] ?? data['run_ids'] ?? data['subagent_run_ids'];
-    const runIds = Array.isArray(rawRunIds)
-      ? rawRunIds.map(stringOrNull).filter((id): id is string => Boolean(id)).slice(0, 100)
-      : runId ? [runId] : [];
-    const rawOrigins = data['origins'] ?? data['subagent_origins'];
-    const origins = Array.isArray(rawOrigins) ? rawOrigins.slice(0, 100).flatMap((origin) => {
-      if (!origin || typeof origin !== 'object' || Array.isArray(origin)) return [];
-      const item = origin as Record<string, unknown>;
-      return [{
-        runId: stringOrNull(item['runId'] ?? item['run_id']),
-        turnId: stringOrNull(item['turnId'] ?? item['turn_id']),
-        postId: stringOrNull(item['postId'] ?? item['post_id']),
-        topicId: stringOrNull(item['topicId'] ?? item['topic_id']),
-      }];
-    }) : [];
-    return {
-      sourceKind,
-      runId,
-      runIds,
-      origins,
-      originTurnId: stringOrNull(data['originTurnId'] ?? data['origin_turn_id']),
-      originPostId: stringOrNull(data['originPostId'] ?? data['origin_post_id']),
-      originTopicId: stringOrNull(data['originTopicId'] ?? data['origin_topic_id']),
-    };
-  }
-  return null;
-}
-
 function sha256File(path: string): string {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
-}
-
-function isPathWithin(parent: string, candidate: string): boolean {
-  const rel = relative(parent, candidate);
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
-}
-
-function guessMimeType(filename: string): string {
-  const ext = extname(filename).toLowerCase();
-  switch (ext) {
-    case '.png':
-      return 'image/png';
-    case '.jpg':
-    case '.jpeg':
-      return 'image/jpeg';
-    case '.webp':
-      return 'image/webp';
-    case '.gif':
-      return 'image/gif';
-    case '.txt':
-      return 'text/plain';
-    case '.md':
-      return 'text/markdown';
-    case '.json':
-      return 'application/json';
-    case '.pdf':
-      return 'application/pdf';
-    case '.zip':
-      return 'application/zip';
-    default:
-      return 'application/octet-stream';
-  }
-}
-
-interface ArtifactRequest {
-  path: string;
-  filename?: string | null;
-  mimeType?: string | null;
-}
-
-function parseMarkerAttrs(raw: string): Record<string, string> {
-  const attrs: Record<string, string> = {};
-  const re = /(\w+)=(?:"([^"]*)"|'([^']*)'|([^\s\]]+))/g;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(raw))) {
-    attrs[match[1] ?? ''] = match[2] ?? match[3] ?? match[4] ?? '';
-  }
-  return attrs;
-}
-
-function consumeStandaloneMarkers(text: string, consume: (line: string) => boolean): string {
-  const out: string[] = [];
-  let inFence = false;
-  for (const line of text.split(/\r?\n/)) {
-    if (/^\s*```/.test(line)) {
-      inFence = !inFence;
-      out.push(line);
-      continue;
-    }
-    if (!inFence && consume(line.trim())) continue;
-    out.push(line);
-  }
-  return out
-    .join('\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
-function extractArtifactMarkers(text: string): { cleanedText: string; artifacts: ArtifactRequest[] } {
-  const artifacts: ArtifactRequest[] = [];
-  const cleanedText = consumeStandaloneMarkers(text, (line) => {
-    const match = /^\[artifact\s+([^\]]+)\]$/i.exec(line);
-    if (!match) return false;
-    const attrs = parseMarkerAttrs(match[1] ?? '');
-    const artifactPath = attrs['path'] ?? attrs['file'] ?? null;
-    if (!artifactPath) return false;
-    artifacts.push({
-      path: artifactPath,
-      filename: attrs['filename'] ?? attrs['name'] ?? null,
-      mimeType: attrs['mime'] ?? attrs['mimeType'] ?? null,
-    });
-    return true;
-  });
-  return { cleanedText, artifacts };
-}
-
-function extractForumAttachmentRefs(text: string): { cleanedText: string; ids: string[] } {
-  const ids: string[] = [];
-  const cleanedText = consumeStandaloneMarkers(text, (line) => {
-    const match = /^\[forum-attachment\s+([^\]]+)\]$/i.exec(line);
-    if (!match) return false;
-    const attrs = parseMarkerAttrs(match[1] ?? '');
-    const id = attrs['id'] ?? attrs['pendingAttachmentId'] ?? null;
-    if (!id) return false;
-    ids.push(id);
-    return true;
-  });
-  return { cleanedText, ids };
 }
 
 function formatBytes(sizeBytes: number): string {
@@ -502,12 +364,11 @@ interface ThreadContext {
   reasoningEffort: string | null;
   currentTurnId: string | null;
   turnStartedAt: number | null;
-  lastAssistantAt: number | null;
   lastUsage: { input_tokens?: number; output_tokens?: number; total_tokens?: number } | null;
   totalInputTokens: number;
   totalOutputTokens: number;
   activeSubagents: Map<string, { task: string; startedAt: number }>;
-  currentContinuation?: ContinuationMetadata | null;
+  currentContinuation?: unknown;
   /** Timestamp of last SSE event received (including keepalives). */
   lastStreamEventAt: number | null;
   /** Character offsets into reasoningSummary recorded at each tool start. */
@@ -535,6 +396,8 @@ interface QueuedTurn {
     mode?: 'queue' | 'steer';
     dispatchId?: string;
     generation?: number;
+    contributorPostIds?: string[];
+    origin?: UtteranceOrigin;
   };
   queuedAt: string;
 }
@@ -560,8 +423,8 @@ export class EchsBridge {
   private spawnToolRunByAgentId = new Map<string, string>();
   private reasoningBackfillRetriesByThread = new Map<string, number>();
   private assistantBackfillTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  private readonly personaBlockRegex = /\[\[persona:([^\]\n]+)\]\][\s\S]*?\[\[\/persona\]\]/i;
   private readonly tamperLayer: MessageTamperLayer<MessageTamperContext>;
+  private stopped = false;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private healthPollTimer: ReturnType<typeof setInterval> | null = null;
   private threadHealthTimer: ReturnType<typeof setInterval> | null = null;
@@ -573,6 +436,9 @@ export class EchsBridge {
   private drainingQueue = false;
   private inflightDispatches = 0;
   private _maxConcurrentTurns: number;
+  private readonly attachmentHandoffs: AttachmentHandoffService;
+  private readonly assistantProjections: AssistantProjectionService;
+  private readonly projectionTails = new Map<string, Promise<void>>();
   private subscriptions = new Map<
     string,
     { close: () => void; ready: Promise<void>; lastEventId: string | null; options: { lastEventId?: string | null } }
@@ -584,17 +450,25 @@ export class EchsBridge {
     private readonly config: EchsBridgeConfig
   ) {
     this.client = new EchsClient(config.echs);
-    const configuredLimit = config.maxConcurrentTurns;
-    this._maxConcurrentTurns =
-      typeof configuredLimit === 'number' && Number.isFinite(configuredLimit) && configuredLimit > 0
-        ? Math.floor(configuredLimit)
-        : 10;
-
     this.tamperLayer =
       config.tamperLayer ??
       new InMemoryMessageTamperLayer<MessageTamperContext>({
         throwOnError: false,
       });
+    this.attachmentHandoffs = new AttachmentHandoffService(store, {
+      uploadsDir: config.tts?.uploadsDir,
+      resolveArtifact: (input) => this.client.resolveArtifact(input),
+      onProjectionFinalized: (projection, payload) => this.deliverAssistantProjectionCompletion(projection, payload),
+    });
+    this.assistantProjections = new AssistantProjectionService(store, {
+      tamperLayer: this.tamperLayer,
+      onProjectionBegun: (projection) => this.attachmentHandoffs.processProjection(projection.id),
+    });
+    const configuredLimit = config.maxConcurrentTurns;
+    this._maxConcurrentTurns =
+      typeof configuredLimit === 'number' && Number.isFinite(configuredLimit) && configuredLimit > 0
+        ? Math.floor(configuredLimit)
+        : 10;
   }
 
   registerTamperPlugin(plugin: MessageTamperPlugin<MessageTamperContext>): void {
@@ -613,12 +487,23 @@ export class EchsBridge {
   }
 
   async start(): Promise<void> {
+    this.stopped = false;
+    // Recover stale leases, crash-window finalization, and pending forum-only
+    // completion delivery before ordinary post dispatch starts.
+    await this.attachmentHandoffs.recover();
+    this.attachmentHandoffs.start();
     this.startHeartbeat();
     this.startHealthPoll();
     this.startThreadHealthCheck();
   }
 
   async stop(): Promise<void> {
+    this.stopped = true;
+    for (const timer of this.assistantBackfillTimers.values()) clearTimeout(timer);
+    this.assistantBackfillTimers.clear();
+
+    await this.attachmentHandoffs.stop();
+    await Promise.allSettled(this.projectionTails.values());
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     if (this.healthPollTimer) clearInterval(this.healthPollTimer);
     if (this.threadHealthTimer) clearInterval(this.threadHealthTimer);
@@ -626,9 +511,8 @@ export class EchsBridge {
     this.healthPollTimer = null;
     this.threadHealthTimer = null;
 
-    for (const timer of this.assistantBackfillTimers.values()) {
-      clearTimeout(timer);
-    }
+    // A projection finalizer may have raced with shutdown; clear once more.
+    for (const timer of this.assistantBackfillTimers.values()) clearTimeout(timer);
     this.assistantBackfillTimers.clear();
 
     for (const sub of this.subscriptions.values()) {
@@ -956,6 +840,10 @@ export class EchsBridge {
       }
       const activeThreadId = conversation.active_thread_id ?? null;
       const conversationActive = conversation.activity === 'active';
+      // Activity alone cannot prove which accepted dispatch is currently
+      // running. Fail closed until a replayed/live turn_started binds its
+      // durable dispatch identity.
+      this.store.clearActiveTurnOrigin?.(session.topic_id);
       this.threadMap.set(threadId, {
         topicId: session.topic_id,
         sessionId: session.id,
@@ -970,7 +858,6 @@ export class EchsBridge {
         reasoningEffort: this.config.reasoningEffort ?? null,
         currentTurnId: null,
         turnStartedAt: null,
-        lastAssistantAt: null,
         lastUsage: null,
         totalInputTokens: 0,
         totalOutputTokens: 0,
@@ -980,7 +867,7 @@ export class EchsBridge {
         assistantText: '',
         assistantCheckpoints: [],
       });
-      await this.ensureSubscribed(threadId);
+      await this.ensureSubscribed(threadId, { replay: true });
       // Update stale last_dispatched_post_id if missing.
       if (!session.last_dispatched_post_id) {
         const latestPostId = this.store.getLatestPostId(session.topic_id);
@@ -1075,6 +962,8 @@ export class EchsBridge {
       reasoningEffort?: string | null;
       dispatchId?: string;
       generation?: number;
+      contributorPostIds?: string[];
+      origin?: UtteranceOrigin;
     }
   ): Promise<void> {
     this.assertRobotDispatchAllowed(topicId);
@@ -1094,10 +983,20 @@ export class EchsBridge {
         mode: options?.mode ?? 'queue',
         dispatchId: options?.dispatchId ?? randomUUID(),
         generation: options?.generation ?? this.store.getTopicDispatchGeneration(topicId),
+        contributorPostIds: options?.contributorPostIds ? [...options.contributorPostIds] : [post.id],
+        origin: options?.origin ? { ...options.origin } : undefined,
       },
       queuedAt: new Date().toISOString(),
     };
     await this.dispatchUserMessage(turn);
+  }
+
+  get assistantProjectionService(): AssistantProjectionService {
+    return this.assistantProjections;
+  }
+
+  async projectAssistantMessage(input: AssistantProjectionInput): Promise<AssistantProjectionRow> {
+    return (await this.assistantProjections.project(input)).projection;
   }
 
   async closeTopic(topicId: string): Promise<{ ok: boolean; message: string }> {
@@ -1108,6 +1007,7 @@ export class EchsBridge {
     }
     try {
       await this.client.closeConversation(threadId);
+      this.store.clearActiveTurnOrigin?.(topicId);
       this.cleanupDeadThread(threadId, topicId);
       this.store.clearSessionAgentThread(session.id);
       this.store.setRobotActivity(topicId, 'idle');
@@ -1277,6 +1177,7 @@ export class EchsBridge {
               if (!['stopping', 'stopped', 'uncertain'].includes(current ?? '')) this.store.setRobotActivity(ctx.topicId, 'idle');
               ctx.currentTurnId = null;
               ctx.turnStartedAt = null;
+              this.store.clearActiveTurnOrigin?.(ctx.topicId);
               this.activeTurnThreads.delete(threadId);
               this.emitState(ctx.topicId);
             }
@@ -1309,6 +1210,7 @@ export class EchsBridge {
     const current = this.store.getRobotState(topicId)?.activity;
     if (!['stopping', 'stopped', 'uncertain'].includes(current ?? '')) this.store.setRobotActivity(topicId, 'idle');
     this.threadMap.delete(threadId);
+    this.store.clearActiveTurnOrigin?.(topicId);
     this.activeTurnThreads.delete(threadId);
     const sub = this.subscriptions.get(threadId);
     if (sub) {
@@ -1402,27 +1304,34 @@ export class EchsBridge {
     }
   }
 
+  private replaceAssistantBackfillTimer(
+    threadId: string,
+    delayMs: number,
+    backfill: () => void | Promise<void>
+  ): void {
+    if (this.stopped) return;
+    const existing = this.assistantBackfillTimers.get(threadId);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      if (this.stopped || this.assistantBackfillTimers.get(threadId) !== timer) return;
+      this.assistantBackfillTimers.delete(threadId);
+      Promise.resolve().then(backfill).catch((error: unknown) => {
+        console.error('[ECHS] assistant backfill failed:', error instanceof Error ? error.message : error);
+      });
+    }, delayMs);
+    timer.unref?.();
+    this.assistantBackfillTimers.set(threadId, timer);
+  }
+
   private scheduleAssistantBackfill(
     threadId: string,
     turn: { topicId: string; sessionId: string; parentPostId: string | null }
   ): void {
-    const existing = this.assistantBackfillTimers.get(threadId);
-    if (existing) {
-      clearTimeout(existing);
-    }
-    const timer = setTimeout(() => {
-      this.assistantBackfillTimers.delete(threadId);
+    this.replaceAssistantBackfillTimer(threadId, 30_000, async () => {
       const ctx = this.threadMap.get(threadId);
-      if (!ctx || ctx.currentTurnId) {
-        return;
-      }
-      if (ctx.lastAssistantAt && ctx.turnStartedAt && ctx.lastAssistantAt >= ctx.turnStartedAt) {
-        return;
-      }
-      void this.ensureAssistantBackfill(threadId, ctx, ctx.turnStartedAt, ctx.turnParentPostId ?? turn.parentPostId);
-    }, 30_000);
-    timer.unref?.();
-    this.assistantBackfillTimers.set(threadId, timer);
+      if (!ctx || ctx.currentTurnId) return;
+      await this.ensureAssistantBackfill(threadId, ctx, ctx.turnStartedAt, ctx.turnParentPostId ?? turn.parentPostId);
+    });
   }
 
   private publishAcceptedDispatchState(input: {
@@ -1465,6 +1374,7 @@ export class EchsBridge {
       const reasoningEffort = options?.reasoningEffort ?? this.config.reasoningEffort ?? null;
       let threadId = session.agent_thread_id;
       let isFirstMessage = !threadId;
+      let conversationWasActive = false;
       const topic = this.store.getTopic(topicId);
       const forum = topic ? this.store.getForum(topic.forum_id) : null;
       const cwd = forum?.cwd ?? this.config.workDir;
@@ -1483,6 +1393,9 @@ export class EchsBridge {
           this.cleanupDeadThread(threadId, topicId);
           threadId = null;
           isFirstMessage = true;
+        } else {
+          conversationWasActive = conversation.activity === 'active';
+          if (!conversationWasActive) this.store.clearActiveTurnOrigin?.(topicId);
         }
       }
       writeRequesterMetadataFile({
@@ -1663,7 +1576,10 @@ export class EchsBridge {
               afterPostId: lastDispatchedPostId,
               beforePostId: parentPostId,
               excludePiSessionId: piSessionLink?.pi_session_id ?? null,
-              excludePendingDispatches: this.store.isCompactionRecoveryPost(parentPostId),
+              // Same-origin contributors have already been superseded into this
+              // trigger; other origins remain pending and must never leak into
+              // this canonical execution envelope.
+              excludePendingDispatches: true,
             })
           : [];
       let catchupText =
@@ -1780,7 +1696,6 @@ export class EchsBridge {
         reasoningEffort,
         currentTurnId: null,
         turnStartedAt: null,
-        lastAssistantAt: existingCtx?.lastAssistantAt ?? null,
         lastUsage: existingCtx?.lastUsage ?? null,
         totalInputTokens: existingCtx?.totalInputTokens ?? 0,
         totalOutputTokens: existingCtx?.totalOutputTokens ?? 0,
@@ -1824,8 +1739,13 @@ export class EchsBridge {
         auto_compact: autoCompact,
       };
       const requestedMode = options?.mode ?? 'queue';
+      const incomingOriginKey = options?.origin ? normalizedOriginKey(options.origin) : null;
       const resolveEnqueueMode = (targetThreadId: string, firstMessage: boolean): 'queue' | 'steer' => {
-        const canSteer = requestedMode === 'steer' && !firstMessage && this.activeTurnThreads.has(targetThreadId);
+        const activeOrigin = this.store.getActiveTurnOrigin(topicId);
+        const causalOriginMatches = incomingOriginKey
+          ? activeOrigin?.generation === generation && activeOrigin.origin_key === incomingOriginKey
+          : this.activeTurnThreads.has(targetThreadId);
+        const canSteer = requestedMode === 'steer' && !firstMessage && causalOriginMatches;
         return canSteer ? 'steer' : 'queue';
       };
       await this.ensureSubscribed(threadId, { replay: isFirstMessage });
@@ -1840,7 +1760,11 @@ export class EchsBridge {
           generation,
           configure,
           attachments: triggerAttachments,
-          provenance: parentPostId ? { origin: 'forum', topicId, postId: parentPostId } : undefined,
+          provenance: parentPostId ? {
+            origin: 'forum', topicId, postId: parentPostId, version: 2,
+            utteranceIds: options?.contributorPostIds ?? [parentPostId],
+            executionOrigins: options?.origin ? [options.origin] : [],
+          } : undefined,
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -1853,6 +1777,7 @@ export class EchsBridge {
           this.activeTurnThreads.delete(threadId);
           threadId = await createConversation();
           isFirstMessage = true;
+          conversationWasActive = false;
           threadCtx.activeThreadId = null;
           this.threadMap.set(threadId, threadCtx);
           await this.ensureSubscribed(threadId, { replay: true });
@@ -1865,7 +1790,11 @@ export class EchsBridge {
             generation,
             configure,
             attachments: triggerAttachments,
-            provenance: parentPostId ? { origin: 'forum', topicId, postId: parentPostId } : undefined,
+            provenance: parentPostId ? {
+              origin: 'forum', topicId, postId: parentPostId, version: 2,
+              utteranceIds: options?.contributorPostIds ?? [parentPostId],
+              executionOrigins: options?.origin ? [options.origin] : [],
+            } : undefined,
           });
         } else {
           throw err;
@@ -1875,9 +1804,15 @@ export class EchsBridge {
       // forum crash or lost HTTP response. Settle the durable forum cursor,
       // but never manufacture a second local turn for that deduplicated retry.
       if (enqueueResult.deduplicated) {
+        // A duplicate response proves acceptance, but not that this dispatch is
+        // the currently active queued turn. Only turn_started may bind origin.
         if (parentPostId) this.store.setSessionLastDispatchedPostId(session.id, parentPostId);
         if (pendingMoveToClear) this.store.clearTopicMovePrompt(pendingMoveToClear);
         return;
+      }
+
+      if (options?.origin && (enqueueMode === 'steer' || !conversationWasActive)) {
+        this.store.recordActiveTurnOrigin?.({ topicId, dispatchId, generation, origin: options.origin });
       }
 
       // An interrupt may advance the durable generation while enqueue is
@@ -1990,26 +1925,18 @@ export class EchsBridge {
     switch (event.event) {
       case 'turn_started': {
         const data = event.data as any;
-        ctx.currentTurnId = data?.message_id ?? data?.messageId ?? ctx.currentTurnId;
+        ctx.currentTurnId = data?.turn_id ?? data?.turnId ?? data?.message_id ?? data?.messageId ?? null;
+        const boundOrigin = typeof ctx.currentTurnId === 'string'
+          ? this.store.recordActiveTurnOriginFromDispatch?.(ctx.topicId, ctx.currentTurnId) ?? null
+          : null;
+        if (!boundOrigin) this.store.clearActiveTurnOrigin?.(ctx.topicId);
+        const priorBackfill = this.assistantBackfillTimers.get(threadId);
+        if (priorBackfill) clearTimeout(priorBackfill);
+        this.assistantBackfillTimers.delete(threadId);
         ctx.turnStartedAt = Date.now();
-        ctx.currentContinuation = readSubagentCompletionMetadata(data);
-        if (ctx.currentContinuation) {
-          const originTopicMatches = !ctx.currentContinuation.originTopicId
-            || ctx.currentContinuation.originTopicId === ctx.topicId;
-          const originPost = originTopicMatches && ctx.currentContinuation.originPostId
-            ? this.store.getPost(ctx.currentContinuation.originPostId)
-            : null;
-          ctx.turnParentPostId = originPost?.topic_id === ctx.topicId ? originPost.id : null;
-          // Extension-triggered completion is its own parent turn, not part of
-          // whichever forum response happened to run most recently.
-          ctx.planId = null;
-          ctx.reasoningSummary = '';
-          ctx.reasoningCheckpoints = [];
-          ctx.assistantText = '';
-          ctx.assistantCheckpoints = [];
-          ctx.lastAssistantAt = null;
-          this.bus.emit(ctx.topicId, { type: 'assistant_reset', data: { reason: 'new_turn' } });
-        }
+        // Continuation is item-specific. Inferring it from turn start can relabel
+        // an earlier ordinary assistant item when a follow-up arrives later.
+        ctx.currentContinuation = null;
         this.activeTurnThreads.add(threadId);
         this.store.upsertRobotState({
           topicId: ctx.topicId,
@@ -2023,19 +1950,15 @@ export class EchsBridge {
         break;
       }
       case 'subagent_continuation': {
-        const continuation = readSubagentCompletionMetadata(event.data);
-        if (!continuation) break;
-        ctx.currentContinuation = continuation;
-        const originTopicMatches = !continuation.originTopicId || continuation.originTopicId === ctx.topicId;
-        const originPost =
-          originTopicMatches && continuation.originPostId ? this.store.getPost(continuation.originPostId) : null;
-        ctx.turnParentPostId = originPost?.topic_id === ctx.topicId ? originPost.id : null;
+        // Preserve the agentd wire shape. AssistantProjectionService owns the
+        // sole live/export normalization boundary when the canonical item lands.
+        ctx.currentContinuation = event.data;
+        ctx.turnParentPostId = null;
         ctx.planId = null;
         ctx.reasoningSummary = '';
         ctx.reasoningCheckpoints = [];
         ctx.assistantText = '';
         ctx.assistantCheckpoints = [];
-        ctx.lastAssistantAt = null;
         this.bus.emit(ctx.topicId, { type: 'assistant_reset', data: { reason: 'new_turn' } });
         this.emitState(ctx.topicId);
         break;
@@ -2166,22 +2089,22 @@ export class EchsBridge {
           }
         }
         if (item?.type === 'message' && item?.role === 'assistant') {
-          const text = extractAssistantText(item);
-          if (text?.trim()) {
-            const continuation = readSubagentCompletionMetadata(data, item, item?.metadata) ?? ctx.currentContinuation ?? null;
-            const completionOriginPost = continuation?.originPostId
-              && (!continuation.originTopicId || continuation.originTopicId === ctx.topicId)
-              ? this.store.getPost(continuation.originPostId)
-              : null;
-            const completionParentPostId = completionOriginPost?.topic_id === ctx.topicId
-              ? completionOriginPost.id
-              : (continuation ? null : undefined);
-            const canonicalPiMessageId = data?.pi_message_id ?? data?.piMessageId ?? item.id ?? null;
-            this.persistAssistantMessage(threadId, ctx, text, {
-              parentPostId: completionParentPostId,
-              piMessageId: canonicalPiMessageId,
-              continuation,
-            }).catch(() => undefined);
+          const assistant = normalizeCanonicalAssistantItem(data, ctx.topicId, ctx.currentContinuation);
+          if (assistant) {
+            if (!assistant.piMessageId) {
+              console.warn(`[ECHS] assistant item missing canonical Pi message id topic=${ctx.topicId} thread=${threadId}`);
+              break;
+            }
+            this.enqueueAssistantProjection(threadId, async () => {
+              await this.persistAssistantMessage(threadId, ctx, assistant.text, {
+                parentPostId: undefined,
+                piMessageId: assistant.piMessageId,
+                utteranceId: assistant.utteranceId,
+                continuation: assistant.continuation,
+                attachmentRefs: assistant.attachmentRefs,
+                origin: assistant.origin,
+              });
+            });
             void this.syncReasoningFromHistory(threadId, ctx);
             void this.forceReasoningBackfill(threadId);
             setTimeout(() => {
@@ -2192,28 +2115,35 @@ export class EchsBridge {
         break;
       }
       case 'turn_completed': {
+        const completionData = asRecord(event.data);
         const turnStartedAt = ctx.turnStartedAt;
         const turnParentPostId = ctx.turnParentPostId;
-        ctx.currentTurnId = null;
-        ctx.turnStartedAt = null;
-        ctx.currentContinuation = null;
-        void this.forceReasoningBackfill(threadId);
-        const currentActivity = this.store.getRobotState(ctx.topicId)?.activity;
-        this.store.upsertRobotState({
-          topicId: ctx.topicId,
-          sessionId: ctx.sessionId,
-          activity: ['stopping', 'stopped', 'uncertain'].includes(currentActivity ?? '') ? currentActivity! : 'idle',
-          model: ctx.model,
-          reasoningEffort: ctx.reasoningEffort,
-          currentPlanId: ctx.planId,
+        const missingPiMessageId = nonEmptyId(completionData?.['pi_message_id'], completionData?.['piMessageId']);
+        this.store.clearActiveTurnOrigin?.(ctx.topicId);
+        const projections = this.projectionTails.get(threadId) ?? Promise.resolve();
+        void projections.finally(() => {
+          if (this.projectionTails.get(threadId) === projections) this.projectionTails.delete(threadId);
+          ctx.currentTurnId = null;
+          ctx.turnStartedAt = null;
+          ctx.currentContinuation = null;
+          void this.forceReasoningBackfill(threadId);
+          const currentActivity = this.store.getRobotState(ctx.topicId)?.activity;
+          this.store.upsertRobotState({
+            topicId: ctx.topicId,
+            sessionId: ctx.sessionId,
+            activity: ['stopping', 'stopped', 'uncertain'].includes(currentActivity ?? '') ? currentActivity! : 'idle',
+            model: ctx.model,
+            reasoningEffort: ctx.reasoningEffort,
+            currentPlanId: ctx.planId,
+          });
+          this.emitState(ctx.topicId);
+          void this.emitContext(ctx.topicId);
+          this.activeTurnThreads.delete(threadId);
+          void this.processTurnQueue();
+          this.replaceAssistantBackfillTimer(threadId, 1000, () =>
+            this.ensureAssistantBackfill(threadId, ctx, turnStartedAt, turnParentPostId, missingPiMessageId)
+          );
         });
-        this.emitState(ctx.topicId);
-        void this.emitContext(ctx.topicId);
-        this.activeTurnThreads.delete(threadId);
-        void this.processTurnQueue();
-        setTimeout(() => {
-          void this.ensureAssistantBackfill(threadId, ctx, turnStartedAt, turnParentPostId);
-        }, 1000);
         break;
       }
       case 'turn_interrupted': {
@@ -2227,6 +2157,7 @@ export class EchsBridge {
         ctx.currentTurnId = null;
         ctx.turnStartedAt = null;
         ctx.currentContinuation = null;
+        this.store.clearActiveTurnOrigin?.(ctx.topicId, generation);
         const cancellation = interruptionData['cancellation'];
         const cancellationState = cancellation && typeof cancellation === 'object' && !Array.isArray(cancellation)
           ? (cancellation as Record<string, unknown>)['state'] : null;
@@ -2327,6 +2258,7 @@ export class EchsBridge {
         ctx.currentTurnId = null;
         ctx.turnStartedAt = null;
         ctx.currentContinuation = null;
+        this.store.clearActiveTurnOrigin?.(ctx.topicId);
         const anchorPostId = ctx.turnParentPostId ?? ctx.lastUserPostId ?? null;
         this.store.setRobotTurnError(ctx.topicId, {
           message: errorMsg,
@@ -2652,216 +2584,77 @@ export class EchsBridge {
     opts?: {
       parentPostId?: string | null;
       piMessageId?: string | null;
-      continuation?: ContinuationMetadata | null;
+      utteranceId?: string | null;
+      continuation?: unknown;
+      attachmentRefs?: unknown;
+      origin?: UtteranceOrigin | Record<string, unknown> | null;
     }
   ): Promise<void> {
-    let finalText = text;
-
-    const piSessionLink = opts?.piMessageId ? this.store.getPiSessionLinkByTopic(ctx.topicId) : null;
-    if (piSessionLink && opts?.piMessageId) {
-      const canonicalLink = this.store.getPiMessageLink(piSessionLink.pi_session_id, opts.piMessageId);
-      const runLink = opts.continuation
-        ? this.store.findPiMessageLinkBySubagentRun(piSessionLink.pi_session_id, opts.continuation.runIds)
-        : null;
-      if (canonicalLink?.post_id || runLink?.post_id) {
-        if (!canonicalLink?.post_id && runLink?.post_id) {
-          this.store.createPiMessageLink({
-            piSessionId: piSessionLink.pi_session_id,
-            piMessageId: opts.piMessageId,
-            postId: runLink.post_id,
-            role: 'assistant',
-            metadata: { forumOrigin: true, linkedBy: 'subagent-run-id', ...(opts.continuation ?? {}) },
-          });
-        }
-        ctx.lastAssistantAt = Date.now();
-        return;
-      }
-    }
-
-    const topic = this.store.getTopic(ctx.topicId);
-    const forumId = topic?.forum_id ?? null;
-    const resolvedParentPostId = opts?.continuation
-      ? (opts.parentPostId ?? null)
-      : (opts?.parentPostId ?? ctx.lastUserPostId);
-
-    const tamperContext: MessageTamperContext = {
+    if (!opts?.piMessageId) return;
+    const piSessionLink = this.store.getPiSessionLinkByTopic(ctx.topicId);
+    if (!piSessionLink) throw new Error('canonical Pi session link is required for assistant projection');
+    await this.assistantProjections.project({
+      piSessionId: piSessionLink.pi_session_id,
+      piMessageId: opts.piMessageId,
+      utteranceId: opts.utteranceId ?? opts.piMessageId,
       topicId: ctx.topicId,
       sessionId: ctx.sessionId,
-      forumId,
-      parentPostId: resolvedParentPostId,
-      actorId: null,
-    };
-
-    const stage1 = await this.tamperLayer.run({
-      stage: 'outbound.codex_to_forum',
-      direction: 'outbound',
-      text: finalText,
-      context: tamperContext,
+      rawText: text,
+      parentPostId: opts.parentPostId ?? null,
+      continuation: opts.continuation ?? null,
+      attachmentRefs: opts.attachmentRefs,
+      origin: opts.origin ?? null,
+      completion: { threadId },
     });
-    finalText = stage1.text;
+  }
 
-    finalText = this.applyDefaultPersona(ctx.topicId, finalText);
-
-    const stage2 = await this.tamperLayer.run({
-      stage: 'outbound.forum_post_body',
-      direction: 'outbound',
-      text: finalText,
-      context: tamperContext,
-    });
-    finalText = stage2.text;
-
-    const robotIdentity = this.store.getIdentityByKind('robot');
-    if (!robotIdentity) {
-      return;
-    }
-    // Tamper hooks are asynchronous. Historical Pi sync may have projected this
-    // run while they were executing, so re-check run identity immediately before
-    // creating a visible post rather than relying on body equality.
-    if (piSessionLink && opts?.piMessageId && opts.continuation) {
-      const racedRunLink = this.store.findPiMessageLinkBySubagentRun(
-        piSessionLink.pi_session_id,
-        opts.continuation.runIds
-      );
-      if (racedRunLink?.post_id) {
-        this.store.createPiMessageLink({
-          piSessionId: piSessionLink.pi_session_id,
-          piMessageId: opts.piMessageId,
-          postId: racedRunLink.post_id,
-          role: 'assistant',
-          metadata: { forumOrigin: true, linkedBy: 'subagent-run-id-after-tamper', ...opts.continuation },
-        });
-        ctx.lastAssistantAt = Date.now();
-        return;
-      }
-    }
-    const { cleanedText: withoutArtifacts, artifacts } = extractArtifactMarkers(finalText);
-    const { cleanedText: withoutForumRefs, ids: pendingAttachmentIds } = extractForumAttachmentRefs(withoutArtifacts);
-    const { cleanedText, requested } = extractRobotTtsMarker(withoutForumRefs);
-    const duplicatePost = this.store.findRecentDuplicatePost({
-      topicId: ctx.topicId,
-      authorId: robotIdentity.id,
-      body: cleanedText,
-    });
-    if (duplicatePost) {
-      if (requested) {
-        this.attachTtsToPost(duplicatePost.id, cleanedText).catch(() => undefined);
-      }
-      if (pendingAttachmentIds.length > 0) {
-        this.attachPendingAttachmentsToPost(duplicatePost.id, ctx.topicId, pendingAttachmentIds).catch(
-          (err: unknown) => {
-            console.warn(
-              'Pending attachment link failed for post ' +
-                duplicatePost.id +
-                ': ' +
-                (err instanceof Error ? err.message : String(err))
-            );
-          }
-        );
-      }
-      if (artifacts.length > 0) {
-        this.attachArtifactsToPost(duplicatePost.id, artifacts).catch((err: unknown) => {
-          console.warn(
-            'Artifact attachment failed for post ' +
-              duplicatePost.id +
-              ': ' +
-              (err instanceof Error ? err.message : String(err))
-          );
-        });
-      }
-      if (opts?.piMessageId && piSessionLink) {
-        this.store.createPiMessageLink({
-          piSessionId: piSessionLink.pi_session_id,
-          piMessageId: opts.piMessageId,
-          postId: duplicatePost.id,
-          role: 'assistant',
-          metadata: {
-            forumOrigin: true,
-            linkedBy: 'agentd-canonical-id',
-            ...(opts.continuation ?? {}),
-          },
-        });
-      }
-      ctx.lastAssistantAt = Date.now();
-      return;
-    }
-
-    const sessionMessage = this.store.createSessionMessage(ctx.sessionId, 'assistant', finalText, 'public');
-    const post = this.store.createPost({
-      topicId: ctx.topicId,
-      body: cleanedText,
-      authorId: robotIdentity.id,
-      parentPostId: resolvedParentPostId,
-      sourceMessageId: sessionMessage.id,
-    });
-    if (opts?.piMessageId && piSessionLink) {
-      this.store.createPiMessageLink({
-        piSessionId: piSessionLink.pi_session_id,
-        piMessageId: opts.piMessageId,
-        postId: post.id,
-        sessionMessageId: sessionMessage.id,
-        role: 'assistant',
-        metadata: {
-          forumOrigin: true,
-          linkedBy: 'agentd-canonical-id',
-          ...(opts.continuation ?? {}),
-        },
+  private async deliverAssistantProjectionCompletion(
+    projection: AssistantProjectionRow,
+    payload: Record<string, unknown>
+  ): Promise<void> {
+    if (!projection.post_id) throw new Error('finalized assistant projection has no post');
+    const text = typeof payload['text'] === 'string' ? payload['text'] : '';
+    const topicId = typeof payload['topicId'] === 'string' ? payload['topicId'] : projection.topic_id;
+    const sessionId = typeof payload['sessionId'] === 'string' ? payload['sessionId'] : null;
+    const threadId = typeof payload['threadId'] === 'string' ? payload['threadId'] : null;
+    const trail = Array.isArray(payload['tamperTrail'])
+      ? payload['tamperTrail'] as MessageTamperTrailEntry[] : [];
+    if (sessionId && trail.length > 0) {
+      this.persistTamperTrail({
+        topicId,
+        sessionId,
+        postId: projection.post_id,
+        sessionMessageId: projection.session_message_id,
+        trail,
       });
     }
-    if (requested) {
-      this.attachTtsToPost(post.id, cleanedText).catch(() => undefined);
-    }
-    if (pendingAttachmentIds.length > 0) {
-      this.attachPendingAttachmentsToPost(post.id, ctx.topicId, pendingAttachmentIds).catch((err: unknown) => {
-        console.warn(
-          'Pending attachment link failed for post ' +
-            post.id +
-            ': ' +
-            (err instanceof Error ? err.message : String(err))
-        );
-      });
-    }
-    if (artifacts.length > 0) {
-      this.attachArtifactsToPost(post.id, artifacts).catch((err) => {
-        console.warn(
-          'Artifact attachment failed for post ' + post.id + ': ' + (err instanceof Error ? err.message : String(err))
-        );
-      });
-    }
-
-    this.persistTamperTrail({
-      topicId: ctx.topicId,
-      sessionId: ctx.sessionId,
-      postId: post.id,
-      sessionMessageId: sessionMessage.id,
-      trail: [...stage1.trail, ...stage2.trail],
-    });
-
-    this.bus.emit(ctx.topicId, { type: 'assistant_message', data: { text: finalText } });
-    void this.syncReasoningFromHistory(threadId, ctx);
-    ctx.lastAssistantAt = Date.now();
-
     if (this.config.autoRunDirector) {
-      void this.config.autoRunDirector.handleAssistantReply({
-        topicId: ctx.topicId,
-        postId: post.id,
-        text: cleanedText,
-      });
+      await this.config.autoRunDirector.handleAssistantReply({ topicId, postId: projection.post_id, text });
     }
+    this.bus.emit(topicId, {
+      type: 'assistant_message',
+      data: {
+        text,
+        postId: projection.post_id,
+        piMessageId: typeof payload['piMessageId'] === 'string' ? payload['piMessageId'] : projection.pi_message_id,
+        utteranceId: typeof payload['utteranceId'] === 'string' ? payload['utteranceId'] : projection.utterance_id,
+        origin: payload['origin'] ?? null,
+      },
+    });
+    if (payload['requestedTts'] === true) {
+      void this.attachTtsToPost(projection.post_id, text).catch(() => undefined);
+    }
+    const ctx = threadId ? this.threadMap.get(threadId) : undefined;
+    if (ctx) void this.syncReasoningFromHistory(threadId as string, ctx);
   }
 
-  private getLatestAssistantSessionMessage(sessionId: string): { content: string; created_at: string } | null {
-    const messages = this.store.listSessionMessages(sessionId);
-    for (let i = messages.length - 1; i >= 0; i -= 1) {
-      const message = messages[i];
-      if (message && message.role === 'assistant') {
-        return message;
-      }
-    }
-    return null;
-  }
-
-  private normalizeAssistantText(value: string): string {
-    return value.replace(/\s+/g, ' ').trim();
+  private enqueueAssistantProjection(threadId: string, project: () => Promise<void>): Promise<void> {
+    const prior = this.projectionTails.get(threadId) ?? Promise.resolve();
+    const next = prior.then(project).catch((error: unknown) => {
+      console.error('[ECHS] assistant projection failed:', error instanceof Error ? error.message : error);
+    });
+    this.projectionTails.set(threadId, next);
+    return next;
   }
 
   private async enrichSubagentToolRun(agentId: string, ctx: ThreadContext): Promise<void> {
@@ -2887,47 +2680,42 @@ export class EchsBridge {
   private async ensureAssistantBackfill(
     threadId: string,
     ctx: ThreadContext,
-    turnStartedAt: number | null,
-    turnParentPostId: string | null
+    _turnStartedAt: number | null,
+    turnParentPostId: string | null,
+    currentMissingPiMessageId: string | null = null
   ): Promise<void> {
-    if (!turnStartedAt) return;
-    if (ctx.lastAssistantAt && ctx.lastAssistantAt >= turnStartedAt) return;
-
-    const latestSessionAssistant = this.getLatestAssistantSessionMessage(ctx.sessionId);
-    if (latestSessionAssistant) {
-      const latestAt = Date.parse(latestSessionAssistant.created_at);
-      if (!Number.isNaN(latestAt) && latestAt >= turnStartedAt) {
-        ctx.lastAssistantAt = latestAt;
-        return;
-      }
-    }
-
     const history = await this.client.getConversationHistory(threadId);
     const items = Array.isArray(history?.items) ? history.items : [];
     if (items.length === 0) return;
 
-    let latestText: string | null = null;
-    for (let i = items.length - 1; i >= 0; i -= 1) {
-      const item = items[i] as any;
-      if (item?.type === 'message' && item?.role === 'assistant') {
-        const text = extractAssistantText(item);
-        if (text?.trim()) {
-          latestText = text;
-          break;
+    await this.enqueueAssistantProjection(threadId, async () => {
+      for (const rawHistoryEvent of items) {
+        const historyEvent = asRecord(rawHistoryEvent);
+        if (historyEvent?.['event'] !== 'item_completed') continue;
+        const assistant = normalizeCanonicalAssistantItem(historyEvent['data'], ctx.topicId, null);
+        if (!assistant) continue;
+        if (!assistant.piMessageId) {
+          console.warn(`[ECHS] assistant history item missing canonical Pi message id topic=${ctx.topicId} thread=${threadId}`);
+          continue;
+        }
+        try {
+          await this.persistAssistantMessage(threadId, ctx, assistant.text, {
+            // Only the item named by this completion boundary may inherit its
+            // turn parent. Older history must rely on its own canonical origin.
+            parentPostId: assistant.piMessageId === currentMissingPiMessageId ? turnParentPostId : null,
+            piMessageId: assistant.piMessageId,
+            utteranceId: assistant.utteranceId,
+            continuation: assistant.continuation,
+            attachmentRefs: assistant.attachmentRefs,
+            origin: assistant.origin,
+          });
+        } catch (error) {
+          // One malformed/unprojectable canonical item must not suppress valid
+          // siblings later in the same ordered history scan.
+          console.error('[ECHS] assistant history projection failed:', error instanceof Error ? error.message : error);
         }
       }
-    }
-    if (!latestText) return;
-
-    if (latestSessionAssistant) {
-      const normalizedExisting = this.normalizeAssistantText(latestSessionAssistant.content);
-      const normalizedLatest = this.normalizeAssistantText(latestText);
-      if (normalizedExisting === normalizedLatest) {
-        return;
-      }
-    }
-
-    await this.persistAssistantMessage(threadId, ctx, latestText, { parentPostId: turnParentPostId });
+    });
   }
 
   private async syncReasoningFromHistory(
@@ -2990,99 +2778,6 @@ export class EchsBridge {
         changed: entry.changed,
         error: entry.error ?? null,
         durationMs: entry.durationMs,
-      });
-    }
-  }
-
-  private applyDefaultPersona(topicId: string, text: string): string {
-    const trimmed = text.trim();
-    if (!trimmed) return text;
-
-    const topic = this.store.getTopic(topicId);
-    if (!topic) return text;
-
-    const personas = this.store.listRobotPersonas(topic.forum_id);
-    if (personas.length !== 1) return text;
-    if (this.personaBlockRegex.test(text)) return text;
-
-    const personaKey = personas[0]?.key;
-    if (!personaKey) return text;
-
-    return `[[persona:${personaKey}]]\n${trimmed}\n[[/persona]]`;
-  }
-
-  private async attachPendingAttachmentsToPost(postId: string, topicId: string, ids: string[]): Promise<void> {
-    for (const id of [...new Set(ids)]) {
-      const pending = this.store.getPendingAttachment(id);
-      if (!pending) {
-        console.warn('Pending attachment not found: ' + id);
-        continue;
-      }
-      if (pending.topic_id !== topicId) {
-        console.warn('Pending attachment topic mismatch: ' + id);
-        continue;
-      }
-      if (new Date(pending.expires_at).getTime() <= Date.now()) {
-        this.store.deletePendingAttachment(id);
-        console.warn('Pending attachment expired: ' + id);
-        continue;
-      }
-      this.store.createAttachment({
-        postId,
-        filename: pending.filename,
-        mimeType: pending.mime_type,
-        sizeBytes: pending.size_bytes,
-        storagePath: pending.storage_path,
-        sha256: pending.sha256 ?? null,
-      });
-      this.store.deletePendingAttachment(id);
-    }
-  }
-
-  private async attachArtifactsToPost(postId: string, artifacts: ArtifactRequest[]): Promise<void> {
-    const uploadsDir = this.config.tts?.uploadsDir;
-    if (!uploadsDir) return;
-    const allowedRoot = resolve(this.config.workDir);
-    for (const artifact of artifacts) {
-      const sourcePath = resolve(artifact.path);
-      if (!isPathWithin(allowedRoot, sourcePath)) {
-        console.warn('Skipping artifact outside workDir: ' + sourcePath);
-        continue;
-      }
-      let filename = basename(artifact.filename?.trim() || basename(sourcePath)).replace(/[\r\n"]/g, '');
-      let mimeType = artifact.mimeType?.trim() || guessMimeType(filename);
-      let sizeBytes = 0;
-      let sha256: string | null = null;
-      const ext = extname(filename);
-      const storageName = ext ? 'artifact_' + randomUUID() + ext : 'artifact_' + randomUUID();
-      const storagePath = join(uploadsDir, storageName);
-
-      if (existsSync(sourcePath)) {
-        const stat = statSync(sourcePath);
-        if (!stat.isFile() || stat.size <= 0) continue;
-        copyFileSync(sourcePath, storagePath);
-        sizeBytes = statSync(storagePath).size;
-        sha256 = sha256File(storagePath);
-      } else {
-        const resolved = await this.client.resolveArtifact({
-          path: artifact.path,
-          filename: artifact.filename ?? null,
-          mimeType: artifact.mimeType ?? null,
-        });
-        filename = resolved.filename.replace(/[\r\n"]/g, '');
-        mimeType = resolved.mimeType;
-        writeFileSync(storagePath, Buffer.from(resolved.dataBase64, 'base64'));
-        sizeBytes = statSync(storagePath).size;
-        sha256 = resolved.sha256;
-      }
-
-      this.store.createAttachment({
-        postId,
-        filename,
-        mimeType,
-        sizeBytes,
-        storagePath,
-        sha256,
       });
     }
   }
@@ -3197,6 +2892,67 @@ export class EchsBridge {
     lines.push('[/CATCH-UP CONTEXT]');
     return lines.join('\n').trim();
   }
+}
+
+type CanonicalAssistantItem = {
+  text: string;
+  piMessageId: string | null;
+  utteranceId: string | null;
+  continuation: unknown;
+  attachmentRefs: unknown;
+  origin: Record<string, unknown> | null;
+};
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function nonEmptyId(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+/** Normalize the canonical agentd item_completed payload for both live and history recovery. */
+function normalizeCanonicalAssistantItem(
+  value: unknown,
+  topicId: string,
+  continuationFallback: unknown
+): CanonicalAssistantItem | null {
+  const data = asRecord(value);
+  const item = asRecord(data?.['item']);
+  if (!data || !item || item['type'] !== 'message' || item['role'] !== 'assistant') return null;
+  const messageKind = item['message_kind'] ?? item['messageKind'];
+  if (messageKind != null && messageKind !== 'assistant_outward' && messageKind !== 'assistant_terminal') return null;
+
+  const text = extractAssistantText(item);
+  const piMessageId = nonEmptyId(
+    data['pi_message_id'], data['piMessageId'], item['pi_message_id'], item['piMessageId'], item['id']
+  );
+  const utteranceId = nonEmptyId(
+    item['utterance_id'], item['utteranceId'], data['utterance_id'], data['utteranceId']
+  ) ?? piMessageId;
+  const rawOrigins = item['execution_origins'] ?? item['executionOrigins']
+    ?? data['execution_origins'] ?? data['executionOrigins'];
+  const origins = Array.isArray(rawOrigins)
+    ? rawOrigins.map(asRecord).filter((origin): origin is Record<string, unknown> => origin !== null)
+    : [];
+  const origin = origins.find((candidate) =>
+    candidate['topicId'] === topicId || candidate['topic_id'] === topicId
+  ) ?? origins[0] ?? null;
+
+  return {
+    text,
+    piMessageId,
+    utteranceId,
+    continuation: [data, item, item['metadata'], continuationFallback],
+    attachmentRefs: item['attachment_refs'] ?? item['attachmentRefs']
+      ?? data['attachment_refs'] ?? data['attachmentRefs'] ?? [],
+    origin,
+  };
 }
 
 function extractAssistantText(item: any): string {

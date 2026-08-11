@@ -52,6 +52,8 @@ export interface Post {
   body: string;
   sourceMessageId?: string | null;
   silent?: boolean;
+  /** Explicit canonical subagent-completion projection metadata. */
+  followUp?: boolean;
   createdAt: string;
   editedAt?: string | null;
   deletedAt?: string | null;

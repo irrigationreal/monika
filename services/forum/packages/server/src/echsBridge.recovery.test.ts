@@ -40,6 +40,7 @@ describe('passive ECHS startup reconciliation', () => {
       listSessionsWithThreads: vi.fn(() => [session]),
       clearSessionAgentThread: vi.fn(),
       setRobotActivity: vi.fn((_topicId: string, next: string) => { activity = next; }),
+      clearActiveTurnOrigin: vi.fn(),
       getRobotState: vi.fn(() => ({ current_plan_id: null, activity })),
       getTopicDispatchGeneration: vi.fn(() => 0),
       isTopicDispatchGenerationCurrent: vi.fn(() => true),
@@ -54,10 +55,10 @@ describe('passive ECHS startup reconciliation', () => {
     vi.spyOn((bridge as any).client, 'getConversation').mockResolvedValue(conversation);
     const create = vi.spyOn((bridge as any).client, 'createConversation');
     const enqueue = vi.spyOn((bridge as any).client, 'enqueueConversationMessage');
-    vi.spyOn(bridge as any, 'ensureSubscribed').mockResolvedValue(undefined);
+    const ensureSubscribed = vi.spyOn(bridge as any, 'ensureSubscribed').mockResolvedValue(undefined);
     vi.spyOn(bridge as any, 'emitState').mockImplementation(() => {});
     const open = vi.spyOn(bridge as any, 'openTopicConversation');
-    return { bridge, store, open, create, enqueue };
+    return { bridge, store, open, create, enqueue, ensureSubscribed };
   }
 
   it('reconciles unresolved canonical cancellation without requiring a loaded conversation', async () => {
@@ -68,6 +69,13 @@ describe('passive ECHS startup reconciliation', () => {
     await bridge.reconcileLoadedThreads();
     expect(store.setRobotActivity).toHaveBeenCalledWith('topic-1', 'stopping');
     expect(store.setRobotActivity).not.toHaveBeenCalledWith('topic-1', 'idle');
+  });
+
+  it('clears an unproven active origin before subscribing for turn replay', async () => {
+    const { bridge, store, ensureSubscribed } = bridgeFixture({ conversation_id: 'conversation-1', active_thread_id: 'conversation-1', activity: 'active' });
+    await bridge.reconcileLoadedThreads();
+    expect(store.clearActiveTurnOrigin).toHaveBeenCalledWith('topic-1');
+    expect(ensureSubscribed).toHaveBeenCalledWith('conversation-1', { replay: true });
   });
 
   it.each(['stopping', 'uncertain'] as const)('does not overwrite %s with thinking during active startup reconciliation', async (activity) => {
@@ -237,7 +245,7 @@ describe('passive ECHS startup reconciliation', () => {
       topicId: 'topic-1', sessionId: 'session-1', activeThreadId: 'conversation-1', lastUserPostId: 'post-1',
       turnParentPostId: 'post-1', planId: 'plan-1', reasoningSummary: '', reasoningBackfillAttempted: false,
       reasoningBackfillRetries: 0, model: 'model', reasoningEffort: null, currentTurnId: 'turn-current',
-      turnStartedAt: 1, lastAssistantAt: null, lastUsage: null, totalInputTokens: 0, totalOutputTokens: 0,
+      turnStartedAt: 1, lastUsage: null, totalInputTokens: 0, totalOutputTokens: 0,
       activeSubagents: new Map(), lastStreamEventAt: null, reasoningCheckpoints: [], assistantText: '', assistantCheckpoints: [],
     };
     (bridge as any).threadMap.set('conversation-1', context);

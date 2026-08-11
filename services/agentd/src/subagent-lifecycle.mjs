@@ -3,7 +3,7 @@ import { constants as fsConstants, promises as fs } from 'node:fs';
 import path from 'node:path';
 
 export const SUBAGENT_RUN_CUSTOM_TYPE = 'monika.subagent.run';
-export const SUBAGENT_RUN_VERSION = 1;
+export const SUBAGENT_RUN_VERSION = 2;
 export const SUBAGENT_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
 const ACTIVE_STATES = new Set(['pending', 'registered', 'launching', 'queued', 'running', 'stopping']);
 const MAX_PUBLIC_RUNS = 64;
@@ -27,6 +27,7 @@ const EXECUTION_STATES = new Set(['active', 'terminal', 'interrupted', 'uncertai
 const OUTCOME_STATES = new Set(['pending', 'succeeded', 'failed', 'interrupted', 'unknown']);
 const EFFECTS_STATES = new Set(['none', 'confirmed', 'unknown']);
 const DELIVERY_STATES = new Set(['pending', 'settled', 'operator-resolved']);
+const DELIVERY_DISPOSITIONS = new Set(['awaited', 'follow_up', 'silent']);
 function publicExecutionTarget(value) {
   const data = record(value); const keys = data ? Object.keys(data).sort() : [];
   if (data?.kind === 'local' && keys.length === 1) return { kind: 'local' };
@@ -264,12 +265,14 @@ export function validateLifecycleArtifact(value, expected = {}) {
   if (expected.sessionId && expected.sessionId !== sessionId) return null;
   if (data.lifecycleArtifactVersion >= 4 && (!EXECUTION_STATES.has(data.execution_state) || !OUTCOME_STATES.has(data.outcome_state)
     || !EFFECTS_STATES.has(data.effects_state) || !DELIVERY_STATES.has(data.delivery_state))) return null;
+  if (data.lifecycleArtifactVersion >= 5 && !DELIVERY_DISPOSITIONS.has(data.deliveryDisposition)) return null;
   return {
     lifecycleArtifactVersion: data.lifecycleArtifactVersion, runId: id, sessionId,
     executionState: data.lifecycleArtifactVersion >= 4 ? data.execution_state : null,
     outcomeState: data.lifecycleArtifactVersion >= 4 ? data.outcome_state : null,
     effectsState: data.lifecycleArtifactVersion >= 4 ? data.effects_state : 'unknown',
     deliveryState: data.lifecycleArtifactVersion >= 4 ? data.delivery_state : null,
+    deliveryDisposition: data.lifecycleArtifactVersion >= 5 ? data.deliveryDisposition : 'follow_up',
     executionTarget: publicExecutionTarget(data.executionTarget ?? data.execution_target),
     asyncDir: path.resolve(asyncDir), sessionDir: sessionDir && path.isAbsolute(sessionDir) ? path.resolve(sessionDir) : null,
     state: safeState(data.state), pid: Number.isInteger(data.pid) ? data.pid : null,
@@ -290,6 +293,7 @@ function originFor(conv) {
 function publicRun(run) {
   return {
     run_id: run.runId, run_key: run.runKey ?? null, state: run.state,
+    delivery_disposition: run.deliveryDisposition ?? 'follow_up', claim_state: run.claimState ?? 'unclaimed',
     execution_state: run.executionState ?? (run.active ? 'active' : 'terminal'),
     outcome_state: run.outcomeState ?? 'unknown', effects_state: run.effectsState === undefined ? 'unknown' : run.effectsState,
     delivery_state: run.deliveryState ?? null, execution_target: run.executionTarget ?? null,
@@ -301,7 +305,7 @@ function publicRun(run) {
 }
 export function extractSubagentRuns(entries) {
   return entries.filter((entry) => entry?.type === 'custom' && entry.customType === SUBAGENT_RUN_CUSTOM_TYPE
-    && record(entry.data)?.version === SUBAGENT_RUN_VERSION && runId(entry.data))
+    && [1, SUBAGENT_RUN_VERSION].includes(record(entry.data)?.version) && runId(entry.data))
     .map((entry) => ({ entry_id: entry.id, parent_id: entry.parentId ?? null, ...entry.data }));
 }
 export function backgroundStatus(conv) {
@@ -313,18 +317,41 @@ export function backgroundStatus(conv) {
 export function hasActiveBackgroundWork(conv) { return backgroundStatus(conv).active_count > 0; }
 
 export class SubagentLifecycle {
-  constructor({ now = Date.now } = {}) { this.now = now; this.conv = null; this.unsubscribes = []; this.completions = []; this.eventBus = null; this.earlyEvents = []; }
-  async attach(conv) { this.conv = conv; conv.subagents ??= { runs: new Map() }; this.restoreMappings(); await this.reconcileArtifacts(); const early = this.earlyEvents.splice(0); for (const event of early) { if (event.type === 'started') this.onStarted(event.value); else if (event.type === 'complete') this.onComplete(event.value); else this.onTerminal(event.value); } }
+  constructor({ now = Date.now, lifecycleRoot = process.env.PI_SUBAGENT_RUNTIME_ROOT, resultsRoot = null } = {}) {
+    this.now = now; this.lifecycleRoot = lifecycleRoot ? path.resolve(lifecycleRoot) : null;
+    this.resultsRoot = resultsRoot ? path.resolve(resultsRoot) : this.lifecycleRoot ? path.join(this.lifecycleRoot, 'async-subagent-results') : null;
+    this.conv = null; this.unsubscribes = []; this.completions = [];
+    this.eventBus = null; this.earlyEvents = []; this.pendingContinuation = null; this.pendingResultClaims = [];
+    this.recoveredFollowUps = new Set();
+  }
+  findRun(id, key = null) {
+    const matches = [...(this.conv?.subagents?.runs?.values?.() ?? [])]
+      .filter((run) => run.runId === id && (!key || run.runKey === key));
+    return matches.length === 1 ? matches[0] : null;
+  }
+  async attach(conv) {
+    this.conv = conv; conv.subagents ??= { runs: new Map() }; this.restoreMappings(); await this.reconcileArtifacts();
+    const early = this.earlyEvents.splice(0);
+    for (const event of early) {
+      if (event.type === 'started') this.onStarted(event.value);
+      else if (event.type === 'complete') this.onComplete(event.value);
+      else if (event.type === 'claim') this.onClaimed(event.value);
+      else this.onTerminal(event.value);
+    }
+    this.restorePendingResultClaims();
+  }
   adoptSnapshotRuns(snapshot) {
     for (const summary of snapshot?.runs ?? []) {
-      const id = string(summary.run_id); const sessionRef = string(summary.parent_session_id ?? summary.parent_session_path);
-      if (!id || this.conv.subagents.runs.has(id) || !sessionMatches(this.conv, sessionRef)) continue;
-      this.conv.subagents.runs.set(id, {
-        runId: id, runKey: string(summary.run_key), sessionId: this.conv.piSessionId, artifactSessionId: sessionRef,
+      const id = string(summary.run_id); const key = string(summary.run_key); const sessionRef = string(summary.parent_session_id ?? summary.parent_session_path);
+      if (!id || this.findRun(id, key) || !sessionMatches(this.conv, sessionRef)) continue;
+      this.conv.subagents.runs.set(key ?? id, {
+        runId: id, runKey: key, sessionId: this.conv.piSessionId, artifactSessionId: sessionRef,
         asyncDir: string(summary.async_dir), state: summary.state, active: summary.blocking,
         executionState: summary.execution_state, reason: summary.reason ?? null,
-        origin: record(summary.origin) ?? {}, startedAt: summary.started_at ?? null,
-        updatedAt: summary.updated_at ?? null, completedAt: summary.blocking ? null : summary.updated_at ?? null,
+        deliveryDisposition: DELIVERY_DISPOSITIONS.has(summary.deliveryDisposition) ? summary.deliveryDisposition : 'follow_up',
+        deliveryState: summary.delivery_state, claimState: 'unclaimed', origin: record(summary.origin) ?? {},
+        startedAt: summary.started_at ?? null, updatedAt: summary.updated_at ?? null,
+        completedAt: summary.blocking ? null : summary.updated_at ?? null,
       });
     }
   }
@@ -337,8 +364,8 @@ export class SubagentLifecycle {
       }
       if (!summary) continue;
       run.state = summary.state; run.runKey = string(summary.run_key) ?? run.runKey; run.executionState = summary.execution_state; run.reason = summary.reason;
-      run.processTerminal = summary.processTerminal; run.active = summary.blocking;
-      run.updatedAt = summary.updated_at; run.deliveryState = summary.delivery_state;
+      run.processTerminal = summary.processTerminal; run.active = summary.blocking; run.updatedAt = summary.updated_at;
+      run.deliveryState = summary.delivery_state; run.deliveryDisposition = summary.deliveryDisposition ?? run.deliveryDisposition ?? 'follow_up';
       run.outcomeState = summary.outcome_state; run.effectsState = summary.effects_state; run.executionTarget = summary.execution_target;
       if (!run.active) run.completedAt = summary.updated_at;
     }
@@ -349,43 +376,193 @@ export class SubagentLifecycle {
     for (const entry of branch) {
       if (entry.type !== 'custom' || entry.customType !== SUBAGENT_RUN_CUSTOM_TYPE) continue;
       const data = record(entry.data); const id = runId(data);
-      if (!id || data.version !== SUBAGENT_RUN_VERSION || !sessionMatches(this.conv, data.sessionId)) continue;
-      const previous = this.conv.subagents.runs.get(id);
-      this.conv.subagents.runs.set(id, { runId: id, sessionId: this.conv.piSessionId,
+      if (!id || ![1, SUBAGENT_RUN_VERSION].includes(data.version) || !sessionMatches(this.conv, data.sessionId)) continue;
+      const key = string(data.runKey) ?? id; const previous = this.conv.subagents.runs.get(key);
+      this.conv.subagents.runs.set(key, {
+        runId: id, runKey: string(data.runKey), sessionId: this.conv.piSessionId,
         artifactSessionId: string(data.artifactSessionId) ?? string(data.sessionId) ?? this.conv.sessionPath,
         asyncDir: string(data.asyncDir), state: previous?.state ?? 'unknown', active: previous?.active ?? true,
         executionState: previous?.executionState ?? 'uncertain', origin: record(data.origin) ?? {},
-        startedAt: data.startedAt ?? null, completedAt: previous?.completedAt ?? null });
+        originUtteranceId: string(data.originUtteranceId) ?? string(data.origin?.postId),
+        deliveryDisposition: DELIVERY_DISPOSITIONS.has(data.deliveryDisposition) ? data.deliveryDisposition : 'follow_up',
+        deliveryState: data.deliveryState ?? previous?.deliveryState ?? 'pending', claimState: data.claimState ?? 'unclaimed',
+        startedAt: data.startedAt ?? null, completedAt: previous?.completedAt ?? null,
+      });
     }
   }
-  extension() { const owner = this; return { name: 'agentd-subagent-lifecycle', hidden: true, factory(pi) { owner.eventBus = pi.events; owner.unsubscribes.push(pi.events.on('subagent:async-registering', (data) => owner.onStarted(data)), pi.events.on('subagent:async-started', (data) => owner.onStarted(data)), pi.events.on('subagent:async-complete', (data) => owner.onComplete(data)), pi.events.on('subagent:process-terminal', (data) => owner.onTerminal(data))); } }; }
+  restorePendingResultClaims() {
+    const branch = this.conv?.session?.sessionManager?.getBranch?.() ?? [];
+    const consumed = new Set(branch.filter((entry) => entry?.type === 'custom'
+      && entry.customType === 'monika.message.provenance' && entry.data?.version === 2)
+      .flatMap((entry) => Array.isArray(entry.data.resultClaims) ? entry.data.resultClaims : [])
+      .map((claim) => string(claim?.claimEntryId)).filter(Boolean));
+    for (const entry of branch) {
+      if (entry?.type !== 'custom' || entry.customType !== 'pi-subagents.result-claim'
+        || consumed.has(entry.id)) continue;
+      this.onClaimed({ ...record(entry.data), claimEntryId: entry.id });
+    }
+  }
+  extension() {
+    const owner = this;
+    return { name: 'agentd-subagent-lifecycle', hidden: true, factory(pi) {
+      owner.eventBus = pi.events;
+      owner.unsubscribes.push(
+        pi.events.on('subagent:async-registering', (data) => owner.onStarted(data)),
+        pi.events.on('subagent:async-started', (data) => owner.onStarted(data)),
+        pi.events.on('subagent:async-complete', (data) => owner.onComplete(data)),
+        pi.events.on('subagent:process-terminal', (data) => owner.onTerminal(data)),
+        pi.events.on('subagent:result-claimed', (data) => owner.onClaimed(data)),
+      );
+    } };
+  }
   onStarted(value) {
     if (!this.conv) { this.earlyEvents.push({ type: 'started', value }); return true; }
     const data = record(value); const id = runId(data); const sessionId = string(data?.sessionId); const asyncDir = string(data?.asyncDir);
+    const disposition = DELIVERY_DISPOSITIONS.has(data?.deliveryDisposition) ? data.deliveryDisposition : 'follow_up';
     if (!id || !sessionMatches(this.conv, sessionId) || !asyncDir || !path.isAbsolute(asyncDir)) return false;
-    if (this.conv.subagents.runs.has(id)) return true;
-    const run = { runId: id, sessionId: this.conv.piSessionId, artifactSessionId: sessionId, asyncDir: path.resolve(asyncDir), state: 'running', executionState: 'active', active: true, origin: originFor(this.conv), startedAt: this.now(), completedAt: null };
-    this.conv.subagents.runs.set(id, run);
-    this.conv.session.sessionManager.appendCustomEntry(SUBAGENT_RUN_CUSTOM_TYPE, { version: SUBAGENT_RUN_VERSION, runId: id, sessionId: this.conv.piSessionId, artifactSessionId: run.artifactSessionId, asyncDir: run.asyncDir, origin: run.origin, startedAt: run.startedAt });
+    const identity = lifecycleRunIdentity(this.lifecycleRoot ?? path.resolve(path.dirname(asyncDir)), asyncDir, id);
+    const key = identity?.runKey ?? string(data.runKey) ?? id;
+    const existing = this.findRun(id, identity?.runKey ?? null);
+    if (existing) { existing.deliveryDisposition = disposition; existing.runKey ??= identity?.runKey ?? null; return true; }
+    const origin = originFor(this.conv);
+    const run = {
+      runId: id, runKey: identity?.runKey ?? string(data.runKey), sessionId: this.conv.piSessionId,
+      artifactSessionId: sessionId, asyncDir: path.resolve(asyncDir), state: 'running', executionState: 'active', active: true,
+      deliveryDisposition: disposition, deliveryState: 'pending', claimState: 'unclaimed', origin,
+      originUtteranceId: origin.postId ?? null, startedAt: this.now(), completedAt: null,
+    };
+    this.conv.subagents.runs.set(key, run);
+    this.conv.session.sessionManager.appendCustomEntry(SUBAGENT_RUN_CUSTOM_TYPE, {
+      version: SUBAGENT_RUN_VERSION, runId: id, runKey: run.runKey ?? null, sessionId: this.conv.piSessionId,
+      artifactSessionId: run.artifactSessionId, asyncDir: run.asyncDir, deliveryDisposition: disposition,
+      deliveryState: run.deliveryState, claimState: run.claimState, origin: run.origin,
+      originUtteranceId: run.originUtteranceId, startedAt: run.startedAt,
+    });
     return true;
   }
-  onComplete(value) { if (!this.conv) { this.earlyEvents.push({ type: 'complete', value }); return true; } const data = record(value); const id = runId(data); if (!id) return false; const run = this.conv.subagents.runs.get(id); if (!run) return false; run.state = data.success === false ? 'failed' : safeState(data.state) === 'unknown' ? 'completed' : safeState(data.state); run.deliveryState = 'notified'; run.completedAt = this.now(); this.completions.push({ runId: id, origin: run.origin }); if (this.completions.length > 100) this.completions.shift(); return true; }
-  onTerminal(value) { if (!this.conv) { this.earlyEvents.push({ type: 'terminal', value }); return true; } const id = runId(value); const run = this.conv?.subagents?.runs?.get(id); if (!run || !validObservedProcessTerminal(value, id)) return false; run.processTerminal = record(value); run.executionState = 'terminal'; run.active = false; run.completedAt = this.now(); return true; }
+  onComplete(value) {
+    if (!this.conv) { this.earlyEvents.push({ type: 'complete', value }); return true; }
+    const data = record(value); const id = runId(data); if (!id) return false;
+    const run = this.findRun(id, string(data.runKey)); if (!run) return false;
+    if (data.deliveryDisposition && data.deliveryDisposition !== run.deliveryDisposition) return false;
+    run.state = data.success === false ? 'failed' : safeState(data.state) === 'unknown' ? 'completed' : safeState(data.state);
+    run.completedAt = this.now();
+    run.deliveryState = run.deliveryDisposition === 'follow_up' ? 'pending-notification'
+      : run.deliveryDisposition === 'awaited' ? 'awaiting-claim' : 'retained';
+    if (run.deliveryDisposition === 'follow_up' && run.claimState !== 'claimed') {
+      this.completions.push({ runId: id, runKey: run.runKey, origin: run.origin });
+      if (this.completions.length > 100) this.completions.shift();
+    }
+    return true;
+  }
+  onClaimed(value) {
+    if (!this.conv) { this.earlyEvents.push({ type: 'claim', value }); return true; }
+    const claim = record(value); const id = string(claim?.runId); const key = string(claim?.runKey);
+    if (!id || !key || claim.kind !== 'pi-subagents.result-claim' || claim.deliveryDisposition !== 'awaited'
+      || !sessionMatches(this.conv, claim.sessionId) || !string(claim.claimEntryId)
+      || !/^[a-f0-9]{64}$/.test(claim.resultSha256 ?? '')
+      || !Number.isSafeInteger(claim.resultSizeBytes) || claim.resultSizeBytes < 0
+      || typeof claim.claimedAt !== 'number' || !Number.isFinite(claim.claimedAt)) return false;
+    const run = this.findRun(id, key);
+    if (!run || run.deliveryDisposition !== 'awaited') return false;
+    run.claimState = 'claimed'; run.deliveryState = 'claimed-awaiting-synthesis';
+    this.completions = this.completions.filter((completion) => completion.runKey !== key);
+    const canonicalClaim = {
+      version: 1, kind: 'pi-subagents.result-claim', runId: id, runKey: key,
+      sessionId: claim.sessionId, deliveryDisposition: 'awaited', resultSha256: claim.resultSha256,
+      resultSizeBytes: claim.resultSizeBytes, claimedAt: claim.claimedAt,
+    };
+    if (!this.pendingResultClaims.some((item) => item.claim.runKey === key && item.claim.resultSha256 === claim.resultSha256)) this.pendingResultClaims.push({ claim: canonicalClaim, claimEntryId: claim.claimEntryId });
+    return true;
+  }
+  onTerminal(value) {
+    if (!this.conv) { this.earlyEvents.push({ type: 'terminal', value }); return true; }
+    const id = runId(value); const run = this.findRun(id, string(value?.runKey));
+    if (!run || !validObservedProcessTerminal(value, id)) return false;
+    run.processTerminal = record(value); run.executionState = 'terminal'; run.active = false; run.completedAt = this.now(); return true;
+  }
   handleSessionEvent(event) {
     const message = event?.message;
     if (event?.type === 'message_start' && message?.role === 'custom' && message.customType === 'subagent-notify') {
       const detailIds = Array.isArray(message.details?.runIds) ? message.details.runIds.map(string).filter(Boolean).slice(0, 100) : [];
       let completions;
-      if (detailIds.length > 0) { completions = detailIds.flatMap((id) => { const run = this.conv.subagents.runs.get(id); return run ? [{ runId: id, origin: run.origin ?? {} }] : []; }); const claimed = new Set(detailIds); this.completions = this.completions.filter((completion) => !claimed.has(completion.runId)); }
-      else { const grouped = typeof message.content === 'string' ? message.content.match(/^Background tasks completed \((\d+)\):/) : null; const requested = grouped ? Math.max(1, Math.min(100, Number(grouped[1]))) : 1; completions = this.completions.splice(0, requested); }
-      const primary = completions[0] ?? null; const continuation = primary ? { ...primary, runIds: completions.map((c) => c.runId), origins: completions.map((c) => ({ runId: c.runId, ...c.origin })) } : null;
-      if (this.conv.current) this.conv.subagents.currentContinuation = continuation; else this.conv.subagents.pendingContinuation = continuation;
+      if (detailIds.length > 0) {
+        completions = detailIds.flatMap((id) => {
+          const run = this.findRun(id);
+          return run && run.deliveryDisposition === 'follow_up' && run.claimState !== 'claimed'
+            ? [{ runId: id, runKey: run.runKey, origin: run.origin ?? {} }] : [];
+        });
+        if (completions.length !== detailIds.length) return;
+        const claimed = new Set(detailIds); this.completions = this.completions.filter((completion) => !claimed.has(completion.runId));
+      } else {
+        const grouped = typeof message.content === 'string' ? message.content.match(/^Background tasks completed \((\d+)\):/) : null;
+        const requested = grouped ? Math.max(1, Math.min(100, Number(grouped[1]))) : 1;
+        completions = this.completions.splice(0, requested);
+      }
+      const primary = completions[0] ?? null;
+      this.pendingContinuation = primary ? {
+        runId: primary.runId,
+        ...(primary.runKey ? { runKey: primary.runKey } : {}),
+        origin: primary.origin,
+        runIds: completions.map((item) => item.runId),
+        ...(completions.some((item) => item.runKey) ? { runKeys: completions.map((item) => item.runKey).filter(Boolean) } : {}),
+        origins: completions.map((item) => ({ runId: item.runId, ...(item.runKey ? { runKey: item.runKey } : {}), ...item.origin })),
+      } : null;
     }
-    if (event?.type === 'agent_start' && this.conv?.subagents?.pendingContinuation) { this.conv.subagents.currentContinuation = this.conv.subagents.pendingContinuation; this.conv.subagents.pendingContinuation = null; }
-    if (event?.type === 'agent_settled') this.conv.subagents.currentContinuation = null;
+    if (event?.type === 'agent_settled') this.pendingContinuation = null;
   }
-  continuation() { return this.conv?.subagents?.currentContinuation ?? null; }
-  async requestStops() { const runs = [...(this.conv?.subagents?.runs?.values?.() ?? [])].filter((run) => run.active); if (!this.eventBus) return { requested: 0, unavailable: runs.length }; for (const run of runs) this.eventBus.emit('subagents:rpc:v1:request', { version: 1, requestId: randomUUID(), method: 'stop', params: { runId: run.runId }, source: { extension: 'agentd' } }); return { requested: runs.length, unavailable: 0 }; }
+  continuation() { return this.pendingContinuation; }
+  consumeCausalMetadata() {
+    const result = { continuation: this.pendingContinuation, resultClaims: this.pendingResultClaims };
+    this.pendingContinuation = null; this.pendingResultClaims = [];
+    return result;
+  }
+  async recoverPendingFollowUps() {
+    if (!this.eventBus || !this.conv) return { recovered: 0 };
+    const branch = this.conv.session?.sessionManager?.getBranch?.() ?? [];
+    const notified = new Set(branch.flatMap((entry) => {
+      const message = entry?.type === 'message' ? entry.message : entry?.type === 'custom' ? entry : null;
+      if (message?.customType !== 'subagent-notify') return [];
+      const details = message.details ?? message.data;
+      return Array.isArray(details?.runIds) ? details.runIds.map(string).filter(Boolean) : [];
+    }));
+    let recovered = 0;
+    for (const run of this.conv.subagents?.runs?.values?.() ?? []) {
+      if (run.deliveryDisposition !== 'follow_up' || run.active || !['pending', 'unproven'].includes(run.deliveryState)
+        || notified.has(run.runId) || this.recoveredFollowUps.has(run.runKey ?? run.runId)
+        || !run.asyncDir || !path.isAbsolute(run.asyncDir)) continue;
+      try {
+        await fs.access(path.join(run.asyncDir, 'host-cancellation.json'));
+        continue;
+      } catch (error) { if (error?.code !== 'ENOENT') continue; }
+      try {
+        if (!this.lifecycleRoot || !this.resultsRoot) continue;
+        const identity = lifecycleRunIdentity(this.lifecycleRoot, run.asyncDir, run.runId);
+        if (!identity || identity.runKey !== run.runKey) continue;
+        const [launch, status, resultBytes] = await Promise.all([
+          readJson(path.join(run.asyncDir, 'launch.json')),
+          readJson(path.join(run.asyncDir, 'status.json')),
+          exactFileBytes(resultPathForIdentity(this.resultsRoot, identity)),
+        ]);
+        const result = JSON.parse(resultBytes.bytes.toString('utf8'));
+        const matches = (value) => record(value) && value.lifecycleArtifactVersion >= 5
+          && (value.runId ?? value.id) === run.runId && value.sessionId === this.conv.piSessionId
+          && value.asyncDir === identity.asyncDir && value.deliveryDisposition === 'follow_up'
+          && (value.runKey === undefined || value.runKey === identity.runKey);
+        if (!matches(launch) || !matches(status) || !matches(result)) continue;
+        this.recoveredFollowUps.add(run.runKey ?? run.runId);
+        this.eventBus.emit('subagent:async-complete', { ...result, runId: run.runId, runKey: run.runKey, triggerTurn: true });
+        recovered += 1;
+      } catch { /* incomplete or foreign artifacts remain retained */ }
+    }
+    return { recovered };
+  }
+  async requestStops() {
+    const runs = [...(this.conv?.subagents?.runs?.values?.() ?? [])].filter((run) => run.active);
+    if (!this.eventBus) return { requested: 0, unavailable: runs.length };
+    for (const run of runs) this.eventBus.emit('subagents:rpc:v1:request', { version: 1, requestId: randomUUID(), method: 'stop', params: { runId: run.runId }, source: { extension: 'agentd' } });
+    return { requested: runs.length, unavailable: 0 };
+  }
   dispose() { for (const unsubscribe of this.unsubscribes) { try { unsubscribe?.(); } catch {} } this.unsubscribes = []; }
 }
 
@@ -526,6 +703,7 @@ async function classifyRunDirectory(asyncDir, { lifecycleRoot = path.dirname(asy
     result_path: resultFile, result_file: resultFile,
     state: status?.state ?? safeState(launch?.state), lifecycle_artifact_version: status?.lifecycleArtifactVersion ?? null,
     execution_state: executionState, outcome_state: outcomeState, effects_state: effectsState, delivery_state: deliveryState,
+    deliveryDisposition: status?.deliveryDisposition ?? (DELIVERY_DISPOSITIONS.has(launch?.deliveryDisposition) ? launch.deliveryDisposition : 'follow_up'),
     effects_resolution: operatorEffectsState ? auditedEffects : null, execution_target: status?.executionTarget ?? null,
     blocking, reason, parent_session_id: launch?.sessionId ?? status?.sessionId,
     parent_session_path: string(launch?.parentSessionPath ?? launch?.sessionPath ?? statusRaw?.parentSessionPath ?? statusRaw?.sessionPath) ?? launch?.sessionId ?? status?.sessionId,

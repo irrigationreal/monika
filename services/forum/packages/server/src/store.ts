@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
+import { normalizedOriginKey } from '@irrigationreal/codex-forum-core';
+
 import { nowIso } from './db';
 import { mapCompactionOperationRowToDomain, mapTopicOperationalEventRowToDomain } from './mappers/db';
 import { STORE_CACHE_MAX_ENTRIES, STORE_ENTITY_CACHE_TTL_MS, STORE_STATS_CACHE_TTL_MS } from './runtimeConfig';
@@ -18,12 +20,16 @@ import type {
   ForumVisibility,
   TopicOperationalEvent,
   TopicStatus,
+  UtteranceOrigin,
 } from '@irrigationreal/codex-forum-core';
 import type Database from 'better-sqlite3';
 
 import type {
   AccessRuleRow,
+  ActiveTurnOriginRow,
   ApiKeyRow,
+  AssistantProjectionRow,
+  AttachmentHandoffRow,
   AttachmentRow,
   AuthSessionRow,
   ChatCategoryRow,
@@ -335,6 +341,56 @@ export interface CreatePostDispatchInput {
   model?: string | null;
   reasoningEffort?: string | null;
 }
+
+export type AttachmentHandoffInput = {
+  refEntryId: string;
+  sourceKind: AttachmentHandoffRow['source_kind'];
+  sourceRef: Record<string, unknown>;
+  expectedSha256?: string | null;
+  expectedSizeBytes?: number | null;
+};
+
+function pendingAttachmentId(handoff: AttachmentHandoffInput): string | null {
+  const value = handoff.sourceRef['pendingAttachmentId']
+    ?? handoff.sourceRef['pending_attachment_id']
+    ?? handoff.sourceRef['id'];
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+/** Structured v2 references supersede legacy text markers for the same staged file. */
+function dedupeAttachmentHandoffs(handoffs: AttachmentHandoffInput[]): AttachmentHandoffInput[] {
+  const structuredPendingIds = new Set(handoffs
+    .filter((handoff) => handoff.sourceKind === 'structured-pending')
+    .map(pendingAttachmentId)
+    .filter((id): id is string => Boolean(id)));
+  const seenRefs = new Set<string>();
+  const seenPending = new Set<string>();
+  return handoffs.filter((handoff) => {
+    if (seenRefs.has(handoff.refEntryId)) return false;
+    const pendingId = pendingAttachmentId(handoff);
+    if (pendingId && handoff.sourceKind !== 'structured-pending' && structuredPendingIds.has(pendingId)) return false;
+    if (pendingId && seenPending.has(pendingId)) return false;
+    seenRefs.add(handoff.refEntryId);
+    if (pendingId) seenPending.add(pendingId);
+    return true;
+  });
+}
+
+export type BeginAssistantProjectionInput = {
+  piSessionId: string;
+  piMessageId: string;
+  utteranceId: string;
+  topicId: string;
+  sessionId: string;
+  body: string;
+  authorId: string;
+  parentPostId?: string | null;
+  origin?: unknown;
+  metadata?: unknown;
+  /** Durable payload consumed by the forum-only completion delivery path. */
+  completionPayload?: unknown;
+  handoffs?: AttachmentHandoffInput[];
+};
 
 export interface CreateExternalRefInput {
   surfaceId: string;
@@ -1081,6 +1137,21 @@ export class ForumStore {
         this.db.prepare('delete from attachments where post_id = ?').run(postId);
       }
 
+      // Projection handoffs own pending attachment custody and cascade from the
+      // projection. Remove them before their post/session foreign keys.
+      this.db.prepare('delete from assistant_projections where topic_id = ?').run(topicId);
+      this.db.prepare('delete from pending_attachments where topic_id = ?').run(topicId);
+
+      // Canonical-session projection state references both sessions and posts.
+      const piSessionIds = this.db.prepare('select pi_session_id from pi_session_links where topic_id = ?')
+        .all(topicId) as Array<{ pi_session_id: string }>;
+      for (const { pi_session_id: piSessionId } of piSessionIds) {
+        this.db.prepare('delete from pi_message_links where pi_session_id = ?').run(piSessionId);
+      }
+      this.db.prepare('delete from pi_sync_anomalies where topic_id = ?').run(topicId);
+      this.db.prepare('delete from post_dispatches where topic_id = ?').run(topicId);
+      this.db.prepare('delete from pi_session_links where topic_id = ?').run(topicId);
+
       // Get all session IDs for this topic to delete session messages
       const sessionIds = this.db.prepare('select id from sessions where topic_id = ?').all(topicId) as { id: string }[];
       for (const { id: sessionId } of sessionIds) {
@@ -1323,19 +1394,24 @@ export class ForumStore {
   listPosts(topicId: string, page = 1, pageSize = 200): PostRow[] {
     const offset = (page - 1) * pageSize;
     return this.db
-      .prepare('select * from posts where topic_id = ? order by created_at asc limit ? offset ?')
+      .prepare(`select p.* from posts p where p.topic_id = ?
+        and not exists (select 1 from assistant_projections ap where ap.post_id = p.id and ap.status <> 'projected')
+        order by p.created_at asc limit ? offset ?`)
       .all(topicId, pageSize, offset) as PostRow[];
   }
 
   countPostsByTopic(topicId: string): number {
     const row = this.db
-      .prepare('select count(*) as count from posts where topic_id = ? and deleted_at is null')
+      .prepare(`select count(*) as count from posts p where p.topic_id = ? and p.deleted_at is null
+        and not exists (select 1 from assistant_projections ap where ap.post_id = p.id and ap.status <> 'projected')`)
       .get(topicId) as { count: number } | undefined;
     return row?.count ?? 0;
   }
 
   listAllPosts(topicId: string): PostRow[] {
-    return this.db.prepare('select * from posts where topic_id = ? order by created_at asc').all(topicId) as PostRow[];
+    return this.db.prepare(`select p.* from posts p where p.topic_id = ?
+      and not exists (select 1 from assistant_projections ap where ap.post_id = p.id and ap.status <> 'projected')
+      order by p.created_at asc`).all(topicId) as PostRow[];
   }
 
   /**
@@ -2509,16 +2585,31 @@ export class ForumStore {
         )
         .run(postId, operation.topicId, operation.initiatedBy, operation.recoveryPrompt, now);
       this.ensurePostDispatchGeneration(operation.topicId, now);
+      const origin: UtteranceOrigin = {
+        utteranceId: postId,
+        originKind: 'forum',
+        channelKind: 'web',
+        topicId: operation.topicId,
+        postId,
+        surfaceId: null,
+        externalEventId: null,
+        scope: null,
+        scopeKind: null,
+      };
       this.db
         .prepare(
           `insert into post_dispatches
          (id, topic_id, post_id, session_id, status, mode, generation, model, reasoning_effort, attempt_count,
-          last_attempt_at, next_attempt_at, dispatched_at, error_message, created_at, updated_at)
+          last_attempt_at, next_attempt_at, dispatched_at, error_message, created_at, updated_at,
+          origin_key, origin_json, contributor_post_ids_json)
          values (?, ?, ?, ?, 'pending', 'auto',
           (select generation from post_dispatch_generations where topic_id = ?),
-          null, null, 0, null, ?, null, null, ?, ?)`
+          null, null, 0, null, ?, null, null, ?, ?, ?, ?, ?)`
         )
-        .run(randomUUID(), operation.topicId, postId, operation.sessionId, operation.topicId, now, now, now);
+        .run(
+          randomUUID(), operation.topicId, postId, operation.sessionId, operation.topicId, now, now, now,
+          normalizedOriginKey(origin), JSON.stringify(origin), JSON.stringify([postId])
+        );
       const event = this.createTopicOperationalEvent({
         topicId: operation.topicId,
         anchorPostId,
@@ -2551,20 +2642,63 @@ export class ForumStore {
       .run(topicId, now);
   }
 
+  resolveUtteranceOrigin(postId: string): UtteranceOrigin {
+    const post = this.getPost(postId);
+    if (!post) throw new Error('post not found for origin resolution');
+    let ref = this.db
+      .prepare("select * from external_refs where mapped_post_id = ? and kind = 'post' order by rowid asc limit 1")
+      .get(postId) as ExternalRefRow | undefined;
+    if (!ref) {
+      const first = this.db.prepare('select id from posts where topic_id = ? order by rowid asc limit 1').get(post.topic_id) as { id: string } | undefined;
+      if (first?.id === post.id) {
+        ref = this.db.prepare(
+          "select * from external_refs where mapped_topic_id = ? and kind = 'topic' order by rowid asc limit 1"
+        ).get(post.topic_id) as ExternalRefRow | undefined;
+      }
+    }
+    if (!ref) {
+      return {
+        utteranceId: post.id,
+        originKind: 'forum',
+        channelKind: 'web',
+        topicId: post.topic_id,
+        postId: post.id,
+        surfaceId: null,
+        externalEventId: null,
+        scope: null,
+        scopeKind: null,
+      };
+    }
+    return {
+      utteranceId: post.id,
+      originKind: 'external',
+      channelKind: ref.surface_kind,
+      topicId: post.topic_id,
+      postId: post.id,
+      surfaceId: ref.surface_id,
+      externalEventId: ref.external_id,
+      scope: ref.kind === 'topic' ? ref.external_id : ref.scope,
+      scopeKind: ref.kind === 'topic' ? 'thread' : ref.scope_kind,
+    };
+  }
+
   createPostDispatch(input: CreatePostDispatchInput): PostDispatchRow {
     const existing = this.getPostDispatchByPost(input.postId);
     if (existing) return existing;
     const id = randomUUID();
     const now = nowIso();
+    const origin = this.resolveUtteranceOrigin(input.postId);
     this.db.transaction(() => {
       this.ensurePostDispatchGeneration(input.topicId, now);
       this.db
         .prepare(
           `insert into post_dispatches
-            (id, topic_id, post_id, session_id, status, mode, generation, model, reasoning_effort, attempt_count, last_attempt_at, next_attempt_at, dispatched_at, error_message, created_at, updated_at)
+            (id, topic_id, post_id, session_id, status, mode, generation, model, reasoning_effort, attempt_count,
+             last_attempt_at, next_attempt_at, dispatched_at, error_message, created_at, updated_at,
+             origin_key, origin_json, contributor_post_ids_json)
             values (?, ?, ?, ?, 'pending', ?,
               (select generation from post_dispatch_generations where topic_id = ?),
-              ?, ?, 0, null, ?, null, null, ?, ?)`
+              ?, ?, 0, null, ?, null, null, ?, ?, ?, ?, ?)`
         )
         .run(
           id,
@@ -2577,10 +2711,43 @@ export class ForumStore {
           input.reasoningEffort ?? null,
           now,
           now,
-          now
+          now,
+          normalizedOriginKey(origin),
+          JSON.stringify(origin),
+          JSON.stringify([input.postId])
         );
     })();
     return this.getPostDispatch(id) as PostDispatchRow;
+  }
+
+  createExternalTopicWithDispatch(input: {
+    topic: CreateTopicInput;
+    externalRef: CreateExternalRefInput;
+    additionalPostRefs?: CreateExternalRefInput[];
+    dispatch: boolean;
+  }): { topic: TopicRow; post: PostRow } {
+    return this.runInTransaction(() => {
+      const created = this.createTopic(input.topic);
+      this.createExternalRef({
+        ...input.externalRef,
+        mappedTopicId: created.topic.id,
+        mappedPostId: input.externalRef.mappedPostId ?? null,
+      });
+      for (const ref of input.additionalPostRefs ?? []) {
+        this.createExternalRef({ ...ref, mappedTopicId: created.topic.id, mappedPostId: created.post.id });
+      }
+      if (input.dispatch) {
+        const session = this.ensureSession({ topicId: created.topic.id });
+        this.createSessionMessage(session.id, 'user', input.topic.body, 'public');
+        this.createPostDispatch({
+          topicId: created.topic.id,
+          postId: created.post.id,
+          sessionId: session.id,
+          mode: 'auto',
+        });
+      }
+      return created;
+    });
   }
 
   createExternalPostWithDispatch(input: {
@@ -2613,6 +2780,59 @@ export class ForumStore {
     const row = this.db.prepare('select * from post_dispatches where post_id = ?').get(postId) as
       PostDispatchRow | undefined;
     return row ?? null;
+  }
+
+  getActiveTurnOrigin(topicId: string): ActiveTurnOriginRow | null {
+    return (this.db.prepare('select * from active_turn_origins where topic_id = ?').get(topicId) as
+      ActiveTurnOriginRow | undefined) ?? null;
+  }
+
+  recordActiveTurnOrigin(input: {
+    topicId: string;
+    dispatchId: string;
+    generation: number;
+    origin: UtteranceOrigin;
+  }): ActiveTurnOriginRow | null {
+    const now = nowIso();
+    const result = this.db.prepare(
+      `insert into active_turn_origins
+       (topic_id, dispatch_id, generation, origin_key, origin_json, accepted_at, updated_at)
+       select ?, ?, ?, ?, ?, ?, ?
+       where ? = (select generation from post_dispatch_generations where topic_id = ?)
+       on conflict(topic_id) do update set
+         dispatch_id = excluded.dispatch_id, generation = excluded.generation,
+         origin_key = excluded.origin_key, origin_json = excluded.origin_json,
+         accepted_at = excluded.accepted_at, updated_at = excluded.updated_at
+       where excluded.generation = (select generation from post_dispatch_generations where topic_id = excluded.topic_id)`
+    ).run(
+      input.topicId, input.dispatchId, input.generation, normalizedOriginKey(input.origin), JSON.stringify(input.origin),
+      now, now, input.generation, input.topicId
+    );
+    return result.changes === 1 ? this.getActiveTurnOrigin(input.topicId) : null;
+  }
+
+  recordActiveTurnOriginFromDispatch(topicId: string, dispatchId: string): ActiveTurnOriginRow | null {
+    const dispatch = this.getPostDispatch(dispatchId);
+    if (!dispatch || dispatch.topic_id !== topicId) return null;
+    let origin: UtteranceOrigin;
+    try {
+      origin = JSON.parse(dispatch.origin_json) as UtteranceOrigin;
+    } catch {
+      return null;
+    }
+    return this.recordActiveTurnOrigin({
+      topicId,
+      dispatchId,
+      generation: dispatch.generation,
+      origin,
+    });
+  }
+
+  clearActiveTurnOrigin(topicId: string, generation?: number): boolean {
+    const result = generation === undefined
+      ? this.db.prepare('delete from active_turn_origins where topic_id = ?').run(topicId)
+      : this.db.prepare('delete from active_turn_origins where topic_id = ? and generation = ?').run(topicId, generation);
+    return result.changes === 1;
   }
 
   isCompactionRecoveryPost(postId: string): boolean {
@@ -2671,6 +2891,42 @@ export class ForumStore {
       )
       .get(topicId) as { count: number } | undefined;
     return row?.count ?? 0;
+  }
+
+  claimPostDispatchGroup(rows: PostDispatchRow[]): PostDispatchRow | null {
+    if (rows.length === 0) return null;
+    const trigger = rows.at(-1) as PostDispatchRow;
+    if (rows.some((row) => row.topic_id !== trigger.topic_id || row.origin_key !== trigger.origin_key)) {
+      throw new Error('cross-origin dispatch group rejected');
+    }
+    return this.db.transaction(() => {
+      let durableContributors: string[] = [];
+      try {
+        const parsed = JSON.parse(trigger.contributor_post_ids_json) as unknown;
+        if (Array.isArray(parsed)) durableContributors = parsed.filter((id): id is string => typeof id === 'string');
+      } catch { /* malformed legacy state is safely rebuilt from the claimed rows */ }
+      const hasPriorGroup = durableContributors.length > 1
+        || (durableContributors.length === 1 && durableContributors[0] !== trigger.post_id);
+      const contributorPostIds = hasPriorGroup
+        ? [...new Set([...durableContributors, ...rows.map((row) => row.post_id)])]
+        : rows.map((row) => row.post_id);
+      const now = nowIso();
+      if (trigger.status === 'pending') {
+        const current = this.db
+          .prepare("select id from post_dispatches where id in (select value from json_each(?)) and status in ('pending', 'dispatching')")
+          .all(JSON.stringify(rows.map((row) => row.id))) as Array<{ id: string }>;
+        if (current.length !== rows.length) return null;
+        for (const row of rows.slice(0, -1)) {
+          this.db.prepare(
+            "update post_dispatches set status = 'superseded', next_attempt_at = null, error_message = ?, updated_at = ? where id = ? and status in ('pending', 'dispatching')"
+          ).run('Included in same-origin dispatch group.', now, row.id);
+        }
+        this.db.prepare(
+          'update post_dispatches set contributor_post_ids_json = ?, updated_at = ? where id = ? and status = ?'
+        ).run(JSON.stringify(contributorPostIds), now, trigger.id, trigger.status);
+      }
+      return this.claimPostDispatch(trigger.id, trigger);
+    })();
   }
 
   claimPostDispatch(id: string, observed: Pick<PostDispatchRow, 'status' | 'last_attempt_at'>): PostDispatchRow | null {
@@ -2810,6 +3066,7 @@ export class ForumStore {
         error_message = ?, updated_at = ? where topic_id = ? and status in ('pending', 'dispatching')`
         )
         .run(reason.slice(0, 1000), now, topicId).changes;
+      this.db.prepare('delete from active_turn_origins where topic_id = ?').run(topicId);
       this.db
         .prepare(
           `update robot_state set activity = 'idle', current_plan_id = null, last_updated_at = ? where topic_id = ?`
@@ -4037,6 +4294,372 @@ export class ForumStore {
     this.db.prepare('delete from invites where id = ?').run(inviteId);
   }
 
+  // Canonical assistant projection and attachment handoff management
+
+  getAssistantProjection(piSessionId: string, piMessageId: string): AssistantProjectionRow | null {
+    return (this.db.prepare(
+      'select * from assistant_projections where pi_session_id = ? and pi_message_id = ?'
+    ).get(piSessionId, piMessageId) as AssistantProjectionRow | undefined) ?? null;
+  }
+
+  beginAssistantProjection(input: BeginAssistantProjectionInput): AssistantProjectionRow {
+    const handoffs = dedupeAttachmentHandoffs(input.handoffs ?? []);
+    const projection = this.db.transaction(() => {
+      const existing = this.getAssistantProjection(input.piSessionId, input.piMessageId);
+      if (existing) {
+        if (input.completionPayload != null && existing.completion_payload_json == null) {
+          this.db.prepare(
+            'update assistant_projections set completion_payload_json = ?, completion_state = case when status = \'projected\' then 1 else completion_state end, updated_at = ? where id = ?'
+          ).run(JSON.stringify(input.completionPayload), nowIso(), existing.id);
+        }
+        return this.getAssistantProjection(input.piSessionId, input.piMessageId) as AssistantProjectionRow;
+      }
+      const now = nowIso();
+      const projectionId = randomUUID();
+      const existingLink = this.getPiMessageLink(input.piSessionId, input.piMessageId);
+      const linkedPost = existingLink?.post_id
+        ? this.db.prepare('select * from posts where id = ? and topic_id = ?').get(existingLink.post_id, input.topicId) as PostRow | undefined
+        : undefined;
+      const linkedSessionMessage = existingLink?.session_message_id
+        ? this.db.prepare('select id from session_messages where id = ?').get(existingLink.session_message_id) as { id: string } | undefined
+        : undefined;
+      const sessionMessageId = linkedSessionMessage?.id ?? randomUUID();
+      if (!linkedSessionMessage) {
+        this.db.prepare(
+          `insert into session_messages (id, session_id, role, content, created_at, visibility)
+           values (?, ?, 'assistant', ?, ?, 'public')`
+        ).run(sessionMessageId, input.sessionId, input.body, now);
+      }
+      const followUp = Boolean((input.metadata as Record<string, unknown> | null)?.['sourceKind'] === 'subagent-completion');
+      this.db.prepare(
+        `insert into assistant_projections
+         (id, pi_session_id, pi_message_id, utterance_id, topic_id, post_id, session_message_id, status,
+          origin_json, projection_json, completion_payload_json, completion_state, attempt_count, created_at, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`
+      ).run(
+        projectionId, input.piSessionId, input.piMessageId, input.utteranceId, input.topicId, linkedPost?.id ?? null,
+        sessionMessageId, handoffs.length > 0 ? 'linking' : 'pending', JSON.stringify(input.origin ?? null),
+        JSON.stringify({
+          sessionId: input.sessionId, body: input.body, authorId: input.authorId,
+          parentPostId: input.parentPostId ?? null, metadata: input.metadata ?? null, followUp,
+        }), input.completionPayload == null ? null : JSON.stringify(input.completionPayload), now, now
+      );
+      for (const handoff of handoffs) {
+        this.db.prepare(
+          `insert or ignore into attachment_handoffs
+           (id, projection_id, ref_entry_id, source_kind, source_ref_json, expected_sha256,
+            expected_size_bytes, status, attempt_count, created_at, updated_at)
+           values (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)`
+        ).run(
+          randomUUID(), projectionId, handoff.refEntryId, handoff.sourceKind, JSON.stringify(handoff.sourceRef),
+          handoff.expectedSha256 ?? null, handoff.expectedSizeBytes ?? null, now, now
+        );
+      }
+      return this.getAssistantProjection(input.piSessionId, input.piMessageId) as AssistantProjectionRow;
+    })();
+    if (handoffs.length === 0) return this.finalizeAssistantProjection(projection.id) ?? projection;
+    return projection;
+  }
+
+  listAttachmentHandoffsForProjection(projectionId: string): AttachmentHandoffRow[] {
+    return this.db.prepare(
+      'select * from attachment_handoffs where projection_id = ? order by rowid asc'
+    ).all(projectionId) as AttachmentHandoffRow[];
+  }
+
+  listDueAttachmentHandoffs(limit = 20): AttachmentHandoffRow[] {
+    return this.db.prepare(
+      `select h.* from attachment_handoffs h
+       join assistant_projections p on p.id = h.projection_id
+       where h.status in ('pending', 'failed') and (h.next_attempt_at is null or h.next_attempt_at <= ?)
+       order by p.rowid asc, h.rowid asc limit ?`
+    ).all(nowIso(), limit) as AttachmentHandoffRow[];
+  }
+
+  reclaimStaleAttachmentHandoffs(staleBefore: string, excludedClaimTokens: readonly string[] = []): number {
+    const exclusion = excludedClaimTokens.length > 0
+      ? ` and (claim_token is null or claim_token not in (${excludedClaimTokens.map(() => '?').join(', ')}))`
+      : '';
+    return this.db.prepare(
+      `update attachment_handoffs set status = 'failed', claim_token = null, next_attempt_at = null,
+       error_message = coalesce(error_message, 'Recovered stale linking lease.'), updated_at = ?
+       where status = 'linking' and updated_at <= ?${exclusion}`
+    ).run(nowIso(), staleBefore, ...excludedClaimTokens).changes;
+  }
+
+  claimAttachmentHandoff(id: string): AttachmentHandoffRow | null {
+    return this.db.transaction(() => {
+      const token = randomUUID();
+      const now = nowIso();
+      const changed = this.db.prepare(
+        `update attachment_handoffs set status = 'linking', claim_token = ?, attempt_count = attempt_count + 1,
+         next_attempt_at = null, error_message = null, updated_at = ?
+         where id = ? and status in ('pending', 'failed') and (next_attempt_at is null or next_attempt_at <= ?)`
+      ).run(token, now, id, now).changes;
+      if (changed !== 1) return null;
+      const handoff = this.db.prepare('select * from attachment_handoffs where id = ?').get(id) as AttachmentHandoffRow;
+      if (handoff.source_kind !== 'legacy-artifact') {
+        const ref = JSON.parse(handoff.source_ref_json) as Record<string, unknown>;
+        const pendingId = pendingAttachmentId({
+          refEntryId: handoff.ref_entry_id,
+          sourceKind: handoff.source_kind,
+          sourceRef: ref,
+        });
+        if (pendingId) {
+          const pending = this.getPendingAttachment(pendingId);
+          const existingReservation = this.db.prepare(
+            'select projection_id from pending_attachment_reservations where pending_attachment_id = ?'
+          ).get(pendingId) as { projection_id: string } | undefined;
+          const owner = pending
+            ? this.reservePendingAttachment(handoff, pending)
+            : existingReservation?.projection_id ?? null;
+          if (owner && owner !== handoff.projection_id) {
+            return this.markAttachmentReservationConflict(handoff, owner);
+          }
+        }
+      }
+      return handoff;
+    })();
+  }
+
+  private reservePendingAttachment(handoff: AttachmentHandoffRow, pending: PendingAttachmentRow): string {
+    const projection = this.getAssistantProjectionById(handoff.projection_id);
+    if (!projection || projection.topic_id !== pending.topic_id) return '';
+    const now = nowIso();
+    this.db.prepare(
+      `insert or ignore into pending_attachment_reservations
+       (pending_attachment_id, topic_id, projection_id, handoff_id, created_at, updated_at)
+       values (?, ?, ?, ?, ?, ?)`
+    ).run(pending.id, pending.topic_id, handoff.projection_id, handoff.id, now, now);
+    const reservation = this.db.prepare(
+      'select projection_id from pending_attachment_reservations where pending_attachment_id = ?'
+    ).get(pending.id) as { projection_id: string } | undefined;
+    return reservation?.projection_id ?? '';
+  }
+
+  private markAttachmentReservationConflict(handoff: AttachmentHandoffRow, ownerProjectionId: string): AttachmentHandoffRow {
+    const projection = this.getAssistantProjectionById(handoff.projection_id);
+    if (!projection) return handoff;
+    const now = nowIso();
+    const message = `Pending attachment is already reserved by assistant projection ${ownerProjectionId}.`;
+    this.db.prepare(
+      `update attachment_handoffs set status = 'needs_manual_review', claim_token = null, next_attempt_at = null,
+       error_message = ?, updated_at = ? where id = ?`
+    ).run(message.slice(0, 1000), now, handoff.id);
+    this.db.prepare(
+      "update assistant_projections set status = 'needs_manual_review', error_message = ?, updated_at = ? where id = ?"
+    ).run(message.slice(0, 1000), now, projection.id);
+    this.db.prepare(
+      `insert into pi_sync_anomalies
+       (id, pi_session_id, pi_message_id, topic_id, session_id, role, status, reason, preview,
+        first_seen_at, last_seen_at, last_checked_at, next_retry_at, retry_count, post_id, metadata_json)
+       values (?, ?, ?, ?, (select id from sessions where topic_id = ? limit 1), 'assistant',
+        'needs_manual_review', 'attachment-handoff-conflict', ?, ?, ?, ?, null, 0, ?, ?)
+       on conflict(pi_session_id, pi_message_id, reason) do update set
+         status = 'needs_manual_review', last_seen_at = excluded.last_seen_at,
+         preview = excluded.preview, post_id = excluded.post_id, metadata_json = excluded.metadata_json`
+    ).run(
+      randomUUID(), projection.pi_session_id, projection.pi_message_id, projection.topic_id, projection.topic_id,
+      message.slice(0, 500), now, now, now, projection.post_id,
+      JSON.stringify({ handoffId: handoff.id, ownerProjectionId, error: message.slice(0, 1000) })
+    );
+    return this.db.prepare('select * from attachment_handoffs where id = ?').get(handoff.id) as AttachmentHandoffRow;
+  }
+
+  completeAttachmentHandoff(id: string, claimToken: string, pending: PendingAttachmentRow): AttachmentHandoffRow | null {
+    return this.db.transaction(() => {
+      const handoff = this.db.prepare(
+        "select * from attachment_handoffs where id = ? and status = 'linking' and claim_token = ?"
+      ).get(id, claimToken) as AttachmentHandoffRow | undefined;
+      if (!handoff) return null;
+      const owner = this.reservePendingAttachment(handoff, pending);
+      if (owner !== handoff.projection_id) return this.markAttachmentReservationConflict(handoff, owner || 'unknown');
+      const now = nowIso();
+      const sourceRef = JSON.parse(handoff.source_ref_json) as Record<string, unknown>;
+      this.db.prepare(
+        `update attachment_handoffs set status = 'linked', claim_token = null, next_attempt_at = null,
+         error_message = null, source_ref_json = ?, updated_at = ? where id = ?`
+      ).run(JSON.stringify({ ...sourceRef, pendingAttachmentId: pending.id }), now, id);
+      return this.db.prepare('select * from attachment_handoffs where id = ?').get(id) as AttachmentHandoffRow;
+    })();
+  }
+
+  failAttachmentHandoff(
+    id: string,
+    claimToken: string,
+    message: string,
+    opts: { retryAt?: string | null; terminal?: boolean } = {}
+  ): AttachmentHandoffRow | null {
+    return this.db.transaction(() => {
+      const handoff = this.db.prepare(
+        "select * from attachment_handoffs where id = ? and status = 'linking' and claim_token = ?"
+      ).get(id, claimToken) as AttachmentHandoffRow | undefined;
+      if (!handoff) return null;
+      const projection = this.db.prepare('select * from assistant_projections where id = ?').get(handoff.projection_id) as AssistantProjectionRow;
+      const now = nowIso();
+      const status = opts.terminal ? 'needs_manual_review' : 'failed';
+      this.db.prepare(
+        'update attachment_handoffs set status = ?, claim_token = null, next_attempt_at = ?, error_message = ?, updated_at = ? where id = ?'
+      ).run(status, opts.retryAt ?? null, message.slice(0, 1000), now, id);
+      this.db.prepare(
+        'update assistant_projections set status = ?, error_message = ?, updated_at = ? where id = ?'
+      ).run(opts.terminal ? 'needs_manual_review' : 'failed', message.slice(0, 1000), now, projection.id);
+      if (opts.terminal) {
+        this.db.prepare(
+          `insert into pi_sync_anomalies
+           (id, pi_session_id, pi_message_id, topic_id, session_id, role, status, reason, preview,
+            first_seen_at, last_seen_at, last_checked_at, next_retry_at, retry_count, post_id, metadata_json)
+           values (?, ?, ?, ?, (select id from sessions where topic_id = ? limit 1), 'assistant',
+            'needs_manual_review', 'attachment-handoff-terminal', ?, ?, ?, ?, null, 0, ?, ?)
+           on conflict(pi_session_id, pi_message_id, reason) do update set
+             status = 'needs_manual_review', last_seen_at = excluded.last_seen_at,
+             preview = excluded.preview, post_id = excluded.post_id, metadata_json = excluded.metadata_json`
+        ).run(
+          randomUUID(), projection.pi_session_id, projection.pi_message_id, projection.topic_id, projection.topic_id,
+          message.slice(0, 500), now, now, now, projection.post_id,
+          JSON.stringify({ handoffId: id, error: message.slice(0, 1000) })
+        );
+      }
+      return this.db.prepare('select * from attachment_handoffs where id = ?').get(id) as AttachmentHandoffRow;
+    })();
+  }
+
+  finalizeAssistantProjection(projectionId: string): AssistantProjectionRow | null {
+    const finalized = this.db.transaction(() => {
+      let projection = this.db.prepare('select * from assistant_projections where id = ?').get(projectionId) as AssistantProjectionRow | undefined;
+      if (!projection) return null;
+      if (projection.status === 'projected') return projection;
+      const earlierIncomplete = this.db.prepare(
+        `select 1 from assistant_projections earlier
+         where earlier.pi_session_id = ? and earlier.topic_id = ?
+           and earlier.rowid < (select rowid from assistant_projections where id = ?)
+           and earlier.status in ('pending', 'linking', 'failed')
+         limit 1`
+      ).get(projection.pi_session_id, projection.topic_id, projectionId);
+      // rowid is the durable canonical arrival order. Terminal manual-review
+      // anomalies are intentionally gaps: they remain visible to operators but
+      // cannot deadlock every later canonical outward item in the session.
+      if (earlierIncomplete) return projection;
+      const remaining = this.db.prepare(
+        "select count(*) as count from attachment_handoffs where projection_id = ? and status <> 'linked'"
+      ).get(projectionId) as { count: number };
+      if (remaining.count > 0) return projection;
+      const payload = JSON.parse(projection.projection_json) as {
+        sessionId: string; body: string; authorId: string; parentPostId: string | null;
+        metadata: unknown; followUp?: boolean;
+      };
+      const now = nowIso();
+      let postId = projection.post_id;
+      if (!postId) {
+        postId = randomUUID();
+        this.db.prepare(
+          `insert into posts
+           (id, topic_id, tenant_id, parent_post_id, author_id, body, source_message_id, silent, follow_up, created_at, edited_at, deleted_at)
+           values (?, ?, null, ?, ?, ?, ?, 0, ?, ?, null, null)`
+        ).run(postId, projection.topic_id, payload.parentPostId, payload.authorId, payload.body,
+          projection.session_message_id, payload.followUp ? 1 : 0, now);
+      } else if (payload.followUp) {
+        this.db.prepare('update posts set follow_up = 1 where id = ?').run(postId);
+      }
+      const handoffs = this.listAttachmentHandoffsForProjection(projectionId);
+      const pendingIds: string[] = [];
+      for (const handoff of handoffs) {
+        const ref = JSON.parse(handoff.source_ref_json) as Record<string, unknown>;
+        const pendingId = typeof ref['pendingAttachmentId'] === 'string' ? ref['pendingAttachmentId'] : null;
+        const pending = pendingId ? this.getPendingAttachment(pendingId) : null;
+        if (!pending) throw new Error(`linked attachment handoff ${handoff.id} lost source custody`);
+        const reservation = this.db.prepare(
+          'select projection_id from pending_attachment_reservations where pending_attachment_id = ?'
+        ).get(pending.id) as { projection_id: string } | undefined;
+        if (reservation?.projection_id !== projectionId) {
+          throw new Error(`linked attachment handoff ${handoff.id} does not own source custody`);
+        }
+        this.db.prepare(
+          `insert into attachments (id, post_id, filename, mime_type, size_bytes, storage_path, sha256, created_at)
+           values (?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(randomUUID(), postId, pending.filename, pending.mime_type, pending.size_bytes,
+          pending.storage_path, pending.sha256, now);
+        pendingIds.push(pending.id);
+      }
+      for (const pendingId of new Set(pendingIds)) this.db.prepare('delete from pending_attachments where id = ?').run(pendingId);
+      this.createPiMessageLink({
+        piSessionId: projection.pi_session_id,
+        piMessageId: projection.pi_message_id,
+        postId,
+        sessionMessageId: projection.session_message_id,
+        role: 'assistant',
+        metadata: payload.metadata,
+      });
+      this.db.prepare(
+        `update assistant_projections set post_id = ?, status = 'projected', claim_token = null,
+         next_attempt_at = null, error_message = null,
+         completion_state = case when completion_payload_json is null then 0 else 1 end,
+         completion_claim_token = null, updated_at = ? where id = ?`
+      ).run(postId, now, projectionId);
+      projection = this.db.prepare('select * from assistant_projections where id = ?').get(projectionId) as AssistantProjectionRow;
+      return projection;
+    })();
+    if (finalized?.status === 'projected') this.invalidateTopicStatsCache(finalized.topic_id);
+    return finalized;
+  }
+
+  listIncompleteAssistantProjections(): AssistantProjectionRow[] {
+    return this.db.prepare(
+      "select * from assistant_projections where status in ('pending', 'linking', 'failed') order by rowid asc"
+    ).all() as AssistantProjectionRow[];
+  }
+
+  reclaimStaleAssistantProjectionCompletions(staleBefore: string, excludedClaimTokens: readonly string[] = []): number {
+    const exclusion = excludedClaimTokens.length > 0
+      ? ` and (completion_claim_token is null or completion_claim_token not in (${excludedClaimTokens.map(() => '?').join(', ')}))`
+      : '';
+    return this.db.prepare(
+      `update assistant_projections set completion_state = 1, completion_claim_token = null, updated_at = ?
+       where completion_state = 2 and updated_at <= ?${exclusion}`
+    ).run(nowIso(), staleBefore, ...excludedClaimTokens).changes;
+  }
+
+  claimAssistantProjectionCompletion(id: string): AssistantProjectionRow | null {
+    const token = randomUUID();
+    const changed = this.db.prepare(
+      `update assistant_projections set completion_state = 2, completion_claim_token = ?, updated_at = ?
+       where id = ? and status = 'projected' and completion_state = 1
+         and not exists (
+           select 1 from assistant_projections earlier
+           where earlier.pi_session_id = assistant_projections.pi_session_id
+             and earlier.topic_id = assistant_projections.topic_id
+             and earlier.rowid < assistant_projections.rowid
+             and earlier.status = 'projected' and earlier.completion_state in (1, 2)
+         )`
+    ).run(token, nowIso(), id).changes;
+    if (changed !== 1) return null;
+    return this.getAssistantProjectionById(id);
+  }
+
+  completeAssistantProjectionCompletion(id: string, claimToken: string): boolean {
+    return this.db.prepare(
+      `update assistant_projections set completion_state = 0, completion_claim_token = null, updated_at = ?
+       where id = ? and completion_state = 2 and completion_claim_token = ?`
+    ).run(nowIso(), id, claimToken).changes === 1;
+  }
+
+  releaseAssistantProjectionCompletion(id: string, claimToken: string): void {
+    this.db.prepare(
+      `update assistant_projections set completion_state = 1, completion_claim_token = null, updated_at = ?
+       where id = ? and completion_state = 2 and completion_claim_token = ?`
+    ).run(nowIso(), id, claimToken);
+  }
+
+  listPendingAssistantProjectionCompletions(): AssistantProjectionRow[] {
+    return this.db.prepare(
+      "select * from assistant_projections where status = 'projected' and completion_state = 1 order by rowid asc"
+    ).all() as AssistantProjectionRow[];
+  }
+
+  getAssistantProjectionById(id: string): AssistantProjectionRow | null {
+    return (this.db.prepare('select * from assistant_projections where id = ?').get(id) as AssistantProjectionRow | undefined) ?? null;
+  }
+
   // Attachment management
 
   createPendingAttachment(input: CreatePendingAttachmentInput): PendingAttachmentRow {
@@ -4068,14 +4691,26 @@ export class ForumStore {
   }
 
   deletePendingAttachment(id: string): void {
+    const reservation = this.db.prepare(
+      'select 1 from pending_attachment_reservations where pending_attachment_id = ?'
+    ).get(id);
+    if (reservation) return;
     this.db.prepare('delete from pending_attachments where id = ?').run(id);
   }
 
   deleteExpiredPendingAttachments(now: string = nowIso()): PendingAttachmentRow[] {
+    const protectedPredicate = `not exists (
+      select 1 from attachment_handoffs h
+      where h.status in ('pending', 'linking', 'failed', 'needs_manual_review')
+        and json_extract(h.source_ref_json, '$.pendingAttachmentId') = pending_attachments.id
+    ) and not exists (
+      select 1 from pending_attachment_reservations r
+      where r.pending_attachment_id = pending_attachments.id
+    )`;
     const rows = this.db
-      .prepare('select * from pending_attachments where expires_at <= ?')
+      .prepare(`select * from pending_attachments where expires_at <= ? and ${protectedPredicate}`)
       .all(now) as PendingAttachmentRow[];
-    this.db.prepare('delete from pending_attachments where expires_at <= ?').run(now);
+    this.db.prepare(`delete from pending_attachments where expires_at <= ? and ${protectedPredicate}`).run(now);
     return rows;
   }
 

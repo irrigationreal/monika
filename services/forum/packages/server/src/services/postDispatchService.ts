@@ -1,3 +1,5 @@
+import type { UtteranceOrigin } from '@irrigationreal/codex-forum-core';
+
 import type { AgentBridge } from '../agentBridge';
 import type { PostDispatchRow } from '../db';
 import type { ForumStore } from '../store';
@@ -83,11 +85,11 @@ export class PostDispatchService {
             (!pending.next_attempt_at || new Date(pending.next_attempt_at).getTime() <= now)
         );
         if (this.store.hasCompactionFence(row.topic_id) && !recoveryCheckpoint) continue;
-        const latest = recoveryCheckpoint ?? pendingForTopic.at(-1) ?? row;
-        if (latest.status === 'dispatching' && !isStaleDispatching(latest)) continue;
-        if (this.activeTopics.has(latest.topic_id) || seenTopics.has(latest.topic_id)) continue;
-        selected.push(latest);
-        seenTopics.add(latest.topic_id);
+        const earliest = recoveryCheckpoint ?? pendingForTopic[0] ?? row;
+        if (earliest.status === 'dispatching' && !isStaleDispatching(earliest)) continue;
+        if (this.activeTopics.has(earliest.topic_id) || seenTopics.has(earliest.topic_id)) continue;
+        selected.push(earliest);
+        seenTopics.add(earliest.topic_id);
       }
       await Promise.all(selected.map((row) => this.dispatch(row)));
     } finally {
@@ -120,39 +122,49 @@ export class PostDispatchService {
 
       const pendingForTopic = this.store.listPendingPostDispatchesForTopic(row.topic_id);
       const dispatchingRecoveryCheckpoint = this.store.isCompactionRecoveryPost(row.post_id);
-      for (const pending of pendingForTopic) {
-        if (!dispatchingRecoveryCheckpoint && pending.id !== row.id && pending.created_at <= row.created_at) {
-          this.store.markPostDispatchSuperseded(pending.id);
-        }
-      }
-
-      const claimed = this.store.claimPostDispatch(row.id, row);
+      const startIndex = pendingForTopic.findIndex((pending) => pending.id === row.id);
+      if (startIndex < 0) return;
+      const candidates = pendingForTopic.slice(startIndex);
+      const boundary = candidates.findIndex((pending) => pending.origin_key !== row.origin_key);
+      const group = dispatchingRecoveryCheckpoint ? [row] : candidates.slice(0, boundary < 0 ? undefined : boundary);
+      const trigger = group.at(-1) ?? row;
+      const claimed = this.store.claimPostDispatchGroup(group);
       claimToken = claimed?.claim_token ?? null;
-      if (!claimed || !claimToken || !this.store.isPostDispatchClaimCurrent(row.id, claimToken)) return;
-      const robotState = this.store.getRobotState(row.topic_id);
-      const mode =
-        row.mode === 'steer' ||
-        (row.mode === 'auto' && robotState && !['idle', 'stopped', 'error'].includes(robotState.activity))
-        ? 'steer'
-        : 'queue';
+      if (!claimed || !claimToken || !this.store.isPostDispatchClaimCurrent(trigger.id, claimToken)) return;
+      const robotState = this.store.getRobotState(trigger.topic_id);
+      const activeOrigin = this.store.getActiveTurnOrigin(trigger.topic_id);
+      const sameActiveOrigin = activeOrigin?.generation === trigger.generation
+        && activeOrigin.origin_key === trigger.origin_key;
+      // A durable dispatch may alter an active Pi turn only when it belongs to
+      // exactly the same normalized causal origin. Other surfaces are accepted
+      // as follow-ups and settle in a later Pi turn.
+      const mode = sameActiveOrigin && (
+        trigger.mode === 'steer' ||
+        (trigger.mode === 'auto' && robotState && !['idle', 'stopped', 'error'].includes(robotState.activity))
+      ) ? 'steer' : 'queue';
 
-      // Re-check immediately before crossing the agentd boundary. An interrupt
-      // advances the durable topic generation, making this claim ineligible.
-      if (!this.store.isPostDispatchClaimCurrent(row.id, claimToken)) return;
-      await this.agent.dispatchPostToAgent(row.topic_id, row.post_id, {
+      // Re-check the same claimed trigger immediately before crossing agentd.
+      // An interrupt advances its durable topic generation and fences the group.
+      if (!this.store.isPostDispatchClaimCurrent(trigger.id, claimToken)) return;
+      const contributorPostIds = JSON.parse(claimed.contributor_post_ids_json) as string[];
+      await this.agent.dispatchPostToAgent(trigger.topic_id, trigger.post_id, {
         mode,
-        model: row.model,
-        reasoningEffort: row.reasoning_effort,
-        dispatchId: row.id,
-        generation: row.generation,
+        model: trigger.model,
+        reasoningEffort: trigger.reasoning_effort,
+        dispatchId: trigger.id,
+        generation: trigger.generation,
+        contributorPostIds,
+        origin: JSON.parse(claimed.origin_json) as UtteranceOrigin,
       });
-      this.store.markPostDispatchDispatched(row.id, claimToken);
-      this.store.clearRobotTurnError(row.topic_id);
+      this.store.markPostDispatchDispatched(trigger.id, claimToken);
+      this.store.clearRobotTurnError(trigger.topic_id);
     } catch (err) {
-      const latest = this.store.getPostDispatch(row.id) ?? row;
+      const pending = this.store.listPendingPostDispatchesForTopic(row.topic_id);
+      const claimed = pending.find((item) => item.claim_token === claimToken) ?? row;
+      const latest = this.store.getPostDispatch(claimed.id) ?? claimed;
       const message = err instanceof Error ? err.message : String(err);
       const retryAt = retryAtForAttempt(latest.attempt_count);
-      if (claimToken) this.store.markPostDispatchFailed(row.id, claimToken, message, { retryAt });
+      if (claimToken) this.store.markPostDispatchFailed(latest.id, claimToken, message, { retryAt });
     } finally {
       this.activeTopics.delete(row.topic_id);
     }

@@ -1,10 +1,11 @@
 import { EchsBridge } from './echsBridge';
 
-import type { MessageTamperContext, MessageTamperLayer, MessageTamperPlugin } from '@irrigationreal/codex-forum-core';
+import type { MessageTamperContext, MessageTamperLayer, MessageTamperPlugin, UtteranceOrigin } from '@irrigationreal/codex-forum-core';
 import type { RobotStopResultDto } from '@irrigationreal/codex-forum-contracts';
 
 import type { ForumStore } from './store';
 import type { EchsSubagentRetention, EchsSubagentWorkload } from './echsClient';
+import type { AssistantProjectionInput, AssistantProjectionService } from './services/assistantProjectionService';
 import type { StreamBusInterface } from './streamBus';
 
 export type AgentBackend = 'echs';
@@ -134,10 +135,21 @@ export class AgentBridge {
   async dispatchPostToAgent(
     topicId: string,
     postId: string,
-    options?: { mode?: 'queue' | 'steer'; model?: string | null; reasoningEffort?: string | null; dispatchId?: string; generation?: number }
+    options?: {
+      mode?: 'queue' | 'steer'; model?: string | null; reasoningEffort?: string | null;
+      dispatchId?: string; generation?: number; contributorPostIds?: string[]; origin?: UtteranceOrigin;
+    }
   ): Promise<void> {
     this.store.setSessionAgentBackend(this.store.ensureSession({ topicId }).id, 'echs');
     return this.echs.dispatchPostToAgent(topicId, postId, options);
+  }
+
+  get assistantProjectionService(): AssistantProjectionService {
+    return this.echs.assistantProjectionService;
+  }
+
+  async projectAssistantMessage(input: AssistantProjectionInput): Promise<void> {
+    await this.echs.projectAssistantMessage(input);
   }
 
   async interruptTopic(topicId: string): Promise<RobotStopResultDto> {

@@ -1,6 +1,7 @@
 export type ForumId = string;
 export type TopicId = string;
 export type PostId = string;
+export type UtteranceId = string;
 export type IdentityId = string;
 export type EventId = string;
 export type ExternalId = string;
