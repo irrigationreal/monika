@@ -30,7 +30,7 @@
     "@fastify/multipart": "^9.4.0",
     "@fastify/rate-limit": "^10.3.0",
     "@fastify/sensible": "^6.0.4",
-    "@fastify/static": "^9.1.3",
+    "@fastify/static": "^10.1.2",
     "@irrigationreal/codex-forum-adapters": "workspace:*",
     "@irrigationreal/codex-forum-contracts": "workspace:*",
     "@irrigationreal/codex-forum-core": "workspace:*",

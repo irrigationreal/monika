@@ -22,7 +22,6 @@ reactions, sync state, and UI metadata.
 Host mode has been removed. Pi tools operate inside the container by default; host
 or infrastructure access should be explicit through SSH/`relocate`.
 
-
 ## Thread moves
 
 Admins can move a topic between forums through `POST /admin/topics/:topicId/move`.
@@ -415,7 +414,6 @@ If `MONIKA_PI_SESSION_TAXONOMY_CONFIG` is set and the file is missing or invalid
 forum startup/sync should fail loudly rather than silently falling back to unsafe
 defaults.
 
-
 ## Deployment
 
 Complete runtime setup lives in [Standalone deployment](deployment.md).
@@ -424,12 +422,13 @@ Forum-specific authentication and migration remain in the
 
 ## Current caveats
 
-- The forum container currently runs as root to avoid bind-mount permission issues
-  with host-owned runtime directories. This should be revisited if the deployment
-  is exposed beyond the trusted host/tailnet boundary.
-- The forum Containerfile currently installs dev dependencies in the runtime image
-  because the server starts with `tsx src/server.ts` and workspace package exports
-  point at `src/index.ts`.
+- The forum runtime image contains only the server's production dependency deployment
+  and declares the non-root `codex` user (UID/GID 1001). When the image runs without
+  a user override, its persistent data and upload mounts must be writable by that user.
+  The standalone Compose deployment deliberately overrides the image user with root to
+  tolerate host-owned bind mounts; this is a known trusted-deployment compromise, not
+  a property of the image itself. `tsx` remains an explicit production dependency
+  because the server starts from TypeScript source.
 - Explicit checkpoint memory save without closing is not implemented. Use close
   for a safe stateful-memory save path, because close emits Pi `session_shutdown`.
   Close returns `409 active_subagent_runs` while background work still owns the
@@ -460,7 +459,6 @@ Forum-specific authentication and migration remain in the
   lineage remain represented by canonical `monika.lineage` JSONL entries.
 - Forum never talks directly to memstore and never invents memory origins. Memory
   dedupe must use canonical Pi session path/id.
-
 
 ## Forum component features
 
