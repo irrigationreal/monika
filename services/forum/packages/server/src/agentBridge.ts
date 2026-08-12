@@ -205,6 +205,22 @@ export class AgentBridge {
     return this.echs.getTopicCompactionLeaf(topicId);
   }
 
+  async forkTopicConversation(
+    topicId: string,
+    opts: { operationId: string; expectedLeafId: string; boundaryEntryId: string }
+  ): Promise<{
+    child_session_id: string;
+    child_session_path: string;
+    inherited_generation: number;
+    active_entry_ids: string[];
+  }> {
+    return this.echs.forkTopicConversation(topicId, opts);
+  }
+
+  async acknowledgeFork(operationId: string, childSessionId: string): Promise<void> {
+    return this.echs.acknowledgeFork(operationId, childSessionId);
+  }
+
   async compactTopicConversation(
     topicId: string,
     opts: { operationId: string; expectedLeafId: string; customInstructions?: string | null }

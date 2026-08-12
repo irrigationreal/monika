@@ -236,6 +236,38 @@ export class EchsClient {
       timeoutMs: 10 * 60_000,
     })) as Record<string, unknown>;
   }
+  async forkConversation(
+    conversationId: string,
+    opts: { operationId: string; expectedLeafId: string; boundaryEntryId: string }
+  ): Promise<{
+    child_session_id: string;
+    child_session_path: string;
+    inherited_generation: number;
+    active_entry_ids: string[];
+  }> {
+    return (await this.request(`/v1/conversations/${conversationId}/fork`, {
+      method: 'POST',
+      body: {
+        operation_id: opts.operationId,
+        expected_leaf_id: opts.expectedLeafId,
+        boundary_entry_id: opts.boundaryEntryId,
+      },
+      timeoutMs: 10 * 60_000,
+    })) as {
+      child_session_id: string;
+      child_session_path: string;
+      inherited_generation: number;
+      active_entry_ids: string[];
+    };
+  }
+
+  async acknowledgeForumFork(operationId: string, childSessionId: string): Promise<void> {
+    await this.request(`/v1/forum-forks/${encodeURIComponent(operationId)}/ack`, {
+      method: 'POST',
+      body: { child_session_id: childSessionId },
+    });
+  }
+
   async createConversation(opts: {
     cwd?: string | null;
     workdir?: string | null;

@@ -92,6 +92,7 @@ import { AnalyticsService } from './services/analyticsService';
 import { AutoRunDirector } from './services/autoRunDirector';
 import { CompactionService } from './services/compactionService';
 import { getEmailService } from './services/emailService';
+import { ForkService } from './services/forkService';
 import { PiSessionSyncService } from './services/piSessionSyncService';
 import { PostDispatchService } from './services/postDispatchService';
 import { WebhookService } from './services/webhookService';
@@ -279,6 +280,7 @@ const postDispatchService = new PostDispatchService(store, codex, {
   maxConcurrent: Math.max(1, Math.min(10, MAX_CONCURRENT_TURNS)),
 });
 const compactionService = new CompactionService(store, codex, postDispatchService);
+const forkService = new ForkService(store, codex, postDispatchService);
 
 const piSessionSync = MONIKA_PI_SYNC_ENABLED
   ? new PiSessionSyncService(db, {
@@ -288,7 +290,6 @@ const piSessionSync = MONIKA_PI_SYNC_ENABLED
       assistantProjections: codex.assistantProjectionService,
     })
   : null;
-piSessionSync?.start();
 
 // Load persisted maxConcurrentTurns from database
 const savedMaxConcurrentTurns = store.getSystemSetting('maxConcurrentTurns');
@@ -315,10 +316,17 @@ try {
   throw err;
 }
 const recoveredCompactions = compactionService.start();
+const recoveredForks = forkService.start();
+// Agentd quarantines unacknowledged children. Finish any immediately due
+// materialization before sync can discover acknowledged children or dispatch can catch up.
+await forkService.waitForIdle();
+piSessionSync?.start();
 postDispatchService.start();
 if (recoveredCompactions > 0) {
   console.warn(`Requeued ${recoveredCompactions} interrupted compaction operation(s) for canonical reconciliation.`);
 }
+if (recoveredForks > 0)
+  console.warn(`Requeued ${recoveredForks} interrupted fork operation(s) for canonical reconciliation.`);
 
 const app = Fastify({ logger: true, bodyLimit: MAX_REQUEST_BODY_BYTES, trustProxy: TRUST_PROXY });
 const access = createAccessHelpers(app, store);
@@ -328,6 +336,7 @@ app.addHook('onClose', async () => {
   const postDispatchStop = postDispatchService.stop();
   await piSessionSync?.waitForIdle();
   await compactionService.stop();
+  await forkService.stop();
   await postDispatchStop;
   await autoRunDirector.stop();
   await codex.stop();
@@ -466,6 +475,7 @@ const registerApiRoutes: FastifyPluginAsync = async (api) => {
     bus,
     postDispatchService,
     compactionService,
+    forkService,
     access,
     webIdentityId: bootstrapResult.webIdentityId,
   });

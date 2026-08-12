@@ -278,6 +278,9 @@ export function registerRobotRoutes({
     if (!canPostTopic(topic, forum, identity)) {
       throw app.httpErrors.forbidden('Posting not allowed in this topic');
     }
+    if (store.hasCompactionFence(topicId)) {
+      throw app.httpErrors.conflict('Robot configuration is unavailable while the canonical conversation is fenced');
+    }
 
     const body = request.body as {
       enabled?: boolean;

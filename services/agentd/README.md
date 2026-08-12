@@ -98,6 +98,23 @@ Deployment quiescence treats a live interactive lease as a blocker.
 A cached agentd conversation is not itself canonical authority. Runtime state must
 be reconciled with the JSONL tree when a session may have advanced elsewhere.
 
+## Forum-native forks
+
+Agentd exposes an idle-only, optimistic before-user fork operation for the forum.
+It validates the current session format, active-branch user boundary, completed
+assistant response, and expected dynamic leaf. A detached `SessionManager` extracts
+the child branch without replacing the loaded parent or changing parent bytes. A
+filesystem operation ledger makes retries idempotent and quarantines the child from
+generic session listing until the forum acknowledges durable projection
+materialization. Crash recovery adopts only a child carrying the exact durable operation
+marker; an unmarked or ambiguous child outcome becomes a manual-recovery source fence
+rather than a heuristic adoption. The ledger retains the candidate session directory,
+exact parent path, operation timestamp, and branch boundary. Generic discovery quarantines
+all sessions plausibly created in that scope—including unmarked candidates after the state
+has become `manual_recovery`—without opening, adopting, or modifying them. While
+acknowledgement or manual recovery is unresolved, conversation writes, canonical
+cancellation reconciliation, and interactive ownership claims against the parent are fenced.
+
 ## Compaction
 
 Agentd exposes idle-only Pi compaction with an operation ID and expected canonical

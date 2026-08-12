@@ -341,6 +341,33 @@ export interface CompactionOperationRow {
   finished_at: string | null;
 }
 
+export interface ForkOperationRow {
+  id: string;
+  source_topic_id: string;
+  source_session_id: string;
+  source_pi_session_id: string;
+  source_pi_session_path: string;
+  boundary_post_id: string;
+  boundary_pi_message_id: string;
+  boundary_entry_id: string;
+  expected_leaf_id: string;
+  initiated_by: string;
+  title: string;
+  opening_body: string;
+  status: 'pending' | 'running' | 'needs_manual_review' | 'succeeded' | 'failed';
+  prestaged_attachments_json: string;
+  agent_result_json: string | null;
+  child_topic_id: string | null;
+  child_session_id: string | null;
+  child_session_path: string | null;
+  attempt_count: number;
+  next_attempt_at: string | null;
+  error_message: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
 export interface RobotAutomationRow {
   id: string;
   name: string;

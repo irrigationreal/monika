@@ -25,6 +25,8 @@ import type { RobotActivityEvent } from '../composables/useForumState';
 import type {
   AttachmentDto,
   CompactionOperationDto,
+  ForkBoundaryDto,
+  ForkOperationDto,
   ForumDto,
   MessageTemplateDto,
   PostDto,
@@ -32,6 +34,7 @@ import type {
   SessionInspectorDto,
   ToolRunDto,
   TopicCompactionStateDto,
+  TopicForkStateDto,
   TopicOperationalEventDto,
 } from '../lib/apiClient';
 import type { ReasoningStep } from '../lib/reasoning';
@@ -162,6 +165,28 @@ const compactionError = ref('');
 const compactionSubmitting = ref(false);
 const compactionRetryingCheckpoint = ref(false);
 const compactionModalRef = ref<HTMLElement | null>(null);
+const showForkModal = ref(false);
+const forkBoundaries = ref<ForkBoundaryDto[]>([]);
+const forkBoundaryPostId = ref('');
+const forkTitle = ref('');
+const forkOpeningBody = ref('');
+const forkOperation = ref<ForkOperationDto | null>(null);
+const forkState = ref<TopicForkStateDto>({ active: null, latest: null });
+const forkError = ref('');
+const forkSubmitting = ref(false);
+const forkModalRef = ref<HTMLElement | null>(null);
+let forkPollTimer: number | null = null;
+let forkFocusOrigin: HTMLElement | null = null;
+let bodyOverflowBeforeForkModal = '';
+interface ForkIntent {
+  operationId: string;
+  topicId: string;
+  boundaryPostId: string;
+  title: string;
+  openingBody: string;
+  createdAt: string;
+  status: 'submitting' | ForkOperationDto['status'];
+}
 const COMPACTION_INTENT_GRACE_MS = 60_000;
 let compactionPollTimer: number | null = null;
 let compactionFocusOrigin: HTMLElement | null = null;
@@ -181,8 +206,29 @@ const checkpointNeedsRecovery = computed(
     compactionState.value.latest?.status === 'succeeded' &&
     ['failed', 'superseded', 'abandoned'].includes(compactionState.value.checkpointDispatch?.status ?? '')
 );
+const forkFence = computed(() => {
+  const operation = forkState.value.active ?? forkOperation.value;
+  return (
+    operation?.status === 'pending' ||
+    operation?.status === 'running' ||
+    operation?.status === 'needs_manual_review'
+  );
+});
+const forkNeedsManualReview = computed(
+  () => (forkState.value.active ?? forkOperation.value)?.status === 'needs_manual_review'
+);
 const compactionFence = computed(
-  () => compactionActive.value || checkpointDispatchPending.value || checkpointNeedsRecovery.value
+  () => compactionActive.value || checkpointDispatchPending.value || checkpointNeedsRecovery.value || forkFence.value
+);
+const canFork = computed(
+  () =>
+    isAdmin.value &&
+    !isRobotBusy.value &&
+    !state.isTopicLocked() &&
+    !compactionFence.value &&
+    !forkSubmitting.value &&
+    forkOperation.value?.status !== 'pending' &&
+    forkOperation.value?.status !== 'running'
 );
 const canCompact = computed(
   () =>
@@ -499,6 +545,270 @@ async function retryCompactionCheckpoint(): Promise<void> {
   }
 }
 
+function forkIntentKey(topicId: string): string {
+  return `codex-forum:fork-intent:${topicId}`;
+}
+
+function persistForkIntent(intent: ForkIntent): void {
+  try {
+    window.localStorage.setItem(forkIntentKey(intent.topicId), JSON.stringify(intent));
+  } catch {
+    // The durable server operation remains authoritative when storage is unavailable.
+  }
+}
+
+function loadForkIntent(topicId: string): ForkIntent | null {
+  try {
+    const raw = window.localStorage.getItem(forkIntentKey(topicId));
+    if (!raw) return null;
+    const intent = JSON.parse(raw) as ForkIntent;
+    return intent.topicId === topicId && /^[A-Za-z0-9_-]{1,128}$/.test(intent.operationId) ? intent : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistForkOperationState(topicId: string, operation: ForkOperationDto): void {
+  const intent = loadForkIntent(topicId);
+  if (intent?.operationId === operation.id) persistForkIntent({ ...intent, status: operation.status });
+}
+
+function clearForkIntent(topicId: string): void {
+  try {
+    window.localStorage.removeItem(forkIntentKey(topicId));
+  } catch {
+    // A terminal server response has already reconciled the operation.
+  }
+}
+
+function restoreForkModalEnvironment(): void {
+  document.body.style.overflow = bodyOverflowBeforeForkModal;
+  const focusTarget = forkFocusOrigin;
+  forkFocusOrigin = null;
+  void nextTick(() => focusTarget?.focus());
+}
+
+function handleForkKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape' && !forkSubmitting.value) {
+    event.preventDefault();
+    closeForkModal();
+    return;
+  }
+  if (event.key !== 'Tab') return;
+  const focusable = Array.from(
+    forkModalRef.value?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href]'
+    ) ?? []
+  ).filter((element) => element.offsetParent !== null);
+  const first = focusable.at(0);
+  const last = focusable.at(-1);
+  if (!first || !last) return;
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+async function openForkModal(): Promise<void> {
+  const topicId = routeTopicId.value;
+  if (!topicId || !canFork.value) return;
+  forkFocusOrigin = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  bodyOverflowBeforeForkModal = document.body.style.overflow;
+  document.body.style.overflow = 'hidden';
+  forkError.value = '';
+  forkBoundaries.value = [];
+  showForkModal.value = true;
+  void nextTick(() => forkModalRef.value?.querySelector<HTMLElement>('.vb-modal-close')?.focus());
+  try {
+    const response = await api.listForkBoundaries(topicId);
+    if (routeTopicId.value !== topicId) return;
+    forkBoundaries.value = response.items;
+    const boundary = response.items.at(-1);
+    if (!boundary) {
+      forkError.value = 'No stable completed user-message boundary is available.';
+      return;
+    }
+    const intent = loadForkIntent(topicId);
+    forkBoundaryPostId.value = intent?.boundaryPostId ?? boundary.postId;
+    forkOpeningBody.value = intent?.openingBody ?? boundary.body;
+    forkTitle.value = intent?.title ?? `Fork: ${state.selectedTopic.value?.title ?? 'Topic'}`;
+  } catch (error) {
+    forkError.value = error instanceof Error ? error.message : 'Could not load fork boundaries.';
+  }
+}
+
+function closeForkModal(): void {
+  if (forkSubmitting.value) return;
+  showForkModal.value = false;
+  restoreForkModalEnvironment();
+}
+
+function selectForkBoundary(): void {
+  const boundary = forkBoundaries.value.find((item) => item.postId === forkBoundaryPostId.value);
+  if (boundary) forkOpeningBody.value = boundary.body;
+}
+
+async function pollFork(topicId: string, operationId: string): Promise<void> {
+  try {
+    const operation = await api.getFork(topicId, operationId);
+    if (routeTopicId.value !== topicId) return;
+    forkOperation.value = operation;
+    persistForkOperationState(topicId, operation);
+    forkState.value = {
+      active:
+        operation.status === 'pending' ||
+        operation.status === 'running' ||
+        operation.status === 'needs_manual_review'
+          ? operation
+          : null,
+      latest: operation,
+    };
+    const intent = loadForkIntent(topicId);
+    if (operation.status === 'succeeded' && operation.childTopicId) {
+      if (intent?.operationId === operation.id) {
+        clearForkIntent(topicId);
+        if (showForkModal.value) {
+          showForkModal.value = false;
+          restoreForkModalEnvironment();
+        }
+        await router.push({ name: 'topic.view', params: { topicId: operation.childTopicId } });
+      }
+    } else if (operation.status === 'needs_manual_review') {
+      if (intent?.operationId === operation.id) clearForkIntent(topicId);
+      forkError.value = operation.errorMessage ?? 'Fork needs operator review; the source remains fenced.';
+    } else if (operation.status === 'failed') {
+      if (intent?.operationId === operation.id) clearForkIntent(topicId);
+      forkError.value = operation.errorMessage ?? 'Fork failed.';
+    } else scheduleForkPoll(topicId, operationId);
+  } catch {
+    if (routeTopicId.value !== topicId) return;
+    await refreshForkState(topicId);
+    if (routeTopicId.value === topicId && loadForkIntent(topicId)?.operationId === operationId)
+      scheduleForkPoll(topicId, operationId);
+  }
+}
+
+async function refreshForkState(topicId: string): Promise<void> {
+  try {
+    const next = await api.getForkState(topicId);
+    if (routeTopicId.value !== topicId) return;
+    forkState.value = next;
+    const intent = loadForkIntent(topicId);
+    const matching = intent
+      ? [next.active, next.latest].find((operation) => operation?.id === intent.operationId) ?? null
+      : null;
+    if (matching) {
+      forkOperation.value = matching;
+      persistForkOperationState(topicId, matching);
+      if (matching.status === 'pending' || matching.status === 'running') scheduleForkPoll(topicId, matching.id);
+      else if (matching.status === 'succeeded' && matching.childTopicId) {
+        clearForkIntent(topicId);
+        await router.push({ name: 'topic.view', params: { topicId: matching.childTopicId } });
+      } else if (matching.status === 'needs_manual_review') {
+        clearForkIntent(topicId);
+        forkError.value = matching.errorMessage ?? 'Fork needs operator review; the source remains fenced.';
+      } else if (matching.status === 'failed') {
+        clearForkIntent(topicId);
+        forkError.value = matching.errorMessage ?? 'Fork failed.';
+      }
+      return;
+    }
+    if (next.active) {
+      forkOperation.value = next.active;
+      if (next.active.status === 'pending' || next.active.status === 'running') scheduleForkPoll(topicId, next.active.id);
+      else forkError.value = next.active.errorMessage ?? 'Fork needs operator review; the source remains fenced.';
+      return;
+    }
+    if (intent) {
+      // The original response was ambiguous. Re-submit the exact durable id and
+      // payload; server idempotency prevents a duplicate fork if it was accepted.
+      const operation = await api.createFork(topicId, {
+        operationId: intent.operationId,
+        boundaryPostId: intent.boundaryPostId,
+        title: intent.title,
+        openingBody: intent.openingBody,
+      });
+      if (routeTopicId.value !== topicId) return;
+      forkOperation.value = operation;
+      persistForkOperationState(topicId, operation);
+      if (operation.status === 'pending' || operation.status === 'running') scheduleForkPoll(topicId, operation.id);
+      else if (operation.status === 'needs_manual_review') {
+        clearForkIntent(topicId);
+        forkError.value = operation.errorMessage ?? 'Fork needs operator review; the source remains fenced.';
+      }
+      return;
+    }
+    forkOperation.value = next.latest;
+  } catch (error) {
+    if (routeTopicId.value === topicId) {
+      forkError.value = error instanceof Error ? error.message : 'Could not refresh fork status.';
+      const intent = loadForkIntent(topicId);
+      if (intent) scheduleForkPoll(topicId, intent.operationId);
+    }
+  }
+}
+
+function scheduleForkPoll(topicId: string, operationId: string): void {
+  if (forkPollTimer !== null) window.clearTimeout(forkPollTimer);
+  forkPollTimer = window.setTimeout(() => {
+    void pollFork(topicId, operationId);
+  }, 1000);
+}
+
+async function submitFork(): Promise<void> {
+  const topicId = routeTopicId.value;
+  if (!topicId || !forkBoundaryPostId.value || !canFork.value) return;
+  forkSubmitting.value = true;
+  forkError.value = '';
+  const intent = loadForkIntent(topicId) ?? {
+    operationId: createClientOperationId(),
+    topicId,
+    boundaryPostId: forkBoundaryPostId.value,
+    title: forkTitle.value.trim(),
+    openingBody: forkOpeningBody.value.trim(),
+    createdAt: new Date().toISOString(),
+    status: 'submitting' as const,
+  };
+  persistForkIntent(intent);
+  const operationId = intent.operationId;
+  try {
+    const operation = await api.createFork(topicId, {
+      operationId,
+      boundaryPostId: intent.boundaryPostId,
+      title: intent.title,
+      openingBody: intent.openingBody,
+    });
+    if (routeTopicId.value !== topicId) return;
+    forkOperation.value = operation;
+    persistForkOperationState(topicId, operation);
+    if (operation.status === 'pending' || operation.status === 'running') scheduleForkPoll(topicId, operation.id);
+    else if (operation.status === 'needs_manual_review') {
+      clearForkIntent(topicId);
+      forkError.value = operation.errorMessage ?? 'Fork needs operator review; the source remains fenced.';
+    }
+  } catch (error) {
+    try {
+      const operation = await api.getFork(topicId, operationId);
+      if (routeTopicId.value !== topicId) return;
+      forkOperation.value = operation;
+      persistForkOperationState(topicId, operation);
+      if (operation.status === 'pending' || operation.status === 'running') scheduleForkPoll(topicId, operation.id);
+      else if (operation.status === 'needs_manual_review') {
+        clearForkIntent(topicId);
+        forkError.value = operation.errorMessage ?? 'Fork needs operator review; the source remains fenced.';
+      }
+    } catch {
+      forkError.value = `${error instanceof Error ? error.message : 'Fork request failed.'} The outcome is unknown; the same durable operation will be reconciled automatically.`;
+      scheduleForkPoll(topicId, operationId);
+    }
+  } finally {
+    if (routeTopicId.value === topicId) forkSubmitting.value = false;
+  }
+}
+
 function normalizeReasoning(model: string, reasoning: string): string {
   const options = state.modelReasoningOptions(model);
   if (options.includes(reasoning)) return reasoning;
@@ -559,6 +869,7 @@ const topicLineageLabel = computed(() => {
   const kind = topicLineage.value?.kind;
   if (!kind) return null;
   if (kind === 'handoff') return 'Handoff from parent session';
+  if (kind === 'fork') return 'Forked from parent session';
   if (kind === 'delegate') return 'Delegate fork from parent session';
   if (kind === 'sleep') return 'Sleep fork from parent session';
   return 'Parent session';
@@ -1851,6 +2162,7 @@ async function loadTopic(topicId: string): Promise<void> {
         compactionState.value = { ...compactionState.value, active: intent };
       }
       await refreshCompactionState(topicId);
+      await refreshForkState(topicId);
     }
     const page = Number.isFinite(routePage.value) && routePage.value > 0 ? routePage.value : 1;
     state.setPage(page);
@@ -2008,6 +2320,17 @@ watch(
     compactionRetryingCheckpoint.value = false;
     compactionState.value = { active: null, latest: null, checkpointDispatch: null };
     compactionError.value = '';
+    if (forkPollTimer !== null) window.clearTimeout(forkPollTimer);
+    forkPollTimer = null;
+    if (showForkModal.value) {
+      showForkModal.value = false;
+      restoreForkModalEnvironment();
+    }
+    forkBoundaries.value = [];
+    forkOperation.value = null;
+    forkState.value = { active: null, latest: null };
+    forkError.value = '';
+    forkSubmitting.value = false;
     replyBody.value = '';
     if (topicId) {
       await loadTopic(topicId);
@@ -2031,7 +2354,9 @@ onMounted(() => {
 onUnmounted(() => {
   state.closeStream();
   stopCompactionPolling();
-  if (showCompactionModal.value) document.body.style.overflow = bodyOverflowBeforeCompactionModal;
+  if (forkPollTimer !== null) window.clearTimeout(forkPollTimer);
+  if (showForkModal.value) document.body.style.overflow = bodyOverflowBeforeForkModal;
+  else if (showCompactionModal.value) document.body.style.overflow = bodyOverflowBeforeCompactionModal;
   window.removeEventListener('scroll', handleScroll);
 });
 </script>
@@ -2169,6 +2494,56 @@ onUnmounted(() => {
     @confirm="confirmDiscardQuickDraft"
     @cancel="showDiscardDraftConfirm = false"
   />
+
+  <div v-if="showForkModal" class="vb-modal-overlay">
+    <div
+      ref="forkModalRef"
+      class="vb-modal"
+      role="dialog"
+      tabindex="-1"
+      aria-modal="true"
+      aria-labelledby="fork-modal-title"
+      @keydown="handleForkKeydown"
+    >
+      <div class="vb-modal-header">
+        <span id="fork-modal-title">Fork Topic</span>
+        <button
+          class="vb-modal-close"
+          type="button"
+          aria-label="Close fork dialog"
+          :disabled="forkSubmitting"
+          @click="closeForkModal"
+        >
+          &times;
+        </button>
+      </div>
+      <div class="vb-modal-body">
+        <p>Create a new canonical conversation inheriting history before a completed user message.</p>
+        <label for="fork-boundary">Fork boundary</label>
+        <select id="fork-boundary" v-model="forkBoundaryPostId" @change="selectForkBoundary">
+          <option v-for="boundary in forkBoundaries" :key="boundary.postId" :value="boundary.postId">
+            #{{ boundary.postNumber }} — {{ boundary.excerpt }}
+          </option>
+        </select>
+        <label for="fork-title">New topic title</label>
+        <input id="fork-title" v-model="forkTitle" type="text" maxlength="300" />
+        <label for="fork-opening">Edited opening message</label>
+        <textarea id="fork-opening" v-model="forkOpeningBody" rows="10"></textarea>
+        <p v-if="forkError" class="vb-error">{{ forkError }}</p>
+        <div class="vb-modal-actions">
+          <button
+            class="vb-btn"
+            type="button"
+            :disabled="forkSubmitting || !forkTitle.trim() || !forkOpeningBody.trim()"
+            @click="submitFork"
+          >
+            {{ forkSubmitting || forkOperation?.status === 'pending' || forkOperation?.status === 'running' ? 'Forking…' : 'Create fork' }}
+          </button>
+          <button class="vb-btn vb-btn-secondary" type="button" :disabled="forkSubmitting" @click="closeForkModal">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <div v-if="showCompactionModal" class="vb-modal-overlay vb-compaction-modal-overlay">
     <div
@@ -2320,6 +2695,7 @@ onUnmounted(() => {
         >
           Handoff
         </button>
+        <button v-if="isAdmin" class="vb-btn" :disabled="!canFork" @click="openForkModal">Fork</button>
         <button v-if="isAdmin" class="vb-btn" :disabled="!canCompact" @click="openCompactionModal">Compact</button>
         <button class="vb-btn" @click="goHome">Back to Forum</button>
       </div>
@@ -2944,6 +3320,7 @@ onUnmounted(() => {
         >
           Handoff
         </button>
+        <button v-if="isAdmin" class="vb-btn" :disabled="!canFork" @click="openForkModal">Fork</button>
         <button v-if="isAdmin" class="vb-btn" :disabled="!canCompact" @click="openCompactionModal">Compact</button>
         <button class="vb-btn" @click="goHome">Back to Forum</button>
       </div>
@@ -3265,7 +3642,10 @@ onUnmounted(() => {
           <span v-if="sessionContext.model" class="vb-context-model">· {{ sessionContext.model }}</span>
         </div>
         <div v-if="compactionFence" class="vb-reply-options-callout" role="status">
-          Replies are paused while server-side compaction is running.
+          <template v-if="forkNeedsManualReview">
+            Replies are paused because a fork needs operator review; the canonical source remains fenced.
+          </template>
+          <template v-else>Replies are paused while a canonical operation is unresolved.</template>
         </div>
         <button
           class="vb-btn"

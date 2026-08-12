@@ -150,6 +150,9 @@ export function registerAttachmentRoutes({
       throw app.httpErrors.notFound('post not found');
     }
     requireTopicVisible(post.topic_id, request);
+    if (store.hasCompactionFence(post.topic_id)) {
+      throw app.httpErrors.conflict('Attachments are unavailable while the canonical topic is fenced');
+    }
 
     const author = store.getIdentity(post.author_id);
     if (!author || author.kind !== 'robot') {
@@ -239,6 +242,9 @@ export function registerAttachmentRoutes({
       throw app.httpErrors.notFound('post not found');
     }
     requireTopicVisible(post.topic_id, request);
+    if (store.hasCompactionFence(post.topic_id)) {
+      throw app.httpErrors.conflict('Attachments are unavailable while the canonical topic is fenced');
+    }
 
     if (post.author_id !== userId) {
       throw app.httpErrors.forbidden('Only the post author can add attachments');
@@ -460,6 +466,9 @@ export function registerAttachmentRoutes({
     const { topicId } = request.params as { topicId: string };
     const topic = store.getTopic(topicId);
     if (!topic) throw app.httpErrors.notFound('topic not found');
+    if (store.hasCompactionFence(topicId)) {
+      throw app.httpErrors.conflict('Attachments are unavailable while the canonical topic is fenced');
+    }
     if (topic.status === 'locked' || topic.status === 'archived') {
       throw app.httpErrors.forbidden('topic is locked or archived');
     }
@@ -714,6 +723,9 @@ export function registerAttachmentRoutes({
       throw app.httpErrors.notFound('post not found');
     }
     const topic = store.getTopic(post.topic_id);
+    if (store.hasCompactionFence(post.topic_id)) {
+      throw app.httpErrors.conflict('Attachments are unavailable while the canonical topic is fenced');
+    }
     if (topic && (topic.status === 'locked' || topic.status === 'archived')) {
       throw app.httpErrors.forbidden('topic is locked or archived');
     }

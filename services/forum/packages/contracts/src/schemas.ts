@@ -52,9 +52,13 @@ import type {
   CompactionOperationDto,
   TopicCompactionStateDto,
   CreateCompactionRequestDto,
+  CreateForkRequestDto,
   DiscordBridgeStatusDto,
   DiscordChannelMappingDto,
   ExternalRefDto,
+  ForkBoundaryDto,
+  ForkOperationDto,
+  TopicForkStateDto,
   ForumDto,
   ForumLastPostDto,
   IdentityDto,
@@ -648,6 +652,37 @@ export const TopicCompactionStateDtoSchema: z.ZodType<TopicCompactionStateDto> =
       errorMessage: z.string().nullable(),
     })
     .nullable(),
+});
+
+export const ForkBoundaryDtoSchema: z.ZodType<ForkBoundaryDto> = z.object({
+  postId: z.string(),
+  postNumber: z.number().int().positive(),
+  excerpt: z.string(),
+  body: z.string(),
+});
+
+export const CreateForkRequestSchema: z.ZodType<CreateForkRequestDto> = z.object({
+  operationId: z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/, 'operationId contains invalid characters'),
+  boundaryPostId: z.string().min(1),
+  title: z.string().trim().min(1).max(300),
+  openingBody: z.string().trim().min(1).max(100_000),
+});
+
+export const ForkOperationDtoSchema: z.ZodType<ForkOperationDto> = z.object({
+  id: z.string(),
+  sourceTopicId: z.string(),
+  boundaryPostId: z.string(),
+  status: z.enum(['pending', 'running', 'needs_manual_review', 'succeeded', 'failed']),
+  childTopicId: z.string().nullable(),
+  errorMessage: z.string().nullable(),
+  createdAt: z.string(),
+  startedAt: z.string().nullable(),
+  finishedAt: z.string().nullable(),
+});
+
+export const TopicForkStateDtoSchema: z.ZodType<TopicForkStateDto> = z.object({
+  active: ForkOperationDtoSchema.nullable(),
+  latest: ForkOperationDtoSchema.nullable(),
 });
 
 export const SessionContextDtoSchema = z.object({

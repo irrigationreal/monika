@@ -156,6 +156,20 @@ External Discord and Matrix adapters are best-effort ingress/egress projections:
 the canonical Pi session and provenance remain authoritative when an external
 API cannot provide atomic delivery or acknowledgement.
 
+Forum-native session forks preserve the same authority boundary. Agentd owns the
+canonical before-user Pi branch copy and its durable idempotency ledger; the forum
+owns a recoverable projection/materialization job. Pending children are quarantined
+from generic session discovery until the forum has atomically created the child
+topic, copied active-branch posts with fresh identities, copied attachment bytes,
+linked canonical message IDs, and seeded the inherited dispatch generation. The
+source topic and canonical parent remain fenced until agentd acknowledges that
+materialization. Recovery adopts only exact operation-marked canonical children;
+ambiguous unmarked outcomes stay in an active `needs_manual_review` forum state and are
+never blindly retried. Agentd retains the candidate directory, parent, creation timestamp,
+and boundary so generic discovery can quarantine every plausible child after manual
+recovery without adopting or modifying it. Successful children are ordinary independent
+topics and may be moved normally afterward.
+
 Assistant projection is one deterministic service path shared by live SSE and
 session sync. It applies outbound tamper/default-persona rules, normalizes parent
 and follow-up metadata, creates durable attachment handoffs, and claims the

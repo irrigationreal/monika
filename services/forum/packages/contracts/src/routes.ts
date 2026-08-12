@@ -830,6 +830,40 @@ export const apiRoutes: ApiRoute[] = [
     response: { schema: schemas.TopicCompactionStateDtoSchema }
   },
 
+  // Forum-native forks
+  {
+    method: 'get',
+    path: '/topics/{topicId}/forks',
+    summary: 'Get the active and latest durable forum-native fork operations',
+    tags: ['topics'],
+    request: { params: stringParam('topicId') },
+    response: { schema: schemas.TopicForkStateDtoSchema }
+  },
+  {
+    method: 'get',
+    path: '/topics/{topicId}/forks/boundaries',
+    summary: 'List stable canonical user-message fork boundaries',
+    tags: ['topics'],
+    request: { params: stringParam('topicId') },
+    response: { schema: itemsSchema(schemas.ForkBoundaryDtoSchema) }
+  },
+  {
+    method: 'post',
+    path: '/topics/{topicId}/forks',
+    summary: 'Accept a durable before-user fork operation',
+    tags: ['topics'],
+    request: { params: stringParam('topicId'), body: { schema: schemas.CreateForkRequestSchema } },
+    response: { schema: schemas.ForkOperationDtoSchema, statusCode: 202, description: 'Accepted' }
+  },
+  {
+    method: 'get',
+    path: '/topics/{topicId}/forks/{operationId}',
+    summary: 'Get a durable forum-native fork operation',
+    tags: ['topics'],
+    request: { params: z.object({ topicId: z.string(), operationId: z.string() }) },
+    response: { schema: schemas.ForkOperationDtoSchema }
+  },
+
   // Posts
   {
     method: 'get',

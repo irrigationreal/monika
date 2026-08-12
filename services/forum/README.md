@@ -279,6 +279,11 @@ For full deployment guidance, see `docs/DEPLOYMENT.md`.
   pending or interrupted requests after restart, and exposes state across reloads. Agentd owns the idle/expected-leaf
   claim and Pi settlement; the forum creates a recovery checkpoint only after canonical compaction succeeds. A failed checkpoint dispatch can be retried
   independently without repeating compaction. The mobile dialog is dynamic-viewport bounded and internally scrollable.
+- **Fork** is an admin-only, idle-only native Pi branch operation. The administrator selects an eligible forum-numbered
+  user post, edits the replay, and receives a new topic containing independent copies of the inherited active-branch posts
+  and attachments plus a non-numbered fork boundary. Agentd preserves the parent runtime, canonical dispatch generation,
+  and crash-safe child quarantine; the forum resumes pending operations after reload and keeps ambiguous recovery fenced
+  for operator review. V1 creation remains in the same forum and cwd; finalized parent and child topics move independently.
 - Canonical parent-session automatic compaction is a default-off, admin-controlled topic setting. The forum persists the
   policy and sends it to agentd; Pi performs native threshold and overflow-retry compaction. Automatic compaction
   creates maintenance events but never the manual recovery-checkpoint post. Direct Pi CLI and disposable child policies

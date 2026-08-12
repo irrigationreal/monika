@@ -27,7 +27,7 @@ describe('Forum routes access controls', () => {
     db.close();
   });
 
-  async function buildApp(compactionService?: any) {
+  async function buildApp(compactionService?: any, forkService?: any) {
     const app = Fastify({ logger: false });
     await app.register(sensible);
     const access = createAccessHelpers(app, store);
@@ -54,6 +54,7 @@ describe('Forum routes access controls', () => {
       webhookService: { dispatch: () => {} } as any,
       bus,
       compactionService,
+      forkService,
       access,
       webIdentityId: store.createIdentity('web', 'human').id,
     });
@@ -96,13 +97,13 @@ describe('Forum routes access controls', () => {
       cwd: '/workspace/private-project',
       parentPiSessionId: 'pi-parent',
       parentPiSessionPath: '/app/.pi/agent/sessions/private-parent.jsonl',
-      lineageKind: 'handoff',
+      lineageKind: 'fork',
       lineageSource: 'forum',
     });
 
     const guest = await app.inject({ method: 'GET', url: `/topics/${child.id}` });
     expect(guest.statusCode).toBe(200);
-    expect(guest.json()).toMatchObject({ lineage: { kind: 'handoff', parentTopicId: null } });
+    expect(guest.json()).toMatchObject({ lineage: { kind: 'fork', parentTopicId: null } });
     expect(guest.json()).not.toHaveProperty('piSession');
     expect(JSON.stringify(guest.json())).not.toContain('/app/.pi');
     expect(JSON.stringify(guest.json())).not.toContain('/workspace/private-project');
@@ -113,7 +114,7 @@ describe('Forum routes access controls', () => {
       headers: { authorization: 'Bearer member-token' },
     });
     expect(member.statusCode).toBe(200);
-    expect(member.json()).toMatchObject({ lineage: { kind: 'handoff', parentTopicId: parent.id } });
+    expect(member.json()).toMatchObject({ lineage: { kind: 'fork', parentTopicId: parent.id } });
     expect(member.json()).not.toHaveProperty('piSession');
   });
 
@@ -632,6 +633,86 @@ describe('Forum routes access controls', () => {
       headers: { authorization: 'Bearer admin-token' },
     });
     expect(adminTopicRes.statusCode).toBe(200);
+  });
+
+  it('keeps fork discovery and durable acceptance admin-only', async () => {
+    const forum = store.createForum('Forum', null, null, null, null, 'active', 'public');
+    const admin = store.createIdentity('Admin', 'admin');
+    const human = store.createIdentity('Human', 'human');
+    store.createAuthSession('admin-token', admin.id);
+    store.createAuthSession('human-token', human.id);
+    const { topic, post } = store.createTopic({
+      forumId: forum.id,
+      title: 'Parent',
+      body: 'starter',
+      authorId: admin.id,
+    });
+    const operation = {
+      id: 'fork-route',
+      sourceTopicId: topic.id,
+      boundaryPostId: post.id,
+      boundaryEntryId: 'entry-1',
+      expectedLeafId: 'leaf-1',
+      initiatedBy: admin.id,
+      title: 'Child',
+      openingBody: 'edited opening',
+      status: 'pending',
+      childTopicId: null,
+      childSessionId: null,
+      errorMessage: null,
+      createdAt: new Date().toISOString(),
+      startedAt: null,
+      finishedAt: null,
+    };
+    const forkService = {
+      state: vi.fn(() => ({ active: operation, latest: operation })),
+      boundaries: vi.fn(() => [
+        { postId: post.id, postNumber: 1, piMessageId: 'entry-1', entryId: 'entry-1', excerpt: 'starter', body: 'starter' },
+      ]),
+      enqueue: vi.fn(async () => operation),
+      get: vi.fn(() => operation),
+    };
+    const app = await buildApp(undefined, forkService);
+
+    expect((await app.inject({ method: 'GET', url: `/topics/${topic.id}/forks` })).statusCode).toBe(401);
+    expect((await app.inject({ method: 'GET', url: `/topics/${topic.id}/forks/boundaries` })).statusCode).toBe(401);
+    expect(
+      (
+        await app.inject({
+          method: 'GET',
+          url: `/topics/${topic.id}/forks/boundaries`,
+          headers: { authorization: 'Bearer human-token' },
+        })
+      ).statusCode
+    ).toBe(403);
+    const state = await app.inject({
+      method: 'GET',
+      url: `/topics/${topic.id}/forks`,
+      headers: { authorization: 'Bearer admin-token' },
+    });
+    expect(state.statusCode).toBe(200);
+    expect(state.json()).toMatchObject({ active: { id: 'fork-route' }, latest: { id: 'fork-route' } });
+
+    const boundaries = await app.inject({
+      method: 'GET',
+      url: `/topics/${topic.id}/forks/boundaries`,
+      headers: { authorization: 'Bearer admin-token' },
+    });
+    expect(boundaries.statusCode).toBe(200);
+    expect(boundaries.json()).toEqual({ items: [{ postId: post.id, postNumber: 1, excerpt: 'starter', body: 'starter' }] });
+
+    const accepted = await app.inject({
+      method: 'POST',
+      url: `/topics/${topic.id}/forks`,
+      headers: { authorization: 'Bearer admin-token' },
+      payload: { operationId: 'fork-route', boundaryPostId: post.id, title: 'Child', openingBody: 'edited opening' },
+    });
+    expect(accepted.statusCode).toBe(202);
+    expect(accepted.headers.location).toBe(`/topics/${topic.id}/forks/fork-route`);
+    expect(accepted.json()).toMatchObject({ id: 'fork-route', status: 'pending' });
+    expect(forkService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ topicId: topic.id, initiatedBy: admin.id, boundaryPostId: post.id })
+    );
   });
 
   it('requires moderator permissions for topic mutations (title/status/delete)', async () => {

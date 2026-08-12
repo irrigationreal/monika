@@ -6,6 +6,7 @@ import type {
   AnalyticsAudience,
   AnalyticsBucket,
   ForumVisibility,
+  ForkOperationStatus,
   MessageDraftContext,
   MessageTemplateContext,
   MessageTemplateForumScope,
@@ -166,7 +167,7 @@ export interface ChatTypingDto {
 }
 
 export interface TopicLineageDto {
-  kind: 'handoff' | 'delegate' | 'sleep' | 'parent';
+  kind: 'handoff' | 'fork' | 'delegate' | 'sleep' | 'parent';
   parentTopicId?: string | null;
 }
 
@@ -529,6 +530,37 @@ export interface TopicCompactionStateDto {
   active: CompactionOperationDto | null;
   latest: CompactionOperationDto | null;
   checkpointDispatch: CompactionCheckpointDispatchDto | null;
+}
+
+export interface ForkBoundaryDto {
+  postId: string;
+  postNumber: number;
+  excerpt: string;
+  body: string;
+}
+
+export interface CreateForkRequestDto {
+  operationId: string;
+  boundaryPostId: string;
+  title: string;
+  openingBody: string;
+}
+
+export interface ForkOperationDto {
+  id: string;
+  sourceTopicId: string;
+  boundaryPostId: string;
+  status: ForkOperationStatus;
+  childTopicId: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+export interface TopicForkStateDto {
+  active: ForkOperationDto | null;
+  latest: ForkOperationDto | null;
 }
 
 /** Best available Pi context-usage snapshot for one canonical session. */

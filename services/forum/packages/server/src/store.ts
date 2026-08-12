@@ -3,7 +3,11 @@ import { randomUUID } from 'node:crypto';
 import { normalizedOriginKey } from '@irrigationreal/codex-forum-core';
 
 import { nowIso } from './db';
-import { mapCompactionOperationRowToDomain, mapTopicOperationalEventRowToDomain } from './mappers/db';
+import {
+  mapCompactionOperationRowToDomain,
+  mapForkOperationRowToDomain,
+  mapTopicOperationalEventRowToDomain,
+} from './mappers/db';
 import { STORE_CACHE_MAX_ENTRIES, STORE_ENTITY_CACHE_TTL_MS, STORE_STATS_CACHE_TTL_MS } from './runtimeConfig';
 import { hashToken } from './utils/auth';
 
@@ -14,6 +18,8 @@ import type {
   AccessRuleScopeKind,
   CompactionOperation,
   CreatePostInput,
+  ForkBoundary,
+  ForkOperation,
   CreateTopicInput,
   ForumListOptions,
   ForumStatus,
@@ -37,6 +43,7 @@ import type {
   ChatRoomRow,
   CompactionOperationRow,
   ExternalRefRow,
+  ForkOperationRow,
   ForumRow,
   IdentityRoleRow,
   IdentityRow,
@@ -331,6 +338,29 @@ export interface CreateCompactionOperationInput {
   expectedLeafId: string;
   customInstructions?: string | null;
   recoveryPrompt: string;
+}
+
+export interface EnqueueForkOperationInput {
+  id: string;
+  sourceTopicId: string;
+  sourceSessionId: string;
+  sourcePiSessionId: string;
+  sourcePiSessionPath: string;
+  boundaryPostId: string;
+  boundaryPiMessageId: string;
+  boundaryEntryId: string;
+  expectedLeafId: string;
+  initiatedBy: string;
+  title: string;
+  openingBody: string;
+  prestagedAttachments: Array<{
+    sourcePostId: string;
+    filename: string;
+    mimeType: string;
+    sizeBytes: number;
+    storagePath: string;
+    sha256: string | null;
+  }>;
 }
 
 export interface CreatePostDispatchInput {
@@ -2358,6 +2388,433 @@ export class ForumStore {
     ).map(mapTopicOperationalEventRowToDomain);
   }
 
+  listEligibleForkBoundaries(topicId: string): ForkBoundary[] {
+    const link = this.getPiSessionLinkByTopic(topicId);
+    if (!link) return [];
+    const head = this.db
+      .prepare('select active_entry_ids_json from pi_session_heads where pi_session_id = ?')
+      .get(link.pi_session_id) as { active_entry_ids_json: string } | undefined;
+    if (!head) return [];
+    let activeIds: string[];
+    let active: Set<string>;
+    try {
+      activeIds = JSON.parse(head.active_entry_ids_json) as string[];
+      active = new Set(activeIds);
+    } catch {
+      return [];
+    }
+    const posts = this.db
+      .prepare('select * from posts where topic_id = ? order by rowid asc')
+      .all(topicId) as PostRow[];
+    const projected = posts.map((post) => {
+      const message = this.db
+        .prepare('select * from pi_message_links where pi_session_id = ? and post_id = ? limit 1')
+        .get(link.pi_session_id, post.id) as PiMessageLinkRow | undefined;
+      const entry = message
+        ? (this.db
+            .prepare('select role, has_visible_text from pi_entry_index where pi_session_id = ? and entry_id = ?')
+            .get(link.pi_session_id, message.pi_message_id) as
+            | { role: string | null; has_visible_text: number }
+            | undefined)
+        : undefined;
+      let singleton = false;
+      try {
+        const metadata = JSON.parse(message?.metadata_json ?? 'null') as { contributorPostIds?: unknown } | null;
+        singleton =
+          Array.isArray(metadata?.contributorPostIds) &&
+          metadata.contributorPostIds.length === 1 &&
+          metadata.contributorPostIds[0] === post.id;
+      } catch {
+        singleton = false;
+      }
+      return { post, message, entry, singleton };
+    });
+
+    const boundaries: ForkBoundary[] = [];
+    let prefixComplete = true;
+    for (let index = 0; index < projected.length; index += 1) {
+      const current = projected[index]!;
+      prefixComplete =
+        prefixComplete &&
+        !current.post.deleted_at &&
+        Boolean(current.message && current.entry?.has_visible_text && active.has(current.message.pi_message_id));
+      const inheritedHasAssistant = projected
+        .slice(0, index)
+        .some((candidate) =>
+          !candidate.post.deleted_at &&
+          candidate.entry?.role === 'assistant' &&
+          Boolean(candidate.entry.has_visible_text && candidate.message && active.has(candidate.message.pi_message_id))
+        );
+      // V1 materialization requires an inherited forum prefix and at least one
+      // inherited assistant response. Never advertise a before-first-user
+      // boundary that the durable worker must later reject.
+      if (!prefixComplete || index === 0 || !inheritedHasAssistant || current.entry?.role !== 'user' || !current.singleton)
+        continue;
+      const response = projected[index + 1];
+      const activeIndex = current.message ? activeIds.indexOf(current.message.pi_message_id) : -1;
+      let nextCanonicalMessageId: string | null = null;
+      for (const entryId of activeIds.slice(activeIndex + 1)) {
+        const entry = this.db
+          .prepare('select role, has_visible_text from pi_entry_index where pi_session_id = ? and entry_id = ?')
+          .get(link.pi_session_id, entryId) as { role: string | null; has_visible_text: number } | undefined;
+        if (entry?.has_visible_text && (entry.role === 'user' || entry.role === 'assistant')) {
+          nextCanonicalMessageId = entryId;
+          break;
+        }
+      }
+      const responseActiveIndex = nextCanonicalMessageId ? activeIds.indexOf(nextCanonicalMessageId) : -1;
+      const canonicalPrefixComplete =
+        responseActiveIndex >= 0 &&
+        activeIds.slice(0, responseActiveIndex + 1).every((entryId) => {
+          const entry = this.db
+            .prepare('select role, has_visible_text from pi_entry_index where pi_session_id = ? and entry_id = ?')
+            .get(link.pi_session_id, entryId) as { role: string | null; has_visible_text: number } | undefined;
+          if (!entry?.has_visible_text || (entry.role !== 'user' && entry.role !== 'assistant')) return true;
+          const projectedPost = this.db
+            .prepare(
+              `select p.deleted_at from pi_message_links l
+               join posts p on p.id = l.post_id
+               where l.pi_session_id = ? and l.pi_message_id = ? and p.topic_id = ? limit 1`
+            )
+            .get(link.pi_session_id, entryId, topicId) as { deleted_at: string | null } | undefined;
+          return Boolean(projectedPost && !projectedPost.deleted_at);
+        });
+      if (
+        activeIndex < 0 ||
+        !canonicalPrefixComplete ||
+        !response ||
+        response.post.deleted_at ||
+        response.entry?.role !== 'assistant' ||
+        !response.entry.has_visible_text ||
+        !response.message ||
+        nextCanonicalMessageId !== response.message.pi_message_id ||
+        !active.has(response.message.pi_message_id) ||
+        !response.singleton
+      )
+        continue;
+      boundaries.push({
+        postId: current.post.id,
+        postNumber: index + 1,
+        piMessageId: current.message!.pi_message_id,
+        entryId: current.message!.pi_message_id,
+        excerpt: current.post.body.trim().slice(0, 180),
+        body: current.post.body,
+      });
+    }
+    return boundaries;
+  }
+
+  getForkOperation(id: string): ForkOperation | null {
+    const row = this.db.prepare('select * from fork_operations where id = ?').get(id) as ForkOperationRow | undefined;
+    return row ? mapForkOperationRowToDomain(row) : null;
+  }
+
+  hasForkFence(topicId: string): boolean {
+    return Boolean(
+      this.db
+        .prepare(
+          "select 1 from fork_operations where source_topic_id = ? and status in ('pending', 'running', 'needs_manual_review') limit 1"
+        )
+        .get(topicId)
+    );
+  }
+
+  getActiveForkOperation(topicId: string): ForkOperation | null {
+    const row = this.db
+      .prepare(
+        "select * from fork_operations where source_topic_id = ? and status in ('pending', 'running', 'needs_manual_review') order by created_at desc limit 1"
+      )
+      .get(topicId) as ForkOperationRow | undefined;
+    return row ? mapForkOperationRowToDomain(row) : null;
+  }
+
+  getLatestForkOperation(topicId: string): ForkOperation | null {
+    const row = this.db
+      .prepare('select * from fork_operations where source_topic_id = ? order by created_at desc limit 1')
+      .get(topicId) as ForkOperationRow | undefined;
+    return row ? mapForkOperationRowToDomain(row) : null;
+  }
+
+  finalizeForkAttachmentPaths(id: string, fromRoot: string, toRoot: string): void {
+    this.db.transaction(() => {
+      const row = this.db.prepare('select prestaged_attachments_json from fork_operations where id = ?').get(id) as
+        | { prestaged_attachments_json: string }
+        | undefined;
+      if (!row) throw new Error('fork operation not found');
+      const prestaged = JSON.parse(row.prestaged_attachments_json) as EnqueueForkOperationInput['prestagedAttachments'];
+      const normalizedFrom = `${fromRoot.replace(/\/$/, '')}/`;
+      const normalizedTo = `${toRoot.replace(/\/$/, '')}/`;
+      const finalized = prestaged.map((attachment) => ({
+        ...attachment,
+        storagePath: attachment.storagePath.startsWith(normalizedFrom)
+          ? `${normalizedTo}${attachment.storagePath.slice(normalizedFrom.length)}`
+          : attachment.storagePath,
+      }));
+      for (let index = 0; index < prestaged.length; index += 1) {
+        const before = prestaged[index]!;
+        const after = finalized[index]!;
+        if (before.storagePath !== after.storagePath)
+          this.db.prepare('update attachments set storage_path = ? where storage_path = ?').run(after.storagePath, before.storagePath);
+      }
+      this.db.prepare('update fork_operations set prestaged_attachments_json = ? where id = ?').run(JSON.stringify(finalized), id);
+    })();
+  }
+
+  enqueueForkOperation(input: EnqueueForkOperationInput): ForkOperation {
+    return this.db.transaction(() => {
+      const existing = this.getForkOperation(input.id);
+      if (existing) return existing;
+      const topic = this.getTopic(input.sourceTopicId);
+      const robotState = this.getRobotState(input.sourceTopicId);
+      const autoRun = this.getTopicAutoRun(input.sourceTopicId);
+      if (
+        !topic ||
+        topic.status !== 'open' ||
+        (robotState?.activity !== 'idle' && robotState?.activity !== 'stopped') ||
+        autoRun?.status === 'running' ||
+        this.countActionablePostDispatches(input.sourceTopicId) > 0 ||
+        this.hasCompactionFence(input.sourceTopicId)
+      )
+        throw new Error('fork_conflict');
+      const now = nowIso();
+      this.db
+        .prepare(
+          `insert into fork_operations
+           (id, source_topic_id, source_session_id, source_pi_session_id, source_pi_session_path,
+            boundary_post_id, boundary_pi_message_id, boundary_entry_id, expected_leaf_id, initiated_by,
+            title, opening_body, status, prestaged_attachments_json, attempt_count, created_at)
+           values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, 0, ?)`
+        )
+        .run(
+          input.id,
+          input.sourceTopicId,
+          input.sourceSessionId,
+          input.sourcePiSessionId,
+          input.sourcePiSessionPath,
+          input.boundaryPostId,
+          input.boundaryPiMessageId,
+          input.boundaryEntryId,
+          input.expectedLeafId,
+          input.initiatedBy,
+          input.title,
+          input.openingBody,
+          JSON.stringify(input.prestagedAttachments),
+          now
+        );
+      return this.getForkOperation(input.id) as ForkOperation;
+    })();
+  }
+
+  listPendingForkOperationRows(limit = 10): ForkOperationRow[] {
+    return this.db
+      .prepare(
+        "select * from fork_operations where status = 'pending' and (next_attempt_at is null or next_attempt_at <= ?) order by created_at asc limit ?"
+      )
+      .all(nowIso(), Math.max(1, Math.trunc(limit))) as ForkOperationRow[];
+  }
+
+  requeueRunningForkOperations(): number {
+    return this.db
+      .prepare("update fork_operations set status = 'pending', next_attempt_at = null where status = 'running'")
+      .run().changes;
+  }
+
+  claimForkOperation(id: string): ForkOperationRow | null {
+    const now = nowIso();
+    const result = this.db
+      .prepare(
+        "update fork_operations set status = 'running', started_at = coalesce(started_at, ?), attempt_count = attempt_count + 1, next_attempt_at = null where id = ? and status = 'pending' and (next_attempt_at is null or next_attempt_at <= ?)"
+      )
+      .run(now, id, now);
+    return result.changes === 1
+      ? (this.db.prepare('select * from fork_operations where id = ?').get(id) as ForkOperationRow)
+      : null;
+  }
+
+  requeueForkOperation(id: string, message: string, retryAt: string): void {
+    this.db
+      .prepare("update fork_operations set status = 'pending', error_message = ?, next_attempt_at = ? where id = ? and status = 'running'")
+      .run(message.slice(0, 1000), retryAt, id);
+  }
+
+  failForkOperation(id: string, message: string): void {
+    this.db
+      .prepare(
+        "update fork_operations set status = 'failed', error_message = ?, next_attempt_at = null, finished_at = ? where id = ? and status = 'running'"
+      )
+      .run(message.slice(0, 1000), nowIso(), id);
+  }
+
+  markForkNeedsManualReview(id: string, message: string): void {
+    this.db
+      .prepare(
+        "update fork_operations set status = 'needs_manual_review', error_message = ?, next_attempt_at = null, finished_at = null where id = ? and status = 'running'"
+      )
+      .run(message.slice(0, 1000), id);
+  }
+
+  materializeForkOperation(
+    id: string,
+    result: {
+      child_session_id: string;
+      child_session_path: string;
+      inherited_generation: number;
+      active_entry_ids: string[];
+    }
+  ): ForkOperation {
+    return this.db.transaction(() => {
+      const row = this.db.prepare('select * from fork_operations where id = ?').get(id) as ForkOperationRow | undefined;
+      if (!row) throw new Error('fork operation not found');
+      if (row.child_topic_id) return this.getForkOperation(id) as ForkOperation;
+      if (row.status !== 'running') throw new Error('fork operation is not running');
+      const sourceTopic = this.getTopic(row.source_topic_id);
+      if (!sourceTopic) throw new Error('source topic not found');
+      const sourcePosts = this.db
+        .prepare('select * from posts where topic_id = ? order by rowid asc')
+        .all(row.source_topic_id) as PostRow[];
+      const boundaryIndex = sourcePosts.findIndex((post) => post.id === row.boundary_post_id);
+      if (boundaryIndex < 1) throw new Error('fork boundary has no inherited forum history');
+      const inherited = sourcePosts.slice(0, boundaryIndex);
+      const first = inherited[0]!;
+      const created = this.createTopic({
+        forumId: sourceTopic.forum_id,
+        title: row.title,
+        body: first.body,
+        authorId: first.author_id,
+        robotMode: sourceTopic.robot_mode as 'auto' | 'mention' | 'off',
+        autoCompactEnabled: Boolean(sourceTopic.auto_compact_enabled),
+        silent: Boolean(first.silent),
+      });
+      if (first.follow_up) this.db.prepare('update posts set follow_up = 1 where id = ?').run(created.post.id);
+      const childSession = this.ensureSession({ topicId: created.topic.id });
+      const postMap = new Map<string, string>([[first.id, created.post.id]]);
+      for (const source of inherited.slice(1)) {
+        const copied = this.createPost({
+          topicId: created.topic.id,
+          authorId: source.author_id,
+          body: source.body,
+          parentPostId: source.parent_post_id ? postMap.get(source.parent_post_id) ?? null : null,
+          silent: Boolean(source.silent),
+        });
+        if (source.follow_up) this.db.prepare('update posts set follow_up = 1 where id = ?').run(copied.id);
+        postMap.set(source.id, copied.id);
+      }
+      const activeIds = new Set(result.active_entry_ids);
+      for (const source of inherited) {
+        const sourceLink = this.db
+          .prepare('select * from pi_message_links where pi_session_id = ? and post_id = ? limit 1')
+          .get(row.source_pi_session_id, source.id) as PiMessageLinkRow | undefined;
+        if (!sourceLink || !activeIds.has(sourceLink.pi_message_id))
+          throw new Error('child canonical branch does not contain inherited projected message');
+        const sourceMetadata = JSON.parse(sourceLink.metadata_json ?? 'null') as Record<string, unknown> | null;
+        const metadata = sourceMetadata
+          ? {
+              ...sourceMetadata,
+              contributorPostIds: Array.isArray(sourceMetadata['contributorPostIds'])
+                ? sourceMetadata['contributorPostIds'].map((postId) =>
+                    typeof postId === 'string' ? postMap.get(postId) ?? postId : postId
+                  )
+                : [postMap.get(source.id)!],
+            }
+          : { contributorPostIds: [postMap.get(source.id)!] };
+        this.createPiMessageLink({
+          piSessionId: result.child_session_id,
+          piMessageId: sourceLink.pi_message_id,
+          postId: postMap.get(source.id)!,
+          role: sourceLink.role,
+          metadata,
+        });
+      }
+      const prestaged = JSON.parse(row.prestaged_attachments_json) as EnqueueForkOperationInput['prestagedAttachments'];
+      for (const attachment of prestaged.filter((item) => item.sourcePostId !== row.boundary_post_id)) {
+        const postId = postMap.get(attachment.sourcePostId);
+        if (postId)
+          this.createAttachment({
+            postId,
+            filename: attachment.filename,
+            mimeType: attachment.mimeType,
+            sizeBytes: attachment.sizeBytes,
+            storagePath: attachment.storagePath,
+            sha256: attachment.sha256,
+          });
+      }
+      this.upsertPiSessionLink({
+        piSessionId: result.child_session_id,
+        piSessionPath: result.child_session_path,
+        topicId: created.topic.id,
+        sessionId: childSession.id,
+        cwd: this.getForum(sourceTopic.forum_id)?.cwd ?? null,
+        kind: 'normal',
+        metadata: { source: 'forum-fork', operationId: id },
+        parentPiSessionId: row.source_pi_session_id,
+        parentPiSessionPath: row.source_pi_session_path,
+        lineageKind: 'fork',
+        lineageSource: 'forum',
+      });
+      const now = nowIso();
+      this.db
+        .prepare(
+          `insert into post_dispatch_generations(topic_id, generation, updated_at) values (?, ?, ?)
+           on conflict(topic_id) do update set generation = excluded.generation, updated_at = excluded.updated_at`
+        )
+        .run(created.topic.id, Math.max(0, Math.trunc(result.inherited_generation)), now);
+      this.setSessionLastDispatchedPostId(childSession.id, postMap.get(inherited.at(-1)!.id) ?? null);
+      const boundary = sourcePosts[boundaryIndex]!;
+      const opening = this.createPost({
+        topicId: created.topic.id,
+        authorId: row.initiated_by,
+        body: row.opening_body,
+        parentPostId: boundary.parent_post_id ? postMap.get(boundary.parent_post_id) ?? null : null,
+      });
+      if (boundary.follow_up) this.db.prepare('update posts set follow_up = 1 where id = ?').run(opening.id);
+      for (const attachment of prestaged.filter((item) => item.sourcePostId === row.boundary_post_id)) {
+        this.createAttachment({
+          postId: opening.id,
+          filename: attachment.filename,
+          mimeType: attachment.mimeType,
+          sizeBytes: attachment.sizeBytes,
+          storagePath: attachment.storagePath,
+          sha256: attachment.sha256,
+        });
+      }
+      this.createSessionMessage(childSession.id, 'user', row.opening_body, 'public');
+      const openingDispatch = this.createPostDispatch({
+        topicId: created.topic.id,
+        postId: opening.id,
+        sessionId: childSession.id,
+        mode: 'auto',
+      });
+      // Do not let the already-running dispatcher open the quarantined child.
+      // completeForkOperation releases this only after agentd acknowledgement.
+      this.db
+        .prepare("update post_dispatches set next_attempt_at = '9999-12-31T23:59:59.999Z' where id = ?")
+        .run(openingDispatch.id);
+      this.upsertRobotState({ topicId: created.topic.id, sessionId: childSession.id, activity: 'idle', currentPlanId: null });
+      this.db
+        .prepare(
+          'update fork_operations set agent_result_json = ?, child_topic_id = ?, child_session_id = ?, child_session_path = ?, error_message = null where id = ?'
+        )
+        .run(JSON.stringify(result), created.topic.id, result.child_session_id, result.child_session_path, id);
+      return this.getForkOperation(id) as ForkOperation;
+    })();
+  }
+
+  completeForkOperation(id: string): void {
+    this.db.transaction(() => {
+      const now = nowIso();
+      this.db
+        .prepare("update fork_operations set status = 'succeeded', error_message = null, next_attempt_at = null, finished_at = ? where id = ? and status = 'running'")
+        .run(now, id);
+      this.db
+        .prepare(
+          `update post_dispatches set next_attempt_at = ?, updated_at = ?
+           where topic_id = (select child_topic_id from fork_operations where id = ?)
+             and status = 'pending'`
+        )
+        .run(now, now, id);
+    })();
+  }
+
   createCompactionOperation(input: CreateCompactionOperationInput): CompactionOperation {
     const existing = this.getCompactionOperation(input.id);
     if (existing) return existing;
@@ -2396,7 +2853,9 @@ export class ForumStore {
   }
 
   hasCompactionFence(topicId: string): boolean {
-    if (this.hasActiveCompactionOperation(topicId)) return true;
+    // Topic mutation routes use this shared fence. A forum-native fork must
+    // freeze the source just as strictly as compaction until materialization is acknowledged.
+    if (this.hasActiveCompactionOperation(topicId) || this.hasForkFence(topicId)) return true;
     const row = this.db
       .prepare(
         `select 1 from compaction_operations c
