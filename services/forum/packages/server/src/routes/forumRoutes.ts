@@ -1,15 +1,18 @@
 import {
   CreateCompactionRequestSchema,
+  CreateForkRequestSchema,
   CreatePostRequestSchema,
   CreateTopicRequestSchema,
 } from '@irrigationreal/codex-forum-contracts';
 
 import {
   mapCompactionOperationToDto,
+  mapForkOperationToDto,
   mapTopicCompactionStateToDto,
   mapTopicOperationalEventToDto,
 } from '../mappers/dto';
 import { CompactionConflictError, CompactionNotFoundError } from '../services/compactionService';
+import { ForkConflictError, ForkNotFoundError } from '../services/forkService';
 import { serializePost, serializeTopic } from '../utils/serializers';
 import { parseBody } from '../utils/validation';
 
@@ -18,6 +21,7 @@ import type { FastifyInstance } from 'fastify';
 import type { AgentBridge } from '../agentBridge';
 import type { FeatureFlags } from '../config';
 import type { CompactionService } from '../services/compactionService';
+import type { ForkService } from '../services/forkService';
 import type { PostDispatchService } from '../services/postDispatchService';
 import type { WebhookService } from '../services/webhookService';
 import type { ForumStore } from '../store';
@@ -33,6 +37,7 @@ export function registerForumRoutes({
   bus,
   postDispatchService,
   compactionService,
+  forkService,
   access,
   webIdentityId,
 }: {
@@ -44,6 +49,7 @@ export function registerForumRoutes({
   bus: StreamBusInterface;
   postDispatchService?: Pick<PostDispatchService, 'wake'>;
   compactionService?: CompactionService;
+  forkService?: ForkService;
   access: AccessHelpers;
   webIdentityId: string;
 }): void {
@@ -73,16 +79,19 @@ export function registerForumRoutes({
     topic: Parameters<typeof serializeTopic>[0],
     request: Parameters<typeof getIdentityFromRequest>[0]
   ): ReturnType<typeof serializeTopic> & {
-    lineage?: { kind: 'handoff' | 'delegate' | 'sleep' | 'parent'; parentTopicId: string | null };
+    lineage?: { kind: 'handoff' | 'fork' | 'delegate' | 'sleep' | 'parent'; parentTopicId: string | null };
   } {
     const dto = serializeTopic(topic) as ReturnType<typeof serializeTopic> & {
-      lineage?: { kind: 'handoff' | 'delegate' | 'sleep' | 'parent'; parentTopicId: string | null };
+      lineage?: { kind: 'handoff' | 'fork' | 'delegate' | 'sleep' | 'parent'; parentTopicId: string | null };
     };
     const link = store.getPiSessionLinkByTopic(topic.id);
     if (!link?.parent_pi_session_id && !link?.parent_pi_session_path) return dto;
 
     const rawKind = link.lineage_kind?.trim().toLowerCase();
-    const kind = rawKind === 'handoff' || rawKind === 'delegate' || rawKind === 'sleep' ? rawKind : 'parent';
+    const kind =
+      rawKind === 'handoff' || rawKind === 'fork' || rawKind === 'delegate' || rawKind === 'sleep'
+        ? rawKind
+        : 'parent';
     const parentLink = link.parent_pi_session_id
       ? store.getPiSessionLinkByPiSessionId(link.parent_pi_session_id)
       : link.parent_pi_session_path
@@ -516,6 +525,71 @@ export function registerForumRoutes({
     }
   });
 
+  app.get('/topics/:topicId/forks', async (request) => {
+    requireAdmin(request);
+    const { topicId } = request.params as { topicId: string };
+    requireTopicVisible(topicId, request);
+    if (!forkService) throw app.httpErrors.serviceUnavailable('Fork service is unavailable');
+    const state = forkService.state(topicId);
+    return {
+      active: state.active ? mapForkOperationToDto(state.active) : null,
+      latest: state.latest ? mapForkOperationToDto(state.latest) : null,
+    };
+  });
+
+  app.get('/topics/:topicId/forks/boundaries', async (request) => {
+    requireAdmin(request);
+    const { topicId } = request.params as { topicId: string };
+    requireTopicVisible(topicId, request);
+    if (!forkService) throw app.httpErrors.serviceUnavailable('Fork service is unavailable');
+    return {
+      items: forkService.boundaries(topicId).map((boundary) => ({
+        postId: boundary.postId,
+        postNumber: boundary.postNumber,
+        excerpt: boundary.excerpt,
+        body: boundary.body,
+      })),
+    };
+  });
+
+  app.post('/topics/:topicId/forks', async (request, reply) => {
+    const user = requireAdmin(request);
+    const { topicId } = request.params as { topicId: string };
+    requireTopicVisible(topicId, request);
+    if (!forkService) throw app.httpErrors.serviceUnavailable('Fork service is unavailable');
+    const parsed = CreateForkRequestSchema.safeParse(request.body);
+    if (!parsed.success) throw app.httpErrors.badRequest(parsed.error.issues[0]?.message ?? 'Invalid fork request');
+    try {
+      const operation = await forkService.enqueue({
+        operationId: parsed.data.operationId,
+        topicId,
+        boundaryPostId: parsed.data.boundaryPostId,
+        initiatedBy: user.identityId,
+        title: parsed.data.title,
+        openingBody: parsed.data.openingBody,
+      });
+      reply.code(202);
+      reply.header('Location', `${request.url}/${encodeURIComponent(operation.id)}`);
+      return mapForkOperationToDto(operation);
+    } catch (error) {
+      if (error instanceof ForkConflictError) throw app.httpErrors.conflict(error.message);
+      throw error;
+    }
+  });
+
+  app.get('/topics/:topicId/forks/:operationId', async (request) => {
+    requireAdmin(request);
+    const { topicId, operationId } = request.params as { topicId: string; operationId: string };
+    requireTopicVisible(topicId, request);
+    if (!forkService) throw app.httpErrors.serviceUnavailable('Fork service is unavailable');
+    try {
+      return mapForkOperationToDto(forkService.get(topicId, operationId));
+    } catch (error) {
+      if (error instanceof ForkNotFoundError) throw app.httpErrors.notFound(error.message);
+      throw error;
+    }
+  });
+
   app.post('/topics/:topicId/handoff/draft', async (request) => {
     const user = requireScope(getCurrentUser(request), 'write');
     const { topicId } = request.params as { topicId: string };
@@ -701,8 +775,8 @@ export function registerForumRoutes({
       throw app.httpErrors.notFound('topic not found');
     }
     requireModerator(request, existing.tenant_id);
-    if (store.hasCompactionFence(topicId) && body.status !== 'open') {
-      throw app.httpErrors.conflict('Topic cannot be locked or archived until compaction recovery is dispatched');
+    if (store.hasForkFence(topicId) || (store.hasCompactionFence(topicId) && body.status !== 'open')) {
+      throw app.httpErrors.conflict('Topic status cannot be changed while the canonical conversation is fenced');
     }
 
     try {
@@ -736,6 +810,9 @@ export function registerForumRoutes({
       throw app.httpErrors.notFound('topic not found');
     }
     requireModerator(request, existing.tenant_id);
+    if (store.hasCompactionFence(topicId)) {
+      throw app.httpErrors.conflict('Topic cannot be changed while the canonical conversation is fenced');
+    }
 
     try {
       const topic = store.updateTopicTitle(topicId, body.title);
@@ -765,6 +842,9 @@ export function registerForumRoutes({
       throw app.httpErrors.notFound('topic not found');
     }
     requireModerator(request, topic.tenant_id);
+    if (store.hasCompactionFence(topicId)) {
+      throw app.httpErrors.conflict('Topic cannot be changed while the canonical conversation is fenced');
+    }
 
     if (body?.sticky === undefined && !Array.isArray(body?.tags)) {
       throw app.httpErrors.badRequest('sticky or tags is required');

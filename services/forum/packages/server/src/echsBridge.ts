@@ -683,6 +683,23 @@ export class EchsBridge {
     return typeof context?.leafEntryId === 'string' ? context.leafEntryId : null;
   }
 
+  async forkTopicConversation(
+    topicId: string,
+    opts: { operationId: string; expectedLeafId: string; boundaryEntryId: string }
+  ): Promise<{
+    child_session_id: string;
+    child_session_path: string;
+    inherited_generation: number;
+    active_entry_ids: string[];
+  }> {
+    const opened = await this.openTopicConversation(topicId);
+    return this.client.forkConversation(opened.conversationId, opts);
+  }
+
+  async acknowledgeFork(operationId: string, childSessionId: string): Promise<void> {
+    await this.client.acknowledgeForumFork(operationId, childSessionId);
+  }
+
   async compactTopicConversation(topicId: string, opts: {
     operationId: string;
     expectedLeafId: string;

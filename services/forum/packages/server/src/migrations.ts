@@ -1669,6 +1669,48 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 44,
+    name: 'durable-forum-native-forks',
+    up: (db) => {
+      db.exec(`
+        create table fork_operations (
+          id text primary key,
+          source_topic_id text not null,
+          source_session_id text not null,
+          source_pi_session_id text not null,
+          source_pi_session_path text not null,
+          boundary_post_id text not null,
+          boundary_pi_message_id text not null,
+          boundary_entry_id text not null,
+          expected_leaf_id text not null,
+          initiated_by text not null,
+          title text not null,
+          opening_body text not null,
+          status text not null default 'pending'
+            check (status in ('pending', 'running', 'needs_manual_review', 'succeeded', 'failed')),
+          prestaged_attachments_json text not null default '[]',
+          agent_result_json text,
+          child_topic_id text,
+          child_session_id text,
+          child_session_path text,
+          attempt_count integer not null default 0,
+          next_attempt_at text,
+          error_message text,
+          created_at text not null,
+          started_at text,
+          finished_at text,
+          foreign key (source_topic_id) references topics(id) on delete cascade,
+          foreign key (boundary_post_id) references posts(id) on delete cascade,
+          foreign key (initiated_by) references identities(id),
+          foreign key (child_topic_id) references topics(id) on delete set null
+        );
+        create unique index idx_fork_operations_active_source
+          on fork_operations(source_topic_id) where status in ('pending', 'running', 'needs_manual_review');
+        create index idx_fork_operations_due on fork_operations(status, next_attempt_at, created_at);
+      `);
+    },
+  },
 ];
 
 export const SCHEMA_VERSION: number = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;

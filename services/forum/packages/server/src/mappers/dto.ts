@@ -6,6 +6,7 @@ import type {
   CompactionCheckpointDispatchDto,
   CompactionOperationDto,
   ExternalRefDto,
+  ForkOperationDto,
   ForumDto,
   ForumThemeKey,
   IdentityDto,
@@ -32,6 +33,7 @@ import type {
 import type {
   CompactionOperation,
   ExternalRef,
+  ForkOperation,
   MessageDraft,
   MessageTemplate,
   PlanArtifact,
@@ -62,6 +64,20 @@ import type {
 } from './domain';
 
 type ChatCategorySummaryRow = ChatCategoryRow & { room_count: number };
+
+export function mapForkOperationToDto(operation: ForkOperation): ForkOperationDto {
+  return {
+    id: operation.id,
+    sourceTopicId: operation.sourceTopicId,
+    boundaryPostId: operation.boundaryPostId,
+    status: operation.status,
+    childTopicId: operation.childTopicId,
+    errorMessage: operation.errorMessage,
+    createdAt: operation.createdAt,
+    startedAt: operation.startedAt,
+    finishedAt: operation.finishedAt,
+  };
+}
 
 export function mapMessageDraftToDto(
   draft: MessageDraft,

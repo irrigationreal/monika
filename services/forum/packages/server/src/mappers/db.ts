@@ -3,6 +3,7 @@ import type {
   ExternalRef,
   ExternalRefKind,
   ExternalScopeKind,
+  ForkOperation,
   Identity,
   IdentityKind,
   MessageDraft,
@@ -21,6 +22,7 @@ import type {
   AttachmentRow,
   CompactionOperationRow,
   ExternalRefRow,
+  ForkOperationRow,
   IdentityRow,
   InviteRow,
   MessageDraftRow,
@@ -38,6 +40,26 @@ import type {
   WebAuthnCredentialRow,
 } from '../db';
 import type { Attachment, Invite, Plan, Session, SessionMessage, ToolRun, TopicAutoRun, UserFile } from './domain';
+
+export function mapForkOperationRowToDomain(row: ForkOperationRow): ForkOperation {
+  return {
+    id: row.id,
+    sourceTopicId: row.source_topic_id,
+    boundaryPostId: row.boundary_post_id,
+    boundaryEntryId: row.boundary_entry_id,
+    expectedLeafId: row.expected_leaf_id,
+    initiatedBy: row.initiated_by,
+    title: row.title,
+    openingBody: row.opening_body,
+    status: row.status,
+    childTopicId: row.child_topic_id,
+    childSessionId: row.child_session_id,
+    errorMessage: row.error_message,
+    createdAt: row.created_at,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+  };
+}
 
 export function mapTopicRowToDomain(row: TopicRow): Topic {
   const topic: Topic = {

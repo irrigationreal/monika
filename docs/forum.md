@@ -148,6 +148,31 @@ Implemented in `services/forum`:
 - Forum-native handoff is implemented with disposable draft generation and final
   confirmation that creates the destination topic, parented Pi session, lineage
   metadata, edited draft post, and first robot turn.
+- Forum-native fork is an admin-only, idle-only durable operation. V1 forks in the
+  same forum and cwd, from a canonical single-post user boundary selected by stable
+  forum post ID (the UI labels it with the forum post number). Agentd performs Pi's
+  exact before-user branch extraction with a detached manager, leaving parent bytes
+  and the loaded parent runtime unchanged. The forum copies the inherited active
+  projection and attachments, seeds the child's inherited dispatch generation, and
+  queues the edited opening replay only after materialization. Copied posts retain their
+  `follow_up` and remapped parent topology; the edited opening uses the selected source
+  post's remapped parent rather than the chronological projection tail. Attachment custody
+  is prestaged to operation-specific paths and verified against recorded size and SHA-256;
+  source post/attachment metadata is rechecked immediately before the source fence is
+  accepted. Successful finalization atomically relocates prestaged files to durable fork
+  attachment storage, while definitive failures remove prestage custody and startup removes
+  only bounded, old pre-row orphan directories. Materialization maps inherited canonical
+  message IDs to the copied child posts, so sync and dispatch catch-up cannot publish or
+  replay inherited history twice. Agentd hides unresolved children from session discovery,
+  and forum startup drains due fork recovery before enabling Pi sync and post dispatch. The
+  browser persists the client operation ID and request state before submission; after an
+  ambiguous HTTP response or reload it queries `GET /api/topics/:topicId/forks` for active/latest
+  state and reuses that exact ID only while acceptance itself is unknown. Agentd's
+  `fork_manual_recovery` response becomes the durable active forum status
+  `needs_manual_review`: it is not failed or retried, the source mutation fence and prestaged
+  custody remain in place, and the UI tells an operator that review is required. The admin API is
+  `GET /api/topics/:topicId/forks`, `GET /api/topics/:topicId/forks/boundaries`,
+  `POST /api/topics/:topicId/forks`, and `GET /api/topics/:topicId/forks/:operationId`.
 - `pi_session_links` stores `parent_pi_session_id`, `parent_pi_session_path`,
   `lineage_kind`, and `lineage_source`.
 - General topic responses expose only public-safe semantic lineage (`kind` and a
@@ -349,6 +374,10 @@ without creating another checkpoint or repeating compaction.
 
 Forum endpoints (admin only except operational-event visibility):
 
+- `GET /api/topics/:topicId/forks` (active/latest state for reload reconciliation)
+- `GET /api/topics/:topicId/forks/boundaries`
+- `POST /api/topics/:topicId/forks` (`202 Accepted`, durable and idempotent)
+- `GET /api/topics/:topicId/forks/:operationId`
 - `GET /api/topics/:topicId/operational-events`
 - `GET /api/topics/:topicId/compactions`
 - `POST /api/topics/:topicId/compactions` (`202 Accepted`, including idempotent repeats)

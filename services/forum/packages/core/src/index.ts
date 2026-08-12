@@ -6,6 +6,7 @@ export * from './domain/surfaces';
 export * from './domain/mentions';
 export * from './domain/access';
 export * from './domain/operationalEvents';
+export * from './domain/forks';
 export * from './domain/analytics';
 export * from './domain/messageTemplates';
 export * from './domain/messageDrafts';

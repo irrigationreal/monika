@@ -31,8 +31,12 @@ import type {
   CompactionCheckpointDispatchDto,
   CompactionOperationDto,
   CreateCompactionRequestDto,
+  CreateForkRequestDto,
   DiscordBridgeStatusDto,
   DiscordChannelMappingDto,
+  ForkBoundaryDto,
+  ForkOperationDto,
+  TopicForkStateDto,
   ForumApi,
   ForumDto,
   ForumLastPostDto,
@@ -205,6 +209,10 @@ export type {
   CompactionOperationDto,
   CompactionCheckpointDispatchDto,
   TopicCompactionStateDto,
+  ForkBoundaryDto,
+  ForkOperationDto,
+  TopicForkStateDto,
+  CreateForkRequestDto,
   ForumApi,
 };
 
@@ -830,6 +838,12 @@ export function createForumSdk(options?: ForumSdkOptions) {
         `/topics/${topicId}/compactions/${encodeURIComponent(operationId)}/retry-checkpoint`,
         { method: 'POST' }
       ),
+    getForkState: (topicId: string) => json<TopicForkStateDto>(`/topics/${topicId}/forks`),
+    listForkBoundaries: (topicId: string) => json<{ items: ForkBoundaryDto[] }>(`/topics/${topicId}/forks/boundaries`),
+    createFork: (topicId: string, payload: CreateForkRequestDto) =>
+      json<ForkOperationDto>(`/topics/${topicId}/forks`, { method: 'POST', body: JSON.stringify(payload) }),
+    getFork: (topicId: string, operationId: string) =>
+      json<ForkOperationDto>(`/topics/${topicId}/forks/${encodeURIComponent(operationId)}`),
     listPosts: (topicId: string, opts?: { page?: number; pageSize?: number; include?: string[] | string }) => {
       const params = new URLSearchParams();
       if (opts?.page) params.set('page', String(opts.page));

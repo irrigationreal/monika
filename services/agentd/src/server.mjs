@@ -17,6 +17,13 @@ import {
   ConversationConflictError,
 } from "./compaction-operation.mjs";
 import {
+  assertForumForkSourceMutable,
+  ForumForkConflictError,
+  ForumForkLedger,
+  filterForumForkSessionDiscovery,
+  forkConversationBeforeUser,
+} from './forum-fork-operation.mjs';
+import {
   createProvenanceState,
   discardDispatch,
   extractMessageProvenance,
@@ -72,6 +79,7 @@ import {
   createAgentSessionRuntime,
   createAgentSessionServices,
   convertToLlm,
+  CURRENT_SESSION_VERSION,
   serializeConversation,
   SessionManager,
   ModelRuntime,
@@ -103,6 +111,10 @@ const SUBAGENT_OPERATOR_ROOT = path.resolve(
 const RUNTIME_INSTANCE_FILE =
   process.env.MONIKA_RUNTIME_INSTANCE_FILE ??
   "/run/monika-runtime-instance.json";
+const FORUM_FORK_OPERATION_ROOT = path.resolve(
+  process.env.MONIKA_AGENTD_FORUM_FORK_OPERATION_ROOT ?? '/data/agentd-operations/forum-forks',
+);
+const forumForkLedger = new ForumForkLedger(FORUM_FORK_OPERATION_ROOT);
 // Agentd owns background lifetime. Pi's print-mode auto-drain must not await
 // subagents before returning a forum turn. Persist lifecycle/results so a
 // recreated agentd runtime can deliver completed work exactly once.
@@ -381,7 +393,7 @@ async function memstoreDeployState() {
 
 function conversationIsActive(conv) {
   return Boolean(
-    conv.current || conv.pendingMutations > 0 || hasActiveBackgroundWork(conv),
+    conv.current || conv.pendingMutations > 0 || conv.forkOperation || hasActiveBackgroundWork(conv),
   );
 }
 
@@ -1130,6 +1142,7 @@ async function conversationFromRuntime(runtime, cwd) {
     subagents: { runs: new Map() },
     subagentLifecycle: runtime.services.subagentLifecycle,
     unsubscribe: null,
+    forkOperation: null,
   };
   // A prior process may have persisted both the assistant response and its
   // canonical completion provenance before crashing ahead of result-file ack.
@@ -1316,14 +1329,29 @@ async function sessionSummaryFromPath(p) {
   const [firstLine, stat] = await Promise.all([readFirstLine(p), fs.stat(p)]);
   const header = JSON.parse(firstLine || "{}");
   if (header.type !== "session") return null;
+  let forumFork = false;
+  if (!isPathWithin(SUBAGENT_SESSION_ROOT, p)) {
+    try {
+      forumFork = SessionManager.open(p, undefined, header.cwd)
+        .getBranch()
+        .some((entry) =>
+          entry.type === 'custom' &&
+          entry.customType === 'monika.lineage' &&
+          entry.data?.kind === 'fork' &&
+          entry.data?.source === 'forum'
+        );
+    } catch {}
+  }
   return {
     id: header.id,
+    version: header.version ?? null,
+    current_format: header.version === CURRENT_SESSION_VERSION,
     path: p,
     cwd: header.cwd,
     timestamp: header.timestamp,
     kind: isPathWithin(SUBAGENT_SESSION_ROOT, p)
       ? "subagent"
-      : p.includes("/forks/")
+      : forumFork || p.includes("/forks/")
         ? "fork"
         : "normal",
     parent_session_path: header.parentSession ?? null,
@@ -1357,8 +1385,10 @@ async function scanSessions() {
     }
   }
   await walk(root);
-  out.sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
-  return out;
+  const forkRecords = await forumForkLedger.records();
+  const visible = filterForumForkSessionDiscovery(out, forkRecords);
+  visible.sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
+  return visible;
 }
 
 async function findSession(sessionRef) {
@@ -1824,6 +1854,7 @@ async function claimExternalSession(sessionRef, body) {
   const timeoutMs = Number.isFinite(timeoutValue) ? Math.min(30_000, Math.max(1_000, timeoutValue)) : 10_000;
 
   return withSessionOperation(session.id, async () => {
+    await assertForumForkSourceMutable(forumForkLedger, session.id);
     const existingLease = sessionOwnership.get(session.id);
     if (existingLease && existingLease.clientId !== clientId) {
       return {
@@ -2168,11 +2199,16 @@ const server = http.createServer(async (req, res) => {
         });
       }
       if (method === "POST" && action === "claim") {
-        const result = await claimExternalSession(
-          session.id,
-          await readBody(req),
-        );
-        return json(res, result.status, result.body);
+        try {
+          const result = await claimExternalSession(
+            session.id,
+            await readBody(req),
+          );
+          return json(res, result.status, result.body);
+        } catch (error) {
+          if (error instanceof ForumForkConflictError) return conflict(res, error);
+          throw error;
+        }
       }
       if (method === "POST" && action === "heartbeat") {
         const body = await readBody(req);
@@ -2219,15 +2255,29 @@ const server = http.createServer(async (req, res) => {
           ? await subagentCancellation.read(operationId)
           : await subagentCancellation.latestForSession(session.id, session.path);
         if (!operation || operation.parent_session_id !== session.id) return notFound(res);
-        const reconciled = await withSessionOperation(session.id, () => reconcileCancellationOperation(session, operation));
-        return json(res, reconciled.state === 'stopping' ? 202 : 200, cancellationPublic(reconciled));
+        try {
+          const reconciled = await withSessionOperation(session.id, async () => {
+            await assertForumForkSourceMutable(forumForkLedger, session.id);
+            return reconcileCancellationOperation(session, operation);
+          });
+          return json(res, reconciled.state === 'stopping' ? 202 : 200, cancellationPublic(reconciled));
+        } catch (error) {
+          if (error instanceof ForumForkConflictError) return conflict(res, error);
+          throw error;
+        }
       }
       if (method === 'POST') {
         const body = await readBody(req);
         try {
-          const result = await withSessionOperation(session.id, () => interruptSession(session, body));
+          const result = await withSessionOperation(session.id, async () => {
+            await assertForumForkSourceMutable(forumForkLedger, session.id);
+            return interruptSession(session, body);
+          });
           return json(res, result.state === 'stopping' ? 202 : 200, cancellationPublic(result));
-        } catch (error) { return badRequest(res, error instanceof Error ? error.message : String(error)); }
+        } catch (error) {
+          if (error instanceof ForumForkConflictError) return conflict(res, error);
+          return badRequest(res, error instanceof Error ? error.message : String(error));
+        }
       }
     }
 
@@ -2263,6 +2313,17 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { conversation: conversationRecord(conv) });
     }
 
+    const forkAckMatch = url.pathname.match(/^\/v1\/forum-forks\/([^/]+)\/ack$/);
+    if (method === 'POST' && forkAckMatch) {
+      const body = await readBody(req);
+      const acknowledged = await forumForkLedger.acknowledge(
+        decodeURIComponent(forkAckMatch[1]),
+        typeof body.child_session_id === 'string' ? body.child_session_id : '',
+      );
+      if (!acknowledged) return conflict(res, new ForumForkConflictError('fork_ack_conflict', 'Fork is not ready for this acknowledgement'));
+      return json(res, 200, { acknowledged: true });
+    }
+
     const convMatch = url.pathname.match(
       /^\/v1\/conversations\/([^/]+)(?:\/(.*))?$/,
     );
@@ -2270,6 +2331,14 @@ const server = http.createServer(async (req, res) => {
       const conv = conversations.get(decodeURIComponent(convMatch[1]));
       const tail = convMatch[2] ?? "";
       if (!conv) return notFound(res);
+      if (method !== 'GET' && tail !== 'fork') {
+        try {
+          await assertForumForkSourceMutable(forumForkLedger, conv.piSessionId);
+        } catch (error) {
+          if (error instanceof ForumForkConflictError) return conflict(res, error);
+          throw error;
+        }
+      }
 
       if (method === "GET" && tail === "")
         return json(res, 200, { conversation: conversationRecord(conv) });
@@ -2313,6 +2382,35 @@ const server = http.createServer(async (req, res) => {
           return json(res, 200, await compactConversation(conv, body));
         } catch (err) {
           if (err instanceof ConversationConflictError) return conflict(res, err);
+          if (err instanceof TypeError) return badRequest(res, err.message);
+          throw err;
+        }
+      }
+      if (method === 'POST' && tail === 'fork') {
+        const body = await readBody(req);
+        try {
+          const sourceFenced = await forumForkLedger.hasSourceFence(conv.piSessionId);
+          const retryRecord = typeof body.operation_id === 'string' ? await forumForkLedger.read(body.operation_id) : null;
+          if (sourceFenced && retryRecord?.source_session_id !== conv.piSessionId) {
+            throw new ForumForkConflictError('fork_in_progress', 'Another canonical fork is unresolved');
+          }
+          return await withSessionOperation(conv.piSessionId, async () => {
+            const lockedSourceFenced = await forumForkLedger.hasSourceFence(conv.piSessionId);
+            const lockedRetryRecord = typeof body.operation_id === 'string' ? await forumForkLedger.read(body.operation_id) : null;
+            if (lockedSourceFenced && lockedRetryRecord?.source_session_id !== conv.piSessionId) {
+              throw new ForumForkConflictError('fork_in_progress', 'Another canonical fork is unresolved');
+            }
+            const pendingMessageCount = Number(conv.session.pendingMessageCount ?? 0);
+            if (conv.current || conv.session.isStreaming || conv.session.isCompacting || pendingMessageCount > 0 || conv.session.agent?.hasQueuedMessages?.() || conv.compactionOperation || hasActiveBackgroundWork(conv)) {
+              throw new ForumForkConflictError('conversation_busy', 'Conversation must be idle before fork');
+            }
+            const operation = forkConversationBeforeUser({ conv, input: body, ledger: forumForkLedger });
+            conv.forkOperation = operation;
+            try { return json(res, 200, await operation); }
+            finally { if (conv.forkOperation === operation) conv.forkOperation = null; }
+          });
+        } catch (err) {
+          if (err instanceof ForumForkConflictError) return conflict(res, err);
           if (err instanceof TypeError) return badRequest(res, err.message);
           throw err;
         }
