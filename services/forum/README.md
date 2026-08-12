@@ -79,7 +79,7 @@ packages/
 
 ## Quick start (local)
 
-> Requires Node 20+ and pnpm 9+ (10.x recommended).
+> Requires Node 20.9+ and pnpm 9+ (10.x recommended).
 
 ```bash
 corepack enable
@@ -96,6 +96,9 @@ Option A: Docker (recommended)
 CODEX_FORUM_BASE_URL=http://localhost:4310 \
   docker compose up -d
 ```
+
+Each architecture-native image build validates that the production deployment can load Sharp and libvips and complete a
+JPEG transform. The forum runtime smoke repeats that transform against the final image.
 
 Option B: Local dev
 

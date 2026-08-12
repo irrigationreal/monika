@@ -11,7 +11,7 @@ The test starts an isolated throwaway container, waits for /healthz, verifies
 static frontend serving, verifies shipped project and third-party license texts,
 checks that representative dev-only packages (vitest, vite, typescript, eslint,
 playwright) are absent from node_modules, and confirms runtime-critical packages
-(tsx, fastify, better-sqlite3, sharp) are present.
+(tsx, fastify, better-sqlite3, sharp) are present and native image processing works.
 USAGE
 }
 
@@ -256,17 +256,22 @@ else
 fi
 
 SHARP_CHECK=$(docker exec "$CONTAINER_NAME" node -e "
-  try {
-    require('sharp');
+  (async () => {
+    const sharp = require('sharp');
+    const jpeg = await sharp({
+      create: { width: 3, height: 2, channels: 3, background: { r: 20, g: 80, b: 140 } }
+    }).jpeg().toBuffer();
+    const metadata = await sharp(jpeg).metadata();
+    if (metadata.format !== 'jpeg' || metadata.width !== 3 || metadata.height !== 2) {
+      throw new Error('unexpected transform metadata: ' + JSON.stringify(metadata));
+    }
     console.log('ok');
-  } catch(e) {
-    console.log('fail: ' + e.message);
-  }
+  })().catch((error) => console.log('fail: ' + error.message));
 " 2>&1)
 if [ "$SHARP_CHECK" = "ok" ]; then
-  pass "sharp loads successfully"
+  pass "sharp loads and transforms an image successfully"
 else
-  fail "sharp failed to load: $SHARP_CHECK"
+  fail "sharp runtime transform failed: $SHARP_CHECK"
   exit 1
 fi
 endsection
