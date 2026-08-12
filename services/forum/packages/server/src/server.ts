@@ -1,12 +1,11 @@
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { existsSync, mkdirSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
 import sensible from '@fastify/sensible';
-import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
 
 import { MessageDraftService, MessageTemplateService } from '@irrigationreal/codex-forum-core';
@@ -94,6 +93,7 @@ import { CompactionService } from './services/compactionService';
 import { getEmailService } from './services/emailService';
 import { PiSessionSyncService } from './services/piSessionSyncService';
 import { PostDispatchService } from './services/postDispatchService';
+import { normalizeApiPrefix, registerSpaFallback, registerStaticAssets } from './services/staticServing';
 import { WebhookService } from './services/webhookService';
 import { ForumStore } from './store';
 import { RedisStreamBus, createStreamBus } from './streamBus';
@@ -210,11 +210,6 @@ if (!PASSWORD_LOGIN_ENABLED && !store.hasWebAuthnAdmin()) {
     'CODEX_FORUM_PASSWORD_LOGIN_ENABLED=0 requires at least one admin account with a registered WebAuthn credential'
   );
 }
-const normalizeApiPrefix = (prefix: string): string => {
-  const trimmed = prefix.trim();
-  if (!trimmed || trimmed === '/') return '';
-  return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
-};
 const apiPrefix = normalizeApiPrefix(API_PREFIX);
 const linkIssuer = new SqliteOneTimeLinkIssuer(db, `${BASE_URL}${apiPrefix}`);
 const webhookService = new WebhookService(store);
@@ -377,27 +372,14 @@ if (!existsSync(AVATARS_DIR)) {
 if (!existsSync(USER_FILES_DIR)) {
   mkdirSync(USER_FILES_DIR, { recursive: true });
 }
-// Serve static files from uploads directory.
-// Security note: do NOT expose the entire uploads root publicly.
-// Only avatars are served as static assets; other uploads must go through authenticated routes.
-await app.register(fastifyStatic, {
-  root: AVATARS_DIR,
-  prefix: '/uploads/avatars/',
-  decorateReply: false,
-});
-
-// Serve the built Vue application when the Docker image includes it. API routes
-// are registered below and keep their normal behavior; unknown non-API GETs fall
-// back to index.html for client-side routing.
+// Expose only generated avatars from upload storage, plus the built Vue app.
+// Other uploads remain behind authenticated routes. Hidden files are denied in
+// both roots by the shared production registration.
 const publicDir = process.env['CODEX_FORUM_PUBLIC_DIR'] ?? resolve(process.cwd(), '../../public');
-const publicIndex = join(publicDir, 'index.html');
-if (existsSync(publicDir)) {
-  await app.register(fastifyStatic, {
-    root: publicDir,
-    prefix: '/',
-    decorateReply: false,
-  });
-}
+const publicIndex = await registerStaticAssets(app, {
+  avatarsDir: AVATARS_DIR,
+  publicDir,
+});
 
 // Root health check (kept unprefixed for container health checks)
 // Avoid duplicate registration when API_PREFIX is empty (system routes already register /healthz).
@@ -499,16 +481,7 @@ if (apiPrefix) {
   await app.register(registerApiRoutes);
 }
 
-app.setNotFoundHandler((request, reply) => {
-  const url = request.url ?? '';
-  const wantsHtml = String(request.headers.accept ?? '').includes('text/html');
-  const isApi = apiPrefix ? url.startsWith(apiPrefix + '/') || url === apiPrefix : false;
-  if (request.method === 'GET' && wantsHtml && !isApi && existsSync(publicIndex)) {
-    reply.header('content-type', 'text/html; charset=utf-8');
-    return reply.send(readFileSync(publicIndex, 'utf8'));
-  }
-  return reply.status(404).send({ code: 'not_found', message: 'Not Found' });
-});
+registerSpaFallback(app, { apiPrefix, publicIndex });
 
 await app.listen({ port: PORT, host: '0.0.0.0' });
 
