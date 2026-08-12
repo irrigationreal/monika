@@ -73,9 +73,15 @@ RUN VITE_BUILD_COMMIT="$MONIKA_BUILD_COMMIT" \
 # Deploy the server package with only production dependencies.
 # pnpm deploy creates a standalone directory with the package, its workspace
 # dependencies (copied into node_modules), and only production npm packages.
-# Native modules (better-sqlite3, sharp) are deployed from the builder where
-# their install scripts have already run; the runtime needs no build toolchain.
+# Native runtime dependencies are deployed from the builder. better-sqlite3 is
+# compiled there; Sharp 0.35's platform packages and bundled libvips are carried
+# into the deployment without requiring a runtime build toolchain.
 RUN pnpm --filter @irrigationreal/codex-forum-server deploy --prod --legacy /app/deploy
+
+# Every native architecture build must prove that the production deployment
+# contains a loadable Sharp addon/libvips pair before the image can be published.
+# The runtime smoke repeats this assertion against the final image.
+RUN cd /app/deploy && node -e "const sharp=require('sharp'); (async()=>{const jpeg=await sharp({create:{width:3,height:2,channels:3,background:{r:20,g:80,b:140}}}).jpeg().toBuffer(); const metadata=await sharp(jpeg).metadata(); if(metadata.format!=='jpeg'||metadata.width!==3||metadata.height!==2) throw new Error('unexpected Sharp transform metadata: '+JSON.stringify(metadata)); console.log('Sharp '+sharp.versions.sharp+' / libvips '+sharp.versions.vips+' production transform passed')})().catch(error=>{console.error(error);process.exit(1)})"
 
 # -----------------------------------------------------------------------------
 # Stage 3: Production runtime

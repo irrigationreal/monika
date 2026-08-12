@@ -216,7 +216,9 @@ The script verifies:
 5. runtime-critical packages (tsx, fastify, better-sqlite3, sharp) are present;
 6. workspace packages (core, contracts, adapters) are present with source files;
 7. build toolchain (python3, make, g++, pnpm) is absent from the runtime image;
-8. native modules (better-sqlite3, sharp) load successfully.
+8. native modules load successfully, including a real Sharp JPEG transform and metadata read. The Containerfile performs
+   the same Sharp transform against the production deployment during every architecture-native image build, before
+   publication.
 
 ## Test compose
 
