@@ -5,8 +5,8 @@ import type {
   AccessRuleScopeKind,
   AnalyticsAudience,
   AnalyticsBucket,
-  ForumVisibility,
   ForkOperationStatus,
+  ForumVisibility,
   MessageDraftContext,
   MessageTemplateContext,
   MessageTemplateForumScope,
@@ -931,6 +931,8 @@ export interface AuthIdentityDto {
    */
   hasPrivateEmail?: boolean;
   hasPassword?: boolean;
+  /** Private account preference; returned only from authenticated self endpoints. */
+  quickReplyDockedByDefault?: boolean;
 }
 
 export const RegistrationModeValues = ['disabled', 'invite-only', 'public'] as const;
@@ -1002,6 +1004,11 @@ export interface InviteInfoDto {
 export interface UpdatePrivateEmailResponseDto {
   ok: boolean;
   hasPrivateEmail: boolean;
+}
+
+export interface UpdateQuickReplyPreferenceResponseDto {
+  ok: boolean;
+  quickReplyDockedByDefault: boolean;
 }
 
 export interface ChangePasswordRequest {

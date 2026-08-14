@@ -30,6 +30,28 @@ describe('Profile routes visibility / privacy', () => {
     return app;
   }
 
+  it('omits private quick-reply preferences from identity and public profile responses', async () => {
+    const app = await buildApp();
+    const profileOwner = store.createIdentityWithPassword('Owner', 'owner', 'pw-hash', 'human');
+    const viewer = store.createIdentityWithPassword('Viewer', 'viewer', 'pw-hash', 'human');
+    store.createAuthSession('viewer-token', viewer.id);
+    store.setIdentityQuickReplyDockDefault(profileOwner.id, true);
+
+    const identityResponse = await app.inject({ method: 'GET', url: `/identities/${profileOwner.id}` });
+    expect(identityResponse.statusCode).toBe(200);
+    expect(identityResponse.json()).not.toHaveProperty('quickReplyDockedByDefault');
+
+    const profileResponse = await app.inject({
+      method: 'GET',
+      url: `/profiles/${profileOwner.id}`,
+      headers: { authorization: 'Bearer viewer-token' }
+    });
+    expect(profileResponse.statusCode).toBe(200);
+    expect(profileResponse.json()).not.toHaveProperty('quickReplyDockedByDefault');
+
+    await app.close();
+  });
+
   it('hides posts from admin-only forums for non-admin viewers', async () => {
     const app = await buildApp();
 

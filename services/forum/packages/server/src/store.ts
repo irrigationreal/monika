@@ -4332,6 +4332,15 @@ export class ForumStore {
       .run(emailAddress ?? null, now, identityId);
   }
 
+  setIdentityQuickReplyDockDefault(identityId: string, enabled: boolean): void {
+    const existing = this.getIdentity(identityId);
+    if (!existing) throw new Error('identity not found');
+    this.db
+      .prepare('update identities set quick_reply_docked_by_default = ?, updated_at = ? where id = ?')
+      .run(enabled ? 1 : 0, nowIso(), identityId);
+    this.invalidateIdentityCache(identityId);
+  }
+
   getIdentityPostCount(identityId: string): number {
     const result = this.db
       .prepare('select count(*) as count from posts where author_id = ? and deleted_at is null')

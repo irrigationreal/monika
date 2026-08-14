@@ -4,8 +4,8 @@ import type {
   ExternalRefKind,
   ExternalScopeKind,
   ForkOperation,
-  Identity,
   IdentityKind,
+  IdentityPrivate,
   MessageDraft,
   MessageTemplate,
   Post,
@@ -177,7 +177,7 @@ export function mapWebAuthnCredentialRowToDomain(row: WebAuthnCredentialRow): We
   };
 }
 
-export function mapIdentityRowToDomain(row: IdentityRow): Identity {
+export function mapIdentityRowToDomain(row: IdentityRow): IdentityPrivate {
   return {
     id: row.id,
     tenantId: row.tenant_id,
@@ -188,6 +188,10 @@ export function mapIdentityRowToDomain(row: IdentityRow): Identity {
     location: row.location,
     signature: row.signature,
     theme: row.theme,
+    username: row.username,
+    passwordHash: row.password_hash,
+    privateEmail: row.private_email,
+    quickReplyDockedByDefault: Boolean(row.quick_reply_docked_by_default),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

@@ -7,11 +7,12 @@ import {
   LoginRequestSchema,
   RegisterRequestSchema,
   UpdatePrivateEmailRequestSchema,
+  UpdateQuickReplyPreferenceRequestSchema,
 } from '@irrigationreal/codex-forum-contracts';
 
 import { clearBrowserSession, issueBrowserSession } from '../auth/browserSession';
 import { mapIdentityRowToDomain, mapInviteRowToDomain } from '../mappers/db';
-import { mapIdentityToDto, mapInviteToDto } from '../mappers/dto';
+import { mapAuthenticatedIdentityToDto, mapIdentityToDto, mapInviteToDto } from '../mappers/dto';
 import { PASSWORD_LOGIN_ENABLED } from '../runtimeConfig';
 import {
   API_KEY_PREFIX,
@@ -137,15 +138,7 @@ export function registerAuthRoutes({
     if (!identity) {
       return { identity: null };
     }
-    const identityDto = mapIdentityToDto(mapIdentityRowToDomain(identity));
-    return {
-      identity: {
-        ...identityDto,
-        username: identity.username,
-        hasPrivateEmail: Boolean(identity.private_email),
-        hasPassword: Boolean(identity.password_hash),
-      },
-    };
+    return { identity: mapAuthenticatedIdentityToDto(mapIdentityRowToDomain(identity)) };
   });
 
   app.get('/api-keys', async (request) => {
@@ -275,6 +268,13 @@ export function registerAuthRoutes({
     store.setIdentityPrivateEmail(user.identityId, normalized);
 
     return { ok: true, hasPrivateEmail: Boolean(normalized) };
+  });
+
+  app.patch('/me/preferences/quick-reply', async (request) => {
+    const user = requireScope(getCurrentUser(request), 'write');
+    const body = parseBody(app, UpdateQuickReplyPreferenceRequestSchema, request.body);
+    store.setIdentityQuickReplyDockDefault(user.identityId, body.quickReplyDockedByDefault);
+    return { ok: true, quickReplyDockedByDefault: body.quickReplyDockedByDefault };
   });
 
   // Password change (self-service)

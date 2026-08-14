@@ -56,6 +56,7 @@ type MockState = {
   compactionRequests: Array<Record<string, unknown>>;
   messageTemplates: MessageTemplateDto[];
   drafts: Record<string, MessageDraftDto>;
+  quickReplyDockedByDefault: boolean;
 };
 
 const REGULAR_TOKEN = 'token-regular';
@@ -124,6 +125,7 @@ function createMockState(): MockState {
     operationalEventsByTopic: {},
     compactionOperations: {},
     compactionRequests: [],
+    quickReplyDockedByDefault: false,
     messageTemplates: [
       {
         id: 'template-reply',
@@ -451,8 +453,18 @@ async function attachMockApi(target: Page | BrowserContext, state: MockState): P
           ? {
             ...identity,
               hasPrivateEmail: false,
+              quickReplyDockedByDefault: state.quickReplyDockedByDefault,
           }
           : null,
+      });
+      return;
+    }
+
+    if (path === '/api/me/preferences/quick-reply' && method === 'PATCH') {
+      state.quickReplyDockedByDefault = Boolean(payload?.quickReplyDockedByDefault);
+      await fulfillJson(route, 200, {
+        ok: true,
+        quickReplyDockedByDefault: state.quickReplyDockedByDefault,
       });
       return;
     }
@@ -1244,6 +1256,106 @@ test.describe('Threading and reply flows', () => {
     expect(blockBox.width).toBeLessThanOrEqual(contentBox.width + 1);
   });
 
+  test('quick reply dock preserves one live composer, focus, files, and layout across presentation states', async ({
+    page,
+    context,
+  }) => {
+    const state = createMockState();
+    state.quickReplyDockedByDefault = true;
+    await attachMockApi(page, state);
+    await setAuthTokens(context, REGULAR_TOKEN);
+    await page.goto('/');
+    const fixture = await createFixture(page, { postCount: 3, includeLocked: true });
+
+    await page.goto(`/topics/${fixture.topicId}`);
+    const composer = page.locator('#quick-reply-composer');
+    const textarea = quickReplyBox(page);
+    await expect(composer).toHaveClass(/vb-quick-reply--docked/);
+    await expect(textarea).toBeVisible();
+    await expect(textarea).toHaveCount(1);
+    await expect(textarea).not.toBeFocused();
+    await textarea.fill('Dock state survives');
+    await expect(composer).toContainText('Draft saved');
+
+    await composer.getByRole('button', { name: 'Options' }).click();
+    await composer.locator('input[type="file"]').setInputFiles({
+      name: 'dock-note.txt',
+      mimeType: 'text/plain',
+      buffer: Buffer.from('dock attachment'),
+    });
+    await expect(composer.locator('.vb-attachment-selected')).toContainText('dock-note.txt');
+
+    await composer.getByRole('button', { name: 'Collapse' }).click();
+    const expand = composer.getByRole('button', { name: 'Expand' });
+    await expect(expand).toBeFocused();
+    await expect(composer).toHaveClass(/vb-quick-reply--collapsed/);
+    await expect(composer.locator('.vb-quick-reply-compact-status')).toContainText('Draft saved');
+    await expect(textarea).toBeHidden();
+    await expect(textarea).toHaveCount(1);
+
+    await expand.click();
+    await expect(textarea).toBeFocused();
+    await expect(textarea).toHaveValue('Dock state survives');
+    await expect(composer.locator('.vb-attachment-selected')).toContainText('dock-note.txt');
+
+    page.once('dialog', async (dialog) => {
+      expect(dialog.message()).toContain('Selected files are not saved with drafts');
+      await dialog.dismiss();
+    });
+    await composer.getByRole('link', { name: 'Open full editor' }).click();
+    await expect(page).toHaveURL(new RegExp(`/topics/${fixture.topicId}$`));
+    await expect(composer.locator('.vb-attachment-selected')).toContainText('dock-note.txt');
+
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await expect(page.locator('.vb-scroll-top')).toHaveClass(/visible/);
+    const dockBox = await composer.boundingBox();
+    const scrollTopBox = await page.locator('.vb-scroll-top').boundingBox();
+    expect(dockBox).not.toBeNull();
+    expect(scrollTopBox).not.toBeNull();
+    if (!dockBox || !scrollTopBox) throw new Error('Quick Reply dock layout boxes unavailable');
+    expect(scrollTopBox.y + scrollTopBox.height).toBeLessThanOrEqual(dockBox.y + 1);
+    const reservedBottom = await page
+      .locator('.vb-topic-with-reply-dock--expanded')
+      .evaluate((element) => Number.parseFloat(getComputedStyle(element).paddingBottom));
+    expect(reservedBottom).toBeGreaterThanOrEqual(dockBox.height);
+
+    await composer.getByRole('button', { name: 'Return inline' }).click();
+    await expect(composer).not.toHaveClass(/vb-quick-reply--docked/);
+    await expect(textarea).toBeFocused();
+    await expect(textarea).toHaveValue('Dock state survives');
+
+    await page.getByRole('button', { name: 'Quick Reply' }).first().click();
+    await expect(textarea).toBeFocused();
+    await composer.getByRole('button', { name: 'Return inline' }).click();
+    await page.getByRole('button', { name: 'Quote' }).first().click();
+    await expect(composer).toHaveClass(/vb-quick-reply--docked/);
+    await expect(textarea).toBeFocused();
+    await expect(textarea).toHaveValue(/\[QUOTE=/);
+
+    await composer.getByRole('button', { name: 'Options' }).click();
+    await composer.locator('input[type="file"]').setInputFiles([]);
+    await textarea.fill('Post without closing the dock');
+    await composer.getByRole('button', { name: 'Post Quick Reply' }).click();
+    await expect(composer).toHaveClass(/vb-quick-reply--docked/);
+    await expect(textarea).toHaveValue('');
+
+    expect(fixture.lockedTopicId).not.toBeNull();
+    await page.goto(`/topics/${fixture.lockedTopicId}`);
+    await expect(page.locator('.vb-locked-badge')).toBeVisible();
+    await expect(composer).not.toHaveClass(/vb-quick-reply--docked/);
+    await expect(composer.getByRole('button', { name: 'Keep Quick Reply visible while reading' })).toHaveCount(0);
+    await page.goto(`/topics/${fixture.topicId}`);
+    await expect(page.locator('.vb-locked-badge')).toHaveCount(0);
+    await expect(composer).toHaveClass(/vb-quick-reply--docked/);
+
+    await page.setViewportSize({ width: 390, height: 800 });
+    await page.reload();
+    await expect(composer).toHaveClass(/vb-quick-reply--docked/);
+    await expect(composer).toHaveClass(/vb-quick-reply--collapsed/);
+    await expect(textarea).toBeHidden();
+    await expect(textarea).toHaveCount(1);
+  });
+
   test('autosaved reply is shared by quick and full composers and consumed on post', async ({ page, context }) => {
     const state = createMockState();
     await attachMockApi(page, state);
@@ -1277,6 +1389,7 @@ test.describe('Threading and reply flows', () => {
     const fixture = await createFixture(page, { postCount: 2 });
 
     await page.goto(`/topics/${fixture.topicId}`);
+    await page.locator('.vb-quick-reply').getByRole('button', { name: 'Options' }).click();
     const quickPicker = page.locator('.vb-quick-reply [data-testid="message-template-picker"]');
     await quickPicker.locator('[data-testid="message-template-select"]').selectOption('template-reply');
     await quickPicker.locator('[data-testid="message-template-insert"]').click();
@@ -1317,6 +1430,7 @@ test.describe('Threading and reply flows', () => {
 
     for (const theme of ['classic-dark', 'classic-light', 'cn-portal-2000s']) {
       await page.goto(`/topics/${fixture.topicId}`);
+      await page.locator('.vb-quick-reply').getByRole('button', { name: 'Options' }).click();
       await expect(page.locator('[data-testid="message-template-select"]')).toBeEnabled();
       await page.evaluate((themeKey) => document.documentElement.setAttribute('data-theme', themeKey), theme);
       await expect(page.locator('html')).toHaveAttribute('data-theme', theme);

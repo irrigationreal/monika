@@ -7,6 +7,7 @@ type OpenApiOperation = {
     required?: boolean;
     content?: Record<string, { schema?: Record<string, unknown> }>;
   };
+  responses?: Record<string, { content?: Record<string, { schema?: Record<string, unknown> }> }>;
 };
 
 describe('OpenAPI request bodies', () => {
@@ -23,5 +24,27 @@ describe('OpenAPI request bodies', () => {
         additionalProperties: false,
       });
     }
+  });
+
+  it('documents the authenticated Quick Reply preference request and response', () => {
+    const document = buildOpenApiDocument() as {
+      paths: Record<string, { patch?: OpenApiOperation }>;
+    };
+    const operation = document.paths['/me/preferences/quick-reply']?.patch;
+
+    expect(operation?.requestBody?.required).toBe(true);
+    expect(operation?.requestBody?.content?.['application/json']?.schema).toMatchObject({
+      type: 'object',
+      required: ['quickReplyDockedByDefault'],
+      properties: { quickReplyDockedByDefault: { type: 'boolean' } },
+    });
+    expect(operation?.responses?.['200']?.content?.['application/json']?.schema).toMatchObject({
+      type: 'object',
+      required: ['ok', 'quickReplyDockedByDefault'],
+      properties: {
+        ok: { type: 'boolean' },
+        quickReplyDockedByDefault: { type: 'boolean' },
+      },
+    });
   });
 });

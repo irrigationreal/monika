@@ -1,7 +1,7 @@
-import type { IdentityService } from '../interfaces/services';
-import type { IdentityRepository } from '../interfaces/repositories';
-import type { IdentityPublic, IdentityPrivate } from '../domain/entities';
+import type { IdentityPrivate, IdentityPublic } from '../domain/entities';
 import type { TopicId } from '../domain/ids';
+import type { IdentityRepository } from '../interfaces/repositories';
+import type { IdentityService } from '../interfaces/services';
 
 export class IdentityServiceImpl implements IdentityService {
   constructor(private readonly repo: IdentityRepository) {}
@@ -21,6 +21,7 @@ function toPublicIdentity(identity: IdentityPrivate): IdentityPublic {
     username: _username,
     passwordHash: _passwordHash,
     privateEmail: _privateEmail,
+    quickReplyDockedByDefault: _quickReplyDockedByDefault,
     ...publicIdentity
   } = identity;
   return publicIdentity;

@@ -76,6 +76,21 @@ curl -sS -X POST "$CODEX_FORUM_BASE_URL/api/message-templates" \
 
 Update, delete, and reorder requests must send the current integer `revision`.
 
+## Quick Reply account preference
+
+The dock default is private account state and requires the signed-in browser session:
+
+```bash
+curl -sS -X PATCH -b forum.cookies \
+  -H 'Content-Type: application/json' \
+  -H "Origin: $CODEX_FORUM_BASE_URL" \
+  -d '{"quickReplyDockedByDefault":true}' \
+  "$CODEX_FORUM_BASE_URL/api/me/preferences/quick-reply"
+```
+
+The preference defaults to `false`, is returned by `/api/auth/me`, and is intentionally omitted from public profile
+responses. Temporary dock expansion, collapse, or return-inline actions do not update it.
+
 ## Private autosaved drafts
 
 Draft APIs intentionally reject API keys and impersonation tokens. They are private browser-session endpoints; the

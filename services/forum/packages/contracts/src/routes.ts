@@ -479,6 +479,7 @@ const loginSchema = schemas.LoginRequestSchema;
 const registerSchema = schemas.RegisterRequestSchema;
 
 const updatePrivateEmailSchema = schemas.UpdatePrivateEmailRequestSchema;
+const updateQuickReplyPreferenceSchema = schemas.UpdateQuickReplyPreferenceRequestSchema;
 
 const verifyResponseSchema = schemas.VerifyResponseDtoSchema;
 
@@ -619,6 +620,15 @@ export const apiRoutes: ApiRoute[] = [
     tags: ['auth'],
     request: { body: { schema: updatePrivateEmailSchema } },
     response: { schema: schemas.UpdatePrivateEmailResponseDtoSchema }
+  },
+
+  {
+    method: 'patch',
+    path: '/me/preferences/quick-reply',
+    summary: 'Update the current user quick-reply dock preference',
+    tags: ['auth'],
+    request: { body: { schema: updateQuickReplyPreferenceSchema } },
+    response: { schema: schemas.UpdateQuickReplyPreferenceResponseDtoSchema }
   },
 
   {

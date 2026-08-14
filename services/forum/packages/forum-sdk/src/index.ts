@@ -36,7 +36,6 @@ import type {
   DiscordChannelMappingDto,
   ForkBoundaryDto,
   ForkOperationDto,
-  TopicForkStateDto,
   ForumApi,
   ForumDto,
   ForumLastPostDto,
@@ -92,12 +91,14 @@ import type {
   TopicAutoRunDto,
   TopicCompactionStateDto,
   TopicDto,
+  TopicForkStateDto,
   TopicLineageDto,
   TopicMoveDto,
   TopicOperationalEventDto,
   TopicSubscriptionDto,
   TopicUnreadDto,
   UpdatePrivateEmailResponseDto,
+  UpdateQuickReplyPreferenceResponseDto,
   UserFileDto,
   UserPostHistoryItemDto,
   UserPostHistoryResponseDto,
@@ -261,6 +262,11 @@ function createApi({
       json<UpdatePrivateEmailResponseDto>('/me/private-email', {
         method: 'PATCH',
         body: JSON.stringify({ emailAddress }),
+      }),
+    updateQuickReplyPreference: (quickReplyDockedByDefault: boolean) =>
+      json<UpdateQuickReplyPreferenceResponseDto>('/me/preferences/quick-reply', {
+        method: 'PATCH',
+        body: JSON.stringify({ quickReplyDockedByDefault }),
       }),
     changePassword: (input: { currentPassword: string; newPassword: string }) =>
       json<{ ok: boolean }>('/me/password', { method: 'POST', body: JSON.stringify(input) }),
