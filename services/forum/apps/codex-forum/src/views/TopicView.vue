@@ -16,6 +16,7 @@ import { useForumState } from '../composables/useForumState';
 import { useMarkdown } from '../composables/useMarkdown';
 import { applyTemplateToTextarea } from '../composables/useMessageTemplateInsertion';
 import { api } from '../lib/apiClient';
+import { copyTextToClipboard } from '../lib/clipboard';
 import { createClientOperationId } from '../lib/clientOperationId';
 import { parseReasoningSteps } from '../lib/reasoning';
 import { getToolMiniModel, toolKindIcon, traceToneForKind } from '../lib/toolMiniView';
@@ -123,6 +124,7 @@ const topicRobotMode = computed(() => state.selectedTopic.value?.robotMode ?? nu
 const autoCompactEnabled = ref(false);
 const robotControlPending = computed(() => state.robotControlPending.value);
 const isSticky = computed(() => state.selectedTopic.value?.tags?.includes('sticky') ?? false);
+const copiedPostSourceId = ref<string | null>(null);
 const copiedLinkPostId = ref<string | null>(null);
 const DEFAULT_HANDOFF_SYSTEM_PROMPT = `You are a context transfer assistant. Given a conversation history and the user's goal for a new thread, generate a focused prompt that:
 
@@ -1735,31 +1737,31 @@ function buildPostPermalink(postNumber: number): string {
   return new URL(resolved.href, window.location.origin).toString();
 }
 
-function copyPostLink(post: PostDto): void {
+async function copyPostSource(post: PostDto): Promise<void> {
+  if (post.deletedAt) return;
+  try {
+    await copyTextToClipboard(post.body);
+    copiedPostSourceId.value = post.id;
+    window.setTimeout(() => {
+      if (copiedPostSourceId.value === post.id) copiedPostSourceId.value = null;
+    }, 1200);
+  } catch {
+    state.setError('Could not copy the post. Your browser denied clipboard access.');
+  }
+}
+
+async function copyPostLink(post: PostDto): Promise<void> {
   const postNumber = postNumberForPostId(post.id);
   if (!postNumber) return;
-  const url = buildPostPermalink(postNumber);
-  navigator.clipboard
-    .writeText(url)
-    .then(() => {
-      copiedLinkPostId.value = post.id;
-      window.setTimeout(() => {
-        if (copiedLinkPostId.value === post.id) copiedLinkPostId.value = null;
-      }, 1200);
-    })
-    .catch(() => {
-      // Fallback for older browsers
-      const textarea = document.createElement('textarea');
-      textarea.value = url;
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand('copy');
-      document.body.removeChild(textarea);
-      copiedLinkPostId.value = post.id;
-      window.setTimeout(() => {
-        if (copiedLinkPostId.value === post.id) copiedLinkPostId.value = null;
-      }, 1200);
-    });
+  try {
+    await copyTextToClipboard(buildPostPermalink(postNumber));
+    copiedLinkPostId.value = post.id;
+    window.setTimeout(() => {
+      if (copiedLinkPostId.value === post.id) copiedLinkPostId.value = null;
+    }, 1200);
+  } catch {
+    state.setError('Could not copy the post link. Your browser denied clipboard access.');
+  }
 }
 
 function toolRunsForPost(post: PostDto): ToolRunDto[] {
@@ -3364,17 +3366,28 @@ onUnmounted(() => {
           >
             Edit
           </button>
-            <button
-              class="vb-control-btn"
-              :disabled="state.isTopicLocked() || !!post.deletedAt"
-              @click="quotePost(post)"
-            >
+          <button
+            class="vb-control-btn"
+            :disabled="state.isTopicLocked() || !!post.deletedAt"
+            @click="quotePost(post)"
+          >
             Quote
           </button>
           <button
             class="vb-control-btn"
             type="button"
+            title="Copy exact post source"
+            :disabled="!!post.deletedAt"
+            aria-live="polite"
+            @click="copyPostSource(post)"
+          >
+            {{ copiedPostSourceId === post.id ? 'Copied' : 'Copy' }}
+          </button>
+          <button
+            class="vb-control-btn"
+            type="button"
             :title="`Copy link to post #${postNumberForPostId(post.id) ?? postNumberForIndex(idx)}`"
+            aria-live="polite"
             @click="copyPostLink(post)"
           >
             {{ copiedLinkPostId === post.id ? 'Copied' : 'Link' }}
