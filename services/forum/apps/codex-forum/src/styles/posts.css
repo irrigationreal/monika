@@ -2503,15 +2503,20 @@
 }
 
 /* Viewport-persistent Quick Reply. The composer is never duplicated or remounted. */
+.vb-topic-with-reply-dock {
+  --quick-reply-dock-height: min(clamp(18rem, 40dvh, 28rem), calc(100dvh - env(safe-area-inset-bottom) - 12px));
+}
+
 .vb-topic-with-reply-dock--collapsed {
   padding-bottom: 58px;
 }
 
 .vb-topic-with-reply-dock--expanded {
-  padding-bottom: calc(40dvh + 12px);
+  padding-bottom: calc(var(--quick-reply-dock-height) + 12px);
 }
 
 .vb-quick-reply-header {
+  flex: none;
   align-items: center;
   gap: 8px;
 }
@@ -2540,18 +2545,6 @@
   font-weight: bold;
 }
 
-.vb-quick-reply-dock-body {
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
-.vb-quick-reply-secondary-controls {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
 .vb-quick-reply-options-panel {
   display: flex;
   align-items: center;
@@ -2562,28 +2555,47 @@
   background: var(--bg-secondary);
 }
 
+.vb-quick-reply-submit {
+  width: 100%;
+}
+
+.vb-quick-reply-footer {
+  flex: none;
+  padding: 8px 10px 10px;
+  border-top: 1px solid var(--border-default);
+  background: var(--bg-surface-alt);
+}
+
 .vb-quick-reply--docked {
   position: fixed;
   z-index: 500;
   left: 50%;
   bottom: 0;
+  display: flex;
   width: 95%;
   max-width: 980px;
-  max-height: 40dvh;
   transform: translateX(-50%);
-  display: flex;
   flex-direction: column;
   border: 1px solid var(--brand-primary);
   box-shadow: 0 -5px 18px var(--shadow-color);
   background: var(--bg-surface-alt);
 }
 
-.vb-quick-reply--docked .vb-new-body {
-  min-height: 0;
+.vb-quick-reply--expanded {
+  height: var(--quick-reply-dock-height);
 }
 
-.vb-quick-reply--docked .vb-quick-reply-dock-body {
+.vb-quick-reply--expanded .vb-quick-reply-dock-body {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.vb-quick-reply--expanded .vb-quick-reply-scroll-region {
+  min-height: 0;
   overflow-y: auto;
+  flex: 1;
 }
 
 .vb-quick-reply--collapsed {
@@ -2599,12 +2611,5 @@
 }
 
 .vb-topic-with-reply-dock--expanded .vb-scroll-top {
-  bottom: calc(40dvh + 12px);
-}
-
-.vb-quick-reply--docked .vb-quick-reply-submit {
-  position: sticky;
-  bottom: 0;
-  align-self: flex-start;
-  z-index: 1;
+  bottom: calc(var(--quick-reply-dock-height) + 32px);
 }

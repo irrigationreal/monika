@@ -65,6 +65,7 @@ const replyBody = ref('');
 const quickReplyTextareaRef = ref<HTMLTextAreaElement | null>(null);
 const quickReplyContainerRef = ref<HTMLElement | null>(null);
 const quickReplyExpandButtonRef = ref<HTMLButtonElement | null>(null);
+const quickReplyKeepVisibleButtonRef = ref<HTMLButtonElement | null>(null);
 const quickReplyPresentation = ref<'inline' | 'docked-expanded' | 'docked-collapsed'>('inline');
 const quickReplyOptionsOpen = ref(false);
 let quickReplyPresentationTouched = false;
@@ -1878,12 +1879,28 @@ async function collapseQuickReply(): Promise<void> {
   quickReplyExpandButtonRef.value?.focus();
 }
 
-async function returnQuickReplyInline(): Promise<void> {
+function prefersReducedMotion(): boolean {
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+async function scrollInlineQuickReply(): Promise<void> {
+  await nextTick();
+  quickReplyContainerRef.value?.scrollIntoView({
+    behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+    block: 'center',
+  });
+}
+
+async function focusInlineQuickReply(): Promise<void> {
+  await scrollInlineQuickReply();
+  quickReplyTextareaRef.value?.focus({ preventScroll: true });
+}
+
+async function undockQuickReply(): Promise<void> {
   quickReplyPresentationTouched = true;
   quickReplyPresentation.value = 'inline';
-  await nextTick();
-  quickReplyContainerRef.value?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  quickReplyTextareaRef.value?.focus({ preventScroll: true });
+  await scrollInlineQuickReply();
+  quickReplyKeepVisibleButtonRef.value?.focus({ preventScroll: true });
 }
 
 function resetQuickReplyPresentation(): void {
@@ -1912,7 +1929,14 @@ async function quotePost(post: PostDto): Promise<void> {
   const authorName = state.identityName(post.authorId);
   const quoted = `[QUOTE=${authorName}]\n${post.body}\n[/QUOTE]\n\n`;
   replyBody.value = quoted + replyBody.value;
-  await activateQuickReply(true);
+  if (quickReplyPresentation.value === 'inline') {
+    await focusInlineQuickReply();
+  } else if (quickReplyPresentation.value === 'docked-collapsed') {
+    await activateQuickReply(true);
+  } else {
+    await nextTick();
+    quickReplyTextareaRef.value?.focus();
+  }
 }
 
 function confirmDelete(post: PostDto): void {
@@ -2794,16 +2818,6 @@ onUnmounted(() => {
           Post Reply
         </button>
         <button
-          class="vb-btn vb-btn-secondary"
-          type="button"
-          :disabled="state.loading.value || compactionFence || !canDockQuickReply"
-          :aria-expanded="!quickReplyDocked || quickReplyExpanded"
-          aria-controls="quick-reply-composer"
-          @click="activateQuickReply(true)"
-        >
-          Quick Reply
-        </button>
-        <button
           class="vb-btn"
           :disabled="state.loading.value || state.isTopicLocked() || compactionFence"
           @click="openHandoffModal"
@@ -3436,16 +3450,6 @@ onUnmounted(() => {
           Post Reply
         </button>
         <button
-          class="vb-btn vb-btn-secondary"
-          type="button"
-          :disabled="state.loading.value || compactionFence || !canDockQuickReply"
-          :aria-expanded="!quickReplyDocked || quickReplyExpanded"
-          aria-controls="quick-reply-composer"
-          @click="activateQuickReply(true)"
-        >
-          Quick Reply
-        </button>
-        <button
           class="vb-btn"
           :disabled="state.loading.value || state.isTopicLocked() || compactionFence"
           @click="openHandoffModal"
@@ -3652,6 +3656,7 @@ onUnmounted(() => {
       class="vb-quick-reply vb-quick-reply-composer"
       :class="{
         'vb-quick-reply--docked': quickReplyDocked,
+        'vb-quick-reply--expanded': quickReplyExpanded,
         'vb-quick-reply--collapsed': quickReplyPresentation === 'docked-collapsed',
       }"
       role="region"
@@ -3674,13 +3679,18 @@ onUnmounted(() => {
             class="vb-small-btn"
             type="button"
             :aria-expanded="quickReplyOptionsOpen"
-            aria-controls="quick-reply-options"
+            :aria-controls="
+              sessionContext
+                ? 'quick-reply-template quick-reply-attachment-picker quick-reply-model-options quick-reply-auto-compact quick-reply-context'
+                : 'quick-reply-template quick-reply-attachment-picker quick-reply-model-options quick-reply-auto-compact'
+            "
             @click="quickReplyOptionsOpen = !quickReplyOptionsOpen"
           >
             {{ quickReplyOptionsOpen ? 'Hide options' : 'Options' }}
           </button>
           <button
             v-if="!quickReplyDocked && canDockQuickReply"
+            ref="quickReplyKeepVisibleButtonRef"
             class="vb-small-btn"
             type="button"
             aria-label="Keep Quick Reply visible while reading"
@@ -3709,19 +3719,18 @@ onUnmounted(() => {
           >
             Expand
           </button>
-          <button v-if="quickReplyDocked" class="vb-small-btn" type="button" @click="returnQuickReplyInline">
-            Return inline
-          </button>
+          <button v-if="quickReplyDocked" class="vb-small-btn" type="button" @click="undockQuickReply">Undock</button>
         </div>
       </div>
       <div id="quick-reply-dock-body" v-show="!quickReplyDocked || quickReplyExpanded" class="vb-quick-reply-dock-body">
+        <div class="vb-quick-reply-scroll-region">
       <div v-if="state.isTopicLocked()" class="vb-locked-notice">
         This topic is {{ state.selectedTopic.value?.status }}. No new replies can be posted.
       </div>
       <div v-else-if="!state.isLoggedIn.value" class="vb-login-notice">
         <template v-if="state.canShowRegisterLink.value">
-            <router-link to="/login">Log in</router-link> or <router-link to="/register">register</router-link> to post
-            a reply.
+              <router-link to="/login">Log in</router-link> or <router-link to="/register">register</router-link> to
+              post a reply.
         </template>
         <template v-else> <router-link to="/login">Log in</router-link> to post a reply. </template>
       </div>
@@ -3745,8 +3754,7 @@ onUnmounted(() => {
           <span class="vb-robot-error-detail">{{ state.robotState.value.lastTurnError.message }}</span>
         </div>
           <label for="quick-reply-message">Message:</label>
-          <div id="quick-reply-options" v-show="quickReplyOptionsOpen" class="vb-quick-reply-secondary-controls">
-            <div class="vb-quick-reply-options-panel">
+            <div id="quick-reply-template" v-show="quickReplyOptionsOpen" class="vb-quick-reply-options-panel">
         <MessageTemplatePicker
           context="reply"
           :forum-id="state.selectedTopic.value?.forumId ?? null"
@@ -3757,7 +3765,26 @@ onUnmounted(() => {
                 Open full editor
               </router-link>
             </div>
-        <div class="vb-reply-attachments">
+            <DraftStatus
+              :status="autosavedReply.status.value"
+              :expires-at="autosavedReply.expiresAt.value"
+              :conflict="Boolean(autosavedReply.remoteDraft.value)"
+              @retry="autosavedReply.resume()"
+              @discard="requestDiscardQuickDraft"
+              @use-saved="autosavedReply.useSavedVersion()"
+              @keep-mine="autosavedReply.keepMyVersion()"
+              @copy-mine="autosavedReply.copyMyText()"
+            />
+            <div v-if="discardDraftError" class="vb-form-error" role="alert">{{ discardDraftError }}</div>
+            <textarea
+              id="quick-reply-message"
+              ref="quickReplyTextareaRef"
+              v-model="replyBody"
+              rows="6"
+              placeholder="Type your reply here..."
+              :disabled="isPublishingReply"
+            ></textarea>
+            <div id="quick-reply-attachment-picker" v-show="quickReplyOptionsOpen" class="vb-reply-attachments">
           <label class="vb-attachment-label">Attachments:</label>
           <span class="vb-form-hint">Selected files are not included in autosaved drafts.</span>
               <input
@@ -3768,7 +3795,36 @@ onUnmounted(() => {
                 @change="handleReplyFiles"
               />
         </div>
-        <div class="vb-reply-options">
+            <div v-if="publishedReplyPostId || replyFiles.length > 0" class="vb-reply-attachments">
+              <div v-if="publishedReplyPostId" class="vb-template-conflict" role="alert">
+                Reply posted; attachment upload is incomplete. Retrying cannot duplicate the reply. Complete it within
+                five minutes.
+                <button
+                  type="button"
+                  class="vb-small-btn"
+                  :disabled="isUploadingReply"
+                  @click="retryQuickReplyAttachments"
+                >
+                  {{ replyFiles.length ? 'Retry remaining files' : 'Retry dispatch' }}
+                </button>
+                <button
+                  type="button"
+                  class="vb-small-btn"
+                  :disabled="isUploadingReply"
+                  @click="abandonQuickReplyAttachments"
+                >
+                  {{ replyFiles.length ? 'Abandon files' : 'Continue'
+                  }}{{ publishedReplyNeedsDispatch ? ' and dispatch' : '' }}
+                </button>
+              </div>
+              <div v-if="replyFiles.length > 0" class="vb-attachment-selected">
+                <span>Selected:</span>
+                <ul>
+                  <li v-for="file in replyFiles" :key="file.name">{{ file.name }} ({{ formatBytes(file.size) }})</li>
+                </ul>
+              </div>
+            </div>
+            <div id="quick-reply-model-options" v-show="quickReplyOptionsOpen" class="vb-reply-options">
           <div class="vb-option-group">
             <label for="model-select">Model:</label>
             <select
@@ -3794,12 +3850,20 @@ onUnmounted(() => {
             </select>
           </div>
         </div>
+            <span v-if="robotModeNotice" class="vb-reply-options-callout">{{ robotModeNotice }}</span>
+            <div id="quick-reply-auto-compact" v-show="quickReplyOptionsOpen">
             <AutoCompactOption
               v-model="autoCompactEnabled"
               :can-edit="isAdmin"
               :busy="isRobotBusy || compactionFence"
             />
-        <div v-if="sessionContext" class="vb-reply-context-meter">
+            </div>
+            <div
+              v-if="sessionContext"
+              v-show="quickReplyOptionsOpen"
+              id="quick-reply-context"
+              class="vb-reply-context-meter"
+            >
           <strong>Context:</strong>
           <span
             v-if="sessionContext.usedTokens !== null && sessionContext.contextWindowTokens"
@@ -3817,62 +3881,15 @@ onUnmounted(() => {
           <span v-else>usage unavailable</span>
           <span v-if="sessionContext.model" class="vb-context-model">· {{ sessionContext.model }}</span>
         </div>
-          </div>
-          <DraftStatus
-            :status="autosavedReply.status.value"
-            :expires-at="autosavedReply.expiresAt.value"
-            :conflict="Boolean(autosavedReply.remoteDraft.value)"
-            @retry="autosavedReply.resume()"
-            @discard="requestDiscardQuickDraft"
-            @use-saved="autosavedReply.useSavedVersion()"
-            @keep-mine="autosavedReply.keepMyVersion()"
-            @copy-mine="autosavedReply.copyMyText()"
-          />
-          <div v-if="discardDraftError" class="vb-form-error" role="alert">{{ discardDraftError }}</div>
-          <textarea
-            id="quick-reply-message"
-            ref="quickReplyTextareaRef"
-            v-model="replyBody"
-            rows="6"
-            placeholder="Type your reply here..."
-            :disabled="isPublishingReply"
-          ></textarea>
-          <div v-if="publishedReplyPostId || replyFiles.length > 0" class="vb-reply-attachments">
-            <div v-if="publishedReplyPostId" class="vb-template-conflict" role="alert">
-              Reply posted; attachment upload is incomplete. Retrying cannot duplicate the reply. Complete it within
-              five minutes.
-              <button
-                type="button"
-                class="vb-small-btn"
-                :disabled="isUploadingReply"
-                @click="retryQuickReplyAttachments"
-              >
-                {{ replyFiles.length ? 'Retry remaining files' : 'Retry dispatch' }}
-              </button>
-              <button
-                type="button"
-                class="vb-small-btn"
-                :disabled="isUploadingReply"
-                @click="abandonQuickReplyAttachments"
-              >
-                {{ replyFiles.length ? 'Abandon files' : 'Continue'
-                }}{{ publishedReplyNeedsDispatch ? ' and dispatch' : '' }}
-              </button>
-            </div>
-            <div v-if="replyFiles.length > 0" class="vb-attachment-selected">
-              <span>Selected:</span>
-              <ul>
-                <li v-for="file in replyFiles" :key="file.name">{{ file.name }} ({{ formatBytes(file.size) }})</li>
-              </ul>
-            </div>
-          </div>
-          <span v-if="robotModeNotice" class="vb-reply-options-callout">{{ robotModeNotice }}</span>
         <div v-if="compactionFence" class="vb-reply-options-callout" role="status">
           <template v-if="forkNeedsManualReview">
             Replies are paused because a fork needs operator review; the canonical source remains fenced.
           </template>
           <template v-else>Replies are paused while a canonical operation is unresolved.</template>
         </div>
+          </div>
+        </div>
+        <div v-if="state.isLoggedIn.value && !state.isTopicLocked()" class="vb-quick-reply-footer">
         <button
             class="vb-btn vb-quick-reply-submit"
           :disabled="

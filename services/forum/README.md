@@ -146,18 +146,20 @@ surfaces, limits, security boundaries, export behavior, and upgrade validation.
 
 ## Persistent Quick Reply dock
 
-Topic pages keep a single Quick Reply composer that can remain inline or be docked to the bottom of the viewport. The dock
-can be expanded for writing or collapsed to a compact bar without remounting the editor, pausing autosave, clearing
-attachments, or changing publication behavior. **Quick Reply** controls at both ends of a topic and per-post Quote actions
-open and focus the dock. The collapsed bar reports draft save and conflict status. Secondary templates, attachment
-selection, model/reasoning, auto-compact, and context controls live under **Options**; draft conflicts, selected files,
-upload recovery, and robot-steering warnings always remain visible. On narrow viewports the dock is a safe-area-aware
-bottom drawer and account-default activation starts collapsed.
+Topic pages keep a single Quick Reply composer that can remain inline or be docked to the bottom of the viewport. **Keep
+visible** is the sole docking entry; the dock can be expanded for writing, collapsed to a compact bar, or undocked without
+remounting the editor, pausing autosave, clearing attachments, or changing publication behavior. Quote preserves the
+current presentation: it scrolls to an inline composer, expands a collapsed dock, or focuses an expanded dock. The
+collapsed bar reports draft save and conflict status. **Options** discloses templates, attachment selection,
+model/reasoning, auto-compact, and context controls in their normal composer order; the editor, draft status, selected
+files, upload recovery, fences, and Post/Steer action remain visible. Expanded docks use one scrolling middle between a
+fixed header and full-width action footer. On narrow viewports the dock is a safe-area-aware bottom drawer and
+account-default activation starts collapsed.
 
 The private account preference **Keep Quick Reply visible while viewing topics** is managed in User CP and persisted by
 `PATCH /me/preferences/quick-reply`. It defaults off, opens the dock on subsequent topic views, and is returned only from
-authenticated self APIs—not public profiles. Temporary expand, collapse, and return-inline actions never rewrite it.
-Expanded docks reserve enough topic space to keep the final content and scroll-to-top control unobscured.
+authenticated self APIs—not public profiles. Temporary expand, collapse, and undock actions never rewrite it. Expanded
+docks reserve enough topic space to keep the final content and scroll-to-top control unobscured.
 
 ## Private autosaved drafts
 
