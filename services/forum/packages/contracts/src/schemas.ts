@@ -114,6 +114,7 @@ import type {
   TopicSubscriptionDto,
   TopicUnreadDto,
   UpdatePrivateEmailResponseDto,
+  UpdateQuickReplyPreferenceResponseDto,
   UserFileDto,
   UserPostHistoryItemDto,
   UserPostHistoryResponseDto,
@@ -160,6 +161,7 @@ import type {
   RegisterRequest,
   UpdateIdentityRequest,
   UpdatePrivateEmailRequest,
+  UpdateQuickReplyPreferenceRequest,
   UpdateTopicStatusRequest,
   UpdateTopicTagsRequest,
   UpdateTopicTitleRequest,
@@ -1110,6 +1112,7 @@ export const AuthIdentityDtoSchema: z.ZodType<AuthIdentityDto> = z.object({
   theme: ForumThemeKeySchema.nullable().optional(),
   hasPrivateEmail: z.boolean().optional(),
   hasPassword: z.boolean().optional(),
+  quickReplyDockedByDefault: z.boolean().optional(),
 });
 
 export const RegistrationModeDtoSchema: z.ZodType<RegistrationModeDto> = z.object({
@@ -1181,6 +1184,11 @@ export const InviteInfoDtoSchema: z.ZodType<InviteInfoDto> = z.object({
 export const UpdatePrivateEmailResponseDtoSchema: z.ZodType<UpdatePrivateEmailResponseDto> = z.object({
   ok: z.boolean(),
   hasPrivateEmail: z.boolean(),
+});
+
+export const UpdateQuickReplyPreferenceResponseDtoSchema: z.ZodType<UpdateQuickReplyPreferenceResponseDto> = z.object({
+  ok: z.boolean(),
+  quickReplyDockedByDefault: z.boolean(),
 });
 
 export const ChangePasswordRequestSchema = z.object({
@@ -1453,6 +1461,10 @@ export const MessageTemplateRevisionQuerySchema = z.object({
 
 export const UpdatePrivateEmailRequestSchema: z.ZodType<UpdatePrivateEmailRequest> = z.object({
   emailAddress: z.string({ required_error: 'emailAddress is required (string or null)' }).nullable(),
+});
+
+export const UpdateQuickReplyPreferenceRequestSchema: z.ZodType<UpdateQuickReplyPreferenceRequest> = z.object({
+  quickReplyDockedByDefault: z.boolean(),
 });
 
 export const CreateApiKeyRequestSchema: z.ZodType<CreateApiKeyRequest> = z.object({

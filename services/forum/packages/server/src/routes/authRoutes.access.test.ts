@@ -45,6 +45,45 @@ describe('Auth route access controls', () => {
     return app;
   }
 
+  it('persists the authenticated user quick-reply dock preference', async () => {
+    const app = await buildApp();
+    const human = store.createIdentityWithPassword('Human', 'human', 'pw-hash', 'human');
+    store.createAuthSession('human-preference-token', human.id);
+    const headers = { authorization: 'Bearer human-preference-token' };
+
+    const initial = await app.inject({ method: 'GET', url: '/auth/me', headers });
+    expect(initial.json().identity.quickReplyDockedByDefault).toBe(false);
+
+    const unauthenticated = await app.inject({
+      method: 'PATCH',
+      url: '/me/preferences/quick-reply',
+      payload: { quickReplyDockedByDefault: true },
+    });
+    expect(unauthenticated.statusCode).toBe(401);
+
+    const malformed = await app.inject({
+      method: 'PATCH',
+      url: '/me/preferences/quick-reply',
+      headers,
+      payload: { quickReplyDockedByDefault: 'yes' },
+    });
+    expect(malformed.statusCode).toBe(400);
+
+    const updated = await app.inject({
+      method: 'PATCH',
+      url: '/me/preferences/quick-reply',
+      headers,
+      payload: { quickReplyDockedByDefault: true },
+    });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json()).toEqual({ ok: true, quickReplyDockedByDefault: true });
+
+    const refreshed = await app.inject({ method: 'GET', url: '/auth/me', headers });
+    expect(refreshed.json().identity.quickReplyDockedByDefault).toBe(true);
+
+    await app.close();
+  });
+
   it('restricts API key and impersonation token routes to admins', async () => {
     const app = await buildApp();
     const admin = store.createIdentity('Admin', 'admin');

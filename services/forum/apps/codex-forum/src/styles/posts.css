@@ -145,7 +145,9 @@
   font-family: Verdana, Tahoma, Arial, sans-serif;
   background: var(--bg-input);
   color: var(--text-primary);
-  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
 
 .vb-robot-body input,
@@ -157,7 +159,9 @@
   font-family: Verdana, Tahoma, Arial, sans-serif;
   background: var(--bg-input);
   color: var(--text-primary);
-  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
 
 .vb-new-body input:focus,
@@ -719,7 +723,10 @@
 
 .vb-trace-card-header {
   width: 100%;
-  background: linear-gradient(var(--trace-card-start, var(--grad-tools-start)), var(--trace-card-end, var(--grad-tools-end)));
+  background: linear-gradient(
+    var(--trace-card-start, var(--grad-tools-start)),
+    var(--trace-card-end, var(--grad-tools-end))
+  );
   color: var(--text-inverse);
   font-weight: bold;
   padding: 4px 6px;
@@ -992,7 +999,6 @@
     opacity: 1;
   }
 }
-
 
 .vb-trace-reasoning-inline {
   margin-bottom: 8px;
@@ -1588,7 +1594,9 @@
   color: var(--text-primary);
   resize: vertical;
   min-height: 120px;
-  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
 
 .vb-modal-textarea:focus {
@@ -1945,7 +1953,8 @@
 
 /* Keyframe animations */
 @keyframes vb-thinking-pulse {
-  0%, 100% {
+  0%,
+  100% {
     box-shadow: 0 0 0 0 rgba(92, 112, 153, 0.4);
   }
   50% {
@@ -1974,7 +1983,8 @@
 }
 
 @keyframes vb-brain-pulse {
-  0%, 100% {
+  0%,
+  100% {
     transform: scale(1);
   }
   50% {
@@ -2000,7 +2010,10 @@
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
-  background: linear-gradient(var(--trace-reasoning-start, var(--grad-tools-start)), var(--trace-reasoning-end, var(--grad-tools-end)));
+  background: linear-gradient(
+    var(--trace-reasoning-start, var(--grad-tools-start)),
+    var(--trace-reasoning-end, var(--grad-tools-end))
+  );
   color: var(--text-inverse);
   font-size: 11px;
   font-weight: bold;
@@ -2226,7 +2239,9 @@
 .vb-live-trace-enter-active,
 .vb-live-trace-leave-active,
 .vb-live-trace-move {
-  transition: opacity 140ms ease, transform 140ms ease;
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease;
 }
 
 .vb-live-trace-enter-from {
@@ -2485,4 +2500,111 @@
 .vb-follow-up-origin:hover {
   color: var(--text-primary);
   border-color: var(--text-muted);
+}
+
+/* Viewport-persistent Quick Reply. The composer is never duplicated or remounted. */
+.vb-topic-with-reply-dock--collapsed {
+  padding-bottom: 58px;
+}
+
+.vb-topic-with-reply-dock--expanded {
+  padding-bottom: calc(40dvh + 12px);
+}
+
+.vb-quick-reply-header {
+  align-items: center;
+  gap: 8px;
+}
+
+.vb-quick-reply-header-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.vb-quick-reply-compact-status {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-inverse);
+  font-weight: normal;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vb-quick-reply-compact-status.is-problem {
+  color: var(--status-warning);
+  font-weight: bold;
+}
+
+.vb-quick-reply-dock-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.vb-quick-reply-secondary-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.vb-quick-reply-options-panel {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-secondary);
+}
+
+.vb-quick-reply--docked {
+  position: fixed;
+  z-index: 500;
+  left: 50%;
+  bottom: 0;
+  width: 95%;
+  max-width: 980px;
+  max-height: 40dvh;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--brand-primary);
+  box-shadow: 0 -5px 18px var(--shadow-color);
+  background: var(--bg-surface-alt);
+}
+
+.vb-quick-reply--docked .vb-new-body {
+  min-height: 0;
+}
+
+.vb-quick-reply--docked .vb-quick-reply-dock-body {
+  overflow-y: auto;
+}
+
+.vb-quick-reply--collapsed {
+  height: 50px;
+}
+
+.vb-quick-reply--collapsed .vb-quick-reply-header {
+  min-height: 48px;
+}
+
+.vb-topic-with-reply-dock--collapsed .vb-scroll-top {
+  bottom: 66px;
+}
+
+.vb-topic-with-reply-dock--expanded .vb-scroll-top {
+  bottom: calc(40dvh + 12px);
+}
+
+.vb-quick-reply--docked .vb-quick-reply-submit {
+  position: sticky;
+  bottom: 0;
+  align-self: flex-start;
+  z-index: 1;
 }

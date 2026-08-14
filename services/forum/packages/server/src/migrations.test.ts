@@ -117,6 +117,22 @@ describe('schema migrations', () => {
     expect(rows.at(-1)?.version).toBe(SCHEMA_VERSION);
   });
 
+  it('adds a default-false constrained quick-reply dock preference to populated v44 databases', () => {
+    runMigrations(db, { targetVersion: 44 });
+    const legacyStore = new ForumStore(db);
+    const identity = legacyStore.createIdentity('Reader', 'human');
+
+    runMigrations(db);
+
+    const row = db
+      .prepare('select quick_reply_docked_by_default as value from identities where id = ?')
+      .get(identity.id) as { value: number };
+    expect(row.value).toBe(0);
+    expect(() =>
+      db.prepare('update identities set quick_reply_docked_by_default = 2 where id = ?').run(identity.id)
+    ).toThrow();
+  });
+
   it('indexes undeleted posts for bounded recent-post lookups', () => {
     runMigrations(db);
 

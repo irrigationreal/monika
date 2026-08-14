@@ -37,6 +37,7 @@ const selectedFile = ref<File | null>(null);
 const selectedFilePreview = ref<string | null>(null);
 const selectedTheme = ref<ForumThemeKey>('vmonika');
 const originalTheme = ref<ForumThemeKey>('vmonika');
+const quickReplyDockedByDefault = ref(false);
 const passkeyName = ref('My passkey');
 const passkeys = ref<{ id: string; name: string; deviceType: string }[]>([]);
 
@@ -145,6 +146,7 @@ function startEdit(): void {
   clearPrivateEmail.value = false;
   selectedTheme.value = currentUser.value.theme ?? 'vmonika';
   originalTheme.value = selectedTheme.value;
+  quickReplyDockedByDefault.value = currentUser.value.quickReplyDockedByDefault ?? false;
   editMode.value = true;
   errorMessage.value = '';
   successMessage.value = '';
@@ -303,6 +305,7 @@ async function saveProfile(): Promise<void> {
     } else if (privateEmail.value.trim()) {
       await state.updatePrivateEmail(privateEmail.value.trim());
     }
+    await state.updateQuickReplyPreference(quickReplyDockedByDefault.value);
 
     successMessage.value = 'Profile updated successfully.';
     editMode.value = false;
@@ -443,6 +446,12 @@ onMounted(async () => {
               <span class="vb-profile-label">Theme:</span>
               <span class="vb-profile-value">{{ FORUM_THEME_BY_KEY[currentUser.theme ?? 'vmonika']?.label }}</span>
             </div>
+            <div class="vb-profile-row">
+              <span class="vb-profile-label">Quick Reply:</span>
+              <span class="vb-profile-value">
+                {{ currentUser.quickReplyDockedByDefault ? 'Keep visible by default' : 'Inline by default' }}
+              </span>
+            </div>
             <div class="vb-modal-actions">
               <button class="vb-btn" @click="startEdit">Edit Profile</button>
               <router-link class="vb-btn vb-btn-secondary" :to="{ name: 'user.messageTemplates' }"
@@ -500,6 +509,16 @@ onMounted(async () => {
               </select>
               <span class="vb-form-hint">{{ selectedThemeInfo?.description }}</span>
               <span class="vb-form-hint">Live preview: picking a theme applies instantly while you browse.</span>
+            </div>
+            <div class="vb-form-row">
+              <label class="vb-checkbox-row" for="quickReplyDockedByDefault">
+                <input id="quickReplyDockedByDefault" v-model="quickReplyDockedByDefault" type="checkbox" />
+                Keep Quick Reply visible while viewing topics
+              </label>
+              <span class="vb-form-hint">
+                Opens the bottom reply dock on desktop and its collapsed bar on mobile. Temporary collapse or unpin
+                actions do not change this account preference.
+              </span>
             </div>
             <div class="vb-form-row">
               <label for="editPrivateEmail">Robot-only email address:</label>

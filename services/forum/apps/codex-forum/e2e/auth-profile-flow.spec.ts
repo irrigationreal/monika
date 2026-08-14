@@ -11,6 +11,7 @@ import type { BrowserContext, Page, Request } from '@playwright/test';
 type IdentityRecord = IdentityDto & {
   username?: string;
   password?: string;
+  quickReplyDockedByDefault?: boolean;
 };
 
 type InviteRecord = InviteInfoDto & {
@@ -201,6 +202,17 @@ class MockAuthApi {
       return { status: 200, body: { identity: this.toAuthIdentity(identity, true) } };
     }
 
+    if (method === 'PATCH' && path === '/me/preferences/quick-reply') {
+      const identity = this.getIdentityFromAuth(request);
+      if (!identity) return { status: 401, body: { message: 'Please log in to continue.' } };
+      const body = (await request.postDataJSON()) as { quickReplyDockedByDefault?: boolean };
+      identity.quickReplyDockedByDefault = Boolean(body.quickReplyDockedByDefault);
+      return {
+        status: 200,
+        body: { ok: true, quickReplyDockedByDefault: identity.quickReplyDockedByDefault },
+      };
+    }
+
     if (method === 'PATCH' && path.startsWith('/identities/')) {
       const identityId = path.split('/')[2];
       const identity = this.identities.get(identityId);
@@ -343,6 +355,7 @@ class MockAuthApi {
       theme: identity.theme,
       hasPrivateEmail: includePrivate ? false : undefined,
       hasPassword: Boolean(identity.password),
+      quickReplyDockedByDefault: identity.quickReplyDockedByDefault ?? false,
     };
   }
 
@@ -430,6 +443,7 @@ test.describe('Auth registration and profile flows', () => {
     await page.locator('#editLocation').fill('Seattle, WA');
     await page.locator('#editSignature').fill('See you in the threads.');
     await page.locator('#editTheme').selectOption('classic-dark');
+    await page.locator('#quickReplyDockedByDefault').check();
 
     await page.locator('button', { hasText: 'Save Changes' }).click();
     await expect(page.locator('.vb-success-banner')).toContainText('Profile updated successfully.');
@@ -437,6 +451,7 @@ test.describe('Auth registration and profile flows', () => {
     await expect(page.locator('.vb-profile-row', { hasText: 'Location:' })).toContainText('Seattle, WA');
     await expect(page.locator('.vb-profile-row', { hasText: 'Signature:' })).toContainText('See you in the threads.');
     await expect(page.locator('.vb-profile-row', { hasText: 'Theme:' })).toContainText('Classic RoboBB');
+    await expect(page.locator('.vb-profile-row', { hasText: 'Quick Reply:' })).toContainText('Keep visible by default');
     await expect(page.locator('.vb-welcome')).toContainText('Riley Updated');
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'classic-dark');
     await expect(page.locator('.vb-theme-toggle')).toHaveAttribute('title', 'Theme: Classic RoboBB (Dark)');
@@ -445,6 +460,7 @@ test.describe('Auth registration and profile flows', () => {
     await expect(page.locator('.vb-profile-row', { hasText: 'Display Name:' })).toContainText('Riley Updated');
     await expect(page.locator('.vb-profile-row', { hasText: 'Location:' })).toContainText('Seattle, WA');
     await expect(page.locator('.vb-profile-row', { hasText: 'Signature:' })).toContainText('See you in the threads.');
+    await expect(page.locator('.vb-profile-row', { hasText: 'Quick Reply:' })).toContainText('Keep visible by default');
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'classic-dark');
 
     const identityId = api.getIdentityByDisplayName('Riley Updated')?.id ?? '';

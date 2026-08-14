@@ -1711,6 +1711,17 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 45,
+    name: 'quick-reply-dock-preference',
+    up: (db) => {
+      if (!hasColumn(db, 'identities', 'quick_reply_docked_by_default')) {
+        db.prepare(
+          'alter table identities add column quick_reply_docked_by_default integer not null default 0 check (quick_reply_docked_by_default in (0, 1))'
+        ).run();
+      }
+    },
+  },
 ];
 
 export const SCHEMA_VERSION: number = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;

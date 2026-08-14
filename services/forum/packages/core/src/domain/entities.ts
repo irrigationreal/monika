@@ -77,6 +77,8 @@ export interface IdentityPrivate extends IdentityPublic {
   username?: string | null;
   passwordHash?: string | null;
   privateEmail?: string | null;
+  /** Private authenticated-account presentation preference. */
+  quickReplyDockedByDefault?: boolean;
 }
 
 export type Identity = IdentityPublic;

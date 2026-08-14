@@ -164,6 +164,7 @@ let flushHandle: number | null = null;
 let assistantMessagePending = false;
 let assistantMessageReloadQueued = false;
 let topicLoadCounter = 0;
+let topicSelectionRequestCounter = 0;
 let forumsLoadCounter = 0;
 let archivedForumsLoadCounter = 0;
 let recentPostsLoadCounter = 0;
@@ -504,6 +505,7 @@ export function useForumState() {
       signature: updated.signature ?? null,
       theme: updated.theme ?? null,
       hasPrivateEmail,
+      quickReplyDockedByDefault: currentUser.value?.quickReplyDockedByDefault ?? false,
     };
 
     if (currentUser.value.theme) {
@@ -517,6 +519,15 @@ export function useForumState() {
     if (!currentUser.value) return;
     const result = await api.updatePrivateEmail(emailAddress);
     currentUser.value = { ...currentUser.value, hasPrivateEmail: result.hasPrivateEmail };
+  }
+
+  async function updateQuickReplyPreference(enabled: boolean): Promise<void> {
+    if (!currentUser.value) return;
+    const result = await api.updateQuickReplyPreference(enabled);
+    currentUser.value = {
+      ...currentUser.value,
+      quickReplyDockedByDefault: result.quickReplyDockedByDefault,
+    };
   }
 
   function formatDate(iso: string): string {
@@ -1112,6 +1123,8 @@ export function useForumState() {
   }
 
   async function selectTopic(topic: TopicDto, options?: { hydrateState?: boolean }): Promise<void> {
+    // A direct selection supersedes any topic fetch still pending in selectTopicById.
+    topicSelectionRequestCounter += 1;
     if (selectedTopicId.value === topic.id) {
       return;
     }
@@ -1149,6 +1162,7 @@ export function useForumState() {
   }
 
   async function selectTopicById(topicId: string, options?: { hydrateState?: boolean }): Promise<void> {
+    const requestId = ++topicSelectionRequestCounter;
     if (selectedTopicId.value === topicId) {
       if (options?.hydrateState !== undefined && options.hydrateState !== topicHydrationEnabled) {
         topicHydrationEnabled = options.hydrateState;
@@ -1160,17 +1174,23 @@ export function useForumState() {
         const loadId = ++topicLoadCounter;
         await Promise.all([loadState(topicId), loadAutoRun(topicId), loadSession(topicId)]);
         await loadSessionInspector();
-        if (isActiveTopic(topicId) && loadId === topicLoadCounter) {
+        if (
+          requestId === topicSelectionRequestCounter &&
+          isActiveTopic(topicId) &&
+          loadId === topicLoadCounter
+        ) {
           openStream(topicId);
         }
       }
       return;
     }
     const topic = await api.getTopic(topicId);
+    if (requestId !== topicSelectionRequestCounter) return;
     await selectTopic(topic, options);
   }
 
   function clearTopic(): void {
+    topicSelectionRequestCounter += 1;
     selectedTopic.value = null;
     posts.value = [];
     operationalEvents.value = [];
@@ -1244,7 +1264,7 @@ export function useForumState() {
         rememberReplyOptions(options);
       }
       try {
-      await loadTopics();
+        await loadTopics();
       } catch {
         // Publication already committed; a projection refresh failure must not make the composer resubmit it.
       }
@@ -1722,6 +1742,7 @@ export function useForumState() {
     checkInviteCode,
     updateProfile,
     updatePrivateEmail,
+    updateQuickReplyPreference,
     openLoginModal,
     closeLoginModal,
     setDateFilter,

@@ -1,5 +1,6 @@
 import type {
   AttachmentDto,
+  AuthIdentityDto,
   ChatCategoryDto,
   ChatMessageDto,
   ChatRoomDto,
@@ -34,6 +35,7 @@ import type {
   CompactionOperation,
   ExternalRef,
   ForkOperation,
+  IdentityPrivate,
   MessageDraft,
   MessageTemplate,
   PlanArtifact,
@@ -274,6 +276,24 @@ export function mapIdentityToDto(identity: IdentityReadModel): IdentityDto {
   if (identity.rank !== undefined) dto.rank = identity.rank;
   if (identity.joinDate !== undefined) dto.joinDate = identity.joinDate;
   return dto;
+}
+
+/** Maps private authenticated-self state without exposing it through public identity DTOs. */
+export function mapAuthenticatedIdentityToDto(identity: IdentityPrivate): AuthIdentityDto {
+  return {
+    id: identity.id,
+    displayName: identity.displayName,
+    kind: identity.kind,
+    username: identity.username,
+    parentIdentityId: identity.parentIdentityId,
+    avatarUrl: identity.avatarUrl,
+    location: identity.location,
+    signature: identity.signature,
+    theme: identity.theme as ForumThemeKey | null | undefined,
+    hasPrivateEmail: Boolean(identity.privateEmail),
+    hasPassword: Boolean(identity.passwordHash),
+    quickReplyDockedByDefault: Boolean(identity.quickReplyDockedByDefault),
+  };
 }
 
 export function mapUserPostHistoryItemToDto(item: UserPostHistoryItem): UserPostHistoryItemDto {

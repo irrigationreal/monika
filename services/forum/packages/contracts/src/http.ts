@@ -129,6 +129,10 @@ export interface UpdatePrivateEmailRequest {
   emailAddress: string | null;
 }
 
+export interface UpdateQuickReplyPreferenceRequest {
+  quickReplyDockedByDefault: boolean;
+}
+
 export interface CreateApiKeyRequest {
   label: string;
   scopes?: string[];

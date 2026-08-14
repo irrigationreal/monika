@@ -224,6 +224,9 @@
                         },
                         "hasPassword": {
                           "type": "boolean"
+                        },
+                        "quickReplyDockedByDefault": {
+                          "type": "boolean"
                         }
                       },
                       "required": [
@@ -361,6 +364,9 @@
                           "type": "boolean"
                         },
                         "hasPassword": {
+                          "type": "boolean"
+                        },
+                        "quickReplyDockedByDefault": {
                           "type": "boolean"
                         }
                       },
@@ -560,6 +566,9 @@
                         },
                         "hasPassword": {
                           "type": "boolean"
+                        },
+                        "quickReplyDockedByDefault": {
+                          "type": "boolean"
                         }
                       },
                       "required": [
@@ -687,6 +696,9 @@
                           "type": "boolean"
                         },
                         "hasPassword": {
+                          "type": "boolean"
+                        },
+                        "quickReplyDockedByDefault": {
                           "type": "boolean"
                         }
                       },
@@ -921,6 +933,9 @@
                           "type": "boolean"
                         },
                         "hasPassword": {
+                          "type": "boolean"
+                        },
+                        "quickReplyDockedByDefault": {
                           "type": "boolean"
                         }
                       },
@@ -1222,6 +1237,56 @@
                   "required": [
                     "ok",
                     "hasPrivateEmail"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me/preferences/quick-reply": {
+      "patch": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Update the current user quick-reply dock preference",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "quickReplyDockedByDefault": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "quickReplyDockedByDefault"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "quickReplyDockedByDefault": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "quickReplyDockedByDefault"
                   ]
                 }
               }
@@ -4146,6 +4211,421 @@
                     "active",
                     "latest",
                     "checkpointDispatch"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/topics/{topicId}/forks": {
+      "get": {
+        "tags": [
+          "topics"
+        ],
+        "summary": "Get the active and latest durable forum-native fork operations",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "topicId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "active": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "sourceTopicId": {
+                          "type": "string"
+                        },
+                        "boundaryPostId": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "pending",
+                            "running",
+                            "needs_manual_review",
+                            "succeeded",
+                            "failed"
+                          ]
+                        },
+                        "childTopicId": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "errorMessage": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "createdAt": {
+                          "type": "string"
+                        },
+                        "startedAt": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "finishedAt": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "sourceTopicId",
+                        "boundaryPostId",
+                        "status",
+                        "childTopicId",
+                        "errorMessage",
+                        "createdAt",
+                        "startedAt",
+                        "finishedAt"
+                      ]
+                    },
+                    "latest": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "sourceTopicId": {
+                          "type": "string"
+                        },
+                        "boundaryPostId": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "pending",
+                            "running",
+                            "needs_manual_review",
+                            "succeeded",
+                            "failed"
+                          ]
+                        },
+                        "childTopicId": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "errorMessage": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "createdAt": {
+                          "type": "string"
+                        },
+                        "startedAt": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "finishedAt": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "sourceTopicId",
+                        "boundaryPostId",
+                        "status",
+                        "childTopicId",
+                        "errorMessage",
+                        "createdAt",
+                        "startedAt",
+                        "finishedAt"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "active",
+                    "latest"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "topics"
+        ],
+        "summary": "Accept a durable before-user fork operation",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "topicId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9_-]+$"
+                  },
+                  "boundaryPostId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300
+                  },
+                  "openingBody": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100000
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "boundaryPostId",
+                  "title",
+                  "openingBody"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "sourceTopicId": {
+                      "type": "string"
+                    },
+                    "boundaryPostId": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "running",
+                        "needs_manual_review",
+                        "succeeded",
+                        "failed"
+                      ]
+                    },
+                    "childTopicId": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "errorMessage": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "createdAt": {
+                      "type": "string"
+                    },
+                    "startedAt": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "finishedAt": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "sourceTopicId",
+                    "boundaryPostId",
+                    "status",
+                    "childTopicId",
+                    "errorMessage",
+                    "createdAt",
+                    "startedAt",
+                    "finishedAt"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/topics/{topicId}/forks/boundaries": {
+      "get": {
+        "tags": [
+          "topics"
+        ],
+        "summary": "List stable canonical user-message fork boundaries",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "topicId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "postId": {
+                            "type": "string"
+                          },
+                          "postNumber": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "exclusiveMinimum": true
+                          },
+                          "excerpt": {
+                            "type": "string"
+                          },
+                          "body": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "postId",
+                          "postNumber",
+                          "excerpt",
+                          "body"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/topics/{topicId}/forks/{operationId}": {
+      "get": {
+        "tags": [
+          "topics"
+        ],
+        "summary": "Get a durable forum-native fork operation",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "topicId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "operationId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "sourceTopicId": {
+                      "type": "string"
+                    },
+                    "boundaryPostId": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "running",
+                        "needs_manual_review",
+                        "succeeded",
+                        "failed"
+                      ]
+                    },
+                    "childTopicId": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "errorMessage": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "createdAt": {
+                      "type": "string"
+                    },
+                    "startedAt": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "finishedAt": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "sourceTopicId",
+                    "boundaryPostId",
+                    "status",
+                    "childTopicId",
+                    "errorMessage",
+                    "createdAt",
+                    "startedAt",
+                    "finishedAt"
                   ]
                 }
               }

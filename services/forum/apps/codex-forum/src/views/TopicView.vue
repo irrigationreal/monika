@@ -63,6 +63,13 @@ const state = useForumState();
 
 const replyBody = ref('');
 const quickReplyTextareaRef = ref<HTMLTextAreaElement | null>(null);
+const quickReplyContainerRef = ref<HTMLElement | null>(null);
+const quickReplyExpandButtonRef = ref<HTMLButtonElement | null>(null);
+const quickReplyPresentation = ref<'inline' | 'docked-expanded' | 'docked-collapsed'>('inline');
+const quickReplyOptionsOpen = ref(false);
+let quickReplyPresentationTouched = false;
+const quickReplyDocked = computed(() => quickReplyPresentation.value !== 'inline');
+const quickReplyExpanded = computed(() => quickReplyPresentation.value === 'docked-expanded');
 const editingPost = ref<PostDto | null>(null);
 const editBody = ref('');
 const showDeleteConfirm = ref<string | null>(null);
@@ -209,9 +216,7 @@ const checkpointNeedsRecovery = computed(
 const forkFence = computed(() => {
   const operation = forkState.value.active ?? forkOperation.value;
   return (
-    operation?.status === 'pending' ||
-    operation?.status === 'running' ||
-    operation?.status === 'needs_manual_review'
+    operation?.status === 'pending' || operation?.status === 'running' || operation?.status === 'needs_manual_review'
   );
 });
 const forkNeedsManualReview = computed(
@@ -659,9 +664,7 @@ async function pollFork(topicId: string, operationId: string): Promise<void> {
     persistForkOperationState(topicId, operation);
     forkState.value = {
       active:
-        operation.status === 'pending' ||
-        operation.status === 'running' ||
-        operation.status === 'needs_manual_review'
+        operation.status === 'pending' || operation.status === 'running' || operation.status === 'needs_manual_review'
           ? operation
           : null,
       latest: operation,
@@ -698,7 +701,7 @@ async function refreshForkState(topicId: string): Promise<void> {
     forkState.value = next;
     const intent = loadForkIntent(topicId);
     const matching = intent
-      ? [next.active, next.latest].find((operation) => operation?.id === intent.operationId) ?? null
+      ? ([next.active, next.latest].find((operation) => operation?.id === intent.operationId) ?? null)
       : null;
     if (matching) {
       forkOperation.value = matching;
@@ -718,7 +721,8 @@ async function refreshForkState(topicId: string): Promise<void> {
     }
     if (next.active) {
       forkOperation.value = next.active;
-      if (next.active.status === 'pending' || next.active.status === 'running') scheduleForkPoll(topicId, next.active.id);
+      if (next.active.status === 'pending' || next.active.status === 'running')
+        scheduleForkPoll(topicId, next.active.id);
       else forkError.value = next.active.errorMessage ?? 'Fork needs operator review; the source remains fenced.';
       return;
     }
@@ -1596,6 +1600,38 @@ function scrollToTop(): void {
 
 const routeTopicId = computed(() => (route.params['topicId'] as string | undefined) ?? null);
 const autosavedReply = useAutosavedDraft({ context: 'reply', contextId: routeTopicId, body: replyBody });
+const canDockQuickReply = computed(() => {
+  const topic = state.selectedTopic.value;
+  return Boolean(state.isLoggedIn.value && topic && topic.id === routeTopicId.value && topic.status === 'open');
+});
+const quickReplyHasAttachmentRecovery = computed(() => Boolean(publishedReplyPostId.value));
+const quickReplyCompactStatus = computed(() => {
+  if (isUploadingReply.value) return 'Uploading attachments…';
+  if (quickReplyHasAttachmentRecovery.value) return 'Reply posted — attachment recovery required';
+  const labels = {
+    idle: replyBody.value.trim() ? 'Draft not saved' : 'No draft',
+    saving: 'Saving draft…',
+    saved: 'Draft saved',
+    offline: 'Offline — draft remains in this tab',
+    failed: 'Draft save failed',
+    conflict: 'Draft conflict — expand to resolve',
+    auth: 'Sign in again to save this draft',
+    too_large: 'Draft is too large to save',
+  } as const;
+  const parts: string[] = [];
+  if (quickReplyWillSteerRobot.value) parts.push('Robot active — posting will steer');
+  if (replyFiles.value.length > 0) {
+    parts.push(`${replyFiles.value.length} attachment${replyFiles.value.length === 1 ? '' : 's'} selected`);
+  }
+  parts.push(labels[autosavedReply.status.value]);
+  return parts.join(' · ');
+});
+const quickReplyCompactStatusIsProblem = computed(
+  () =>
+    quickReplyHasAttachmentRecovery.value ||
+    quickReplyWillSteerRobot.value ||
+    ['offline', 'failed', 'conflict', 'auth', 'too_large'].includes(autosavedReply.status.value)
+);
 const routePage = computed(() => {
   const raw = route.query['page'];
   if (Array.isArray(raw)) return Number(raw[0] ?? 1);
@@ -1827,7 +1863,47 @@ async function saveEdit(): Promise<void> {
   }
 }
 
-function quotePost(post: PostDto): void {
+async function activateQuickReply(focus = true): Promise<void> {
+  if (!canDockQuickReply.value) return;
+  quickReplyPresentationTouched = true;
+  quickReplyPresentation.value = 'docked-expanded';
+  await nextTick();
+  if (focus) quickReplyTextareaRef.value?.focus();
+}
+
+async function collapseQuickReply(): Promise<void> {
+  quickReplyPresentationTouched = true;
+  quickReplyPresentation.value = 'docked-collapsed';
+  await nextTick();
+  quickReplyExpandButtonRef.value?.focus();
+}
+
+async function returnQuickReplyInline(): Promise<void> {
+  quickReplyPresentationTouched = true;
+  quickReplyPresentation.value = 'inline';
+  await nextTick();
+  quickReplyContainerRef.value?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  quickReplyTextareaRef.value?.focus({ preventScroll: true });
+}
+
+function resetQuickReplyPresentation(): void {
+  quickReplyPresentationTouched = false;
+  quickReplyOptionsOpen.value = false;
+  quickReplyPresentation.value = 'inline';
+}
+
+function applyQuickReplyDefault(): void {
+  if (quickReplyPresentationTouched || !canDockQuickReply.value) return;
+  if (!state.currentUser.value?.quickReplyDockedByDefault) {
+    quickReplyPresentation.value = 'inline';
+    return;
+  }
+  quickReplyPresentation.value = window.matchMedia('(max-width: 600px)').matches
+    ? 'docked-collapsed'
+    : 'docked-expanded';
+}
+
+async function quotePost(post: PostDto): Promise<void> {
   if (isPublishingReply.value) return;
   if (state.isTopicLocked()) {
     state.setError('Cannot reply to a locked or archived topic.');
@@ -1836,6 +1912,7 @@ function quotePost(post: PostDto): void {
   const authorName = state.identityName(post.authorId);
   const quoted = `[QUOTE=${authorName}]\n${post.body}\n[/QUOTE]\n\n`;
   replyBody.value = quoted + replyBody.value;
+  await activateQuickReply(true);
 }
 
 function confirmDelete(post: PostDto): void {
@@ -2155,6 +2232,7 @@ async function handleDeleteTopic(): Promise<void> {
 async function loadTopic(topicId: string): Promise<void> {
   try {
     await state.selectTopicById(topicId);
+    if (routeTopicId.value !== topicId || state.selectedTopic.value?.id !== topicId) return;
     if (isAdmin.value) {
       const intent = loadCompactionIntent(topicId);
       if (intent) {
@@ -2287,7 +2365,17 @@ async function guardQuickDraftNavigation(): Promise<boolean> {
   return saved;
 }
 
-onBeforeRouteLeave(() => guardQuickDraftNavigation());
+function confirmReplyFileNavigation(): boolean {
+  if (replyFiles.value.length === 0) return true;
+  if (!window.confirm('Selected files are not saved with drafts. Leave this page and clear those files?')) return false;
+  clearReplyFiles();
+  return true;
+}
+
+onBeforeRouteLeave(async () => {
+  if (!(await guardQuickDraftNavigation())) return false;
+  return confirmReplyFileNavigation();
+});
 onBeforeRouteUpdate(async (to, from) => {
   if (isPublishingReply.value && !allowQuickReplyNavigation.value) {
     state.setError('Wait for the reply to finish posting before leaving this topic.');
@@ -2295,17 +2383,13 @@ onBeforeRouteUpdate(async (to, from) => {
   }
   if (to.params['topicId'] === from.params['topicId']) return true;
   if (!(await guardQuickDraftNavigation())) return false;
-  if (replyFiles.value.length > 0) {
-    if (!window.confirm('Selected files are not saved with drafts. Leave this topic and clear those files?'))
-      return false;
-    clearReplyFiles();
-  }
-  return true;
+  return confirmReplyFileNavigation();
 });
 
 watch(
   routeTopicId,
   async (topicId) => {
+    resetQuickReplyPresentation();
     showStopRobotConfirm.value = false;
     showDiscardDraftConfirm.value = false;
     discardDraftError.value = '';
@@ -2334,6 +2418,8 @@ watch(
     replyBody.value = '';
     if (topicId) {
       await loadTopic(topicId);
+      if (routeTopicId.value !== topicId) return;
+      applyQuickReplyDefault();
       if (state.isLoggedIn.value) await autosavedReply.load();
     }
   },
@@ -2341,10 +2427,16 @@ watch(
 );
 
 watch(
-  () => state.isLoggedIn.value,
-  (loggedIn) => {
+  [() => state.isLoggedIn.value, () => state.selectedTopic.value?.id, () => state.selectedTopic.value?.status],
+  ([loggedIn]) => {
+    if (!canDockQuickReply.value && quickReplyDocked.value) resetQuickReplyPresentation();
     if (loggedIn && routeTopicId.value && !autosavedReply.hydrated.value) void autosavedReply.load();
   }
+);
+
+watch(
+  () => state.currentUser.value?.quickReplyDockedByDefault,
+  () => applyQuickReplyDefault()
 );
 
 onMounted(() => {
@@ -2537,9 +2629,15 @@ onUnmounted(() => {
             :disabled="forkSubmitting || !forkTitle.trim() || !forkOpeningBody.trim()"
             @click="submitFork"
           >
-            {{ forkSubmitting || forkOperation?.status === 'pending' || forkOperation?.status === 'running' ? 'Forking…' : 'Create fork' }}
+            {{
+              forkSubmitting || forkOperation?.status === 'pending' || forkOperation?.status === 'running'
+                ? 'Forking…'
+                : 'Create fork'
+            }}
           </button>
-          <button class="vb-btn vb-btn-secondary" type="button" :disabled="forkSubmitting" @click="closeForkModal">Cancel</button>
+          <button class="vb-btn vb-btn-secondary" type="button" :disabled="forkSubmitting" @click="closeForkModal">
+            Cancel
+          </button>
         </div>
       </div>
     </div>
@@ -2656,7 +2754,14 @@ onUnmounted(() => {
     {{ compactionError }}
   </div>
 
-  <section class="vb-section">
+  <section
+    class="vb-section"
+    :class="{
+      'vb-topic-with-reply-dock': quickReplyDocked,
+      'vb-topic-with-reply-dock--expanded': quickReplyExpanded,
+      'vb-topic-with-reply-dock--collapsed': quickReplyPresentation === 'docked-collapsed',
+    }"
+  >
     <div class="vb-thread-titlebar">
       <div class="vb-thread-icon" aria-hidden="true"></div>
       <h2>{{ state.selectedTopic.value?.title }}</h2>
@@ -2687,6 +2792,16 @@ onUnmounted(() => {
           @click="openReplyPage"
         >
           Post Reply
+        </button>
+        <button
+          class="vb-btn vb-btn-secondary"
+          type="button"
+          :disabled="state.loading.value || compactionFence || !canDockQuickReply"
+          :aria-expanded="!quickReplyDocked || quickReplyExpanded"
+          aria-controls="quick-reply-composer"
+          @click="activateQuickReply(true)"
+        >
+          Quick Reply
         </button>
         <button
           class="vb-btn"
@@ -2974,10 +3089,13 @@ onUnmounted(() => {
           </div>
         </div>
         <a
-          v-if="state.isRobotPost(post) && post.followUp && post.parentPostId && postNumberForPostId(post.parentPostId)"
+            v-if="
+              state.isRobotPost(post) && post.followUp && post.parentPostId && postNumberForPostId(post.parentPostId)
+            "
           class="vb-follow-up-origin"
           :href="`#${postNumberForPostId(post.parentPostId)}`"
-        >Background follow-up to #{{ postNumberForPostId(post.parentPostId) }}</a>
+            >Background follow-up to #{{ postNumberForPostId(post.parentPostId) }}</a
+          >
         <div
           class="vb-post-body"
           :class="{ 'vb-post-body--multipost': isRobotOrSystemPost(post) && hasMultipostSegments(post.body) }"
@@ -3061,7 +3179,11 @@ onUnmounted(() => {
                     <div class="vb-multipost-segment-header">
                       <a class="vb-segment-link" :href="`#${segmentAnchorId(post.id, segIdx)}`">#</a>
                     </div>
-                    <div v-enhance-mermaid class="vb-post-text vb-rendered-content" v-html="renderPost(segment.body)"></div>
+                      <div
+                        v-enhance-mermaid
+                        class="vb-post-text vb-rendered-content"
+                        v-html="renderPost(segment.body)"
+                      ></div>
                     <div v-if="personaSignature(segment.personaKey)" class="vb-post-signature">
                       <div class="vb-signature-line"></div>
                       <div
@@ -3314,6 +3436,16 @@ onUnmounted(() => {
           Post Reply
         </button>
         <button
+          class="vb-btn vb-btn-secondary"
+          type="button"
+          :disabled="state.loading.value || compactionFence || !canDockQuickReply"
+          :aria-expanded="!quickReplyDocked || quickReplyExpanded"
+          aria-controls="quick-reply-composer"
+          @click="activateQuickReply(true)"
+        >
+          Quick Reply
+        </button>
+        <button
           class="vb-btn"
           :disabled="state.loading.value || state.isTopicLocked() || compactionFence"
           @click="openHandoffModal"
@@ -3514,15 +3646,82 @@ onUnmounted(() => {
     </div>
   </div>
 
-    <div class="vb-quick-reply">
-      <div class="vb-table-header">Quick Reply</div>
+    <div
+      id="quick-reply-composer"
+      ref="quickReplyContainerRef"
+      class="vb-quick-reply vb-quick-reply-composer"
+      :class="{
+        'vb-quick-reply--docked': quickReplyDocked,
+        'vb-quick-reply--collapsed': quickReplyPresentation === 'docked-collapsed',
+      }"
+      role="region"
+      aria-labelledby="quick-reply-title"
+    >
+      <div class="vb-table-header vb-quick-reply-header">
+        <span id="quick-reply-title">Quick Reply</span>
+        <span
+          v-if="quickReplyPresentation === 'docked-collapsed'"
+          class="vb-quick-reply-compact-status"
+          :class="{ 'is-problem': quickReplyCompactStatusIsProblem }"
+          role="status"
+          aria-live="polite"
+        >
+          {{ quickReplyCompactStatus }}
+        </span>
+        <div class="vb-quick-reply-header-actions">
+          <button
+            v-if="(!quickReplyDocked || quickReplyExpanded) && canDockQuickReply"
+            class="vb-small-btn"
+            type="button"
+            :aria-expanded="quickReplyOptionsOpen"
+            aria-controls="quick-reply-options"
+            @click="quickReplyOptionsOpen = !quickReplyOptionsOpen"
+          >
+            {{ quickReplyOptionsOpen ? 'Hide options' : 'Options' }}
+          </button>
+          <button
+            v-if="!quickReplyDocked && canDockQuickReply"
+            class="vb-small-btn"
+            type="button"
+            aria-label="Keep Quick Reply visible while reading"
+            @click="activateQuickReply(false)"
+          >
+            Keep visible
+          </button>
+          <button
+            v-else-if="quickReplyDocked && quickReplyExpanded && canDockQuickReply"
+            class="vb-small-btn"
+            type="button"
+            aria-expanded="true"
+            aria-controls="quick-reply-dock-body"
+            @click="collapseQuickReply"
+          >
+            Collapse
+          </button>
+          <button
+            v-else-if="quickReplyDocked && canDockQuickReply"
+            ref="quickReplyExpandButtonRef"
+            class="vb-small-btn"
+            type="button"
+            aria-expanded="false"
+            aria-controls="quick-reply-dock-body"
+            @click="activateQuickReply(true)"
+          >
+            Expand
+          </button>
+          <button v-if="quickReplyDocked" class="vb-small-btn" type="button" @click="returnQuickReplyInline">
+            Return inline
+          </button>
+        </div>
+      </div>
+      <div id="quick-reply-dock-body" v-show="!quickReplyDocked || quickReplyExpanded" class="vb-quick-reply-dock-body">
       <div v-if="state.isTopicLocked()" class="vb-locked-notice">
         This topic is {{ state.selectedTopic.value?.status }}. No new replies can be posted.
       </div>
       <div v-else-if="!state.isLoggedIn.value" class="vb-login-notice">
         <template v-if="state.canShowRegisterLink.value">
-          <router-link to="/login">Log in</router-link> or <router-link to="/register">register</router-link> to post a
-          reply.
+            <router-link to="/login">Log in</router-link> or <router-link to="/register">register</router-link> to post
+            a reply.
         </template>
         <template v-else> <router-link to="/login">Log in</router-link> to post a reply. </template>
       </div>
@@ -3545,57 +3744,29 @@ onUnmounted(() => {
           >
           <span class="vb-robot-error-detail">{{ state.robotState.value.lastTurnError.message }}</span>
         </div>
-        <label>Message:</label>
+          <label for="quick-reply-message">Message:</label>
+          <div id="quick-reply-options" v-show="quickReplyOptionsOpen" class="vb-quick-reply-secondary-controls">
+            <div class="vb-quick-reply-options-panel">
         <MessageTemplatePicker
           context="reply"
           :forum-id="state.selectedTopic.value?.forumId ?? null"
           :has-draft="replyBody.length > 0"
           @apply="applyQuickReplyTemplate"
         />
-        <DraftStatus
-          :status="autosavedReply.status.value"
-          :expires-at="autosavedReply.expiresAt.value"
-          :conflict="Boolean(autosavedReply.remoteDraft.value)"
-          @retry="autosavedReply.resume()"
-          @discard="requestDiscardQuickDraft"
-          @use-saved="autosavedReply.useSavedVersion()"
-          @keep-mine="autosavedReply.keepMyVersion()"
-          @copy-mine="autosavedReply.copyMyText()"
-        />
-        <div v-if="discardDraftError" class="vb-form-error" role="alert">{{ discardDraftError }}</div>
-        <textarea
-          ref="quickReplyTextareaRef"
-          v-model="replyBody"
-          rows="6"
-          placeholder="Type your reply here..."
-          :disabled="isPublishingReply"
-        ></textarea>
+              <router-link class="vb-small-btn" :to="{ name: 'topic.reply', params: { topicId: routeTopicId } }">
+                Open full editor
+              </router-link>
+            </div>
         <div class="vb-reply-attachments">
           <label class="vb-attachment-label">Attachments:</label>
           <span class="vb-form-hint">Selected files are not included in autosaved drafts.</span>
-          <input ref="replyFileInputRef" class="vb-attachment-input" type="file" multiple @change="handleReplyFiles" />
-          <div v-if="publishedReplyPostId" class="vb-template-conflict" role="alert">
-            Reply posted; attachment upload is incomplete. Retrying cannot duplicate the reply. Complete it within five
-            minutes.
-            <button type="button" class="vb-small-btn" :disabled="isUploadingReply" @click="retryQuickReplyAttachments">
-              {{ replyFiles.length ? 'Retry remaining files' : 'Retry dispatch' }}
-            </button>
-            <button
-              type="button"
-              class="vb-small-btn"
-              :disabled="isUploadingReply"
-              @click="abandonQuickReplyAttachments"
-            >
-              {{ replyFiles.length ? 'Abandon files' : 'Continue'
-              }}{{ publishedReplyNeedsDispatch ? ' and dispatch' : '' }}
-            </button>
-          </div>
-          <div v-if="replyFiles.length > 0" class="vb-attachment-selected">
-            <span>Selected:</span>
-            <ul>
-              <li v-for="file in replyFiles" :key="file.name">{{ file.name }} ({{ formatBytes(file.size) }})</li>
-            </ul>
-          </div>
+              <input
+                ref="replyFileInputRef"
+                class="vb-attachment-input"
+                type="file"
+                multiple
+                @change="handleReplyFiles"
+              />
         </div>
         <div class="vb-reply-options">
           <div class="vb-option-group">
@@ -3609,7 +3780,7 @@ onUnmounted(() => {
               <option v-for="model in replyModels" :key="model" :value="model">{{ model }}</option>
             </select>
           </div>
-          <div class="vb-option-group" v-if="supportsReasoning">
+              <div v-if="supportsReasoning" class="vb-option-group">
             <label for="reasoning-select">Reasoning:</label>
             <select
               id="reasoning-select"
@@ -3622,9 +3793,12 @@ onUnmounted(() => {
               </option>
             </select>
           </div>
-          <span v-if="robotModeNotice" class="vb-reply-options-callout">{{ robotModeNotice }}</span>
         </div>
-        <AutoCompactOption v-model="autoCompactEnabled" :can-edit="isAdmin" :busy="isRobotBusy || compactionFence" />
+            <AutoCompactOption
+              v-model="autoCompactEnabled"
+              :can-edit="isAdmin"
+              :busy="isRobotBusy || compactionFence"
+            />
         <div v-if="sessionContext" class="vb-reply-context-meter">
           <strong>Context:</strong>
           <span
@@ -3633,7 +3807,9 @@ onUnmounted(() => {
           >
             {{ formatTokenCount(sessionContext.usedTokens) }} /
             {{ formatTokenCount(sessionContext.contextWindowTokens) }}
-            <span v-if="typeof sessionContext.percent === 'number'">({{ sessionContext.percent.toFixed(1) }}%)</span>
+                <span v-if="typeof sessionContext.percent === 'number'"
+                  >({{ sessionContext.percent.toFixed(1) }}%)</span
+                >
             <span v-if="!sessionContext.exact" class="vb-context-warning"
               >best Pi usage; not exact current context</span
             >
@@ -3641,6 +3817,56 @@ onUnmounted(() => {
           <span v-else>usage unavailable</span>
           <span v-if="sessionContext.model" class="vb-context-model">· {{ sessionContext.model }}</span>
         </div>
+          </div>
+          <DraftStatus
+            :status="autosavedReply.status.value"
+            :expires-at="autosavedReply.expiresAt.value"
+            :conflict="Boolean(autosavedReply.remoteDraft.value)"
+            @retry="autosavedReply.resume()"
+            @discard="requestDiscardQuickDraft"
+            @use-saved="autosavedReply.useSavedVersion()"
+            @keep-mine="autosavedReply.keepMyVersion()"
+            @copy-mine="autosavedReply.copyMyText()"
+          />
+          <div v-if="discardDraftError" class="vb-form-error" role="alert">{{ discardDraftError }}</div>
+          <textarea
+            id="quick-reply-message"
+            ref="quickReplyTextareaRef"
+            v-model="replyBody"
+            rows="6"
+            placeholder="Type your reply here..."
+            :disabled="isPublishingReply"
+          ></textarea>
+          <div v-if="publishedReplyPostId || replyFiles.length > 0" class="vb-reply-attachments">
+            <div v-if="publishedReplyPostId" class="vb-template-conflict" role="alert">
+              Reply posted; attachment upload is incomplete. Retrying cannot duplicate the reply. Complete it within
+              five minutes.
+              <button
+                type="button"
+                class="vb-small-btn"
+                :disabled="isUploadingReply"
+                @click="retryQuickReplyAttachments"
+              >
+                {{ replyFiles.length ? 'Retry remaining files' : 'Retry dispatch' }}
+              </button>
+              <button
+                type="button"
+                class="vb-small-btn"
+                :disabled="isUploadingReply"
+                @click="abandonQuickReplyAttachments"
+              >
+                {{ replyFiles.length ? 'Abandon files' : 'Continue'
+                }}{{ publishedReplyNeedsDispatch ? ' and dispatch' : '' }}
+              </button>
+            </div>
+            <div v-if="replyFiles.length > 0" class="vb-attachment-selected">
+              <span>Selected:</span>
+              <ul>
+                <li v-for="file in replyFiles" :key="file.name">{{ file.name }} ({{ formatBytes(file.size) }})</li>
+              </ul>
+            </div>
+          </div>
+          <span v-if="robotModeNotice" class="vb-reply-options-callout">{{ robotModeNotice }}</span>
         <div v-if="compactionFence" class="vb-reply-options-callout" role="status">
           <template v-if="forkNeedsManualReview">
             Replies are paused because a fork needs operator review; the canonical source remains fenced.
@@ -3648,7 +3874,7 @@ onUnmounted(() => {
           <template v-else>Replies are paused while a canonical operation is unresolved.</template>
         </div>
         <button
-          class="vb-btn"
+            class="vb-btn vb-quick-reply-submit"
           :disabled="
             state.loading.value ||
             isReplying ||
@@ -3672,6 +3898,7 @@ onUnmounted(() => {
           }}
         </button>
       </div>
+    </div>
     </div>
 
     <div v-if="showRobotStatePanel" class="vb-robot-state">
@@ -3864,10 +4091,18 @@ onUnmounted(() => {
             <div><strong>Canonical Pi session:</strong> {{ piSessionDiagnostics.id }}</div>
             <div><strong>Session path:</strong> {{ piSessionDiagnostics.path }}</div>
             <div v-if="piSessionDiagnostics.cwd"><strong>CWD:</strong> {{ piSessionDiagnostics.cwd }}</div>
-            <div v-if="piSessionDiagnostics.parentId"><strong>Parent session:</strong> {{ piSessionDiagnostics.parentId }}</div>
-            <div v-if="piSessionDiagnostics.parentPath"><strong>Parent path:</strong> {{ piSessionDiagnostics.parentPath }}</div>
-            <div v-if="piSessionDiagnostics.lineageKind"><strong>Lineage:</strong> {{ piSessionDiagnostics.lineageKind }}</div>
-            <div v-if="piSessionDiagnostics.lineageSource"><strong>Lineage source:</strong> {{ piSessionDiagnostics.lineageSource }}</div>
+            <div v-if="piSessionDiagnostics.parentId">
+              <strong>Parent session:</strong> {{ piSessionDiagnostics.parentId }}
+            </div>
+            <div v-if="piSessionDiagnostics.parentPath">
+              <strong>Parent path:</strong> {{ piSessionDiagnostics.parentPath }}
+            </div>
+            <div v-if="piSessionDiagnostics.lineageKind">
+              <strong>Lineage:</strong> {{ piSessionDiagnostics.lineageKind }}
+            </div>
+            <div v-if="piSessionDiagnostics.lineageSource">
+              <strong>Lineage source:</strong> {{ piSessionDiagnostics.lineageSource }}
+            </div>
             <div><strong>Imported:</strong> {{ state.formatDate(piSessionDiagnostics.importedAt) }}</div>
             <div v-if="piSessionDiagnostics.lastImportRunId">
               <strong>Import run:</strong> {{ piSessionDiagnostics.lastImportRunId }}
