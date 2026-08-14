@@ -341,12 +341,19 @@
 }
 
 @media (max-width: 600px) {
+  .vb-topic-with-reply-dock {
+    --quick-reply-dock-height: min(
+      clamp(18rem, calc(55dvh + env(safe-area-inset-bottom)), 34rem),
+      calc(100dvh - env(safe-area-inset-bottom) - 12px)
+    );
+  }
+
   .vb-topic-with-reply-dock--collapsed {
     padding-bottom: calc(56px + env(safe-area-inset-bottom));
   }
 
   .vb-topic-with-reply-dock--expanded {
-    padding-bottom: calc(55dvh + env(safe-area-inset-bottom) + 12px);
+    padding-bottom: calc(var(--quick-reply-dock-height) + 12px);
   }
 
   .vb-quick-reply--docked {
@@ -355,7 +362,6 @@
     bottom: 0;
     width: 100%;
     max-width: none;
-    max-height: 55dvh;
     transform: none;
     padding-bottom: env(safe-area-inset-bottom);
   }
@@ -379,6 +385,6 @@
   }
 
   .vb-topic-with-reply-dock--expanded .vb-scroll-top {
-    bottom: calc(55dvh + env(safe-area-inset-bottom) + 12px);
+    bottom: calc(var(--quick-reply-dock-height) + 32px);
   }
 }

@@ -89,7 +89,7 @@ curl -sS -X PATCH -b forum.cookies \
 ```
 
 The preference defaults to `false`, is returned by `/api/auth/me`, and is intentionally omitted from public profile
-responses. Temporary dock expansion, collapse, or return-inline actions do not update it.
+responses. Temporary dock expansion, collapse, or undock actions do not update it.
 
 ## Private autosaved drafts
 
