@@ -130,9 +130,14 @@ Manage personal templates at `/profile/message-templates` and system templates i
 
 ## Post formatting and code fences
 
-Post bodies and previews support Markdown and legacy BBCode. Fenced Markdown code blocks accept backtick or tilde fences
-of three or more markers. To display a fenced block inside another code block, make the outer fence longer than every
-run of the same marker in its content—for example, use four backticks around text containing triple-backtick fences.
+Post bodies and previews support Markdown and legacy BBCode. Each visible post footer provides **Copy**, which writes the
+exact stored forum source to the clipboard without trimming or converting it; this deliberately preserves Markdown,
+legacy BBCode, whitespace, code fences, and persona wrappers. Separately uploaded attachments and post metadata are not
+added to the copied source. The action remains available in locked topics and to any viewer authorized to read the post.
+
+Fenced Markdown code blocks accept backtick or tilde fences of three or more markers. To display a fenced block inside
+another code block, make the outer fence longer than every run of the same marker in its content—for example, use four
+backticks around text containing triple-backtick fences.
 The composer Code button calculates this delimiter length from the selection automatically. Unclosed fences extend to
 the current end of input, so partial robot responses remain literal and use the same deterministic renderer as completed
 posts. Code contents are HTML-escaped and bypass Markdown, BBCode, and typographic-ligature processing.
