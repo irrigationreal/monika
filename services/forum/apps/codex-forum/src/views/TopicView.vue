@@ -2340,6 +2340,10 @@ function openReplyPage(): void {
   });
 }
 
+function openReplyFilePicker(): void {
+  replyFileInputRef.value?.click();
+}
+
 function handleReplyFiles(event: Event): void {
   const input = event.target as HTMLInputElement | null;
   const files = input?.files ? Array.from(input.files) : [];
@@ -3986,13 +3990,34 @@ onUnmounted(() => {
             <div id="quick-reply-attachment-picker" v-show="quickReplyOptionsOpen" class="vb-reply-attachments">
               <label class="vb-attachment-label">Attachments:</label>
               <span class="vb-form-hint">Selected files are not included in autosaved drafts.</span>
-              <input
-                ref="replyFileInputRef"
-                class="vb-attachment-input"
-                type="file"
-                multiple
-                @change="handleReplyFiles"
-              />
+              <div class="vb-attachment-picker">
+                <input
+                  ref="replyFileInputRef"
+                  class="vb-attachment-input vb-attachment-input-hidden"
+                  type="file"
+                  multiple
+                  tabindex="-1"
+                  aria-label="Choose files to attach"
+                  aria-describedby="quick-reply-file-selection-status"
+                  :disabled="isPublishingReply || isUploadingReply"
+                  @change="handleReplyFiles"
+                />
+                <button
+                  type="button"
+                  class="vb-btn vb-btn-secondary"
+                  :disabled="isPublishingReply || isUploadingReply"
+                  @click="openReplyFilePicker"
+                >
+                  Browse files
+                </button>
+                <span id="quick-reply-file-selection-status" class="vb-attachment-picker-status" role="status">
+                  {{
+                    replyFiles.length
+                      ? `${String(replyFiles.length)} file${replyFiles.length === 1 ? '' : 's'} selected`
+                      : 'No files selected'
+                  }}
+                </span>
+              </div>
             </div>
             <div v-if="publishedReplyPostId || replyFiles.length > 0" class="vb-reply-attachments">
               <div v-if="publishedReplyPostId" class="vb-template-conflict" role="alert">

@@ -310,6 +310,10 @@ async function handleCancel(): Promise<void> {
   if (await guardDraftNavigation()) router.back();
 }
 
+function openThreadFilePicker(): void {
+  threadFileInputRef.value?.click();
+}
+
 function handleThreadFiles(event: Event): void {
   const input = event.target as HTMLInputElement | null;
   threadFiles.value = input?.files ? Array.from(input.files) : [];
@@ -589,13 +593,34 @@ onMounted(async () => {
             <div class="vb-reply-attachments">
               <label class="vb-attachment-label">Attachments:</label>
               <span class="vb-form-hint">Selected files are not included in autosaved drafts.</span>
-              <input
-                ref="threadFileInputRef"
-                class="vb-attachment-input"
-                type="file"
-                multiple
-                @change="handleThreadFiles"
-              />
+              <div class="vb-attachment-picker">
+                <input
+                  ref="threadFileInputRef"
+                  class="vb-attachment-input vb-attachment-input-hidden"
+                  type="file"
+                  multiple
+                  tabindex="-1"
+                  aria-label="Choose files to attach"
+                  aria-describedby="new-thread-file-selection-status"
+                  :disabled="isPublishing || isUploading"
+                  @change="handleThreadFiles"
+                />
+                <button
+                  type="button"
+                  class="vb-btn vb-btn-secondary"
+                  :disabled="isPublishing || isUploading"
+                  @click="openThreadFilePicker"
+                >
+                  Browse files
+                </button>
+                <span id="new-thread-file-selection-status" class="vb-attachment-picker-status" role="status">
+                  {{
+                    threadFiles.length
+                      ? `${String(threadFiles.length)} file${threadFiles.length === 1 ? '' : 's'} selected`
+                      : 'No files selected'
+                  }}
+                </span>
+              </div>
               <div
                 v-if="publishedTopicId && (threadFiles.length || publishedNeedsDispatch)"
                 class="vb-template-conflict"
