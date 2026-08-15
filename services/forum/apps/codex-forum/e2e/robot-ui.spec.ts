@@ -903,30 +903,39 @@ test.describe('Robot UI (mocked)', () => {
 
     const reasoningToggle = page.getByRole('button', { name: 'Reasoning: On' });
     const reasoningItem = page.locator('.vb-tool-item--reasoning');
-    await expect(reasoningToggle).toBeVisible();
-    await expect(reasoningItem).toContainText('Inspect the path');
-
     const traceItems = page.locator('.vb-tool-response .vb-tool-item');
-    await expect(traceItems).toHaveCount(2);
-    await expect(traceItems.first()).toHaveClass(/vb-tool-item--reasoning/);
+    await expect(reasoningToggle).toBeVisible();
+    await expect(reasoningItem).toHaveCount(0);
+    await expect(traceItems).toHaveCount(1);
+    await expect(traceItems.first()).not.toHaveClass(/vb-tool-item--reasoning/);
+
+    await page.getByRole('button', { name: 'Show All', exact: true }).click();
+    await expect(reasoningItem).toContainText('Inspect the path');
+    await expect(page.locator('.vb-tool-response-label')).toHaveCount(2);
+    await expect(traceItems).toHaveCount(3);
 
     await reasoningToggle.click();
     await expect(reasoningItem).toHaveCount(0);
+    await expect(traceItems).toHaveCount(2);
     await page.reload();
     await expect(page.getByRole('button', { name: 'Reasoning: Off' })).toBeVisible();
-    await page.getByRole('button', { name: 'Reasoning: Off' }).click();
-    await expect(reasoningItem).toContainText('Inspect the path');
+    await expect(traceItems).toHaveCount(1);
 
+    await page.getByRole('button', { name: 'Reasoning: Off' }).click();
+    await expect(reasoningItem).toHaveCount(0);
+    await expect(traceItems).toHaveCount(1);
     await page.getByRole('button', { name: 'Show All', exact: true }).click();
-    await expect(page.locator('.vb-tool-response-label')).toHaveCount(2);
-    await expect(page.locator('.vb-tool-response .vb-tool-item')).toHaveCount(3);
-    await page.getByRole('button', { name: 'Show Latest', exact: true }).click();
-    await expect(page.locator('.vb-tool-response .vb-tool-item')).toHaveCount(2);
+    await expect(reasoningItem).toContainText('Inspect the path');
+    await expect(traceItems).toHaveCount(3);
 
     await reasoningItem.locator('.vb-tool-toggle').click();
     await expect(reasoningItem.locator('.vb-tool-reasoning-detail')).toContainText(
       'Confirm the long path before reading it.'
     );
+
+    await page.getByRole('button', { name: 'Show Latest', exact: true }).click();
+    await expect(traceItems).toHaveCount(1);
+    await expect(reasoningItem).toHaveCount(0);
 
     const toolToggle = page.locator('.vb-tool-item:not(.vb-tool-item--reasoning) .vb-tool-toggle').first();
     const toolControls = toolToggle.locator('.vb-tool-toggle-right');

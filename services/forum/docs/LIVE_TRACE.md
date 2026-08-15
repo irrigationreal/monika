@@ -143,17 +143,19 @@ data or imported sessions).
 ### Robot State Tool Usage trace
 
 The admin-only Robot State **Tool Usage** section is also a unified reasoning and
-tool trace. It groups plans and tool runs by `parentPostId`, shows the complete
-latest response by default, and lets the administrator expand the bounded set of
-available response groups with **Show All**. This scope control operates on
-responses rather than individual tools so reasoning is never detached from the
-tool calls it explains.
+tool trace. It groups plans and tool runs by `parentPostId` while preserving the
+original compact interaction: the collapsed view shows only the newest tool card.
+**Show All** expands the complete available reasoning-and-tool trace, and **Show
+Latest** returns to that one-tool view. Response headings appear only in the
+expanded view when more than one response group is present.
 
-Reasoning is shown by default. The accessible **Reasoning: On/Off** toggle filters
-reasoning cards without changing the selected responses or tools, and its value
-is remembered in browser-local storage. Reasoning cards show a compact preview
-and expand to sanitized Markdown detail. Assistant response text is intentionally
-excluded because canonical outward text is already rendered as forum posts.
+Reasoning is enabled by default for the expanded trace. The accessible
+**Reasoning: On/Off** toggle filters reasoning cards without changing which tools
+are available, and its value is remembered in browser-local storage. The compact
+one-tool view remains tool-only regardless of that preference. Reasoning cards
+show a compact preview and expand to sanitized Markdown detail. Assistant response
+text is intentionally excluded because canonical outward text is already rendered
+as forum posts.
 
 While a response is active, Tool Usage uses the append-only committed reasoning
 and tool segments plus the current reasoning draft. Completed responses use the

@@ -1791,19 +1791,76 @@ const toolUsageTraceGroups = computed<ToolUsageTraceGroup[]>(() => {
     .slice(0, toolUsageResponseLimit);
 });
 
-const showingAllToolUsageGroups = computed(
-  () => showAllTools.value && toolUsageTraceGroups.value.length > 1
+function filteredToolUsageItems(group: ToolUsageTraceGroup): UnifiedTraceItem[] {
+  return showToolReasoning.value ? group.items : group.items.filter((item) => item.type === 'tool');
+}
+
+const expandedToolUsageGroups = computed(() =>
+  toolUsageTraceGroups.value
+    .map((group) => ({
+      ...group,
+      items: filteredToolUsageItems(group)
+    }))
+    .filter((group) => group.items.length > 0)
 );
 
-const visibleToolUsageGroups = computed(() => {
-  const groups = showingAllToolUsageGroups.value
-    ? toolUsageTraceGroups.value
-    : toolUsageTraceGroups.value.slice(0, 1);
-  return groups.map((group) => ({
-    ...group,
-    items: showToolReasoning.value ? group.items : group.items.filter((item) => item.type === 'tool')
-  }));
+const expandedToolUsageEntryCount = computed(() =>
+  expandedToolUsageGroups.value.reduce(
+    (count, group) =>
+      count +
+      group.items.reduce(
+        (groupCount, item) => groupCount + (item.type === 'reasoning' ? item.steps.length : 1),
+        0
+      ),
+    0
+  )
+);
+
+const latestToolUsageSelection = computed(() => {
+  const newestToolId =
+    state.robotState.value?.recentToolRuns[0]?.id ?? state.sessionInspector.value?.toolRuns[0]?.id ?? null;
+  if (newestToolId) {
+    for (const group of toolUsageTraceGroups.value) {
+      const item = group.items.find((candidate) => candidate.type === 'tool' && candidate.tool.id === newestToolId);
+      if (item?.type === 'tool') return { group, item };
+    }
+  }
+
+  const tools = toolUsageTraceGroups.value.flatMap((group) =>
+    group.items
+      .filter((item): item is Extract<UnifiedTraceItem, { type: 'tool' }> => item.type === 'tool')
+      .map((item) => ({ group, item }))
+  );
+  return tools.sort((a, b) => b.item.tool.startedAt.localeCompare(a.item.tool.startedAt))[0] ?? null;
 });
+
+const canExpandToolUsage = computed(
+  () => expandedToolUsageEntryCount.value > (latestToolUsageSelection.value ? 1 : 0)
+);
+const showingAllToolUsageGroups = computed(() => showAllTools.value && canExpandToolUsage.value);
+
+watch(canExpandToolUsage, (canExpand) => {
+  if (!canExpand) showAllTools.value = false;
+});
+
+const visibleToolUsageGroups = computed(() => {
+  if (showingAllToolUsageGroups.value) return expandedToolUsageGroups.value;
+  const selection = latestToolUsageSelection.value;
+  if (!selection) return [];
+  return [{ ...selection.group, items: [selection.item] }];
+});
+
+const visibleToolUsageEntryCount = computed(() =>
+  visibleToolUsageGroups.value.reduce(
+    (count, group) =>
+      count +
+      group.items.reduce(
+        (groupCount, item) => groupCount + (item.type === 'reasoning' ? item.steps.length : 1),
+        0
+      ),
+    0
+  )
+);
 
 function toolUsageReasoningKey(
   group: ToolUsageTraceGroup,
@@ -4240,7 +4297,7 @@ onUnmounted(() => {
               <button
                 class="vb-small-btn"
                 type="button"
-                :disabled="toolUsageTraceGroups.length <= 1"
+                :disabled="!canExpandToolUsage"
                 @click="showAllTools = !showAllTools"
               >
                 {{ showingAllToolUsageGroups ? 'Show Latest' : 'Show All' }}
@@ -4248,13 +4305,16 @@ onUnmounted(() => {
             </div>
           </div>
           <div v-if="toolUsageTraceGroups.length === 0" class="vb-empty">No trace activity yet.</div>
+          <div v-else-if="visibleToolUsageEntryCount === 0" class="vb-empty">No tool runs yet.</div>
           <div
             v-for="group in visibleToolUsageGroups"
-            v-else
             :key="group.id"
             class="vb-tool-response"
           >
-            <div v-if="showingAllToolUsageGroups" class="vb-tool-response-label">
+            <div
+              v-if="showingAllToolUsageGroups && visibleToolUsageGroups.length > 1"
+              class="vb-tool-response-label"
+            >
               Response · {{ state.formatDate(group.latestAt) }}
             </div>
             <div v-if="group.items.length === 0" class="vb-empty">No tool runs in this response.</div>
@@ -4343,8 +4403,8 @@ onUnmounted(() => {
               </div>
             </template>
           </div>
-          <div v-if="!showingAllToolUsageGroups && toolUsageTraceGroups.length > 1" class="vb-tool-hint">
-            Latest response shown. Expand entries for details.
+          <div v-if="!showingAllToolUsageGroups && canExpandToolUsage" class="vb-tool-hint">
+            Latest tool shown. Choose Show All for the complete trace.
           </div>
         </div>
       </div>
