@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue';
-import { useRouter } from 'vue-router';
+import { ref, computed, onMounted, watch, type ObjectDirective } from 'vue';
+import { useRoute, useRouter, type RouteLocationRaw } from 'vue-router';
 import { useForumState } from '../composables/useForumState';
 import MessageTemplateManager from '../components/MessageTemplateManager.vue';
 import {
@@ -24,11 +24,11 @@ import {
   type TamperTestResultDto
 } from '../lib/apiClient';
 
+const route = useRoute();
 const router = useRouter();
 const state = useForumState();
 
-// Tab state
-const activeTab = ref<
+type AdminSection =
   | 'forums'
   | 'personas'
   | 'skills'
@@ -40,9 +40,124 @@ const activeTab = ref<
   | 'sync'
   | 'robots'
   | 'message-templates'
-  | 'tampers'
->('forums');
-const messageTemplatesOpened = ref(false);
+  | 'tampers';
+
+const adminSections: readonly { id: AdminSection; label: string }[] = [
+  { id: 'forums', label: 'Forums' },
+  { id: 'personas', label: 'Personas' },
+  { id: 'skills', label: 'Skills' },
+  { id: 'users', label: 'Users' },
+  { id: 'invites', label: 'Invites' },
+  { id: 'discord', label: 'Discord' },
+  { id: 'matrix', label: 'Matrix' },
+  { id: 'tampers', label: 'Tampers' },
+  { id: 'deploy', label: 'Deploy' },
+  { id: 'sync', label: 'Sync Health' },
+  { id: 'message-templates', label: 'Message Templates' },
+  { id: 'robots', label: 'Robot Automations' }
+];
+const adminSectionIds = new Set<AdminSection>(adminSections.map(({ id }) => id));
+
+function parseAdminSection(value: unknown): AdminSection {
+  return typeof value === 'string' && adminSectionIds.has(value as AdminSection)
+    ? (value as AdminSection)
+    : 'forums';
+}
+
+function adminSectionLocation(section: AdminSection): RouteLocationRaw {
+  const query = { ...route.query };
+  if (section === 'forums') delete query['section'];
+  else query['section'] = section;
+  return { name: 'admin', query };
+}
+
+// Section state follows the URL so admin views are linkable and survive reloads.
+const initialAdminSection = parseAdminSection(route.query['section']);
+const activeTab = ref<AdminSection>(initialAdminSection);
+const messageTemplatesOpened = ref(initialAdminSection === 'message-templates');
+
+interface AdminDialogState {
+  close: () => void;
+  keydown: (event: KeyboardEvent) => void;
+  previousFocus: HTMLElement | null;
+  fallbackFocus: HTMLElement | null;
+}
+
+const dialogStates = new WeakMap<HTMLElement, AdminDialogState>();
+const dialogFocusableSelector = [
+  'a[href]',
+  'button:not([disabled])',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])'
+].join(',');
+
+// Local directive shared by the legacy admin dialogs until they can be split into
+// smaller components. It provides Escape, focus containment, and focus restoration.
+const vAccessibleDialog: ObjectDirective<HTMLElement, () => void> = {
+  mounted(el, binding) {
+    const visiblePanel = Array.from(document.querySelectorAll<HTMLElement>('.vb-admin-section-panel'))
+      .find((panel) => panel.getClientRects().length > 0);
+    const fallbackFocus = visiblePanel?.querySelector<HTMLElement>('.vb-admin-section-title') ?? null;
+    if (fallbackFocus && !fallbackFocus.hasAttribute('tabindex')) fallbackFocus.tabIndex = -1;
+    const state: AdminDialogState = {
+      close: binding.value,
+      previousFocus: document.activeElement instanceof HTMLElement ? document.activeElement : null,
+      fallbackFocus,
+      keydown(event: KeyboardEvent) {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          state.close();
+          return;
+        }
+        if (event.key !== 'Tab') return;
+        const focusable = Array.from(el.querySelectorAll<HTMLElement>(dialogFocusableSelector))
+          .filter((item) => !item.hasAttribute('disabled') && item.getClientRects().length > 0);
+        const first = focusable[0];
+        if (!first) {
+          event.preventDefault();
+          el.focus();
+          return;
+        }
+        const last = focusable.at(-1) ?? first;
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+    };
+    el.addEventListener('keydown', state.keydown);
+    dialogStates.set(el, state);
+    queueMicrotask(() => {
+      const firstFocusable = el.querySelector<HTMLElement>(dialogFocusableSelector);
+      if (firstFocusable) firstFocusable.focus();
+      else el.focus();
+    });
+  },
+  updated(el, binding) {
+    const state = dialogStates.get(el);
+    if (state) state.close = binding.value;
+  },
+  beforeUnmount(el) {
+    const state = dialogStates.get(el);
+    if (!state) return;
+    el.removeEventListener('keydown', state.keydown);
+    dialogStates.delete(el);
+    queueMicrotask(() => {
+      if (state.previousFocus?.isConnected) state.previousFocus.focus();
+      else if (state.fallbackFocus?.isConnected) state.fallbackFocus.focus();
+      requestAnimationFrame(() => {
+        if (state.previousFocus && !state.previousFocus.isConnected && state.fallbackFocus?.isConnected) {
+          state.fallbackFocus.focus();
+        }
+      });
+    });
+  }
+};
 
 // Forums list
 const forums = ref<ForumDto[]>([]);
@@ -419,31 +534,73 @@ const forumNameById = computed(() => {
   return map;
 });
 
-watch(activeTab, (tab) => {
-  if (tab === 'message-templates') messageTemplatesOpened.value = true;
-});
+const adminReady = ref(false);
 
-watch([activeTab, personaForumId], async ([tab]) => {
-  if (tab === 'personas') {
-    await loadPersonas();
-  }
-});
+watch(
+  () => route.query['section'],
+  (section) => {
+    const parsed = parseAdminSection(section);
+    activeTab.value = parsed;
+    if (section !== undefined && parsed === 'forums' && section !== 'forums') {
+      void router.replace(adminSectionLocation('forums'));
+    }
+  },
+  { immediate: true }
+);
 
 watch(activeTab, async (tab) => {
-  if (tab === 'skills') {
-    await loadAdminSkills();
-  }
-  if (tab === 'tampers') {
-    await loadTamperPlugins();
-    await loadTamperConfigs();
-  }
-  if (tab === 'robots') {
-    await loadRobotSettings();
-  }
-  if (tab === 'sync') {
-    await loadPiSyncHealth();
-  }
+  if (tab === 'message-templates') messageTemplatesOpened.value = true;
+  if (adminReady.value) await loadAdminSection(tab);
 });
+
+watch(personaForumId, async () => {
+  if (adminReady.value && activeTab.value === 'personas') await loadPersonas();
+});
+
+async function loadAdminSection(tab: AdminSection): Promise<void> {
+  switch (tab) {
+    case 'forums':
+      await Promise.all([loadForums(), loadAdminForums()]);
+      break;
+    case 'personas': {
+      await loadForums();
+      const firstForum = forums.value[0];
+      if (!personaForumId.value && firstForum) personaForumId.value = firstForum.id;
+      else await loadPersonas();
+      break;
+    }
+    case 'skills':
+      await Promise.all([loadForums(), loadAdminSkills()]);
+      break;
+    case 'users':
+      await loadUsers();
+      break;
+    case 'invites':
+      await loadInvites();
+      break;
+    case 'discord':
+      await Promise.all([loadForums(), loadDiscordStatus()]);
+      break;
+    case 'matrix':
+      await Promise.all([loadForums(), loadMatrixStatus()]);
+      break;
+    case 'tampers':
+      await Promise.all([loadForums(), loadTamperPlugins(), loadTamperConfigs()]);
+      break;
+    case 'deploy':
+      await loadDeployStatus();
+      break;
+    case 'sync':
+      await loadPiSyncHealth();
+      break;
+    case 'robots':
+      await Promise.all([loadForums(), loadRobotAutomations(), loadRobotSettings()]);
+      break;
+    case 'message-templates':
+      messageTemplatesOpened.value = true;
+      break;
+  }
+}
 
 watch(tamperConfigPluginKey, (pluginKey) => {
   if (!pluginKey) return;
@@ -1843,22 +2000,12 @@ onMounted(async () => {
     await state.checkAuth();
   }
   if (!state.isLoggedIn.value || !isAdmin.value) {
-    router.push({ name: 'forum.home' });
+    await router.push({ name: 'forum.home' });
     return;
   }
-  await loadForums();
-  if (!personaForumId.value && forums.value.length > 0) {
-    personaForumId.value = forums.value[0]!.id;
-  }
-  await loadAdminForums();
-  await loadUsers();
-  await loadInvites();
-  await loadDiscordStatus();
-  await loadMatrixStatus();
-  await loadDeployStatus();
-  await loadRobotAutomations();
-  await loadRobotSettings();
   resetTamperCreateForm();
+  adminReady.value = true;
+  await loadAdminSection(activeTab.value);
 });
 </script>
 
@@ -1877,96 +2024,21 @@ onMounted(async () => {
     </div>
 
     <div v-else class="vb-admin-content">
-      <!-- Tab Navigation -->
-      <div class="vb-admin-tabs">
-        <button
+      <nav class="vb-admin-tabs" aria-label="Admin sections">
+        <router-link
+          v-for="section in adminSections"
+          :key="section.id"
           class="vb-admin-tab"
-          :class="{ active: activeTab === 'forums' }"
-          @click="activeTab = 'forums'"
+          :class="{ active: activeTab === section.id }"
+          :to="adminSectionLocation(section.id)"
+          :aria-current="activeTab === section.id ? 'page' : undefined"
         >
-          Forums
-        </button>
-        <button
-          class="vb-admin-tab"
-          :class="{ active: activeTab === 'personas' }"
-          @click="activeTab = 'personas'"
-        >
-          Personas
-        </button>
-        <button
-          class="vb-admin-tab"
-          :class="{ active: activeTab === 'skills' }"
-          @click="activeTab = 'skills'"
-        >
-          Skills
-        </button>
-        <button
-          class="vb-admin-tab"
-          :class="{ active: activeTab === 'users' }"
-          @click="activeTab = 'users'"
-        >
-          Users
-        </button>
-        <button
-          class="vb-admin-tab"
-          :class="{ active: activeTab === 'invites' }"
-          @click="activeTab = 'invites'"
-        >
-          Invites
-        </button>
-        <button
-          class="vb-admin-tab"
-          :class="{ active: activeTab === 'discord' }"
-          @click="activeTab = 'discord'"
-        >
-          Discord
-        </button>
-        <button
-          class="vb-admin-tab"
-          :class="{ active: activeTab === 'matrix' }"
-          @click="activeTab = 'matrix'"
-        >
-          Matrix
-        </button>
-        <button
-          class="vb-admin-tab"
-          :class="{ active: activeTab === 'tampers' }"
-          @click="activeTab = 'tampers'"
-        >
-          Tampers
-        </button>
-        <button
-          class="vb-admin-tab"
-          :class="{ active: activeTab === 'deploy' }"
-          @click="activeTab = 'deploy'"
-        >
-          Deploy
-        </button>
-        <button
-          class="vb-admin-tab"
-          :class="{ active: activeTab === 'sync' }"
-          @click="activeTab = 'sync'"
-        >
-          Sync Health
-        </button>
-        <button
-          class="vb-admin-tab"
-          :class="{ active: activeTab === 'message-templates' }"
-          @click="activeTab = 'message-templates'"
-        >
-          Message Templates
-        </button>
-        <button
-          class="vb-admin-tab"
-          :class="{ active: activeTab === 'robots' }"
-          @click="activeTab = 'robots'"
-        >
-          Robot Automations
-        </button>
-      </div>
+          {{ section.label }}
+        </router-link>
+      </nav>
 
       <!-- Forums Tab -->
-      <div v-if="activeTab === 'forums'" class="vb-admin-panel">
+      <div v-if="activeTab === 'forums'" class="vb-admin-section-panel">
         <h3 class="vb-admin-section-title">Forum Management</h3>
 
         <div v-if="adminForumsError" class="vb-login-error">{{ adminForumsError }}</div>
@@ -1979,7 +2051,7 @@ onMounted(async () => {
             No forums found.
           </div>
 
-          <div v-else class="vb-admin-table-scroll" aria-label="Forum management table">
+          <div v-else class="vb-admin-table-scroll" role="region" tabindex="0" aria-label="Forum management table">
             <table class="vb-admin-table">
               <thead>
                 <tr>
@@ -2206,10 +2278,10 @@ onMounted(async () => {
 
       <!-- Edit Forum Modal -->
       <div v-if="editingForum" class="vb-modal-overlay" @click.self="closeEditForum">
-        <div class="vb-modal">
+        <div v-accessible-dialog="closeEditForum" class="vb-modal" role="dialog" aria-modal="true" aria-labelledby="edit-forum-title" tabindex="-1">
           <div class="vb-modal-header">
-            <h3>Edit Forum</h3>
-            <button class="vb-modal-close" @click="closeEditForum">&times;</button>
+            <h3 id="edit-forum-title">Edit Forum</h3>
+            <button class="vb-modal-close" type="button" aria-label="Close edit forum dialog" @click="closeEditForum">&times;</button>
           </div>
           <div class="vb-modal-body">
             <div v-if="adminForumsError" class="vb-login-error">{{ adminForumsError }}</div>
@@ -2351,7 +2423,7 @@ onMounted(async () => {
       </div>
 
       <!-- Personas Tab -->
-      <div v-if="activeTab === 'personas'" class="vb-admin-panel">
+      <div v-if="activeTab === 'personas'" class="vb-admin-section-panel">
         <h3 class="vb-admin-section-title">Robot Personas</h3>
 
         <div v-if="personasError" class="vb-login-error">{{ personasError }}</div>
@@ -2373,7 +2445,8 @@ onMounted(async () => {
             No personas configured for this forum.
           </div>
 
-          <table v-else class="vb-admin-table">
+          <div v-else class="vb-admin-table-scroll" role="region" tabindex="0" aria-label="Robot Personas table">
+          <table class="vb-admin-table">
             <thead>
               <tr>
                 <th>Key</th>
@@ -2406,6 +2479,7 @@ onMounted(async () => {
               </tr>
             </tbody>
           </table>
+          </div>
 
           <h4 class="vb-admin-section-subtitle">Create Persona</h4>
           <div class="vb-form-grid">
@@ -2447,8 +2521,8 @@ onMounted(async () => {
           </div>
 
           <div v-if="editingPersona" class="vb-modal-overlay" @click.self="closeEditPersona">
-            <div class="vb-modal">
-              <h3>Edit Persona: {{ editPersonaKey }}</h3>
+            <div v-accessible-dialog="closeEditPersona" class="vb-modal vb-modal--legacy-body" role="dialog" aria-modal="true" aria-labelledby="edit-persona-title" tabindex="-1">
+              <h3 id="edit-persona-title">Edit Persona: {{ editPersonaKey }}</h3>
               <div class="vb-form-grid">
                 <div class="vb-form-row">
                   <label>Key:</label>
@@ -2491,7 +2565,7 @@ onMounted(async () => {
       </div>
 
       <!-- Skills Tab -->
-      <div v-if="activeTab === 'skills'" class="vb-admin-panel">
+      <div v-if="activeTab === 'skills'" class="vb-admin-section-panel">
         <h3 class="vb-admin-section-title">Skills</h3>
 
         <p class="vb-form-hint">
@@ -2518,7 +2592,8 @@ onMounted(async () => {
 
           <h4 class="vb-admin-section-subtitle">Skill Roots</h4>
           <div v-if="adminSkillRoots.length === 0" class="vb-admin-empty">No skill roots found.</div>
-          <table v-else class="vb-admin-table">
+          <div v-else class="vb-admin-table-scroll" role="region" tabindex="0" aria-label="Skill Roots table">
+          <table class="vb-admin-table">
             <thead>
               <tr>
                 <th>Root</th>
@@ -2548,6 +2623,7 @@ onMounted(async () => {
               </tr>
             </tbody>
           </table>
+          </div>
 
           <h4 class="vb-admin-section-subtitle">Skills</h4>
 
@@ -2584,7 +2660,7 @@ onMounted(async () => {
             No matching skills.
           </div>
 
-          <div v-else class="vb-admin-table-scroll" aria-label="Skills table">
+          <div v-else class="vb-admin-table-scroll" role="region" tabindex="0" aria-label="Skills table">
             <table class="vb-admin-table">
               <thead>
                 <tr>
@@ -2640,7 +2716,7 @@ onMounted(async () => {
       </div>
 
       <!-- Users Tab -->
-      <div v-if="activeTab === 'users'" class="vb-admin-panel">
+      <div v-if="activeTab === 'users'" class="vb-admin-section-panel">
         <h3 class="vb-admin-section-title">User Management</h3>
 
         <div v-if="usersError" class="vb-login-error">{{ usersError }}</div>
@@ -2653,7 +2729,8 @@ onMounted(async () => {
             No users found.
           </div>
 
-          <table v-else class="vb-admin-table">
+          <div v-else class="vb-admin-table-scroll" role="region" tabindex="0" aria-label="User Management table">
+          <table class="vb-admin-table">
             <thead>
               <tr>
                 <th>Display Name</th>
@@ -2709,6 +2786,7 @@ onMounted(async () => {
               </tr>
             </tbody>
           </table>
+          </div>
 
           <!-- Create User Form -->
           <div class="vb-admin-mapping-form">
@@ -2763,10 +2841,10 @@ onMounted(async () => {
 
       <!-- Edit User Modal -->
       <div v-if="editingUser" class="vb-modal-overlay" @click.self="closeEditUser">
-        <div class="vb-modal">
+        <div v-accessible-dialog="closeEditUser" class="vb-modal" role="dialog" aria-modal="true" aria-labelledby="edit-user-title" tabindex="-1">
           <div class="vb-modal-header">
-            <h3>Edit User</h3>
-            <button class="vb-modal-close" @click="closeEditUser">&times;</button>
+            <h3 id="edit-user-title">Edit User</h3>
+            <button class="vb-modal-close" type="button" aria-label="Close edit user dialog" @click="closeEditUser">&times;</button>
           </div>
           <div class="vb-modal-body">
             <div v-if="usersError" class="vb-login-error">{{ usersError }}</div>
@@ -2810,7 +2888,7 @@ onMounted(async () => {
       </div>
 
       <!-- Invites Tab -->
-      <div v-if="activeTab === 'invites'" class="vb-admin-panel">
+      <div v-if="activeTab === 'invites'" class="vb-admin-section-panel">
         <h3 class="vb-admin-section-title">Invite Management</h3>
 
         <div v-if="invitesError" class="vb-login-error">{{ invitesError }}</div>
@@ -2823,7 +2901,8 @@ onMounted(async () => {
             No invites found.
           </div>
 
-          <table v-else class="vb-admin-table">
+          <div v-else class="vb-admin-table-scroll" role="region" tabindex="0" aria-label="Invite Management table">
+          <table class="vb-admin-table">
             <thead>
               <tr>
                 <th>Code</th>
@@ -2880,6 +2959,7 @@ onMounted(async () => {
               </tr>
             </tbody>
           </table>
+          </div>
 
           <!-- Create Invite Form -->
           <div class="vb-admin-mapping-form">
@@ -2918,7 +2998,7 @@ onMounted(async () => {
       </div>
 
       <!-- Discord Tab -->
-      <div v-if="activeTab === 'discord'" class="vb-admin-panel">
+      <div v-if="activeTab === 'discord'" class="vb-admin-section-panel">
         <h3 class="vb-admin-section-title">Discord Bridge Configuration</h3>
 
         <div v-if="discordError" class="vb-login-error">{{ discordError }}</div>
@@ -2992,7 +3072,8 @@ onMounted(async () => {
               No channels mapped yet.
             </div>
 
-            <table v-else class="vb-admin-table">
+            <div v-else class="vb-admin-table-scroll" role="region" tabindex="0" aria-label="Channel Mappings table">
+            <table class="vb-admin-table">
               <thead>
                 <tr>
                   <th>Channel ID</th>
@@ -3015,6 +3096,7 @@ onMounted(async () => {
                 </tr>
               </tbody>
             </table>
+            </div>
 
             <!-- Add mapping form -->
             <div class="vb-admin-mapping-form">
@@ -3053,7 +3135,7 @@ onMounted(async () => {
       </div>
 
       <!-- Matrix Tab -->
-      <div v-if="activeTab === 'matrix'" class="vb-admin-panel">
+      <div v-if="activeTab === 'matrix'" class="vb-admin-section-panel">
         <h3 class="vb-admin-section-title">Matrix Bridge Configuration</h3>
 
         <div v-if="matrixError" class="vb-login-error">{{ matrixError }}</div>
@@ -3140,7 +3222,8 @@ onMounted(async () => {
               No rooms mapped yet.
             </div>
 
-            <table v-else class="vb-admin-table">
+            <div v-else class="vb-admin-table-scroll" role="region" tabindex="0" aria-label="Room Mappings table">
+            <table class="vb-admin-table">
               <thead>
                 <tr>
                   <th>Room ID</th>
@@ -3163,6 +3246,7 @@ onMounted(async () => {
                 </tr>
               </tbody>
             </table>
+            </div>
 
             <!-- Add mapping form -->
             <div class="vb-admin-mapping-form">
@@ -3201,7 +3285,7 @@ onMounted(async () => {
       </div>
 
       <!-- Tampers Tab -->
-      <div v-if="activeTab === 'tampers'" class="vb-admin-panel">
+      <div v-if="activeTab === 'tampers'" class="vb-admin-section-panel">
         <h3 class="vb-admin-section-title">Tamper Layer</h3>
 
         <div v-if="tamperError" class="vb-login-error">{{ tamperError }}</div>
@@ -3213,7 +3297,8 @@ onMounted(async () => {
           <div v-if="tamperConfigs.length === 0" class="vb-admin-empty">
             No tamper configs defined yet.
           </div>
-          <table v-else class="vb-admin-table">
+          <div v-else class="vb-admin-table-scroll" role="region" tabindex="0" aria-label="Tamper Configs table">
+          <table class="vb-admin-table">
             <thead>
               <tr>
                 <th>Plugin</th>
@@ -3267,6 +3352,7 @@ onMounted(async () => {
               </tr>
             </tbody>
           </table>
+          </div>
 
           <h4 class="vb-admin-section-subtitle">Create Tamper Config</h4>
           <div class="vb-admin-form">
@@ -3478,6 +3564,7 @@ onMounted(async () => {
             </div>
             <div v-if="tamperTestResult.trail.length > 0">
               <h6 class="vb-admin-subsection-title">Trail</h6>
+              <div class="vb-admin-table-scroll" role="region" tabindex="0" aria-label="Trail table">
               <table class="vb-admin-table">
                 <thead>
                   <tr>
@@ -3498,12 +3585,13 @@ onMounted(async () => {
                   </tr>
                 </tbody>
               </table>
+              </div>
             </div>
           </div>
 
           <div v-if="editingTamperConfig" class="vb-modal-overlay">
-            <div class="vb-modal">
-              <h4>Edit Tamper Config</h4>
+            <div v-accessible-dialog="closeEditTamperConfig" class="vb-modal vb-modal--legacy-body" role="dialog" aria-modal="true" aria-labelledby="edit-tamper-title" tabindex="-1">
+              <h4 id="edit-tamper-title">Edit Tamper Config</h4>
               <div class="vb-form-row">
                 <label>Plugin:</label>
                 <input :value="editingTamperConfig.pluginKey" type="text" readonly />
@@ -3593,7 +3681,7 @@ onMounted(async () => {
       </div>
 
       <!-- Deploy Tab -->
-      <div v-if="activeTab === 'deploy'" class="vb-admin-panel">
+      <div v-if="activeTab === 'deploy'" class="vb-admin-section-panel">
         <h3 class="vb-admin-section-title">Deploy & Restart</h3>
 
         <div v-if="deployError" class="vb-login-error">{{ deployError }}</div>
@@ -3689,7 +3777,7 @@ onMounted(async () => {
       </div>
 
       <!-- Sync Health Tab -->
-      <div v-if="activeTab === 'sync'" class="vb-admin-panel">
+      <div v-if="activeTab === 'sync'" class="vb-admin-section-panel">
         <h3 class="vb-admin-section-title">Pi Sync Health</h3>
         <p class="vb-form-hint">
           Tracks bounded Pi/forum projection anomalies so failed live-topic imports are visible and repairable without making the hot sync loop retry forever.
@@ -3717,7 +3805,7 @@ onMounted(async () => {
           </div>
 
           <div v-if="!piSyncHealth?.anomalies.length" class="vb-admin-empty">No active sync anomalies.</div>
-          <div v-else class="vb-admin-table-scroll" aria-label="Pi sync anomalies table">
+          <div v-else class="vb-admin-table-scroll" role="region" tabindex="0" aria-label="Pi sync anomalies table">
             <table class="vb-admin-table">
               <thead>
                 <tr>
@@ -3755,12 +3843,12 @@ onMounted(async () => {
 
       <!-- Robot Automations Tab -->
       <!-- Message Templates Tab -->
-      <div v-if="messageTemplatesOpened" v-show="activeTab === 'message-templates'" class="vb-admin-panel">
+      <div v-if="messageTemplatesOpened" v-show="activeTab === 'message-templates'" class="vb-admin-section-panel">
         <h3 class="vb-admin-section-title">System Message Templates</h3>
         <MessageTemplateManager system />
       </div>
 
-      <div v-if="activeTab === 'robots'" class="vb-admin-panel">
+      <div v-if="activeTab === 'robots'" class="vb-admin-section-panel">
         <!-- Robot Settings Section -->
         <h3 class="vb-admin-section-title">Robot Settings</h3>
         <div class="vb-admin-mapping-form" style="margin-bottom: 2rem;">
@@ -3792,7 +3880,8 @@ onMounted(async () => {
             No automations found.
           </div>
 
-          <table v-else class="vb-admin-table">
+          <div v-else class="vb-admin-table-scroll" role="region" tabindex="0" aria-label="Robot Automations table">
+          <table class="vb-admin-table">
             <thead>
               <tr>
                 <th>Name</th>
@@ -3862,6 +3951,7 @@ onMounted(async () => {
               </tr>
             </tbody>
           </table>
+          </div>
 
           <div class="vb-admin-mapping-form">
             <h5>Create Automation</h5>
@@ -3954,10 +4044,10 @@ onMounted(async () => {
 
       <!-- Edit Automation Modal -->
       <div v-if="editingAutomation" class="vb-modal-overlay" @click.self="closeEditAutomation">
-        <div class="vb-modal">
+        <div v-accessible-dialog="closeEditAutomation" class="vb-modal" role="dialog" aria-modal="true" aria-labelledby="edit-automation-title" tabindex="-1">
           <div class="vb-modal-header">
-            <h3>Edit Automation</h3>
-            <button class="vb-modal-close" @click="closeEditAutomation">&times;</button>
+            <h3 id="edit-automation-title">Edit Automation</h3>
+            <button class="vb-modal-close" type="button" aria-label="Close edit automation dialog" @click="closeEditAutomation">&times;</button>
           </div>
           <div class="vb-modal-body">
             <div v-if="robotAutomationsError" class="vb-login-error">{{ robotAutomationsError }}</div>
@@ -4041,10 +4131,10 @@ onMounted(async () => {
 
       <!-- Automation Runs Modal -->
       <div v-if="runsAutomationId" class="vb-modal-overlay" @click.self="closeAutomationRuns">
-        <div class="vb-modal">
+        <div v-accessible-dialog="closeAutomationRuns" class="vb-modal" role="dialog" aria-modal="true" aria-labelledby="automation-runs-title" tabindex="-1">
           <div class="vb-modal-header">
-            <h3>Automation Runs</h3>
-            <button class="vb-modal-close" @click="closeAutomationRuns">&times;</button>
+            <h3 id="automation-runs-title">Automation Runs</h3>
+            <button class="vb-modal-close" type="button" aria-label="Close automation runs dialog" @click="closeAutomationRuns">&times;</button>
           </div>
           <div class="vb-modal-body">
             <div v-if="loadingAutomationRuns" class="vb-admin-loading">Loading runs...</div>
@@ -4052,7 +4142,8 @@ onMounted(async () => {
               <div v-if="automationRuns.length === 0" class="vb-admin-empty">
                 No runs recorded yet.
               </div>
-              <table v-else class="vb-admin-table">
+              <div v-else class="vb-admin-table-scroll" role="region" tabindex="0" aria-label="Automation Runs table">
+              <table class="vb-admin-table">
                 <thead>
                   <tr>
                     <th>Status</th>
@@ -4076,6 +4167,7 @@ onMounted(async () => {
                   </tr>
                 </tbody>
               </table>
+              </div>
               <div v-if="selectedAutomationRun" class="vb-admin-log-panel">
                 <div class="vb-admin-log-header">
                   <strong>Automation Log</strong>
@@ -4116,24 +4208,32 @@ onMounted(async () => {
 }
 
 .vb-admin-tabs {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 128px), 1fr));
   gap: 4px;
+  width: 100%;
+  max-width: 100%;
   margin-bottom: 16px;
-  border-bottom: 2px solid var(--brand-secondary);
 }
 
 .vb-admin-tab {
-  padding: 10px 20px;
+  display: flex;
+  min-width: 0;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 12px;
   background: linear-gradient(var(--bg-surface-alt), var(--bg-surface-muted));
   border: 1px solid var(--border-muted);
-  border-bottom: none;
   cursor: pointer;
   font-weight: bold;
+  line-height: 1.25;
+  text-align: center;
+  text-decoration: none;
+  overflow-wrap: anywhere;
   color: var(--text-secondary);
-  transition: all 0.15s ease;
-  border-radius: 4px 4px 0 0;
-  position: relative;
-  top: 1px;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+  border-radius: 4px;
 }
 
 .vb-admin-tab:hover:not(.active) {
@@ -4141,14 +4241,20 @@ onMounted(async () => {
   color: var(--brand-secondary);
 }
 
+.vb-admin-tab:focus-visible,
+.vb-admin-table-scroll:focus-visible {
+  outline: 3px solid var(--brand-secondary);
+  outline-offset: 2px;
+}
+
 .vb-admin-tab.active {
   background: linear-gradient(var(--grad-nav-start), var(--grad-nav-end));
   color: var(--text-inverse);
   border-color: var(--brand-secondary);
-  box-shadow: 0 -2px 4px var(--shadow-color);
+  box-shadow: 0 1px 4px var(--shadow-color);
 }
 
-.vb-admin-panel {
+.vb-admin-section-panel {
   background: var(--bg-surface);
   border: 1px solid var(--border-muted);
   padding: 16px;
@@ -4305,7 +4411,12 @@ onMounted(async () => {
 }
 
 .vb-admin-info-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px;
   margin-bottom: 8px;
+  overflow-wrap: anywhere;
 }
 
 .vb-admin-info-label {
@@ -4677,6 +4788,7 @@ onMounted(async () => {
 /* Action buttons */
 .vb-action-buttons {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
 }
 
@@ -4789,7 +4901,71 @@ onMounted(async () => {
   background: var(--bg-surface-alt);
   border-top: 1px solid var(--border-subtle);
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
+}
+
+.vb-modal--legacy-body {
+  gap: 12px;
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.vb-modal--legacy-body > h3,
+.vb-modal--legacy-body > h4 {
+  margin: 0;
+}
+
+@media (max-width: 600px) {
+  .vb-admin-content,
+  .vb-admin-section-panel {
+    padding: 10px;
+  }
+
+  .vb-admin-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .vb-form-row input,
+  .vb-form-row select,
+  .vb-form-row textarea {
+    font-size: 16px;
+  }
+
+  .vb-modal-overlay {
+    padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right))
+      max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+  }
+
+  .vb-modal {
+    max-height: calc(100dvh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  }
+
+  .vb-modal-close,
+  .vb-modal .vb-modal-actions .vb-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .vb-modal .vb-modal-actions {
+    flex-direction: column-reverse;
+  }
+
+  .vb-modal .vb-modal-actions .vb-btn {
+    width: 100%;
+  }
+
+  .vb-prompt-toolbar,
+  .vb-admin-status,
+  .vb-admin-info-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .vb-prompt-template {
+    min-width: 0;
+    width: 100%;
+  }
 }
 </style>

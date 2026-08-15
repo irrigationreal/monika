@@ -348,8 +348,11 @@ For full deployment guidance, see `docs/DEPLOYMENT.md`.
 ## Development notes
 
 - The repo is intentionally interface-first: most packages define types and boundaries so the system can evolve safely.
-- The Admin Panel is available under `/admin`; logged-in users can access the Developer Portal under `/developers`, API
-  docs under `/docs/api`, and chat under `/chat`.
+- The Admin Panel is available under `/admin`. Its responsive section navigation is URL-backed with
+  `/admin?section=<section>` links (the Forums section uses canonical `/admin`), and unknown section values fall back to
+  Forums. Admin section data is loaded on demand; wide management tables scroll inside their labelled table regions
+  rather than widening the page. Logged-in users can access the Developer Portal under `/developers`, API docs under
+  `/docs/api`, and chat under `/chat`.
 - The UI and browser SDK use same-origin first-party cookie sessions for JSON, uploads, and EventSource. API keys and
   impersonation tokens are bearer credentials for automation; bearer-authenticated SSE requires a caller-provided
   authorization-capable EventSource transport and never uses query-string credentials.

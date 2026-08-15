@@ -168,6 +168,22 @@ async function attachMockApi(context: BrowserContext, state: MockState): Promise
       return;
     }
 
+    if (path === '/api/admin/skills' && method === 'GET') {
+      await fulfillJson(200, {
+        generatedAt: state.nextTimestamp(),
+        promptEnhancerEnabledByDefault: true,
+        defaultSkillsRoot: '/skills',
+        roots: [{ root: '/skills', exists: true, skillCount: 1, usedByForumIds: [state.adminForums[0]!.id] }],
+        items: []
+      });
+      return;
+    }
+
+    if (path === '/api/admin/message-templates' && method === 'GET') {
+      await fulfillJson(200, { templates: [] });
+      return;
+    }
+
     if (path === '/api/admin/forums' && method === 'POST') {
       const payload = (await request.postDataJSON()) as {
         name?: string;
@@ -464,12 +480,71 @@ async function gotoDevelopers(page: Page): Promise<void> {
   await expect(page.locator('.vb-table-header', { hasText: 'Developer Portal' }).first()).toBeVisible();
 }
 
+test('admin navigation stays contained, linkable, and lazy on mobile', async ({ page }) => {
+  const state = buildMockState({ admin: true });
+  const requestedPaths: string[] = [];
+  page.on('request', (request) => {
+    const url = new URL(request.url());
+    if (url.pathname.startsWith('/api/')) requestedPaths.push(url.pathname);
+  });
+  await seedAuth(page.context(), state.authToken);
+  await attachMockApi(page.context(), state);
+  await page.setViewportSize({ width: 390, height: 844 });
+
+  await gotoAdmin(page);
+  await expect(page.getByRole('navigation', { name: 'Admin sections' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Forums' })).toHaveAttribute('aria-current', 'page');
+  expect(requestedPaths).not.toContain('/api/admin/users');
+
+  const contentBox = await page.locator('.vb-admin-content').boundingBox();
+  expect(contentBox).not.toBeNull();
+  for (const tab of await page.locator('.vb-admin-tab').all()) {
+    const tabBox = await tab.boundingBox();
+    expect(tabBox).not.toBeNull();
+    expect(tabBox!.x).toBeGreaterThanOrEqual(contentBox!.x - 1);
+    expect(tabBox!.x + tabBox!.width).toBeLessThanOrEqual(contentBox!.x + contentBox!.width + 1);
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+
+  await page.getByRole('link', { name: 'Users' }).click();
+  await expect(page).toHaveURL(/\/admin\?section=users$/);
+  await expect(page.getByRole('link', { name: 'Users' })).toHaveAttribute('aria-current', 'page');
+  await expect(page.locator('.vb-admin-section-panel', { hasText: 'User Management' })).toBeVisible();
+  expect(requestedPaths).toContain('/api/admin/users');
+
+  await page.reload();
+  await expect(page.getByRole('link', { name: 'Users' })).toHaveAttribute('aria-current', 'page');
+  await page.getByRole('link', { name: 'Invites' }).click();
+  await page.goBack();
+  await expect(page.getByRole('link', { name: 'Users' })).toHaveAttribute('aria-current', 'page');
+
+  await page.goto('/admin?section=message-templates');
+  await expect(page.getByRole('heading', { name: 'System Message Templates' })).toBeVisible();
+  await expect(page.getByText('No message templates yet.')).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'System Message Templates' })).toBeVisible();
+  await expect(page.getByText('No message templates yet.')).toBeVisible();
+
+  await page.goto('/admin?section=skills');
+  const skillRootTable = page.getByRole('region', { name: 'Skill Roots table' });
+  await expect(skillRootTable).toContainText('E2E Root Forum');
+  await expect(skillRootTable).not.toContainText(state.adminForums[0]!.id);
+
+  await page.goto('/admin?section=not-a-section');
+  await expect(page).toHaveURL('/admin');
+  await expect(page.getByRole('link', { name: 'Forums' })).toHaveAttribute('aria-current', 'page');
+});
+
 test('admin manages forums with validation, edits, and archive status', async ({ page }) => {
   const state = buildMockState({ admin: true });
   await seedAuth(page.context(), state.authToken);
   await attachMockApi(page.context(), state);
 
   await gotoAdmin(page);
+  const adminNavigation = page.getByRole('navigation', { name: 'Admin sections' });
+  await adminNavigation.getByRole('link', { name: 'Message Templates' }).click();
+  await expect(page.getByText('No message templates yet.')).toBeVisible();
+  await adminNavigation.getByRole('link', { name: 'Forums' }).click();
 
   const forumTable = page.locator('div[aria-label="Forum management table"] tbody tr');
   await expect(forumTable).toHaveCount(1);
@@ -493,11 +568,21 @@ test('admin manages forums with validation, edits, and archive status', async ({
   await expect(createdRow).toContainText('Operations');
   await expect(createdRow).toContainText('members');
 
-  await createdRow.getByRole('button', { name: 'Edit' }).click();
+  const editButton = createdRow.getByRole('button', { name: 'Edit' });
+  await editButton.click();
+  const editDialog = page.getByRole('dialog', { name: 'Edit Forum' });
+  await expect(editDialog).toBeVisible();
+  await expect(editDialog.getByRole('button', { name: 'Close edit forum dialog' })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(editDialog).toBeHidden();
+  await expect(editButton).toBeFocused();
+
+  await editButton.click();
   await page.fill('#editForumName', 'E2E Admin Forum Updated');
   await page.fill('#editForumDescription', 'Updated description');
   await page.selectOption('#editForumVisibility', 'admin');
   await page.click('button:has-text("Save Changes")');
+  await expect(page.getByRole('heading', { name: 'Forum Management' })).toBeFocused();
 
   const updatedRow = forumTable.filter({ hasText: 'E2E Admin Forum Updated' });
   await expect(updatedRow).toHaveCount(1);
@@ -516,8 +601,8 @@ test('admin manages users and invites with validation and list updates', async (
 
   await gotoAdmin(page);
 
-  await page.getByRole('button', { name: 'Users' }).click();
-  const usersPanel = page.locator('.vb-admin-panel', { hasText: 'User Management' });
+  await page.getByRole('link', { name: 'Users' }).click();
+  const usersPanel = page.locator('.vb-admin-section-panel', { hasText: 'User Management' });
   const userRows = usersPanel.locator('table tbody tr');
   await expect(userRows).toHaveCount(1);
 
@@ -543,8 +628,8 @@ test('admin manages users and invites with validation and list updates', async (
   await page.click('button:has-text("Save Changes")');
   await expect(userRows.filter({ hasText: 'E2E Managed User Updated' })).toHaveCount(1);
 
-  await page.getByRole('button', { name: 'Invites' }).click();
-  const invitesPanel = page.locator('.vb-admin-panel', { hasText: 'Invite Management' });
+  await page.getByRole('link', { name: 'Invites' }).click();
+  const invitesPanel = page.locator('.vb-admin-section-panel', { hasText: 'Invite Management' });
   const inviteRows = invitesPanel.locator('table tbody tr');
   await expect(invitesPanel.locator('.vb-admin-empty')).toContainText('No invites found.');
 
@@ -579,7 +664,7 @@ test('admin reviews deploy status and adapter tabs', async ({ page }) => {
 
   await gotoAdmin(page);
 
-  await page.getByRole('button', { name: 'Deploy' }).click();
+  await page.getByRole('link', { name: 'Deploy' }).click();
   await expect(page.getByText('Deploy & Restart')).toBeVisible();
   await expect(page.locator('.vb-admin-status', { hasText: 'Deploy enabled:' })).toContainText('Yes');
   await expect(page.locator('.vb-cwd-path', { hasText: 'abc123' })).toBeVisible();
@@ -590,10 +675,10 @@ test('admin reviews deploy status and adapter tabs', async ({ page }) => {
   await page.getByRole('button', { name: 'Deploy Latest Code' }).click();
   await expect(page.locator('.vb-admin-status', { hasText: 'Deploy started' })).toBeVisible();
 
-  await page.getByRole('button', { name: 'Discord' }).click();
+  await page.getByRole('link', { name: 'Discord' }).click();
   await expect(page.locator('.vb-admin-status', { hasText: 'Status:' })).toContainText('Disconnected');
 
-  await page.getByRole('button', { name: 'Matrix' }).click();
+  await page.getByRole('link', { name: 'Matrix' }).click();
   await expect(page.locator('.vb-login-error')).toHaveText('Matrix status unavailable.');
 });
 
