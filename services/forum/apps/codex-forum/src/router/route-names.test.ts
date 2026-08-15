@@ -32,6 +32,17 @@ describe('router route names', () => {
     expect(routeNames.has('admin.analytics')).toBe(true);
   });
 
+  it('settles authentication before public route components initialize', async () => {
+    const routerSource = await readFile(path.resolve(__dirname, 'index.ts'), 'utf8');
+    const authCheck = routerSource.indexOf('if (!state.authChecked.value) await state.checkAuth();');
+    const publicReturn = routerSource.indexOf('if (!requiresAuth) return true;', authCheck);
+    expect(authCheck).toBeGreaterThan(-1);
+    expect(publicReturn).toBeGreaterThan(authCheck);
+
+    const appSource = await readFile(path.resolve(__dirname, '../App.vue'), 'utf8');
+    expect(appSource).toContain('if (!state.authChecked.value) await state.checkAuth();');
+  });
+
   it('does not reference the removed forum index route name anywhere in the app', async () => {
     // Construct the removed route name without embedding it verbatim in this test
     // (otherwise the scan would always fail on this file).

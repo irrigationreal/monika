@@ -88,9 +88,10 @@ curl -sS -X PATCH -b forum.cookies \
   "$CODEX_FORUM_BASE_URL/api/me/preferences/quick-reply"
 ```
 
-The preference defaults to `false`, is returned by `/api/auth/me`, and is intentionally omitted from public profile
-responses. When enabled, eligible topic views start with the dock collapsed on desktop and mobile. Temporary dock
-expansion, collapse, or undock actions do not update it.
+User CP presents this boolean as **Quick Reply Style** with **Inline** (`false`) and **Docked** (`true`) choices. It
+defaults to `false`, is returned by `/api/auth/me`, and is intentionally omitted from public profile responses. Docked
+eligible topic views start with the collapsed dock on desktop and mobile. Temporary dock expansion, collapse, or undock
+actions do not update it.
 
 ## Private autosaved drafts
 

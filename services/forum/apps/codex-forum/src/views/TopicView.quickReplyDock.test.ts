@@ -109,7 +109,13 @@ describe('TopicView persistent Quick Reply dock', () => {
     expect(scrollTopRule).toContain('transform var(--transition-normal)');
   });
 
-  it('applies preferences only for an eligible loaded topic and preserves stale-load and attachment guards', () => {
+  it('reveals one resolved initial presentation and never reapplies the preference beneath an active draft', () => {
+    expect(source).toContain('const quickReplyPresentationReady = ref(false);');
+    expect(source).toContain('v-if="quickReplyPresentationReady"');
+    expect(source).toContain('quickReplyPresentationReady.value = false;');
+    expect(source).toContain('applyQuickReplyDefault();\n      quickReplyPresentationReady.value = true;');
+    expect(source).toContain('@input="quickReplyPresentationTouched = true"');
+    expect(source).not.toContain('() => state.currentUser.value?.quickReplyDockedByDefault,');
     expect(source).toContain('if (!canDockQuickReply.value) return;');
     expect(source).toContain('v-if="!quickReplyDocked && canDockQuickReply"');
     expect(source).toContain('if (!canDockQuickReply.value && quickReplyDocked.value) resetQuickReplyPresentation();');

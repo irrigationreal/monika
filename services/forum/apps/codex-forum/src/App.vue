@@ -256,7 +256,7 @@ watch(
 onMounted(async () => {
   initTheme();
   try {
-    await state.checkAuth();
+    if (!state.authChecked.value) await state.checkAuth();
     await state.loadForums();
     await state.loadTopics();
   } catch (err) {

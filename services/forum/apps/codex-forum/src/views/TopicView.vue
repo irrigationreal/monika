@@ -70,6 +70,7 @@ const quickReplyContainerRef = ref<HTMLElement | null>(null);
 const quickReplyExpandButtonRef = ref<HTMLButtonElement | null>(null);
 const quickReplyKeepVisibleButtonRef = ref<HTMLButtonElement | null>(null);
 const quickReplyPresentation = ref<'inline' | 'docked-expanded' | 'docked-collapsed'>('inline');
+const quickReplyPresentationReady = ref(false);
 const quickReplyOptionsOpen = ref(false);
 let quickReplyPresentationTouched = false;
 const quickReplyDocked = computed(() => quickReplyPresentation.value !== 'inline');
@@ -2597,6 +2598,7 @@ onBeforeRouteUpdate(async (to, from) => {
 watch(
   routeTopicId,
   async (topicId) => {
+    quickReplyPresentationReady.value = false;
     resetQuickReplyPresentation();
     showStopRobotConfirm.value = false;
     showDiscardDraftConfirm.value = false;
@@ -2628,6 +2630,7 @@ watch(
       await loadTopic(topicId);
       if (routeTopicId.value !== topicId) return;
       applyQuickReplyDefault();
+      quickReplyPresentationReady.value = true;
       if (state.isLoggedIn.value) await autosavedReply.load();
     }
   },
@@ -2640,11 +2643,6 @@ watch(
     if (!canDockQuickReply.value && quickReplyDocked.value) resetQuickReplyPresentation();
     if (loggedIn && routeTopicId.value && !autosavedReply.hydrated.value) void autosavedReply.load();
   }
-);
-
-watch(
-  () => state.currentUser.value?.quickReplyDockedByDefault,
-  () => applyQuickReplyDefault()
 );
 
 onMounted(() => {
@@ -3854,6 +3852,7 @@ onUnmounted(() => {
     </div>
 
     <div
+      v-if="quickReplyPresentationReady"
       id="quick-reply-composer"
       ref="quickReplyContainerRef"
       class="vb-quick-reply vb-quick-reply-composer"
@@ -3982,6 +3981,7 @@ onUnmounted(() => {
               rows="6"
               placeholder="Type your reply here..."
               :disabled="isPublishingReply"
+              @input="quickReplyPresentationTouched = true"
             ></textarea>
             <div id="quick-reply-attachment-picker" v-show="quickReplyOptionsOpen" class="vb-reply-attachments">
               <label class="vb-attachment-label">Attachments:</label>

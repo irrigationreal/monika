@@ -184,11 +184,12 @@ viewport; a successful Steer leaves it expanded for iterative guidance. Failed o
 the current presentation and recovery controls. Expanded docks use one scrolling middle between a fixed header and
 full-width action footer. On narrow viewports the dock is a safe-area-aware bottom drawer.
 
-The private account preference **Keep Quick Reply visible while viewing topics** is managed in User CP and persisted by
-`PATCH /me/preferences/quick-reply`. It defaults off; when enabled, each eligible topic opens with the dock collapsed on
-both desktop and mobile. It is returned only from authenticated self APIs—not public profiles. Temporary expand,
-collapse, and undock actions never rewrite it. Expanded docks reserve enough topic space to keep the final content and
-scroll-to-top control unobscured.
+The private account preference **Quick Reply Style** is managed in User CP with **Inline** and **Docked** choices and is
+persisted by `PATCH /me/preferences/quick-reply`. It defaults to Inline; Docked opens each eligible topic with the dock
+collapsed on both desktop and mobile. Authentication and topic eligibility resolve before the composer is revealed, so
+its initial layout never changes underneath an active draft. The preference is returned only from authenticated self
+APIs—not public profiles. Temporary expand, collapse, and undock actions never rewrite it. Expanded docks reserve enough
+topic space to keep the final content and scroll-to-top control unobscured.
 
 ## Private autosaved drafts
 

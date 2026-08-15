@@ -58,6 +58,7 @@ type MockState = {
   messageTemplates: MessageTemplateDto[];
   drafts: Record<string, MessageDraftDto>;
   quickReplyDockedByDefault: boolean;
+  authDelayMs: number;
   robotActivity: RobotStateDto['activity'];
   sessionContext: SessionContextDto | null;
 };
@@ -129,6 +130,7 @@ function createMockState(): MockState {
     compactionOperations: {},
     compactionRequests: [],
     quickReplyDockedByDefault: false,
+    authDelayMs: 0,
     robotActivity: 'idle',
     sessionContext: null,
     messageTemplates: [
@@ -452,6 +454,7 @@ async function attachMockApi(target: Page | BrowserContext, state: MockState): P
     }
 
     if (path === '/api/auth/me' && method === 'GET') {
+      if (state.authDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, state.authDelayMs));
       const identity = identityFromRequest(state, request);
       await fulfillJson(route, 200, {
         identity: identity
@@ -1261,6 +1264,50 @@ test.describe('Threading and reply flows', () => {
     expect(contentBox).not.toBeNull();
     if (!blockBox || !contentBox) throw new Error('Code-block responsive layout boxes unavailable');
     expect(blockBox.width).toBeLessThanOrEqual(contentBox.width + 1);
+  });
+
+  test('docked Quick Reply resolves before the composer first appears on a direct topic load', async ({
+    page,
+    context,
+  }) => {
+    const state = createMockState();
+    state.quickReplyDockedByDefault = true;
+    await attachMockApi(page, state);
+    await setAuthTokens(context, REGULAR_TOKEN);
+    await page.goto('/');
+    const fixture = await createFixture(page, { postCount: 2 });
+
+    const deepLinkPage = await context.newPage();
+    await attachMockApi(deepLinkPage, state);
+    await deepLinkPage.addInitScript(() => {
+      (window as any).__quickReplyFirstClass = null;
+      const capture = () => {
+        const composer = document.getElementById('quick-reply-composer');
+        if (composer && !(window as any).__quickReplyFirstClass) {
+          (window as any).__quickReplyFirstClass = composer.className;
+        }
+      };
+      const observe = () => {
+        new MutationObserver(capture).observe(document.documentElement, {
+          attributes: true,
+          childList: true,
+          subtree: true,
+        });
+        capture();
+      };
+      if (document.documentElement) observe();
+      else document.addEventListener('DOMContentLoaded', observe, { once: true });
+    });
+    state.authDelayMs = 350;
+
+    await deepLinkPage.goto(`/topics/${fixture.topicId}`);
+    const composer = deepLinkPage.locator('#quick-reply-composer');
+    await expect(composer).toHaveClass(/vb-quick-reply--collapsed/);
+    const firstClass = await deepLinkPage.evaluate(() => (window as any).__quickReplyFirstClass as string | null);
+    expect(firstClass).toContain('vb-quick-reply--docked');
+    expect(firstClass).toContain('vb-quick-reply--collapsed');
+    expect(firstClass).not.toContain('vb-quick-reply--expanded');
+    await deepLinkPage.close();
   });
 
   test('quick reply dock preserves controls, scroll chaining, focus, files, and layout across presentations', async ({
