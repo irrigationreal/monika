@@ -2278,8 +2278,14 @@ export class ForumStore {
 
   listPlansBySession(sessionId: string, limit = 50): PlanRow[] {
     return this.db
-      .prepare('select * from plans where session_id = ? order by created_at desc limit ?')
+      .prepare('select * from plans where session_id = ? order by created_at desc, rowid desc limit ?')
       .all(sessionId, limit) as PlanRow[];
+  }
+
+  listAllPlansBySession(sessionId: string): PlanRow[] {
+    return this.db
+      .prepare('select * from plans where session_id = ? order by created_at desc, rowid desc')
+      .all(sessionId) as PlanRow[];
   }
 
   createToolRun(input: CreateToolRunInput): ToolRunRow {
@@ -2335,14 +2341,20 @@ export class ForumStore {
 
   listToolRuns(topicId: string, limit = 20): ToolRunRow[] {
     return this.db
-      .prepare('select * from tool_runs where topic_id = ? order by started_at desc limit ?')
+      .prepare('select * from tool_runs where topic_id = ? order by started_at desc, rowid desc limit ?')
       .all(topicId, limit) as ToolRunRow[];
   }
 
   listToolRunsBySession(sessionId: string, limit = 50): ToolRunRow[] {
     return this.db
-      .prepare('select * from tool_runs where session_id = ? order by started_at desc limit ?')
+      .prepare('select * from tool_runs where session_id = ? order by started_at desc, rowid desc limit ?')
       .all(sessionId, limit) as ToolRunRow[];
+  }
+
+  listAllToolRunsBySession(sessionId: string): ToolRunRow[] {
+    return this.db
+      .prepare('select * from tool_runs where session_id = ? order by started_at desc, rowid desc')
+      .all(sessionId) as ToolRunRow[];
   }
 
   getToolRun(toolRunId: string): ToolRunRow | null {

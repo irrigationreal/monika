@@ -851,9 +851,20 @@ test.describe('Robot UI (mocked)', () => {
     context.topics.set(topicId, { ...topic, robotMode: 'auto' });
 
     const longPath = `/${'deeply-nested-directory/'.repeat(20)}document.md`;
+    const reasoning = '**Inspect the path**\nConfirm the long path before reading it.';
     context.robotStates.set(topicId, {
       ...state,
       activity: 'running_tools',
+      currentPlan: {
+        id: `plan-${topicId}-tool-usage`,
+        content: reasoning,
+        summary: reasoning,
+        parentPostId: `post-${topicId}-1`,
+        reasoningCheckpoints: [reasoning.length],
+        visibility: 'internal',
+        createdAt: context.now,
+        updatedAt: context.now
+      },
       recentToolRuns: [
         {
           id: `tool-${topicId}-long-read`,
@@ -867,6 +878,19 @@ test.describe('Robot UI (mocked)', () => {
           outputSummary: 'Read document',
           redactionsApplied: false,
           visibility: 'public'
+        },
+        {
+          id: `tool-${topicId}-older`,
+          tool: 'shell',
+          parentPostId: `post-${topicId}-older`,
+          startedAt: new Date(Date.parse(context.now) - 60_000).toISOString(),
+          finishedAt: new Date(Date.parse(context.now) - 59_000).toISOString(),
+          exitCode: 0,
+          command: 'ls -la',
+          filesTouched: [],
+          outputSummary: 'Listed files',
+          redactionsApplied: false,
+          visibility: 'public'
         }
       ]
     });
@@ -877,7 +901,34 @@ test.describe('Robot UI (mocked)', () => {
     await login(page, context.user.displayName);
     await page.goto(`/topics/${topicId}`);
 
-    const toolToggle = page.locator('.vb-tool-list .vb-tool-toggle').first();
+    const reasoningToggle = page.getByRole('button', { name: 'Reasoning: On' });
+    const reasoningItem = page.locator('.vb-tool-item--reasoning');
+    await expect(reasoningToggle).toBeVisible();
+    await expect(reasoningItem).toContainText('Inspect the path');
+
+    const traceItems = page.locator('.vb-tool-response .vb-tool-item');
+    await expect(traceItems).toHaveCount(2);
+    await expect(traceItems.first()).toHaveClass(/vb-tool-item--reasoning/);
+
+    await reasoningToggle.click();
+    await expect(reasoningItem).toHaveCount(0);
+    await page.reload();
+    await expect(page.getByRole('button', { name: 'Reasoning: Off' })).toBeVisible();
+    await page.getByRole('button', { name: 'Reasoning: Off' }).click();
+    await expect(reasoningItem).toContainText('Inspect the path');
+
+    await page.getByRole('button', { name: 'Show All', exact: true }).click();
+    await expect(page.locator('.vb-tool-response-label')).toHaveCount(2);
+    await expect(page.locator('.vb-tool-response .vb-tool-item')).toHaveCount(3);
+    await page.getByRole('button', { name: 'Show Latest', exact: true }).click();
+    await expect(page.locator('.vb-tool-response .vb-tool-item')).toHaveCount(2);
+
+    await reasoningItem.locator('.vb-tool-toggle').click();
+    await expect(reasoningItem.locator('.vb-tool-reasoning-detail')).toContainText(
+      'Confirm the long path before reading it.'
+    );
+
+    const toolToggle = page.locator('.vb-tool-item:not(.vb-tool-item--reasoning) .vb-tool-toggle').first();
     const toolControls = toolToggle.locator('.vb-tool-toggle-right');
     const tableDetail = toolToggle.locator('.vb-tool-mini-detail--table');
     await expect(toolToggle).toBeVisible();

@@ -75,7 +75,7 @@ describe('Robot routes access controls', () => {
       reasoningEffort: 'xhigh',
       currentPlanId: plan.id
     });
-    return { topic };
+    return { topic, post, session };
   }
 
   it('redacts robot state details for unauthenticated public readers', async () => {
@@ -112,9 +112,64 @@ describe('Robot routes access controls', () => {
     expect(authBody.reasoningEffort).toBe('xhigh');
     expect(authBody.currentPlan?.content).toBe('secret plan content');
     expect(authBody.currentPlan?.summary).toBe('secret plan summary');
+    expect(authBody.currentPlan?.parentPostId).toBe(authBody.recentToolRuns[0].parentPostId);
     expect(authBody.recentToolRuns).toHaveLength(1);
     expect(authBody.recentToolRuns[0].command).toBe('cat /secret/path');
     expect(authBody.recentToolRuns[0].outputSummary).toBe('secret output');
+  });
+
+  it('returns complete inspector traces with deterministic newest-first tool ordering', async () => {
+    const app = await buildApp();
+    const { topic, post, session } = createTopicWithTrace();
+    const admin = store.createIdentityWithPassword('Admin', 'admin', 'pw-hash', 'admin');
+    store.createAuthSession('admin-token', admin.id);
+
+    let olderSameTimeToolId = '';
+    let newerSameTimeToolId = '';
+    for (let index = 0; index < 51; index++) {
+      store.createPlan({
+        topicId: topic.id,
+        sessionId: session.id,
+        content: `plan ${index}`,
+        summary: `plan ${index}`,
+        parentPostId: post.id,
+        visibility: 'internal'
+      });
+      const tool = store.createToolRun({
+        topicId: topic.id,
+        sessionId: session.id,
+        tool: 'read',
+        parentPostId: post.id,
+        command: `read ${index}`,
+        outputSummary: `output ${index}`,
+        visibility: 'internal'
+      });
+      if (index === 49) olderSameTimeToolId = tool.id;
+      if (index === 50) newerSameTimeToolId = tool.id;
+    }
+    db.prepare('update tool_runs set started_at = ? where id in (?, ?)').run(
+      '2026-01-01T00:00:00.000Z',
+      olderSameTimeToolId,
+      newerSameTimeToolId
+    );
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/sessions/${session.id}/inspector`,
+      headers: { authorization: 'Bearer admin-token' }
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as any;
+    expect(body.toolRuns).toHaveLength(52);
+    expect(body.plans).toHaveLength(52);
+    const tiedTools = body.toolRuns.filter((tool: { id: string }) =>
+      [olderSameTimeToolId, newerSameTimeToolId].includes(tool.id)
+    );
+    expect(tiedTools.map((tool: { id: string }) => tool.id)).toEqual([
+      newerSameTimeToolId,
+      olderSameTimeToolId
+    ]);
   });
 
   it('does not expose stale idle current plans to authenticated readers', async () => {

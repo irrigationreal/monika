@@ -223,6 +223,7 @@ export function registerRobotRoutes({
             id: plan.id,
             content: plan.content,
             summary: plan.summary,
+            parentPostId: plan.parent_post_id,
             reasoningCheckpoints: plan.reasoning_checkpoints_json
               ? (JSON.parse(plan.reasoning_checkpoints_json) as number[])
               : null,
@@ -610,8 +611,8 @@ export function registerRobotRoutes({
     }
     requireTopicVisible(session.topic_id, request);
     const messages = store.listSessionMessages(sessionId);
-    const toolRuns = store.listToolRunsBySession(sessionId, 50);
-    const plans = store.listPlansBySession(sessionId, 50);
+    const toolRuns = store.listAllToolRunsBySession(sessionId);
+    const plans = store.listAllPlansBySession(sessionId);
     return {
       session: serializeAdminSession(session),
       messages: messages.map((msg) => ({

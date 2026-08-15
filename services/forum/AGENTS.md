@@ -197,6 +197,7 @@ boundary is essential before modifying trace rendering.
 | `apps/codex-forum/src/components/ToolTimelineEvent.vue` | Individual tool event in saved timeline |
 | `apps/codex-forum/src/lib/toolMiniView.ts` | Tool parsing: name detection, kind classification, detail extraction |
 | `apps/codex-forum/src/lib/toolTimeline.ts` | Timeline building: events, bursts, agent frames |
+| `apps/codex-forum/src/lib/unifiedTrace.ts` | Shared live/persisted reasoning-and-tool ordering for Trace History and Tool Usage |
 | `apps/codex-forum/src/lib/reasoning.ts` | `parseReasoningSteps`: splits `**bold**`-delimited reasoning text |
 | `packages/server/src/echsBridge.ts` | Server-side: maps Pi events, creates tool runs, emits SSE, stores checkpoints |
 | `packages/server/src/streamBus.ts` | SSE event type registry |
