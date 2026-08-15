@@ -1,8 +1,8 @@
 # codex-forum
 
 Forum frontend and projection service for Monika's canonical Pi sessions. The service keeps discussion, forum metadata,
-robot presentation state, and adapter events in one place while all agent execution and memory remain behind `agentd`
-in the Monika container.
+robot presentation state, and adapter events in one place while all agent execution and memory remain behind `agentd` in
+the Monika container.
 
 ![Codex topic view](docs/screenshots/product-topic-codex-tall-1600.png)
 
@@ -16,10 +16,14 @@ controls.
 
 Key capabilities:
 
-- **Canonical Pi session projection**: each topic maps to one durable Pi session with forum posts, attachments, and robot activity projected around it.
-- **Private Notepad**: each browser-session account has an owner-only reverse-chronological note feed with unified autosaved capture drafts, tags, search, pinning, and hard expiration/deletion. Notes are forum-native account data, not topics or Pi sessions.
-- **Post-bound attachments**: browser downloads use opaque attachment IDs associated with visible posts; arbitrary
-  robot-output filesystem paths are never a public attachment surface.
+- **Canonical Pi session projection**: each topic maps to one durable Pi session with forum posts, attachments, and
+  robot activity projected around it.
+- **Private Notepad**: each browser-session account has an owner-only reverse-chronological note feed with unified
+  autosaved capture drafts, tags, search, pinning, and hard expiration/deletion. Notes are forum-native account data,
+  not topics or Pi sessions.
+- **Unified User Files and attachments**: owner-scoped content blobs are SHA-256 deduplicated across an account's
+  standalone uploads and human-authored post attachments. Logical post associations retain opaque compatible URLs and
+  deletion tombstones; arbitrary robot-output filesystem paths are never a public attachment surface.
 - **Live robot state + tool trace**: authenticated users can see reasoning steps, tool runs, and outputs inline in a
   topic view; public readers see only final posts, public-safe topic lineage, and a neutral in-progress placeholder.
   Canonical Pi identifiers, JSONL paths, working directories, and import diagnostics remain admin-only.
@@ -55,16 +59,17 @@ packages/
 ### Server/runtime
 
 - Fastify server in `packages/server` with SQLite storage and optional Redis stream bus.
-- Robot orchestration is handled by the Monika Pi bridge, which calls `agentd` over HTTP/SSE and reconciles canonical
-  Pi provenance into forum state.
+- Robot orchestration is handled by the Monika Pi bridge, which calls `agentd` over HTTP/SSE and reconciles canonical Pi
+  provenance into forum state.
 - A canonical utterance is channel-neutral. One agent run may persist zero, one, or several ordered assistant messages;
-  Pi's internal `agent_settled` is idle-only, and agentd maps it to wire `turn_completed`; neither asks the forum to publish a raw aggregate.
+  Pi's internal `agent_settled` is idle-only, and agentd maps it to wire `turn_completed`; neither asks the forum to
+  publish a raw aggregate.
 - Provenance v1 preserves legacy forum post identity. V2 adds the durable ordered contributor set and normalized origin.
   Same-origin events can group; retries retain that original order and never absorb a different origin.
 - Live SSE and background sync share one deterministic projection/handoff service, including outbound tamper, default
   persona, parent/follow-up metadata, attachment dedupe, crash recovery, and exactly-once Pi-message claiming.
-- Discord/Matrix adapters are best effort beyond the local transaction boundary. Forum SQLite cannot turn a remote
-  send or acknowledgement into canonical Pi settlement.
+- Discord/Matrix adapters are best effort beyond the local transaction boundary. Forum SQLite cannot turn a remote send
+  or acknowledgement into canonical Pi settlement.
 - Feature flags (auth, rate limiting, search, Redis stream bus) are toggled via env vars.
 
 ### Web UI
@@ -134,17 +139,28 @@ Manage personal templates at `/profile/message-templates` and system templates i
 
 ## Post formatting and code fences
 
-Post bodies and previews support Markdown and legacy BBCode. Each visible post footer provides **Copy**, which writes the
-exact stored forum source to the clipboard without trimming or converting it; this deliberately preserves Markdown,
+The **User Files** page is cursor-paginated through `GET /user-files/page`, defaults to standalone uploads, and can also
+show all files or post attachments only. The original `GET /user-files` array response remains available for existing
+REST and SDK consumers and lists the standalone library. New standalone uploads are private and expire after one month
+by default, with the same retention presets as Notepad; existing uploads are grandfathered as private/never. Owners can
+choose private, members, or public access, reset retention, follow post-association permalinks, remove standalone
+custody, or detach one post association. Private owner-library listing and mutation reject impersonation credentials;
+private downloads do not treat impersonation as owner authority. Members visibility is tenant-scoped when the owner has
+a tenant. Post visibility is evaluated live and any visible active association grants access. Bytes are reclaimed by
+restart-safe garbage collection only after standalone custody and every post association are gone; pending paths removed
+by expiry or topic deletion use the same durable retry loop.
+
+Post bodies and previews support Markdown and legacy BBCode. Each visible post footer provides **Copy**, which writes
+the exact stored forum source to the clipboard without trimming or converting it; this deliberately preserves Markdown,
 legacy BBCode, whitespace, code fences, and persona wrappers. Separately uploaded attachments and post metadata are not
 added to the copied source. The action remains available in locked topics and to any viewer authorized to read the post.
 
 Fenced Markdown code blocks accept backtick or tilde fences of three or more markers. To display a fenced block inside
 another code block, make the outer fence longer than every run of the same marker in its content—for example, use four
-backticks around text containing triple-backtick fences.
-The composer Code button calculates this delimiter length from the selection automatically. Unclosed fences extend to
-the current end of input, so partial robot responses remain literal and use the same deterministic renderer as completed
-posts. Code contents are HTML-escaped and bypass Markdown, BBCode, and typographic-ligature processing.
+backticks around text containing triple-backtick fences. The composer Code button calculates this delimiter length from
+the selection automatically. Unclosed fences extend to the current end of input, so partial robot responses remain
+literal and use the same deterministic renderer as completed posts. Code contents are HTML-escaped and bypass Markdown,
+BBCode, and typographic-ligature processing.
 
 A completed fence whose first info-string token is `mermaid` is progressively enhanced into a website-themed diagram.
 The full Mermaid package supplies all built-in diagram grammars. Diagrams render in permissionless sandbox frames,
@@ -180,20 +196,20 @@ Authenticated browser users receive private server-side autosave for quick repli
 Notepad capture composer. Reply composers share one draft per account/topic; new threads may have multiple ID-addressed
 drafts; Notepad has one account-wide capture draft. Forum publication drafts contain only literal title/body text, while
 the Notepad draft also retains structured tags and its expiration preset. Drafts never retain attachments,
-model/reasoning, robot settings, or preview state, and expire 30
-days after their last material edit. Opening or saving identical content does not renew retention. Publishing atomically
-consumes the exact saved revision; ordinary navigation preserves it. A successfully published composer resets its consumed
-revision before accepting the next draft. Explicit discard and deletion from **My Drafts** require the forum's accessible
-confirmation dialog before permanently deleting the saved revision.
+model/reasoning, robot settings, or preview state, and expire 30 days after their last material edit. Opening or saving
+identical content does not renew retention. Publishing atomically consumes the exact saved revision; ordinary navigation
+preserves it. A successfully published composer resets its consumed revision before accepting the next draft. Explicit
+discard and deletion from **My Drafts** require the forum's accessible confirmation dialog before permanently deleting
+the saved revision.
 
 Ordinary autosave scheduling runs only while the composer document is visible and focused. When it loses visibility or
-window focus, the client stops that scheduling and immediately attempts one final revision-checked save. When the document
-becomes visible and focused again (including after a back/forward-cache restore), it reconciles with the server before
-resuming: an unchanged local editor adopts the latest saved draft automatically, while unsaved local text is preserved
-and shown as a conflict if the saved revision changed elsewhere. Posting remains unavailable until initial draft loading
-finishes, and editor mutations are frozen while publication is in flight. Browser lifecycle events and networks cannot
-guarantee a final request after a crash or forced process termination, so the normal debounced autosave and server-side
-optimistic revision checks remain the durability and conflict-safety boundaries.
+window focus, the client stops that scheduling and immediately attempts one final revision-checked save. When the
+document becomes visible and focused again (including after a back/forward-cache restore), it reconciles with the server
+before resuming: an unchanged local editor adopts the latest saved draft automatically, while unsaved local text is
+preserved and shown as a conflict if the saved revision changed elsewhere. Posting remains unavailable until initial
+draft loading finishes, and editor mutations are frozen while publication is in flight. Browser lifecycle events and
+networks cannot guarantee a final request after a crash or forced process termination, so the normal debounced autosave
+and server-side optimistic revision checks remain the durability and conflict-safety boundaries.
 
 `/profile/drafts` lists only the signed-in user's drafts. Draft endpoints reject API keys and impersonation tokens, have
 no administrator browsing surface, use `Cache-Control: no-store`, and never project draft content into posts, search,
@@ -204,23 +220,24 @@ IDs, and `409` for stale optimistic revisions.
 
 ## Private Notepad
 
-`/notepad` is a browser-session-only private capture surface. The composer appears above a reverse-chronological feed and
-uses the unified draft service; publishing atomically consumes the exact Notepad draft revision. Notes support optional
-titles, normalized structured tags, owner-scoped text search, clickable frequency-sorted tag filters, one pinned note per
-account, source/preview rendering, copy, explicit revision-checked editing, and permanent deletion. Pinned notes are shown
-once above the ordinary feed and retain their chosen expiration.
+`/notepad` is a browser-session-only private capture surface. The composer appears above a reverse-chronological feed
+and uses the unified draft service; publishing atomically consumes the exact Notepad draft revision. Notes support
+optional titles, normalized structured tags, owner-scoped text search, clickable frequency-sorted tag filters, one
+pinned note per account, source/preview rendering, copy, explicit revision-checked editing, and permanent deletion.
+Pinned notes are shown once above the ordinary feed and retain their chosen expiration.
 
 New notes default to 30-day expiration and may instead use 1 day, 1 week, 2 weeks, 6 months, 1 year, or never. Editing
 keeps the existing absolute expiration unless the user explicitly chooses a new preset, which is calculated from the
-successful edit time. A one-minute server cleanup hard-deletes due notes and tag rows; read APIs do not hide notes before
-that transaction succeeds, and already-open browser snapshots remain stale until an ordinary refresh. Deletion creates no
-tombstone. Live deletion cannot promise immediate erasure from SQLite free pages, WAL files, or retained backups.
+successful edit time. A one-minute server cleanup hard-deletes due notes and tag rows; read APIs do not hide notes
+before that transaction succeeds, and already-open browser snapshots remain stale until an ordinary refresh. Deletion
+creates no tombstone. Live deletion cannot promise immediate erasure from SQLite free pages, WAL files, or retained
+backups.
 
-Notepad routes use owner-qualified repository queries, `Cache-Control: no-store`, and generic `404` responses for foreign
-IDs. They reject API keys and impersonation tokens and provide no administrator browsing surface. Notepad content never
-enters ordinary posts/topics, recent activity, public profiles, global forum search, analytics, streams, notifications,
-webhooks, Pi sessions, agentd, or memstore. Plaintext notes remain readable to trusted database/backup operators; the UI
-states that they are not end-to-end encrypted.
+Notepad routes use owner-qualified repository queries, `Cache-Control: no-store`, and generic `404` responses for
+foreign IDs. They reject API keys and impersonation tokens and provide no administrator browsing surface. Notepad
+content never enters ordinary posts/topics, recent activity, public profiles, global forum search, analytics, streams,
+notifications, webhooks, Pi sessions, agentd, or memstore. Plaintext notes remain readable to trusted database/backup
+operators; the UI states that they are not end-to-end encrypted.
 
 Entries carry a versioned `content_format` (`plaintext-v1` initially) so a future additive format can store an opaque
 per-entry ciphertext envelope. Services must not assume every future payload is searchable prose. Future encrypted notes
@@ -283,7 +300,7 @@ Key env vars (see `packages/server/src/runtimeConfig.ts` for the full list):
 | `CODEX_FORUM_BOOTSTRAP_ADMIN_USERNAME`     | Bootstrap admin username                                                                                                        | unset                            |
 | `CODEX_FORUM_BOOTSTRAP_ADMIN_PASSWORD`     | Bootstrap admin password                                                                                                        | unset                            |
 | `CODEX_FORUM_BOOTSTRAP_ADMIN_DISPLAY_NAME` | Bootstrap admin display name                                                                                                    | `Admin`                          |
-| `CODEX_FORUM_UPLOADS_DIR`                  | Attachments path                                                                                                                | `/mnt/storage/forum-attachments` |
+| `CODEX_FORUM_UPLOADS_DIR`                  | Unified file blob, attachment, staging, and avatar storage root                                                                 | `/mnt/storage/forum-attachments` |
 | `CODEX_FORUM_INTERNAL_API_TOKEN`           | Shared secret required for internal agent pending-attachment uploads; send as `x-internal-token` or `Authorization: Bearer ...` | unset                            |
 | `CODEX_FORUM_DEPLOY_TOKEN`                 | Shared secret required for `/deploy/quiescence`; send as `x-deploy-token` or `Authorization: Bearer ...`                        | unset                            |
 | `CODEX_FORUM_REDIS_STREAM_BUS`             | Redis stream bus toggle                                                                                                         | `0`                              |
@@ -337,13 +354,15 @@ For full deployment guidance, see `docs/DEPLOYMENT.md`.
   authorization-capable EventSource transport and never uses query-string credentials.
 - Manual **Compact and recover** is an admin-only durable request projection: the forum returns `202 Accepted`, resumes
   pending or interrupted requests after restart, and exposes state across reloads. Agentd owns the idle/expected-leaf
-  claim and Pi settlement; the forum creates a recovery checkpoint only after canonical compaction succeeds. A failed checkpoint dispatch can be retried
-  independently without repeating compaction. The mobile dialog is dynamic-viewport bounded and internally scrollable.
+  claim and Pi settlement; the forum creates a recovery checkpoint only after canonical compaction succeeds. A failed
+  checkpoint dispatch can be retried independently without repeating compaction. The mobile dialog is dynamic-viewport
+  bounded and internally scrollable.
 - **Fork** is an admin-only, idle-only native Pi branch operation. The administrator selects an eligible forum-numbered
-  user post, edits the replay, and receives a new topic containing independent copies of the inherited active-branch posts
-  and attachments plus a non-numbered fork boundary. Agentd preserves the parent runtime, canonical dispatch generation,
-  and crash-safe child quarantine; the forum resumes pending operations after reload and keeps ambiguous recovery fenced
-  for operator review. V1 creation remains in the same forum and cwd; finalized parent and child topics move independently.
+  user post, edits the replay, and receives a new topic containing independent copies of the inherited active-branch
+  posts and attachments plus a non-numbered fork boundary. Agentd preserves the parent runtime, canonical dispatch
+  generation, and crash-safe child quarantine; the forum resumes pending operations after reload and keeps ambiguous
+  recovery fenced for operator review. V1 creation remains in the same forum and cwd; finalized parent and child topics
+  move independently.
 - Canonical parent-session automatic compaction is a default-off, admin-controlled topic setting. The forum persists the
   policy and sends it to agentd; Pi performs native threshold and overflow-retry compaction. Automatic compaction
   creates maintenance events but never the manual recovery-checkpoint post. Direct Pi CLI and disposable child policies
@@ -360,13 +379,12 @@ Playwright E2E tests live under `apps/codex-forum/e2e`.
 ## Deployment
 
 - Canonical Monika host: `https://www.vmonika.com`
-- Repository-root Docker Compose is the primary deployment path. See `docs/DEPLOYMENT.md` for forum authentication and network details.
+- Repository-root Docker Compose is the primary deployment path. See `docs/DEPLOYMENT.md` for forum authentication and
+  network details.
 
 ## License
 
 Copyright (c) 2026 Irrigate Collective.
 
-Except for the separately identified components in
-[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md), the Monika Forum service is
-licensed under the [GNU Affero General Public License version 3 or
-later](LICENSE).
+Except for the separately identified components in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md), the Monika Forum
+service is licensed under the [GNU Affero General Public License version 3 or later](LICENSE).

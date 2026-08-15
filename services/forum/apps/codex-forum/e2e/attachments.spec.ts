@@ -218,8 +218,16 @@ function createMockApi(options: MockApiOptions = {}): {
       return fulfillJson(route, [forum]);
     }
 
-    if (path === '/api/user-files' && method === 'GET') {
-      return fulfillJson(route, userFiles);
+    if (path === '/api/user-files/page' && method === 'GET') {
+      const filter = url.searchParams.get('filter') ?? 'standalone';
+      return fulfillJson(route, {
+        items: userFiles.filter(
+          (file) =>
+            filter === 'all' ||
+            (filter === 'standalone' ? file.standalone : file.associations.some((item) => !item.deletedAt))
+        ),
+        nextCursor: null,
+      });
     }
 
     if (path === '/api/user-files' && method === 'POST') {
@@ -238,13 +246,32 @@ function createMockApi(options: MockApiOptions = {}): {
         filename,
         mimeType: 'application/octet-stream',
         sizeBytes,
+        standalone: true,
+        visibility: 'private',
+        expiresAt: '2025-02-01T00:00:00.000Z',
+        revision: 1,
+        blobState: 'ready',
+        associations: [],
         createdAt: now,
+        updatedAt: now,
       };
       userFiles.unshift(file);
       return fulfillJson(route, file, 200, options.userFileUploadDelayMs ?? 0);
     }
 
-    const userFilesMatch = path.match(/^\/api\/user-files\/([^/]+)$/);
+    const userFilesMatch = path.match(/^\/(?:api\/)?user-files\/([^/]+)$/);
+    if (userFilesMatch && method === 'GET') {
+      const file = userFiles.find((item) => item.id === userFilesMatch[1]);
+      if (!file) return fulfillJson(route, { message: 'file not found' }, 404);
+      return route.fulfill({
+        status: 200,
+        headers: {
+          'content-type': file.mimeType,
+          'content-disposition': `attachment; filename="${file.filename}"`,
+        },
+        body: Buffer.alloc(file.sizeBytes, 1),
+      });
+    }
     if (userFilesMatch && method === 'DELETE') {
       const fileId = userFilesMatch[1];
       if (options.failUserFileDeletes?.has(fileId)) {
@@ -422,7 +449,7 @@ function createMockApi(options: MockApiOptions = {}): {
 
   return {
     attach: async (page: Page) => {
-      await page.route('**/api/**', handleRoute);
+      await page.context().route('**/api/**', handleRoute);
       return {
         requestLog,
         createdPostIds,
@@ -745,25 +772,74 @@ test.describe('Attachment lifecycle', () => {
     await expect(page.locator('.vb-user-file-name', { hasText: 'alpha.txt' })).toBeVisible();
     await expect(page.locator('.vb-user-file-name', { hasText: 'beta.txt' })).toBeVisible();
 
-    await expect(page.locator('.vb-user-files-total')).toContainText('2 files');
+    await expect(page.locator('.vb-user-files-total')).toContainText('2 shown');
     await expect(page.locator('.vb-user-files-total')).toContainText('300 B');
 
     const alphaItem = page.locator('.vb-user-file-item', { hasText: 'alpha.txt' });
     await expect(alphaItem.locator('.vb-user-file-input')).toHaveValue(/user-files\/user-file-/);
+    const downloadLink = alphaItem.getByRole('link', { name: 'Open / Download' });
+    await expect(downloadLink).toHaveAttribute('href', /\/api\/user-files\/user-file-/);
+    const downloadPromise = page.waitForEvent('download');
+    await downloadLink.click();
+    await downloadPromise;
 
     const copyButton = alphaItem.locator('button').filter({ hasText: /Copy Link|Copied!/ });
     await copyButton.click();
     await expect(page.locator('.vb-success-banner')).toContainText('Link copied to clipboard');
-    await expect(copyButton).toContainText('Copied!');
 
+    page.on('dialog', (dialog) => void dialog.accept());
     const deleteButton = page
       .locator('.vb-user-file-item', { hasText: 'beta.txt' })
-      .locator('button', { hasText: 'Delete' });
+      .locator('button', { hasText: 'Remove standalone copy' });
     await deleteButton.click();
 
     await expect(page.locator('.vb-user-file-name', { hasText: 'beta.txt' })).toHaveCount(0);
-    await expect(page.locator('.vb-user-files-total')).toContainText('1 file');
+    await expect(page.locator('.vb-user-files-total')).toContainText('1 shown');
     await expect(page.locator('.vb-user-files-total')).toContainText('100 B');
+  });
+
+  test('defaults to standalone files and reveals post associations in the alternate filters', async ({ page }) => {
+    const postOnly: UserFileDto = {
+      id: 'post-file-1',
+      ownerId: 'identity-1',
+      filename: 'post-only.txt',
+      mimeType: 'text/plain',
+      sizeBytes: 12,
+      standalone: false,
+      visibility: null,
+      expiresAt: null,
+      revision: 1,
+      blobState: 'ready',
+      associations: [
+        {
+          id: 'attachment-1',
+          postId: 'post-1',
+          topicId: 'topic-1',
+          topicTitle: 'Linked topic',
+          postNumber: 9,
+          filename: 'post-only.txt',
+          mimeType: 'text/plain',
+          deletedAt: null,
+        },
+      ],
+      createdAt: '2025-01-01T12:00:00.000Z',
+      updatedAt: '2025-01-01T12:00:00.000Z',
+    };
+    const mock = createMockApi({ initialUserFiles: [postOnly] });
+    await mock.attach(page);
+    await page.addInitScript(() => {
+      document.cookie = 'cforum_session=test-token; path=/; SameSite=Lax';
+    });
+    await page.goto('/files');
+    await expect(page.locator('.vb-user-file-name', { hasText: 'post-only.txt' })).toHaveCount(0);
+    await page.getByRole('button', { name: 'All', exact: true }).click();
+    await expect(page.locator('.vb-user-file-name', { hasText: 'post-only.txt' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Linked topic #9' })).toHaveAttribute(
+      'href',
+      /topics\/topic-1\?page=2#9/
+    );
+    await page.getByRole('button', { name: 'Post attachments', exact: true }).click();
+    await expect(page.locator('.vb-user-file-name', { hasText: 'post-only.txt' })).toBeVisible();
   });
 
   test('shows empty state when visiting file storage while logged out', async ({ page }) => {
@@ -785,7 +861,14 @@ test.describe('Attachment lifecycle', () => {
         filename: 'existing.txt',
         mimeType: 'text/plain',
         sizeBytes: 120,
+        standalone: true,
+        visibility: 'private',
+        expiresAt: null,
+        revision: 1,
+        blobState: 'ready',
+        associations: [],
         createdAt: '2025-01-01T12:00:00.000Z',
+        updatedAt: '2025-01-01T12:00:00.000Z',
       },
       {
         id: 'user-file-10',
@@ -793,7 +876,14 @@ test.describe('Attachment lifecycle', () => {
         filename: 'recoverable.txt',
         mimeType: 'text/plain',
         sizeBytes: 64,
+        standalone: true,
+        visibility: 'private',
+        expiresAt: null,
+        revision: 1,
+        blobState: 'ready',
+        associations: [],
         createdAt: '2025-01-01T12:10:00.000Z',
+        updatedAt: '2025-01-01T12:10:00.000Z',
       },
     ];
     const fileSizes = {
@@ -828,11 +918,14 @@ test.describe('Attachment lifecycle', () => {
 
     await expect(page.locator('.vb-login-error')).toContainText('Upload failed');
     await expect(page.locator('.vb-user-file-name', { hasText: 'existing.txt' })).toBeVisible();
-    await expect(page.locator('.vb-user-file-name', { hasText: 'good.txt' })).toHaveCount(0);
+    await expect(page.locator('.vb-user-file-name', { hasText: 'good.txt' })).toBeVisible();
+    await expect(page.locator('.vb-attachment-selected')).toContainText('oversized.bin');
+    await expect(page.locator('.vb-attachment-selected')).not.toContainText('good.txt');
 
+    page.on('dialog', (dialog) => void dialog.accept());
     const deleteButton = page
       .locator('.vb-user-file-item', { hasText: 'existing.txt' })
-      .locator('button', { hasText: 'Delete' });
+      .locator('button', { hasText: 'Remove standalone copy' });
     await deleteButton.click();
 
     await expect(page.locator('.vb-login-error')).toContainText('Delete failed');
@@ -840,7 +933,7 @@ test.describe('Attachment lifecycle', () => {
 
     const recoveryDelete = page
       .locator('.vb-user-file-item', { hasText: 'recoverable.txt' })
-      .locator('button', { hasText: 'Delete' });
+      .locator('button', { hasText: 'Remove standalone copy' });
     await recoveryDelete.click();
 
     await expect(page.locator('.vb-user-file-name', { hasText: 'recoverable.txt' })).toHaveCount(0);

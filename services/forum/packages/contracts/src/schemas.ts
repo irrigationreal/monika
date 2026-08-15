@@ -9,11 +9,11 @@ import {
   AnalyticsBucketValues,
   ForumVisibilityValues,
   MessageDraftContextValues,
-  NotepadContentFormatValues,
-  NotepadExpirationPresetValues,
   MessageTemplateContextValues,
   MessageTemplateForumScopeValues,
   MessageTemplateScopeValues,
+  NotepadContentFormatValues,
+  NotepadExpirationPresetValues,
   RobotModeValues,
 } from '@irrigationreal/codex-forum-core';
 
@@ -52,7 +52,6 @@ import type {
   ChatRoomListDto,
   ChatTypingDto,
   CompactionOperationDto,
-  TopicCompactionStateDto,
   CreateCompactionRequestDto,
   CreateForkRequestDto,
   DiscordBridgeStatusDto,
@@ -60,7 +59,6 @@ import type {
   ExternalRefDto,
   ForkBoundaryDto,
   ForkOperationDto,
-  TopicForkStateDto,
   ForumDto,
   ForumLastPostDto,
   IdentityDto,
@@ -76,13 +74,13 @@ import type {
   MessageDraftDto,
   MessageDraftListResponseDto,
   MessageDraftResponseDto,
-  NotepadEntryDto,
-  NotepadEntryResponseDto,
-  NotepadListResponseDto,
   MessageTemplateDto,
   MessageTemplateListResponseDto,
   ModelCatalogDto,
   ModelInfoDto,
+  NotepadEntryDto,
+  NotepadEntryResponseDto,
+  NotepadListResponseDto,
   NotificationDto,
   PiSessionDiagnosticsDto,
   PlanDto,
@@ -112,7 +110,9 @@ import type {
   ToolRunDto,
   TopicAttachmentsDto,
   TopicAutoRunDto,
+  TopicCompactionStateDto,
   TopicDto,
+  TopicForkStateDto,
   TopicLineageDto,
   TopicMoveDto,
   TopicOperationalEventDto,
@@ -121,6 +121,7 @@ import type {
   UpdatePrivateEmailResponseDto,
   UpdateQuickReplyPreferenceResponseDto,
   UserFileDto,
+  UserFileListResponseDto,
   UserPostHistoryItemDto,
   UserPostHistoryResponseDto,
   UserProfileDto,
@@ -159,12 +160,12 @@ import type {
   MatrixMapRoomRequest,
   MatrixSendRequest,
   MessageDraftWriteRequest,
-  NotepadEntryUpdateRequest,
-  NotepadEntryWriteRequest,
   MessageTemplateReorderRequest,
   MessageTemplateUpdateRequest,
   MessageTemplateWriteRequest,
   MoveTopicRequest,
+  NotepadEntryUpdateRequest,
+  NotepadEntryWriteRequest,
   RegisterRequest,
   UpdateIdentityRequest,
   UpdatePrivateEmailRequest,
@@ -195,7 +196,16 @@ export const AccessRuleActionSchema = z.enum(AccessRuleActionValues);
 export const AccessRuleEffectSchema = z.enum(AccessRuleEffectValues);
 export const PlanVisibilitySchema = z.enum(['public', 'internal', 'private']);
 export const ToolRunVisibilitySchema = z.enum(['public', 'internal', 'private']);
-export const RobotActivitySchema = z.enum(['idle', 'thinking', 'running_tools', 'waiting', 'stopping', 'stopped', 'uncertain', 'error']);
+export const RobotActivitySchema = z.enum([
+  'idle',
+  'thinking',
+  'running_tools',
+  'waiting',
+  'stopping',
+  'stopped',
+  'uncertain',
+  'error',
+]);
 export const RobotAutomationWorkerSchema = z.enum(['echs']);
 export const RobotAutomationRunModeSchema = z.enum(['manual', 'interval']);
 export const TopicAutoRunStatusSchema = z.enum(['idle', 'running', 'stopped', 'error']);
@@ -321,6 +331,7 @@ export const AttachmentDtoSchema: z.ZodType<AttachmentDto> = z.object({
   mimeType: z.string(),
   sizeBytes: z.number(),
   createdAt: z.string(),
+  deletedAt: optionalNullableString,
 });
 
 export const TopicAttachmentsDtoSchema: z.ZodType<TopicAttachmentsDto> = z.object({
@@ -409,13 +420,49 @@ export const ChatTypingDtoSchema: z.ZodType<ChatTypingDto> = z.object({
   isTyping: z.boolean(),
 });
 
+export const UserFileListQuerySchema = z.object({
+  filter: z.enum(['standalone', 'all', 'post_attachments']).optional(),
+  cursor: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+});
+
+export const UserFileUpdateRequestSchema = z.object({
+  expectedRevision: z.number().int().positive(),
+  visibility: z.enum(['private', 'members', 'public']),
+  expiration: z.union([z.enum(NotepadExpirationPresetValues), z.literal('keep')]),
+});
+
 export const UserFileDtoSchema: z.ZodType<UserFileDto> = z.object({
   id: z.string(),
-  ownerId: z.string(),
+  ownerId: z.string().nullable(),
   filename: z.string(),
   mimeType: z.string(),
   sizeBytes: z.number(),
+  standalone: z.boolean(),
+  visibility: z.enum(['private', 'members', 'public']).nullable(),
+  expiresAt: z.string().nullable(),
+  revision: z.number().int().positive(),
+  blobState: z.enum(['staging', 'ready', 'gc_pending', 'missing']),
+  associations: z.array(
+    z.object({
+      id: z.string(),
+      postId: z.string(),
+      topicId: z.string(),
+      topicTitle: z.string(),
+      postNumber: z.number().int().positive(),
+      filename: z.string(),
+      mimeType: z.string(),
+      deletedAt: z.string().nullable(),
+    })
+  ),
   createdAt: z.string(),
+  updatedAt: z.string(),
+  deduplicated: z.boolean().optional(),
+});
+
+export const UserFileListResponseDtoSchema: z.ZodType<UserFileListResponseDto> = z.object({
+  items: z.array(UserFileDtoSchema),
+  nextCursor: z.string().nullable(),
 });
 
 export const ApiKeyDtoSchema: z.ZodType<ApiKeyDto> = z.object({
@@ -629,7 +676,11 @@ export const TopicOperationalEventDtoSchema: z.ZodType<TopicOperationalEventDto>
 });
 
 export const CreateCompactionRequestSchema: z.ZodType<CreateCompactionRequestDto> = z.object({
-  operationId: z.string().min(1).max(200).regex(/^[A-Za-z0-9._~-]+$/, 'operationId contains invalid characters'),
+  operationId: z
+    .string()
+    .min(1)
+    .max(200)
+    .regex(/^[A-Za-z0-9._~-]+$/, 'operationId contains invalid characters'),
   confirmation: z.literal('COMPACT'),
   customInstructions: z.string().max(20_000).nullable(),
   recoveryPrompt: z.string().trim().min(1).max(100_000),
@@ -671,7 +722,11 @@ export const ForkBoundaryDtoSchema: z.ZodType<ForkBoundaryDto> = z.object({
 });
 
 export const CreateForkRequestSchema: z.ZodType<CreateForkRequestDto> = z.object({
-  operationId: z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/, 'operationId contains invalid characters'),
+  operationId: z
+    .string()
+    .min(1)
+    .max(128)
+    .regex(/^[A-Za-z0-9_-]+$/, 'operationId contains invalid characters'),
   boundaryPostId: z.string().min(1),
   title: z.string().trim().min(1).max(300),
   openingBody: z.string().trim().min(1).max(100_000),
@@ -716,15 +771,18 @@ export const RobotStateDtoSchema: z.ZodType<RobotStateDto> = z.object({
   model: optionalNullableString,
   reasoningEffort: optionalNullableString,
   lastUpdatedAt: z.string(),
-  lastTurnError: z.object({
-    message: z.string(),
-    at: z.string(),
-    postId: optionalNullableString,
-    turnId: optionalNullableString
-  }).nullable().optional(),
+  lastTurnError: z
+    .object({
+      message: z.string(),
+      at: z.string(),
+      postId: optionalNullableString,
+      turnId: optionalNullableString,
+    })
+    .nullable()
+    .optional(),
   currentPlan: PlanDtoSchema.nullable().optional(),
   context: SessionContextDtoSchema.nullable().optional(),
-  recentToolRuns: z.array(ToolRunDtoSchema)
+  recentToolRuns: z.array(ToolRunDtoSchema),
 });
 
 export const RobotStopResultDtoSchema: z.ZodType<RobotStopResultDto> = z.object({
@@ -775,10 +833,10 @@ export const RobotSubagentRunDtoSchema: z.ZodType<RobotSubagentRunDto> = z.objec
   outcomeState: optionalNullableString,
   effectsState: z.enum(['none', 'confirmed', 'unknown']).nullable().optional(),
   deliveryState: optionalNullableString,
-  executionTarget: z.union([
-    z.object({ kind: z.literal('local') }),
-    z.object({ kind: z.literal('ssh'), name: z.string() })
-  ]).nullable().optional(),
+  executionTarget: z
+    .union([z.object({ kind: z.literal('local') }), z.object({ kind: z.literal('ssh'), name: z.string() })])
+    .nullable()
+    .optional(),
   blocking: z.boolean(),
   reason: optionalNullableString,
   parentSessionId: optionalNullableString,
@@ -786,49 +844,59 @@ export const RobotSubagentRunDtoSchema: z.ZodType<RobotSubagentRunDto> = z.objec
   topicTitle: optionalNullableString,
   postId: optionalNullableString,
   startedAt: optionalNullableString,
-  updatedAt: optionalNullableString
+  updatedAt: optionalNullableString,
 });
 
 export const RobotDashboardDtoSchema: z.ZodType<RobotDashboardDto> = z.object({
   jobs: z.array(RobotJobDtoSchema),
   queue: z.array(RobotQueueItemDtoSchema),
-  subagents: z.object({
-    activeCount: z.number(),
-    uncertainCount: z.number(),
-    effectsUnknownCount: z.number(),
-    runs: z.array(RobotSubagentRunDtoSchema),
-    groups: z.object({
-      blockers: z.array(RobotSubagentRunDtoSchema),
-      pendingDelivery: z.array(RobotSubagentRunDtoSchema),
-      history: z.array(RobotSubagentRunDtoSchema)
-    }),
-    omitted: z.number(),
-    blockerCount: z.number(),
-    omittedBlockerCount: z.number(),
-    available: z.boolean(),
-    error: optionalNullableString,
-    retention: z.object({
-      available: z.boolean(),
-      generatedAt: optionalNullableString,
-      retentionDays: z.number(),
-      counts: z.object({ protected: z.number(), waiting: z.number(), eligible: z.number(), compacted: z.number(), error: z.number() }),
-      trackedRemovableBytes: z.number(),
-      eligibleBytes: z.number(),
+  subagents: z
+    .object({
+      activeCount: z.number(),
+      uncertainCount: z.number(),
+      effectsUnknownCount: z.number(),
+      runs: z.array(RobotSubagentRunDtoSchema),
+      groups: z.object({
+        blockers: z.array(RobotSubagentRunDtoSchema),
+        pendingDelivery: z.array(RobotSubagentRunDtoSchema),
+        history: z.array(RobotSubagentRunDtoSchema),
+      }),
       omitted: z.number(),
-      running: z.boolean(),
-      lastError: optionalNullableString
-    }).optional()
-  }).optional(),
+      blockerCount: z.number(),
+      omittedBlockerCount: z.number(),
+      available: z.boolean(),
+      error: optionalNullableString,
+      retention: z
+        .object({
+          available: z.boolean(),
+          generatedAt: optionalNullableString,
+          retentionDays: z.number(),
+          counts: z.object({
+            protected: z.number(),
+            waiting: z.number(),
+            eligible: z.number(),
+            compacted: z.number(),
+            error: z.number(),
+          }),
+          trackedRemovableBytes: z.number(),
+          eligibleBytes: z.number(),
+          omitted: z.number(),
+          running: z.boolean(),
+          lastError: optionalNullableString,
+        })
+        .optional(),
+    })
+    .optional(),
   settings: z
     .object({
       maxConcurrentTurns: z.number(),
-      activeTurnsCount: z.number()
+      activeTurnsCount: z.number(),
     })
-    .optional()
+    .optional(),
 });
 
 export const RobotSettingsDtoSchema: z.ZodType<RobotSettingsDto> = z.object({
-  maxConcurrentTurns: z.number()
+  maxConcurrentTurns: z.number(),
 });
 
 const AnalyticsToolDtoSchema = z.object({
@@ -1323,7 +1391,7 @@ export const CreateTopicRequestSchema: z.ZodType<CreateTopicRequest> = z.object(
   robotMode: RobotModeSchema.optional(),
   autoCompactEnabled: z.boolean().optional(),
   silent: z.boolean().optional(),
-  draft: DraftReferenceRequestSchema.optional()
+  draft: DraftReferenceRequestSchema.optional(),
 });
 
 export const CreatePostRequestSchema: z.ZodType<CreatePostRequest> = z.object({
@@ -1335,7 +1403,7 @@ export const CreatePostRequestSchema: z.ZodType<CreatePostRequest> = z.object({
   autoCompactEnabled: z.boolean().optional(),
   autoCompactRevision: z.number().int().nonnegative().optional(),
   silent: z.boolean().optional(),
-  draft: DraftReferenceRequestSchema.optional()
+  draft: DraftReferenceRequestSchema.optional(),
 });
 
 export const LoginRequestSchema: z.ZodType<LoginRequest> = z.object({
@@ -1405,7 +1473,9 @@ export const NotepadEntryDtoSchema: z.ZodType<NotepadEntryDto> = z.object({
   updatedAt: z.string(),
   expiresAt: nullableString,
 });
-export const NotepadEntryResponseDtoSchema: z.ZodType<NotepadEntryResponseDto> = z.object({ entry: NotepadEntryDtoSchema });
+export const NotepadEntryResponseDtoSchema: z.ZodType<NotepadEntryResponseDto> = z.object({
+  entry: NotepadEntryDtoSchema,
+});
 export const NotepadListResponseDtoSchema: z.ZodType<NotepadListResponseDto> = z.object({
   entries: z.array(NotepadEntryDtoSchema),
   tags: z.array(z.object({ tag: z.string(), count: z.number().int().nonnegative() })),
@@ -1425,12 +1495,14 @@ export const NotepadEntryUpdateRequestSchema: z.ZodType<NotepadEntryUpdateReques
   expiration: z.union([NotepadExpirationPresetSchema, z.literal('keep')]).optional(),
   pinned: z.boolean().optional(),
 }).strict();
-export const NotepadListQuerySchema = z.object({
-  q: z.string().max(500).optional(),
-  tags: z.string().max(1000).optional(),
-  cursor: z.string().max(2000).optional(),
-  limit: z.coerce.number().int().min(1).max(100).optional(),
-}).strict();
+export const NotepadListQuerySchema = z
+  .object({
+    q: z.string().max(500).optional(),
+    tags: z.string().max(1000).optional(),
+    cursor: z.string().max(2000).optional(),
+    limit: z.coerce.number().int().min(1).max(100).optional(),
+  })
+  .strict();
 export const NotepadDeleteQuerySchema = z.object({ revision: z.coerce.number().int().positive() }).strict();
 
 export const MessageDraftRevisionQuerySchema = z

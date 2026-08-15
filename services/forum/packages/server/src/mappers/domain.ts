@@ -1,10 +1,10 @@
 import type {
   Forum as CoreForum,
+  Post as CorePost,
+  Topic as CoreTopic,
   ForumLastPost,
   Identity,
-  Post as CorePost,
   RobotMode,
-  Topic as CoreTopic
 } from '@irrigationreal/codex-forum-core';
 
 export interface TopicReadModel extends CoreTopic {
@@ -40,15 +40,7 @@ export interface Attachment {
   sizeBytes: number;
   sha256?: string | null;
   createdAt: string;
-}
-
-export interface UserFile {
-  id: string;
-  ownerId: string;
-  filename: string;
-  mimeType: string;
-  sizeBytes: number;
-  createdAt: string;
+  deletedAt?: string | null;
 }
 
 export interface IdentityReadModel extends Identity {

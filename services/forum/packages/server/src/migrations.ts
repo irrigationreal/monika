@@ -1790,6 +1790,120 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 47,
+    name: 'unified-user-files',
+    up: (db) => {
+      db.exec(`
+        create table file_blobs (
+          id text primary key,
+          owner_identity_id text,
+          sha256 text,
+          size_bytes integer not null,
+          storage_path text not null,
+          state text not null default 'ready' check (state in ('staging','ready','gc_pending','missing')),
+          created_at text not null,
+          updated_at text not null,
+          foreign key (owner_identity_id) references identities(id) on delete set null
+        );
+        create unique index idx_file_blobs_owner_hash on file_blobs(owner_identity_id, sha256, size_bytes)
+          where owner_identity_id is not null and sha256 is not null and state = 'ready';
+        create index idx_file_blobs_state on file_blobs(state, updated_at);
+        create index idx_file_blobs_path on file_blobs(storage_path);
+        create table file_deletion_queue (
+          storage_path text primary key,
+          reason text not null,
+          created_at text not null,
+          attempt_count integer not null default 0,
+          last_error text
+        );
+
+        alter table user_files rename to user_files_legacy;
+        create table user_files (
+          id text primary key,
+          identity_id text,
+          blob_id text,
+          filename text not null,
+          mime_type text not null,
+          size_bytes integer not null,
+          standalone integer not null default 0 check (standalone in (0,1)),
+          visibility text check (visibility in ('private','members','public')),
+          expires_at text,
+          revision integer not null default 1,
+          created_at text not null,
+          updated_at text not null,
+          foreign key (identity_id) references identities(id) on delete set null,
+          foreign key (blob_id) references file_blobs(id) on delete set null
+        );
+        insert into file_blobs
+          (id, owner_identity_id, sha256, size_bytes, storage_path, state, created_at, updated_at)
+          select 'legacy-user-' || id, identity_id, null, size_bytes, storage_path, 'ready', created_at, created_at
+          from user_files_legacy;
+        insert into user_files
+          (id, identity_id, blob_id, filename, mime_type, size_bytes, standalone, visibility, expires_at, revision, created_at, updated_at)
+          select id, identity_id, 'legacy-user-' || id, filename, mime_type, size_bytes, 1, 'private', null, 1, created_at, created_at
+          from user_files_legacy;
+        drop table user_files_legacy;
+
+        alter table attachments rename to attachments_legacy;
+        create table user_file_aliases (
+          alias_id text primary key,
+          file_id text not null,
+          created_at text not null,
+          foreign key (file_id) references user_files(id) on delete cascade
+        );
+
+        create table attachments (
+          id text primary key,
+          file_id text,
+          post_id text not null,
+          filename text not null,
+          mime_type text not null,
+          size_bytes integer not null,
+          storage_path text,
+          sha256 text,
+          created_at text not null,
+          deleted_at text,
+          delete_reason text,
+          foreign key (file_id) references user_files(id) on delete set null,
+          foreign key (post_id) references posts(id) on delete cascade
+        );
+        insert into file_blobs
+          (id, owner_identity_id, sha256, size_bytes, storage_path, state, created_at, updated_at)
+          select 'legacy-attachment-' || min(a.id),
+                 case when i.kind in ('human','admin') then p.author_id else null end,
+                 null, max(a.size_bytes), a.storage_path, 'ready', min(a.created_at), min(a.created_at)
+          from attachments_legacy a
+          join posts p on p.id = a.post_id
+          join identities i on i.id = p.author_id
+          group by a.storage_path;
+        insert into user_files
+          (id, identity_id, blob_id, filename, mime_type, size_bytes, standalone, visibility, expires_at, revision, created_at, updated_at)
+          select 'post-file-' || a.id,
+                 case when i.kind in ('human','admin') then p.author_id else null end,
+                 'legacy-attachment-' || (
+                   select min(a2.id) from attachments_legacy a2 where a2.storage_path = a.storage_path
+                 ),
+                 a.filename, a.mime_type, a.size_bytes, 0, null, null, 1, a.created_at, a.created_at
+          from attachments_legacy a
+          join posts p on p.id = a.post_id
+          join identities i on i.id = p.author_id;
+        insert into attachments
+          (id, file_id, post_id, filename, mime_type, size_bytes, storage_path, sha256, created_at, deleted_at, delete_reason)
+          select a.id, 'post-file-' || a.id, a.post_id, a.filename, a.mime_type, a.size_bytes, a.storage_path, a.sha256, a.created_at,
+                 case when p.deleted_at is null then null else p.deleted_at end,
+                 case when p.deleted_at is null then null else 'post_deleted' end
+          from attachments_legacy a join posts p on p.id = a.post_id;
+        drop table attachments_legacy;
+
+        create index idx_user_files_identity on user_files(identity_id, created_at desc, id desc);
+        create index idx_user_files_expiry on user_files(expires_at) where standalone = 1 and expires_at is not null;
+        create index idx_user_files_blob on user_files(blob_id);
+        create index idx_attachments_post on attachments(post_id, created_at);
+        create index idx_attachments_file on attachments(file_id);
+      `);
+    },
+  },
 ];
 
 export const SCHEMA_VERSION: number = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;

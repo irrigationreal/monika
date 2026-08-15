@@ -15,6 +15,7 @@ import type {
   Topic,
   TopicOperationalEvent,
   TopicStatus,
+  UserFile,
   WebAuthnCredential,
 } from '@irrigationreal/codex-forum-core';
 
@@ -39,7 +40,7 @@ import type {
   UserFileRow,
   WebAuthnCredentialRow,
 } from '../db';
-import type { Attachment, Invite, Plan, Session, SessionMessage, ToolRun, TopicAutoRun, UserFile } from './domain';
+import type { Attachment, Invite, Plan, Session, SessionMessage, ToolRun, TopicAutoRun } from './domain';
 
 export function mapForkOperationRowToDomain(row: ForkOperationRow): ForkOperation {
   return {
@@ -105,17 +106,25 @@ export function mapAttachmentRowToDomain(row: AttachmentRow): Attachment {
     sizeBytes: row.size_bytes,
     sha256: row.sha256 ?? null,
     createdAt: row.created_at,
+    deletedAt: row.deleted_at,
   };
 }
 
 export function mapUserFileRowToDomain(row: UserFileRow): UserFile {
   return {
     id: row.id,
-    ownerId: row.identity_id,
+    ownerIdentityId: row.identity_id,
     filename: row.filename,
     mimeType: row.mime_type,
     sizeBytes: row.size_bytes,
+    standalone: Boolean(row.standalone),
+    visibility: row.visibility,
+    expiresAt: row.expires_at,
+    revision: row.revision,
+    blobState: row.blob_id ? 'ready' : 'missing',
+    associations: [],
     createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 

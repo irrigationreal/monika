@@ -25,6 +25,10 @@
     {
       "key": "topicId",
       "value": ""
+    },
+    {
+      "key": "fileId",
+      "value": ""
     }
   ],
   "item": [
@@ -209,6 +213,19 @@
           }
         },
         {
+          "name": "List User Files (Paged)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{apiKey}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/user-files/page?filter=standalone&limit=30"
+          }
+        },
+        {
           "name": "Upload User File",
           "request": {
             "method": "POST",
@@ -222,6 +239,18 @@
               "mode": "formdata",
               "formdata": [
                 {
+                  "key": "visibility",
+                  "value": "private",
+                  "type": "text",
+                  "description": "private, members, or public"
+                },
+                {
+                  "key": "expiration",
+                  "value": "one_month",
+                  "type": "text",
+                  "description": "Notepad retention preset: one_day, one_week, two_weeks, one_month, six_months, one_year, or never"
+                },
+                {
                   "key": "file",
                   "type": "file",
                   "src": ""
@@ -229,6 +258,27 @@
               ]
             },
             "url": "{{baseUrl}}/api/user-files"
+          }
+        },
+        {
+          "name": "Update User File Visibility and Retention",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{apiKey}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"expectedRevision\": 1,\n  \"visibility\": \"members\",\n  \"expiration\": \"six_months\"\n}"
+            },
+            "url": "{{baseUrl}}/api/user-files/{{fileId}}"
           }
         }
       ]
