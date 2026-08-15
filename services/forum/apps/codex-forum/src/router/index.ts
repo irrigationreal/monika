@@ -9,9 +9,9 @@ import DeveloperPortalView from '../views/DeveloperPortalView.vue';
 import DraftsView from '../views/DraftsView.vue';
 import ForumHomeView from '../views/ForumHomeView.vue';
 import ForumIndexView from '../views/ForumIndexView.vue';
+import MessageTemplatesView from '../views/MessageTemplatesView.vue';
 import NewThreadView from '../views/NewThreadView.vue';
 import NotepadView from '../views/NotepadView.vue';
-import MessageTemplatesView from '../views/MessageTemplatesView.vue';
 import ProfileView from '../views/ProfileView.vue';
 import RegisterView from '../views/RegisterView.vue';
 import ReplyView from '../views/ReplyView.vue';
@@ -41,13 +41,23 @@ const routes: RouteRecordRaw[] = [
   { path: '/register', name: 'auth.register', component: RegisterView, meta: { title: 'Register' } },
   { path: '/verify/:token', name: 'auth.verify', component: VerifyView, meta: { title: 'Verify Account' } },
   { path: '/profile', name: 'user.profile', component: ProfileView, meta: { title: 'User Control Panel' } },
-  { path: '/profile/message-templates', name: 'user.messageTemplates', component: MessageTemplatesView, meta: { title: 'Message Templates', requiresAuth: true } },
-  { path: '/profile/drafts', name: 'user.drafts', component: DraftsView, meta: { title: 'My Drafts', requiresAuth: true } },
+  {
+    path: '/profile/message-templates',
+    name: 'user.messageTemplates',
+    component: MessageTemplatesView,
+    meta: { title: 'Message Templates', requiresAuth: true },
+  },
+  {
+    path: '/profile/drafts',
+    name: 'user.drafts',
+    component: DraftsView,
+    meta: { title: 'My Drafts', requiresAuth: true },
+  },
   { path: '/notepad', name: 'user.notepad', component: NotepadView, meta: { title: 'My Notepad', requiresAuth: true } },
   { path: '/chat', name: 'chat.home', component: ChatView, meta: { title: 'Chat Rooms', requiresAuth: true } },
   { path: '/chat/:roomId', name: 'chat.room', component: ChatView, meta: { title: 'Chat Room', requiresAuth: true } },
   { path: '/users/:identityId', name: 'user.view', component: UserProfileView, meta: { title: 'User Profile' } },
-  { path: '/files', name: 'user.files', component: UserFilesView, meta: { title: 'File Storage' } },
+  { path: '/files', name: 'user.files', component: UserFilesView, meta: { title: 'User Files' } },
   { path: '/admin', name: 'admin', component: AdminView, meta: { title: 'Admin Panel', requiresAdmin: true } },
   {
     path: '/admin/analytics',

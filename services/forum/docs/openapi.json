@@ -6136,7 +6136,8 @@
                 "type": "object",
                 "properties": {
                   "file": {
-                    "type": "string"
+                    "type": "string",
+                    "format": "binary"
                   }
                 },
                 "required": [
@@ -11807,7 +11808,7 @@
         "tags": [
           "attachments"
         ],
-        "summary": "List user files",
+        "summary": "List standalone user files (legacy array response)",
         "responses": {
           "200": {
             "description": "OK",
@@ -11822,7 +11823,8 @@
                         "type": "string"
                       },
                       "ownerId": {
-                        "type": "string"
+                        "type": "string",
+                        "nullable": true
                       },
                       "filename": {
                         "type": "string"
@@ -11833,8 +11835,89 @@
                       "sizeBytes": {
                         "type": "number"
                       },
+                      "standalone": {
+                        "type": "boolean"
+                      },
+                      "visibility": {
+                        "type": "string",
+                        "nullable": true,
+                        "enum": [
+                          "private",
+                          "members",
+                          "public"
+                        ]
+                      },
+                      "expiresAt": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "revision": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "exclusiveMinimum": true
+                      },
+                      "blobState": {
+                        "type": "string",
+                        "enum": [
+                          "staging",
+                          "ready",
+                          "gc_pending",
+                          "missing"
+                        ]
+                      },
+                      "associations": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "postId": {
+                              "type": "string"
+                            },
+                            "topicId": {
+                              "type": "string"
+                            },
+                            "topicTitle": {
+                              "type": "string"
+                            },
+                            "postNumber": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "exclusiveMinimum": true
+                            },
+                            "filename": {
+                              "type": "string"
+                            },
+                            "mimeType": {
+                              "type": "string"
+                            },
+                            "deletedAt": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "postId",
+                            "topicId",
+                            "topicTitle",
+                            "postNumber",
+                            "filename",
+                            "mimeType",
+                            "deletedAt"
+                          ]
+                        }
+                      },
                       "createdAt": {
                         "type": "string"
+                      },
+                      "updatedAt": {
+                        "type": "string"
+                      },
+                      "deduplicated": {
+                        "type": "boolean"
                       }
                     },
                     "required": [
@@ -11843,7 +11926,14 @@
                       "filename",
                       "mimeType",
                       "sizeBytes",
-                      "createdAt"
+                      "standalone",
+                      "visibility",
+                      "expiresAt",
+                      "revision",
+                      "blobState",
+                      "associations",
+                      "createdAt",
+                      "updatedAt"
                     ]
                   }
                 }
@@ -11865,7 +11955,28 @@
                 "type": "object",
                 "properties": {
                   "file": {
-                    "type": "string"
+                    "type": "string",
+                    "format": "binary"
+                  },
+                  "visibility": {
+                    "type": "string",
+                    "enum": [
+                      "private",
+                      "members",
+                      "public"
+                    ]
+                  },
+                  "expiration": {
+                    "type": "string",
+                    "enum": [
+                      "one_day",
+                      "one_week",
+                      "two_weeks",
+                      "one_month",
+                      "six_months",
+                      "one_year",
+                      "never"
+                    ]
                   }
                 },
                 "required": [
@@ -11887,7 +11998,8 @@
                       "type": "string"
                     },
                     "ownerId": {
-                      "type": "string"
+                      "type": "string",
+                      "nullable": true
                     },
                     "filename": {
                       "type": "string"
@@ -11898,8 +12010,89 @@
                     "sizeBytes": {
                       "type": "number"
                     },
+                    "standalone": {
+                      "type": "boolean"
+                    },
+                    "visibility": {
+                      "type": "string",
+                      "nullable": true,
+                      "enum": [
+                        "private",
+                        "members",
+                        "public"
+                      ]
+                    },
+                    "expiresAt": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "revision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "exclusiveMinimum": true
+                    },
+                    "blobState": {
+                      "type": "string",
+                      "enum": [
+                        "staging",
+                        "ready",
+                        "gc_pending",
+                        "missing"
+                      ]
+                    },
+                    "associations": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "postId": {
+                            "type": "string"
+                          },
+                          "topicId": {
+                            "type": "string"
+                          },
+                          "topicTitle": {
+                            "type": "string"
+                          },
+                          "postNumber": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "exclusiveMinimum": true
+                          },
+                          "filename": {
+                            "type": "string"
+                          },
+                          "mimeType": {
+                            "type": "string"
+                          },
+                          "deletedAt": {
+                            "type": "string",
+                            "nullable": true
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "postId",
+                          "topicId",
+                          "topicTitle",
+                          "postNumber",
+                          "filename",
+                          "mimeType",
+                          "deletedAt"
+                        ]
+                      }
+                    },
                     "createdAt": {
                       "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string"
+                    },
+                    "deduplicated": {
+                      "type": "boolean"
                     }
                   },
                   "required": [
@@ -11908,7 +12101,201 @@
                     "filename",
                     "mimeType",
                     "sizeBytes",
-                    "createdAt"
+                    "standalone",
+                    "visibility",
+                    "expiresAt",
+                    "revision",
+                    "blobState",
+                    "associations",
+                    "createdAt",
+                    "updatedAt"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/user-files/page": {
+      "get": {
+        "tags": [
+          "attachments"
+        ],
+        "summary": "List and filter user files with cursor pagination",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "standalone",
+                "all",
+                "post_attachments"
+              ]
+            },
+            "required": false,
+            "name": "filter",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "ownerId": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "filename": {
+                            "type": "string"
+                          },
+                          "mimeType": {
+                            "type": "string"
+                          },
+                          "sizeBytes": {
+                            "type": "number"
+                          },
+                          "standalone": {
+                            "type": "boolean"
+                          },
+                          "visibility": {
+                            "type": "string",
+                            "nullable": true,
+                            "enum": [
+                              "private",
+                              "members",
+                              "public"
+                            ]
+                          },
+                          "expiresAt": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "revision": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "exclusiveMinimum": true
+                          },
+                          "blobState": {
+                            "type": "string",
+                            "enum": [
+                              "staging",
+                              "ready",
+                              "gc_pending",
+                              "missing"
+                            ]
+                          },
+                          "associations": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "postId": {
+                                  "type": "string"
+                                },
+                                "topicId": {
+                                  "type": "string"
+                                },
+                                "topicTitle": {
+                                  "type": "string"
+                                },
+                                "postNumber": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "exclusiveMinimum": true
+                                },
+                                "filename": {
+                                  "type": "string"
+                                },
+                                "mimeType": {
+                                  "type": "string"
+                                },
+                                "deletedAt": {
+                                  "type": "string",
+                                  "nullable": true
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "postId",
+                                "topicId",
+                                "topicTitle",
+                                "postNumber",
+                                "filename",
+                                "mimeType",
+                                "deletedAt"
+                              ]
+                            }
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          },
+                          "updatedAt": {
+                            "type": "string"
+                          },
+                          "deduplicated": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "ownerId",
+                          "filename",
+                          "mimeType",
+                          "sizeBytes",
+                          "standalone",
+                          "visibility",
+                          "expiresAt",
+                          "revision",
+                          "blobState",
+                          "associations",
+                          "createdAt",
+                          "updatedAt"
+                        ]
+                      }
+                    },
+                    "nextCursor": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "nextCursor"
                   ]
                 }
               }
@@ -11918,6 +12305,203 @@
       }
     },
     "/user-files/{fileId}": {
+      "patch": {
+        "tags": [
+          "attachments"
+        ],
+        "summary": "Update standalone file visibility and retention",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "fileId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expectedRevision": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "exclusiveMinimum": true
+                  },
+                  "visibility": {
+                    "type": "string",
+                    "enum": [
+                      "private",
+                      "members",
+                      "public"
+                    ]
+                  },
+                  "expiration": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "one_day",
+                          "one_week",
+                          "two_weeks",
+                          "one_month",
+                          "six_months",
+                          "one_year",
+                          "never"
+                        ]
+                      },
+                      {
+                        "type": "string",
+                        "enum": [
+                          "keep"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "expectedRevision",
+                  "visibility",
+                  "expiration"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "ownerId": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "filename": {
+                      "type": "string"
+                    },
+                    "mimeType": {
+                      "type": "string"
+                    },
+                    "sizeBytes": {
+                      "type": "number"
+                    },
+                    "standalone": {
+                      "type": "boolean"
+                    },
+                    "visibility": {
+                      "type": "string",
+                      "nullable": true,
+                      "enum": [
+                        "private",
+                        "members",
+                        "public"
+                      ]
+                    },
+                    "expiresAt": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "revision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "exclusiveMinimum": true
+                    },
+                    "blobState": {
+                      "type": "string",
+                      "enum": [
+                        "staging",
+                        "ready",
+                        "gc_pending",
+                        "missing"
+                      ]
+                    },
+                    "associations": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "postId": {
+                            "type": "string"
+                          },
+                          "topicId": {
+                            "type": "string"
+                          },
+                          "topicTitle": {
+                            "type": "string"
+                          },
+                          "postNumber": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "exclusiveMinimum": true
+                          },
+                          "filename": {
+                            "type": "string"
+                          },
+                          "mimeType": {
+                            "type": "string"
+                          },
+                          "deletedAt": {
+                            "type": "string",
+                            "nullable": true
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "postId",
+                          "topicId",
+                          "topicTitle",
+                          "postNumber",
+                          "filename",
+                          "mimeType",
+                          "deletedAt"
+                        ]
+                      }
+                    },
+                    "createdAt": {
+                      "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string"
+                    },
+                    "deduplicated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "ownerId",
+                    "filename",
+                    "mimeType",
+                    "sizeBytes",
+                    "standalone",
+                    "visibility",
+                    "expiresAt",
+                    "revision",
+                    "blobState",
+                    "associations",
+                    "createdAt",
+                    "updatedAt"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
       "get": {
         "tags": [
           "attachments"
@@ -12031,6 +12615,10 @@
                             },
                             "createdAt": {
                               "type": "string"
+                            },
+                            "deletedAt": {
+                              "type": "string",
+                              "nullable": true
                             }
                           },
                           "required": [
@@ -12098,6 +12686,10 @@
                       },
                       "createdAt": {
                         "type": "string"
+                      },
+                      "deletedAt": {
+                        "type": "string",
+                        "nullable": true
                       }
                     },
                     "required": [
@@ -12138,7 +12730,8 @@
                 "type": "object",
                 "properties": {
                   "file": {
-                    "type": "string"
+                    "type": "string",
+                    "format": "binary"
                   }
                 },
                 "required": [
@@ -12173,6 +12766,10 @@
                     },
                     "createdAt": {
                       "type": "string"
+                    },
+                    "deletedAt": {
+                      "type": "string",
+                      "nullable": true
                     }
                   },
                   "required": [
@@ -12301,7 +12898,8 @@
                 "type": "object",
                 "properties": {
                   "file": {
-                    "type": "string"
+                    "type": "string",
+                    "format": "binary"
                   }
                 },
                 "required": [
@@ -12386,6 +12984,10 @@
                     },
                     "createdAt": {
                       "type": "string"
+                    },
+                    "deletedAt": {
+                      "type": "string",
+                      "nullable": true
                     }
                   },
                   "required": [
@@ -12556,6 +13158,10 @@
                     },
                     "createdAt": {
                       "type": "string"
+                    },
+                    "deletedAt": {
+                      "type": "string",
+                      "nullable": true
                     }
                   },
                   "required": [

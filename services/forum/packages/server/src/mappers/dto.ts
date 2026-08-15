@@ -44,6 +44,7 @@ import type {
   RobotState,
   ToolRunSummary,
   TopicOperationalEvent,
+  UserFile,
   WebAuthnCredential,
 } from '@irrigationreal/codex-forum-core';
 
@@ -63,7 +64,6 @@ import type {
   ToolRun,
   TopicAutoRun,
   TopicReadModel,
-  UserFile,
   UserPostHistoryItem,
 } from './domain';
 
@@ -250,17 +250,34 @@ export function mapAttachmentToDto(attachment: Attachment): AttachmentDto {
     mimeType: attachment.mimeType,
     sizeBytes: attachment.sizeBytes,
     createdAt: attachment.createdAt,
+    deletedAt: attachment.deletedAt ?? null,
   };
 }
 
 export function mapUserFileToDto(file: UserFile): UserFileDto {
   return {
     id: file.id,
-    ownerId: file.ownerId,
+    ownerId: file.ownerIdentityId,
     filename: file.filename,
     mimeType: file.mimeType,
     sizeBytes: file.sizeBytes,
+    standalone: file.standalone,
+    visibility: file.visibility,
+    expiresAt: file.expiresAt,
+    revision: file.revision,
+    blobState: file.blobState,
+    associations: file.associations.map((association) => ({
+      id: association.id,
+      postId: association.postId,
+      topicId: association.topicId,
+      topicTitle: association.topicTitle,
+      postNumber: association.postNumber,
+      filename: association.filename,
+      mimeType: association.mimeType,
+      deletedAt: association.deletedAt,
+    })),
     createdAt: file.createdAt,
+    updatedAt: file.updatedAt,
   };
 }
 

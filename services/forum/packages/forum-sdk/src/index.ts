@@ -107,6 +107,7 @@ import type {
   UpdatePrivateEmailResponseDto,
   UpdateQuickReplyPreferenceResponseDto,
   UserFileDto,
+  UserFileListResponseDto,
   UserPostHistoryItemDto,
   UserPostHistoryResponseDto,
   UserProfileDto,
@@ -472,7 +473,22 @@ function createApi({
       return (await res.json()) as { id: string; displayName: string; avatarUrl: string; message: string };
     },
     listUserFiles: () => json<UserFileDto[]>('/user-files'),
-    uploadUserFile: async (file: File): Promise<UserFileDto> => {
+    listUserFilesPage: (
+      filter: 'standalone' | 'all' | 'post_attachments' = 'standalone',
+      options?: { cursor?: string; limit?: number }
+    ) => {
+      const query = new URLSearchParams({ filter });
+      if (options?.cursor) query.set('cursor', options.cursor);
+      if (options?.limit) query.set('limit', String(options.limit));
+      return json<UserFileListResponseDto>(`/user-files/page?${query.toString()}`);
+    },
+    uploadUserFile: async (
+      file: File,
+      options?: {
+        visibility?: 'private' | 'members' | 'public';
+        expiration?: 'one_day' | 'one_week' | 'two_weeks' | 'one_month' | 'six_months' | 'one_year' | 'never';
+      }
+    ): Promise<UserFileDto> => {
       const token = storage.getAuthToken();
       const headers: Record<string, string> = {};
       if (token) {
@@ -480,6 +496,8 @@ function createApi({
       }
 
       const formData = new FormData();
+      formData.append('visibility', options?.visibility ?? 'private');
+      formData.append('expiration', options?.expiration ?? 'one_month');
       formData.append('file', file);
 
       const res = await fetchImpl(`${baseUrl}/user-files`, {
@@ -503,6 +521,14 @@ function createApi({
 
       return (await res.json()) as UserFileDto;
     },
+    updateUserFile: (
+      fileId: string,
+      input: {
+        expectedRevision: number;
+        visibility: 'private' | 'members' | 'public';
+        expiration: 'one_day' | 'one_week' | 'two_weeks' | 'one_month' | 'six_months' | 'one_year' | 'never' | 'keep';
+      }
+    ) => json<UserFileDto>(`/user-files/${fileId}`, { method: 'PATCH', body: JSON.stringify(input) }),
     deleteUserFile: (fileId: string) => json<{ ok: boolean }>(`/user-files/${fileId}`, { method: 'DELETE' }),
     listTopicAttachments: (topicId: string) => json<TopicAttachmentsDto>(`/topics/${topicId}/attachments`),
     listPostAttachments: (postId: string) => json<AttachmentDto[]>(`/posts/${postId}/attachments`),

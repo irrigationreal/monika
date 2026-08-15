@@ -74,6 +74,16 @@ describe('ForkService', () => {
       sizeBytes: 17,
       storagePath: source,
     });
+    const deletedSource = join(uploads, 'deleted.txt');
+    await writeFile(deletedSource, 'deleted bytes');
+    const deletedAttachment = store.createAttachment({
+      postId: created.post.id,
+      filename: 'deleted.txt',
+      mimeType: 'text/plain',
+      sizeBytes: 13,
+      storagePath: deletedSource,
+    });
+    store.deleteAttachment(deletedAttachment.id, 'removed');
     const openingSource = join(uploads, 'opening.txt');
     await writeFile(openingSource, 'opening attachment');
     store.createAttachment({
@@ -162,6 +172,10 @@ describe('ForkService', () => {
     expect(copiedAttachment.storage_path).toContain('/fork-attachments/fork-1/');
     expect(await readFile(copiedAttachment.storage_path, 'utf8')).toBe('independent bytes');
     expect(copiedAttachment.sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(store.listAttachmentsByPost(posts[0]!.id)).toHaveLength(1);
+    expect(store.listAttachmentsByPost(posts[0]!.id).some((attachment) => attachment.filename === 'deleted.txt')).toBe(
+      false
+    );
     const openingAttachment = store.listAttachmentsByPost(posts[2]!.id)[0]!;
     expect(openingAttachment.storage_path).not.toBe(seeded.openingSource);
     expect(await readFile(openingAttachment.storage_path, 'utf8')).toBe('opening attachment');
@@ -172,7 +186,10 @@ describe('ForkService', () => {
     expect(forkTopicConversation).toHaveBeenCalledTimes(1);
     expect(acknowledgeFork).toHaveBeenCalledWith('fork-1', 'child-pi');
     expect(store.hasForkFence(seeded.topic.id)).toBe(false);
-    expect(service.state(seeded.topic.id)).toMatchObject({ active: null, latest: { id: 'fork-1', status: 'succeeded' } });
+    expect(service.state(seeded.topic.id)).toMatchObject({
+      active: null,
+      latest: { id: 'fork-1', status: 'succeeded' },
+    });
     await expect(stat(join(uploads, 'fork-prestage', 'fork-1'))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(wake).toHaveBeenCalled();
   });
@@ -269,7 +286,9 @@ describe('ForkService', () => {
       openingBody: 'edited',
     });
     await vi.waitFor(() => expect(service.get(seeded.topic.id, 'fork-definitive-failure').status).toBe('failed'));
-    await expect(stat(join(uploads, 'fork-prestage', 'fork-definitive-failure'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(join(uploads, 'fork-prestage', 'fork-definitive-failure'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
   });
 
   it('removes only bounded, old pre-row orphan prestage directories at startup', async () => {

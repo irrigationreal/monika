@@ -1,7 +1,9 @@
+import { EchsClient } from '../echsClient';
+import { truncateText } from '../utils/automation';
+
+import type { EchsClientOptions, EchsEvent } from '../echsClient';
 import type { ForumStore } from '../store';
 import type { StreamBusInterface } from '../streamBus';
-import { EchsClient, type EchsClientOptions, type EchsEvent } from '../echsClient';
-import { truncateText } from '../utils/automation';
 
 export type AutoRunDirectorWorker = 'echs';
 
@@ -141,7 +143,7 @@ export class AutoRunDirector {
           topicId: opts.topicId,
           enabled: false,
           status: 'stopped',
-          lastError: 'max_replies_reached'
+          lastError: 'max_replies_reached',
         });
       }
       return;
@@ -156,7 +158,7 @@ export class AutoRunDirector {
       status: 'running',
       lastRunAt: nowIso(),
       lastError: null,
-      lastTriggerPostId: opts.triggerPostId ?? autoRun.last_trigger_post_id
+      lastTriggerPostId: opts.triggerPostId ?? autoRun.last_trigger_post_id,
     });
 
     try {
@@ -183,7 +185,7 @@ export class AutoRunDirector {
         reasoningEffort,
         directorThreadId: autoRun.director_thread_id ?? null,
         topicId: opts.topicId,
-        triggerPostId: opts.triggerPostId
+        triggerPostId: opts.triggerPostId,
       });
       if (directorThreadId && directorThreadId !== autoRun.director_thread_id) {
         this.store.upsertTopicAutoRun({ topicId: opts.topicId, directorThreadId });
@@ -209,7 +211,7 @@ export class AutoRunDirector {
           steerMessage: null,
           ...(nextWorker ? { worker: nextWorker } : {}),
           model: nextModel,
-          reasoningEffort: nextReasoning
+          reasoningEffort: nextReasoning,
         });
         return;
       }
@@ -238,7 +240,7 @@ export class AutoRunDirector {
           body: reply,
           authorId: directorIdentity.id,
           parentPostId: opts.triggerPostId,
-          sourceMessageId: sessionMessage.id
+          sourceMessageId: sessionMessage.id,
         });
 
         const replyCount = autoRun.reply_count + 1;
@@ -256,7 +258,7 @@ export class AutoRunDirector {
           steerMessage: null,
           ...(nextWorker ? { worker: nextWorker } : {}),
           model: nextModel,
-          reasoningEffort: nextReasoning
+          reasoningEffort: nextReasoning,
         });
 
         this.bus.emit(opts.topicId, { type: 'assistant_message', data: { text: reply, postId: post.id } });
@@ -272,7 +274,7 @@ export class AutoRunDirector {
               body: reply,
               parentPostId: post.id,
               model: dispatchModel,
-              reasoningEffort: dispatchReasoning
+              reasoningEffort: dispatchReasoning,
             });
           } catch {
             // ignore dispatch errors
@@ -290,7 +292,7 @@ export class AutoRunDirector {
         steerMessage: null,
         ...(nextWorker ? { worker: nextWorker } : {}),
         model: nextModel,
-        reasoningEffort: nextReasoning
+        reasoningEffort: nextReasoning,
       });
     } catch (err) {
       const message = formatDirectorError(err);
@@ -298,14 +300,17 @@ export class AutoRunDirector {
         topicId: opts.topicId,
         status: 'error',
         lastError: message,
-        lastRunAt: nowIso()
+        lastRunAt: nowIso(),
       });
     } finally {
       this.runningTopics.delete(opts.topicId);
     }
   }
 
-  private buildPrompt(opts: { topicId: string; autoRun: NonNullable<ReturnType<ForumStore['getTopicAutoRun']>> }): string {
+  private buildPrompt(opts: {
+    topicId: string;
+    autoRun: NonNullable<ReturnType<ForumStore['getTopicAutoRun']>>;
+  }): string {
     const topic = this.store.getTopic(opts.topicId);
     const forum = topic ? this.store.getForum(topic.forum_id) : null;
     const posts = this.store.listAllPosts(opts.topicId);
@@ -319,7 +324,7 @@ export class AutoRunDirector {
       const author = this.store.getIdentity(post.author_id);
       participants.set(post.author_id, {
         name: author?.display_name ?? 'unknown',
-        kind: author?.kind ?? 'unknown'
+        kind: author?.kind ?? 'unknown',
       });
     }
 
@@ -339,13 +344,15 @@ export class AutoRunDirector {
       postLines.push('');
       postLines.push(truncateText(post.body ?? '', maxPostChars));
 
-      const attachments = this.store.listAttachmentsByPost(post.id);
+      const attachments = this.store.listAttachmentsByPost(post.id).filter((attachment) => !attachment.deleted_at);
       if (attachments.length > 0) {
         postLines.push('');
         postLines.push(`Attachments (${attachments.length}):`);
         for (const attachment of attachments) {
           const url = apiBase ? `${apiBase}/attachments/${attachment.id}` : `/attachments/${attachment.id}`;
-          postLines.push(`- ${attachment.filename} (${formatBytes(attachment.size_bytes)}) id=${attachment.id} url=${url}`);
+          postLines.push(
+            `- ${attachment.filename} (${formatBytes(attachment.size_bytes)}) id=${attachment.id} url=${url}`
+          );
         }
       }
 
@@ -385,7 +392,7 @@ export class AutoRunDirector {
       participantLines.length > 0 ? ['Participants:', ...participantLines, ''].join('\n') : '',
       '[THREAD]',
       postLines.join('\n'),
-      '[/THREAD]'
+      '[/THREAD]',
     ]
       .filter((line) => line !== '')
       .join('\n');
@@ -415,7 +422,7 @@ export class AutoRunDirector {
       reasoningEffort: opts.reasoningEffort,
       conversationId: opts.directorThreadId,
       topicId: opts.topicId,
-      triggerPostId: opts.triggerPostId
+      triggerPostId: opts.triggerPostId,
     });
     return { output, directorThreadId: conversationId };
   }
@@ -427,7 +434,7 @@ export class AutoRunDirector {
     }
     this.echsClient = new EchsClient({
       baseUrl: this.config.echs.baseUrl,
-      apiToken: this.config.echs.apiToken ?? null
+      apiToken: this.config.echs.apiToken ?? null,
     });
     return this.echsClient;
   }
@@ -456,7 +463,7 @@ export class AutoRunDirector {
         cwd: opts.cwd,
         model: opts.model,
         reasoning: opts.reasoningEffort,
-        instructions: DIRECTOR_BASE_INSTRUCTIONS
+        instructions: DIRECTOR_BASE_INSTRUCTIONS,
       });
     }
 
@@ -469,7 +476,7 @@ export class AutoRunDirector {
         activity: 'idle',
         model: null,
         reasoningEffort: null,
-        currentPlanId: null
+        currentPlanId: null,
       });
     }
     this.store.upsertRobotState({
@@ -478,7 +485,7 @@ export class AutoRunDirector {
       activity: 'running',
       model: opts.model ?? null,
       reasoningEffort: opts.reasoningEffort ?? null,
-      currentPlanId: null
+      currentPlanId: null,
     });
 
     const configure: Record<string, unknown> = { cwd: opts.cwd };
@@ -504,7 +511,7 @@ export class AutoRunDirector {
         this.store.updateToolRun(toolRunId, {
           finished_at: finishedAt,
           exit_code: 1,
-          output_summary: summary
+          output_summary: summary,
         });
       }
       toolRunByCallId.clear();
@@ -517,7 +524,7 @@ export class AutoRunDirector {
         activity: 'idle',
         model: opts.model ?? null,
         reasoningEffort: opts.reasoningEffort ?? null,
-        currentPlanId: null
+        currentPlanId: null,
       });
     };
 
@@ -548,7 +555,7 @@ export class AutoRunDirector {
             parentPostId: opts.triggerPostId,
             command,
             outputSummary: null,
-            visibility: 'internal'
+            visibility: 'internal',
           });
           toolRunByCallId.set(callId, toolRun.id);
           break;
@@ -564,7 +571,7 @@ export class AutoRunDirector {
           this.store.updateToolRun(toolRunId, {
             finished_at: nowIso(),
             exit_code: null,
-            output_summary: summary
+            output_summary: summary,
           });
           toolRunByCallId.delete(callId);
           break;
@@ -610,7 +617,7 @@ export class AutoRunDirector {
     try {
       const { messageId } = await client.enqueueConversationMessage(conversationId, opts.prompt, {
         mode: 'queue',
-        configure
+        configure,
       });
       targetMessageId = messageId;
       if (bufferedEvents.length > 0) {
@@ -624,7 +631,7 @@ export class AutoRunDirector {
         completion,
         new Promise<string>((_resolve, reject) => {
           setTimeout(() => reject(new Error('ECHS director turn timed out')), 4 * 60 * 1000);
-        })
+        }),
       ]);
 
       const finalOutput = output?.trim() ? output : await this.fallbackEchsOutput(client, conversationId);
@@ -688,7 +695,7 @@ const DIRECTOR_BASE_INSTRUCTIONS = [
   'You are the Auto-Run Director for a forum thread.',
   'Always reply with valid JSON only. No markdown.',
   'Choose action=reply to write a forum reply, action=idle if no reply is needed now, or action=stop to disable auto-run.',
-  'If the input includes full thread context, prioritize that and do not ask for missing context.'
+  'If the input includes full thread context, prioritize that and do not ask for missing context.',
 ].join('\n');
 
 function formatDirectorError(err: unknown): string {
@@ -762,7 +769,7 @@ function formatEchsToolCommand(item: any): string | null {
   }
   if (item.type === 'function_call') {
     const args = typeof item.arguments === 'string' ? item.arguments : safeJson(item.arguments);
-    return args ? `${item.name} ${truncateText(String(args), 200)}` : item.name ?? null;
+    return args ? `${item.name} ${truncateText(String(args), 200)}` : (item.name ?? null);
   }
   return null;
 }

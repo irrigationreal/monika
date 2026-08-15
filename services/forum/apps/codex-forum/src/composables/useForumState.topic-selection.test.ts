@@ -92,6 +92,10 @@ describe('topic selection request fencing', () => {
     await state.selectTopicById('topic-1', { hydrateState: false });
 
     expect(state.selectedTopic.value?.id).toBe('topic-1');
-    expect(mocks.listPosts).toHaveBeenCalledWith('topic-1', { include: ['reactions'] });
+    expect(mocks.listPosts).toHaveBeenCalledWith('topic-1', {
+      page: 1,
+      pageSize: 100_000,
+      include: ['reactions'],
+    });
   });
 });

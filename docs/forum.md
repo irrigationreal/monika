@@ -476,14 +476,14 @@ trace presentation and checkpoints live in
 Attachment support is implemented as a hybrid reference model rather than treating
 Pi JSONL as a blob store:
 
-- Browser downloads use opaque attachment IDs backed by attachment rows bound to
-  a post and topic. Topic visibility is checked through that persisted
-  relationship before the file is streamed.
+- Browser downloads retain opaque attachment IDs, but each ID is now a logical post association to a canonical file and immutable blob. Authorization is the union of active grants: owner access, standalone private/members/public policy, or any currently visible associated post. Forum visibility changes and topic moves therefore take effect immediately without copying an access scalar.
+- Human-authored uploads are deduplicated by SHA-256 only within that owner's account. Standalone entries and each post association retain their own filename/MIME metadata. Robot, TTS, pending-agent, and ambiguous system artifacts remain system-custodied and are excluded from a human User Files library.
+- Detaching an attachment keeps safe association metadata so the post renders `Attachment deleted: <filename>`. Soft post deletion detaches its associations. Blob garbage collection is idempotent and unlinks bytes only after no standalone custody or active post association remains.
 - The legacy `/api/robot-attachments?path=...` filesystem-path proxy and
   `[[attach:path]]` renderer have been retired. Never authorize an arbitrary
   output path using an independently supplied topic ID.
-- Forum uploads remain in forum-owned upload storage.
-- Forum attachment rows store optional `sha256` for verification.
+- Forum uploads remain in forum-owned upload storage. Uploads are streamed through confined staging paths while hashing; committed blob metadata records `ready`, `gc_pending`, or `missing` lifecycle state. A durable path-deletion queue covers pending objects removed by expiry or topic deletion, and startup/minute reconciliation resumes legacy hashing, orphan staging cleanup, and idempotent byte collection after failures.
+- `/files` is the cursor-paginated owner library. It defaults to standalone entries, with All and Post attachments filters. New standalone files default to private/one-month retention; the Notepad duration presets are reused. Expiration removes standalone custody but never an active post association. Migrated standalone entries are private and never-expiring.
 - When dispatching a post to agentd, the forum sends internal attachment
   descriptors alongside the normal text envelope. Raw paths are not exposed to
   browser clients.

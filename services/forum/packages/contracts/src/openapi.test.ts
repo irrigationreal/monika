@@ -26,6 +26,49 @@ describe('OpenAPI request bodies', () => {
     }
   });
 
+  it('documents multipart file parts as binary and preserves user-file options', () => {
+    const document = buildOpenApiDocument() as {
+      paths: Record<string, { post?: OpenApiOperation }>;
+    };
+
+    const userFileSchema = document.paths['/user-files']?.post?.requestBody?.content?.['multipart/form-data']?.schema;
+    expect(userFileSchema).toMatchObject({
+      type: 'object',
+      required: ['file'],
+      properties: {
+        file: { type: 'string', format: 'binary' },
+        visibility: { type: 'string', enum: ['private', 'members', 'public'] },
+        expiration: { type: 'string' },
+      },
+    });
+    expect(
+      document.paths['/posts/{postId}/attachments']?.post?.requestBody?.content?.['multipart/form-data']?.schema
+    ).toMatchObject({
+      type: 'object',
+      required: ['file'],
+      properties: { file: { type: 'string', format: 'binary' } },
+    });
+  });
+
+  it('preserves the legacy user-file array and documents the additive paginated endpoint', () => {
+    const document = buildOpenApiDocument() as {
+      paths: Record<string, { get?: OpenApiOperation }>;
+    };
+
+    expect(document.paths['/user-files']?.get?.responses?.['200']?.content?.['application/json']?.schema).toMatchObject(
+      {
+        type: 'array',
+      }
+    );
+    expect(
+      document.paths['/user-files/page']?.get?.responses?.['200']?.content?.['application/json']?.schema
+    ).toMatchObject({
+      type: 'object',
+      required: ['items', 'nextCursor'],
+      properties: { items: { type: 'array' } },
+    });
+  });
+
   it('documents the authenticated Quick Reply preference request and response', () => {
     const document = buildOpenApiDocument() as {
       paths: Record<string, { patch?: OpenApiOperation }>;

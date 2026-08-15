@@ -1,7 +1,10 @@
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
 import { migrate } from './db';
-import { ForumStore, type CreateAttachmentInput } from './store';
+import { ForumStore } from './store';
+
+import type { CreateAttachmentInput } from './store';
 
 /**
  * Comprehensive unit tests for attachment and reaction systems in ForumStore.
@@ -300,7 +303,7 @@ describe('ForumStore - Attachments', () => {
   });
 
   describe('deleteAttachment()', () => {
-    it('should remove the attachment record', () => {
+    it('should retain an attachment tombstone', () => {
       const attachment = store.createAttachment({
         postId,
         filename: 'to-delete.txt',
@@ -315,8 +318,8 @@ describe('ForumStore - Attachments', () => {
       // Delete the attachment
       store.deleteAttachment(attachment.id);
 
-      // Verify attachment is gone
-      expect(store.getAttachment(attachment.id)).toBeNull();
+      // The safe metadata remains so the post can render a tombstone.
+      expect(store.getAttachment(attachment.id)?.deleted_at).not.toBeNull();
     });
 
     it('should not throw when deleting non-existent attachment', () => {
@@ -341,11 +344,11 @@ describe('ForumStore - Attachments', () => {
 
       store.deleteAttachment(attachment2.id);
 
-      expect(store.getAttachment(attachment1.id)).not.toBeNull();
-      expect(store.getAttachment(attachment2.id)).toBeNull();
+      expect(store.getAttachment(attachment1.id)?.deleted_at).toBeNull();
+      expect(store.getAttachment(attachment2.id)?.deleted_at).not.toBeNull();
     });
 
-    it('should remove attachment from list results', () => {
+    it('should retain deleted attachments in list results as tombstones', () => {
       const attachment = store.createAttachment({
         postId,
         filename: 'listed-then-deleted.txt',
@@ -361,9 +364,9 @@ describe('ForumStore - Attachments', () => {
       // Delete it
       store.deleteAttachment(attachment.id);
 
-      // Verify it's no longer in the list
       attachments = store.listAttachmentsByPost(postId);
-      expect(attachments).toHaveLength(0);
+      expect(attachments).toHaveLength(1);
+      expect(attachments[0]?.deleted_at).not.toBeNull();
     });
   });
 });

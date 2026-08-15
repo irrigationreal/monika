@@ -1,5 +1,12 @@
+import { extendZodWithOpenApi } from '@asteasolutions/zod-to-openapi';
 import { z } from 'zod';
+
 import * as schemas from './schemas';
+
+// Route schemas use OpenAPI-only metadata while remaining ordinary Zod schemas
+// at runtime. Extend this module's Zod instance before constructing them rather
+// than depending on the OpenAPI generator's module evaluation order.
+extendZodWithOpenApi(z);
 
 export type HttpMethod = 'get' | 'post' | 'put' | 'patch' | 'delete';
 
@@ -35,7 +42,7 @@ const okMessageSchema = okSchema.extend({ message: z.string().optional() });
 const okReadCountSchema = okSchema.extend({ readCount: z.number() });
 const okDispatchedSchema = okSchema.extend({
   dispatched: z.boolean(),
-  post: schemas.PostDtoSchema
+  post: schemas.PostDtoSchema,
 });
 
 const pageSchema = <T extends z.ZodTypeAny>(item: T) =>
@@ -43,37 +50,41 @@ const pageSchema = <T extends z.ZodTypeAny>(item: T) =>
     page: z.number(),
     pageSize: z.number(),
     total: z.number(),
-    items: z.array(item)
+    items: z.array(item),
   });
 
 const itemsSchema = <T extends z.ZodTypeAny>(item: T) =>
   z.object({
-    items: z.array(item)
+    items: z.array(item),
   });
 
 const stringParam = (name: string) => z.object({ [name]: z.string() });
 const paginationQuerySchema = z.object({
   page: z.number().optional(),
-  pageSize: z.number().optional()
+  pageSize: z.number().optional(),
 });
 
 const fileUploadSchema = z.object({
-  file: z.string()
+  file: z.string().openapi({ type: 'string', format: 'binary' }),
+});
+const userFileUploadSchema = fileUploadSchema.extend({
+  visibility: z.enum(['private', 'members', 'public']).optional(),
+  expiration: schemas.NotepadExpirationPresetSchema.optional(),
 });
 
 const chunkUploadSchema = z.object({
   filename: z.string(),
   mimeType: z.string().optional(),
-  sizeBytes: z.number()
+  sizeBytes: z.number(),
 });
 
 const chunkUploadResponseSchema = z.object({
   ok: z.boolean(),
-  index: z.number()
+  index: z.number(),
 });
 
 const chunkIndexQuerySchema = z.object({
-  index: z.number()
+  index: z.number(),
 });
 
 const listForumsQuerySchema = schemas.ListForumsRequestSchema;
@@ -81,13 +92,13 @@ const listForumsQuerySchema = schemas.ListForumsRequestSchema;
 const listTopicsQuerySchema = z.object({
   since: z.string().optional(),
   page: z.number().optional(),
-  pageSize: z.number().optional()
+  pageSize: z.number().optional(),
 });
 
 const listPostsQuerySchema = z.object({
   page: z.number().optional(),
   pageSize: z.number().optional(),
-  include: z.string().optional()
+  include: z.string().optional(),
 });
 
 const listIdentitiesQuerySchema = paginationQuerySchema;
@@ -95,23 +106,23 @@ const listIdentitiesQuerySchema = paginationQuerySchema;
 const listNotificationsQuerySchema = z.object({
   page: z.number().optional(),
   pageSize: z.number().optional(),
-  unreadOnly: z.boolean().optional()
+  unreadOnly: z.boolean().optional(),
 });
 
 const robotStateQuerySchema = z.object({
   view: z.enum(['summary', 'full', 'detailed']).optional(),
-  include: z.string().optional()
+  include: z.string().optional(),
 });
 
 const recentPostsQuerySchema = z.object({
-  limit: z.number().optional()
+  limit: z.number().optional(),
 });
 
 const searchQuerySchema = z.object({
   q: z.string(),
   scope: z.enum(['all', 'topics', 'posts']).optional(),
   forumId: z.string().optional(),
-  limit: z.number().min(1).max(100).optional()
+  limit: z.number().min(1).max(100).optional(),
 });
 
 const attachmentContentSchema = z.string();
@@ -120,33 +131,33 @@ const avatarUploadResponseSchema = z.object({
   id: z.string(),
   displayName: z.string(),
   avatarUrl: z.string(),
-  message: z.string()
+  message: z.string(),
 });
 
 const discordConnectResponseSchema = z.object({
   ok: z.boolean(),
-  status: schemas.DiscordBridgeStatusDtoSchema.optional()
+  status: schemas.DiscordBridgeStatusDtoSchema.optional(),
 });
 
 const discordMapResponseSchema = z.object({
   ok: z.boolean(),
   mapping: z.object({
     channelId: z.string(),
-    forumId: z.string()
-  })
+    forumId: z.string(),
+  }),
 });
 
 const matrixConnectResponseSchema = z.object({
   ok: z.boolean(),
-  status: schemas.MatrixBridgeStatusDtoSchema.optional()
+  status: schemas.MatrixBridgeStatusDtoSchema.optional(),
 });
 
 const matrixMapResponseSchema = z.object({
   ok: z.boolean(),
   mapping: z.object({
     roomId: z.string(),
-    forumId: z.string()
-  })
+    forumId: z.string(),
+  }),
 });
 
 const notificationListSchema = pageSchema(schemas.NotificationDtoSchema);
@@ -179,28 +190,28 @@ const reactionListSchema = z.array(
     postId: z.string(),
     identityId: z.string(),
     emoji: z.string(),
-    createdAt: z.string()
+    createdAt: z.string(),
   })
 );
 
 const reactionCountsSchema = z.array(
   z.object({
     emoji: z.string(),
-    count: z.number()
+    count: z.number(),
   })
 );
 
 const notificationPatchSchema = z.object({
-  readAt: z.string().nullable().optional()
+  readAt: z.string().nullable().optional(),
 });
 
 const topicReadSchema = z.object({
   lastReadPostId: z.string().optional().nullable(),
-  lastReadAt: z.string().optional().nullable()
+  lastReadAt: z.string().optional().nullable(),
 });
 
 const topicSubscriptionSchema = z.object({
-  mode: z.enum(['watching', 'muted', 'off'])
+  mode: z.enum(['watching', 'muted', 'off']),
 });
 
 const createInviteSchema = schemas.CreateInviteRequestSchema;
@@ -209,7 +220,7 @@ const createForumAccessRuleSchema = z.object({
   principalKind: z.enum(['all', 'logged_in', 'identity', 'role']),
   principalId: z.string().nullable().optional(),
   action: z.enum(['view', 'post', 'topic.create', 'moderate']),
-  effect: z.enum(['allow', 'deny'])
+  effect: z.enum(['allow', 'deny']),
 });
 
 const createTopicAccessRuleSchema = createForumAccessRuleSchema;
@@ -226,7 +237,7 @@ const automationCreateSchema = z.object({
   maxReplies: z.number().optional(),
   scheduleCron: z.string().optional().nullable(),
   context: z.string().optional().nullable(),
-  prompt: z.string().optional().nullable()
+  prompt: z.string().optional().nullable(),
 });
 
 const automationUpdateSchema = z.object({
@@ -237,11 +248,11 @@ const automationUpdateSchema = z.object({
   maxReplies: z.number().optional(),
   scheduleCron: z.string().optional().nullable(),
   context: z.string().optional().nullable(),
-  prompt: z.string().optional().nullable()
+  prompt: z.string().optional().nullable(),
 });
 
 const robotSettingsSchema = z.object({
-  maxConcurrentTurns: z.number()
+  maxConcurrentTurns: z.number(),
 });
 
 const createTamperConfigSchema = z.object({
@@ -251,7 +262,7 @@ const createTamperConfigSchema = z.object({
   priority: z.number().optional(),
   direction: z.enum(['inbound', 'outbound', 'both']).optional(),
   onlyFirstMessage: z.boolean().optional(),
-  config: z.record(z.unknown()).nullable().optional()
+  config: z.record(z.unknown()).nullable().optional(),
 });
 
 const updateTamperConfigSchema = z.object({
@@ -260,7 +271,7 @@ const updateTamperConfigSchema = z.object({
   priority: z.number().optional(),
   direction: z.enum(['inbound', 'outbound', 'both']).optional(),
   onlyFirstMessage: z.boolean().optional(),
-  config: z.record(z.unknown()).nullable().optional()
+  config: z.record(z.unknown()).nullable().optional(),
 });
 
 const tamperTestSchema = z.object({
@@ -271,20 +282,20 @@ const tamperTestSchema = z.object({
   pluginKey: z.string().optional().nullable(),
   pluginConfig: z.record(z.unknown()).optional().nullable(),
   onlyPlugin: z.boolean().optional(),
-  isFirstMessage: z.boolean().optional()
+  isFirstMessage: z.boolean().optional(),
 });
 
 const adminUserCreateSchema = z.object({
   displayName: z.string(),
   username: z.string().optional(),
   password: z.string().optional(),
-  kind: z.string().optional()
+  kind: z.string().optional(),
 });
 
 const adminUserUpdateSchema = z.object({
   displayName: z.string().optional(),
   kind: z.string().optional(),
-  password: z.string().optional()
+  password: z.string().optional(),
 });
 
 const adminForumCreateSchema = z.object({
@@ -295,7 +306,7 @@ const adminForumCreateSchema = z.object({
   parentForumId: z.string().optional().nullable(),
   category: z.string().optional().nullable(),
   status: z.enum(['active', 'archived']).optional(),
-  visibility: z.enum(['public', 'members', 'admin']).optional()
+  visibility: z.enum(['public', 'members', 'admin']).optional(),
 });
 
 const adminForumUpdateSchema = z.object({
@@ -307,7 +318,7 @@ const adminForumUpdateSchema = z.object({
   category: z.string().optional().nullable(),
   status: z.enum(['active', 'archived']).optional(),
   visibility: z.enum(['public', 'members', 'admin']).optional(),
-  archivedAt: z.string().optional().nullable()
+  archivedAt: z.string().optional().nullable(),
 });
 
 const adminPersonaCreateSchema = z.object({
@@ -317,7 +328,7 @@ const adminPersonaCreateSchema = z.object({
   accentColor: z.string().optional().nullable(),
   avatarUrl: z.string().optional().nullable(),
   signature: z.string().optional().nullable(),
-  soul: z.string().optional().nullable()
+  soul: z.string().optional().nullable(),
 });
 
 const adminPersonaUpdateSchema = z.object({
@@ -326,20 +337,20 @@ const adminPersonaUpdateSchema = z.object({
   accentColor: z.string().optional().nullable(),
   avatarUrl: z.string().optional().nullable(),
   signature: z.string().optional().nullable(),
-  soul: z.string().optional().nullable()
+  soul: z.string().optional().nullable(),
 });
 
 const webhookCreateSchema = z.object({
   url: z.string(),
   secret: z.string(),
-  events: z.array(z.string())
+  events: z.array(z.string()),
 });
 
 const webhookUpdateSchema = z.object({
   url: z.string().optional(),
   secret: z.string().optional(),
   events: z.array(z.string()).optional(),
-  enabled: z.boolean().optional()
+  enabled: z.boolean().optional(),
 });
 
 const webhookResponseSchema = z.object({
@@ -348,7 +359,7 @@ const webhookResponseSchema = z.object({
   events: z.array(z.string()),
   enabled: z.boolean(),
   createdAt: z.string(),
-  updatedAt: z.string()
+  updatedAt: z.string(),
 });
 
 const webhookListSchema = z.array(webhookResponseSchema);
@@ -359,7 +370,7 @@ const tenantSchema = z.object({
   slug: z.string(),
   settings: z.record(z.unknown()),
   createdAt: z.string(),
-  updatedAt: z.string()
+  updatedAt: z.string(),
 });
 
 const tenantListSchema = z.array(tenantSchema);
@@ -367,12 +378,12 @@ const tenantListSchema = z.array(tenantSchema);
 const tenantCreateSchema = z.object({
   name: z.string(),
   slug: z.string(),
-  settings: z.record(z.unknown()).optional()
+  settings: z.record(z.unknown()).optional(),
 });
 
 const tenantUpdateSchema = z.object({
   name: z.string().optional(),
-  settings: z.record(z.unknown()).optional()
+  settings: z.record(z.unknown()).optional(),
 });
 
 const roleSchema = z.object({
@@ -380,7 +391,7 @@ const roleSchema = z.object({
   tenantId: z.string().nullable().optional(),
   name: z.string(),
   permissions: z.array(z.string()),
-  createdAt: z.string()
+  createdAt: z.string(),
 });
 
 const roleListSchema = z.array(roleSchema);
@@ -388,12 +399,12 @@ const roleListSchema = z.array(roleSchema);
 const roleCreateSchema = z.object({
   name: z.string(),
   tenantId: z.string().optional().nullable(),
-  permissions: z.array(z.string()).optional()
+  permissions: z.array(z.string()).optional(),
 });
 
 const roleUpdateSchema = z.object({
   name: z.string().optional(),
-  permissions: z.array(z.string()).optional()
+  permissions: z.array(z.string()).optional(),
 });
 
 const identityRoleListSchema = z.array(
@@ -402,13 +413,13 @@ const identityRoleListSchema = z.array(
     name: z.string(),
     tenantId: z.string().nullable().optional(),
     permissions: z.array(z.string()),
-    createdAt: z.string()
+    createdAt: z.string(),
   })
 );
 
 const identityRoleUpdateSchema = z.object({
   roleId: z.string(),
-  tenantId: z.string().optional().nullable()
+  tenantId: z.string().optional().nullable(),
 });
 
 const identityPermissionListSchema = schemas.IdentityPermissionsDtoSchema;
@@ -431,25 +442,25 @@ const topicAutoRunUpdateSchema = z.object({
   reasoningEffort: z.string().optional().nullable(),
   maxReplies: z.number().optional().nullable(),
   resetCount: z.boolean().optional(),
-  steerMessage: z.string().optional().nullable()
+  steerMessage: z.string().optional().nullable(),
 });
 
 const autoRunRunSchema = z.object({
-  steerMessage: z.string().optional().nullable()
+  steerMessage: z.string().optional().nullable(),
 });
 
 const postDispatchSchema = z.object({
   model: z.string().optional().nullable(),
-  reasoningEffort: z.string().optional().nullable()
+  reasoningEffort: z.string().optional().nullable(),
 });
 
 const updatePostSchema = z.object({
-  body: z.string()
+  body: z.string(),
 });
 
 const updateTopicStickySchema = z.object({
   sticky: z.boolean().optional(),
-  tags: z.array(z.string()).optional()
+  tags: z.array(z.string()).optional(),
 });
 
 const updateTopicTitleSchema = schemas.UpdateTopicTitleRequestSchema;
@@ -487,7 +498,7 @@ const inviteInfoSchema = schemas.InviteInfoDtoSchema;
 
 const topicMoveResponseSchema = z.object({
   topic: schemas.TopicDtoSchema,
-  move: schemas.TopicMoveDtoSchema
+  move: schemas.TopicMoveDtoSchema,
 });
 
 const notificationResponseSchema = schemas.NotificationDtoSchema;
@@ -496,7 +507,8 @@ const subscriptionsResponseSchema = itemsSchema(schemas.TopicSubscriptionDtoSche
 
 const searchResponseSchema = schemas.SearchResultsDtoSchema;
 
-const userFilesResponseSchema = z.array(schemas.UserFileDtoSchema);
+const userFilesResponseSchema = schemas.UserFileListResponseDtoSchema;
+const legacyUserFilesResponseSchema = z.array(schemas.UserFileDtoSchema);
 
 const attachmentsResponseSchema = z.array(schemas.AttachmentDtoSchema);
 
@@ -521,14 +533,14 @@ export const apiRoutes: ApiRoute[] = [
     path: '/openapi.json',
     summary: 'Download OpenAPI spec',
     tags: ['system'],
-    response: { schema: z.record(z.unknown()) }
+    response: { schema: z.record(z.unknown()) },
   },
   {
     method: 'get',
     path: '/models',
     summary: 'List available models',
     tags: ['system'],
-    response: { schema: schemas.ModelCatalogDtoSchema }
+    response: { schema: schemas.ModelCatalogDtoSchema },
   },
 
   // Auth
@@ -538,28 +550,28 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Login',
     tags: ['auth'],
     request: { body: { schema: loginSchema } },
-    response: { schema: schemas.LoginResponseDtoSchema }
+    response: { schema: schemas.LoginResponseDtoSchema },
   },
   {
     method: 'post',
     path: '/auth/logout',
     summary: 'Logout',
     tags: ['auth'],
-    response: { schema: okSchema }
+    response: { schema: okSchema },
   },
   {
     method: 'get',
     path: '/auth/me',
     summary: 'Get current user',
     tags: ['auth'],
-    response: { schema: schemas.AuthUserDtoSchema }
+    response: { schema: schemas.AuthUserDtoSchema },
   },
   {
     method: 'get',
     path: '/auth/registration',
     summary: 'Get registration mode',
     tags: ['auth'],
-    response: { schema: schemas.RegistrationModeDtoSchema }
+    response: { schema: schemas.RegistrationModeDtoSchema },
   },
   {
     method: 'post',
@@ -567,7 +579,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Register',
     tags: ['auth'],
     request: { body: { schema: registerSchema } },
-    response: { schema: schemas.RegisterResponseDtoSchema }
+    response: { schema: schemas.RegisterResponseDtoSchema },
   },
   {
     method: 'get',
@@ -575,7 +587,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Verify registration token',
     tags: ['auth'],
     request: { params: stringParam('token') },
-    response: { schema: verifyResponseSchema }
+    response: { schema: verifyResponseSchema },
   },
   {
     method: 'get',
@@ -583,34 +595,55 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Get invite info',
     tags: ['auth'],
     request: { params: stringParam('code') },
-    response: { schema: inviteInfoSchema }
+    response: { schema: inviteInfoSchema },
   },
 
   {
-    method: 'post', path: '/auth/webauthn/login/options', summary: 'Begin usernameless passkey login', tags: ['auth'],
+    method: 'post',
+    path: '/auth/webauthn/login/options',
+    summary: 'Begin usernameless passkey login',
+    tags: ['auth'],
     request: { body: { schema: schemas.EmptyJsonRequestSchema } },
-    response: { schema: schemas.WebAuthnOptionsResponseDtoSchema }
+    response: { schema: schemas.WebAuthnOptionsResponseDtoSchema },
   },
   {
-    method: 'post', path: '/auth/webauthn/login/verify', summary: 'Complete passkey login', tags: ['auth'],
-    request: { body: { schema: schemas.WebAuthnVerifyRequestSchema } }, response: { schema: schemas.WebAuthnLoginResponseDtoSchema }
+    method: 'post',
+    path: '/auth/webauthn/login/verify',
+    summary: 'Complete passkey login',
+    tags: ['auth'],
+    request: { body: { schema: schemas.WebAuthnVerifyRequestSchema } },
+    response: { schema: schemas.WebAuthnLoginResponseDtoSchema },
   },
   {
-    method: 'get', path: '/me/webauthn/credentials', summary: 'List passkeys', tags: ['auth'],
-    response: { schema: schemas.WebAuthnCredentialListResponseDtoSchema }
+    method: 'get',
+    path: '/me/webauthn/credentials',
+    summary: 'List passkeys',
+    tags: ['auth'],
+    response: { schema: schemas.WebAuthnCredentialListResponseDtoSchema },
   },
   {
-    method: 'post', path: '/me/webauthn/register/options', summary: 'Begin passkey enrollment', tags: ['auth'],
+    method: 'post',
+    path: '/me/webauthn/register/options',
+    summary: 'Begin passkey enrollment',
+    tags: ['auth'],
     request: { body: { schema: schemas.EmptyJsonRequestSchema } },
-    response: { schema: schemas.WebAuthnOptionsResponseDtoSchema }
+    response: { schema: schemas.WebAuthnOptionsResponseDtoSchema },
   },
   {
-    method: 'post', path: '/me/webauthn/register/verify', summary: 'Complete passkey enrollment', tags: ['auth'],
-    request: { body: { schema: schemas.WebAuthnRegistrationVerifyRequestSchema } }, response: { schema: schemas.WebAuthnCredentialDtoSchema }
+    method: 'post',
+    path: '/me/webauthn/register/verify',
+    summary: 'Complete passkey enrollment',
+    tags: ['auth'],
+    request: { body: { schema: schemas.WebAuthnRegistrationVerifyRequestSchema } },
+    response: { schema: schemas.WebAuthnCredentialDtoSchema },
   },
   {
-    method: 'delete', path: '/me/webauthn/credentials/{credentialId}', summary: 'Remove a passkey', tags: ['auth'],
-    request: { params: stringParam('credentialId') }, response: { schema: okSchema }
+    method: 'delete',
+    path: '/me/webauthn/credentials/{credentialId}',
+    summary: 'Remove a passkey',
+    tags: ['auth'],
+    request: { params: stringParam('credentialId') },
+    response: { schema: okSchema },
   },
 
   {
@@ -619,7 +652,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Update private email',
     tags: ['auth'],
     request: { body: { schema: updatePrivateEmailSchema } },
-    response: { schema: schemas.UpdatePrivateEmailResponseDtoSchema }
+    response: { schema: schemas.UpdatePrivateEmailResponseDtoSchema },
   },
 
   {
@@ -628,7 +661,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Update the current user quick-reply dock preference',
     tags: ['auth'],
     request: { body: { schema: updateQuickReplyPreferenceSchema } },
-    response: { schema: schemas.UpdateQuickReplyPreferenceResponseDtoSchema }
+    response: { schema: schemas.UpdateQuickReplyPreferenceResponseDtoSchema },
   },
 
   {
@@ -637,15 +670,22 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Change current user password',
     tags: ['auth'],
     request: { body: { schema: schemas.ChangePasswordRequestSchema } },
-    response: { schema: schemas.ChangePasswordResponseDtoSchema }
+    response: { schema: schemas.ChangePasswordResponseDtoSchema },
   },
   {
-    method: 'delete', path: '/me/password', summary: 'Remove current user password after passkey enrollment', tags: ['auth'],
-    response: { schema: okSchema }
+    method: 'delete',
+    path: '/me/password',
+    summary: 'Remove current user password after passkey enrollment',
+    tags: ['auth'],
+    response: { schema: okSchema },
   },
   {
-    method: 'post', path: '/me/password/create', summary: 'Create a password from a recent passkey session', tags: ['auth'],
-    request: { body: { schema: schemas.CreatePasswordRequestSchema } }, response: { schema: okSchema }
+    method: 'post',
+    path: '/me/password/create',
+    summary: 'Create a password from a recent passkey session',
+    tags: ['auth'],
+    request: { body: { schema: schemas.CreatePasswordRequestSchema } },
+    response: { schema: okSchema },
   },
 
   // API keys
@@ -654,7 +694,7 @@ export const apiRoutes: ApiRoute[] = [
     path: '/api-keys',
     summary: 'List API keys',
     tags: ['auth'],
-    response: { schema: schemas.ApiKeyListResponseDtoSchema }
+    response: { schema: schemas.ApiKeyListResponseDtoSchema },
   },
   {
     method: 'post',
@@ -662,7 +702,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Create API key',
     tags: ['auth'],
     request: { body: { schema: createApiKeySchema } },
-    response: { schema: schemas.ApiKeyCreateResponseDtoSchema }
+    response: { schema: schemas.ApiKeyCreateResponseDtoSchema },
   },
   {
     method: 'delete',
@@ -670,7 +710,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Revoke API key',
     tags: ['auth'],
     request: { params: stringParam('id') },
-    response: { schema: okSchema }
+    response: { schema: okSchema },
   },
 
   // Impersonation tokens
@@ -679,7 +719,7 @@ export const apiRoutes: ApiRoute[] = [
     path: '/impersonation-tokens',
     summary: 'List impersonation tokens',
     tags: ['auth'],
-    response: { schema: schemas.ImpersonationTokenListResponseDtoSchema }
+    response: { schema: schemas.ImpersonationTokenListResponseDtoSchema },
   },
   {
     method: 'post',
@@ -687,7 +727,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Create impersonation token',
     tags: ['auth'],
     request: { body: { schema: createImpersonationSchema } },
-    response: { schema: schemas.ImpersonationTokenCreateResponseDtoSchema }
+    response: { schema: schemas.ImpersonationTokenCreateResponseDtoSchema },
   },
   {
     method: 'delete',
@@ -695,7 +735,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Revoke impersonation token',
     tags: ['auth'],
     request: { params: stringParam('id') },
-    response: { schema: okSchema }
+    response: { schema: okSchema },
   },
 
   // Invites (admin)
@@ -705,7 +745,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'List invites',
     tags: ['admin'],
     request: { query: paginationQuerySchema },
-    response: { schema: inviteListSchema }
+    response: { schema: inviteListSchema },
   },
   {
     method: 'post',
@@ -713,7 +753,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Create invite',
     tags: ['admin'],
     request: { body: { schema: createInviteSchema } },
-    response: { schema: schemas.InviteDtoSchema }
+    response: { schema: schemas.InviteDtoSchema },
   },
   {
     method: 'delete',
@@ -721,7 +761,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Delete invite',
     tags: ['admin'],
     request: { params: stringParam('inviteId') },
-    response: { schema: okSchema }
+    response: { schema: okSchema },
   },
 
   // Forums + topics
@@ -731,7 +771,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'List forums',
     tags: ['forums'],
     request: { query: listForumsQuerySchema },
-    response: { schema: forumListSchema }
+    response: { schema: forumListSchema },
   },
   {
     method: 'post',
@@ -739,7 +779,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Create forum',
     tags: ['forums'],
     request: { body: { schema: createForumSchema } },
-    response: { schema: schemas.ForumDtoSchema }
+    response: { schema: schemas.ForumDtoSchema },
   },
   {
     method: 'get',
@@ -747,7 +787,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'List topics',
     tags: ['topics'],
     request: { params: stringParam('forumId'), query: listTopicsQuerySchema },
-    response: { schema: topicListResponseSchema }
+    response: { schema: topicListResponseSchema },
   },
   {
     method: 'post',
@@ -755,7 +795,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Create topic',
     tags: ['topics'],
     request: { params: stringParam('forumId'), body: { schema: createTopicSchema } },
-    response: { schema: schemas.TopicDtoSchema }
+    response: { schema: schemas.TopicDtoSchema },
   },
   {
     method: 'get',
@@ -763,7 +803,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Get topic',
     tags: ['topics'],
     request: { params: stringParam('topicId') },
-    response: { schema: schemas.TopicDtoSchema }
+    response: { schema: schemas.TopicDtoSchema },
   },
   {
     method: 'patch',
@@ -771,7 +811,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Update topic status',
     tags: ['topics'],
     request: { params: stringParam('topicId'), body: { schema: updateTopicStatusSchema } },
-    response: { schema: schemas.TopicDtoSchema }
+    response: { schema: schemas.TopicDtoSchema },
   },
   {
     method: 'patch',
@@ -779,7 +819,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Update topic title',
     tags: ['topics'],
     request: { params: stringParam('topicId'), body: { schema: updateTopicTitleSchema } },
-    response: { schema: schemas.TopicDtoSchema }
+    response: { schema: schemas.TopicDtoSchema },
   },
   {
     method: 'patch',
@@ -787,7 +827,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Update topic tags',
     tags: ['topics'],
     request: { params: stringParam('topicId'), body: { schema: updateTopicStickySchema } },
-    response: { schema: schemas.TopicDtoSchema }
+    response: { schema: schemas.TopicDtoSchema },
   },
   {
     method: 'delete',
@@ -795,7 +835,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Delete topic',
     tags: ['topics'],
     request: { params: stringParam('topicId') },
-    response: { schema: okSchema }
+    response: { schema: okSchema },
   },
 
   // Operational timeline and maintenance
@@ -805,7 +845,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'List durable topic operational events',
     tags: ['topics'],
     request: { params: stringParam('topicId') },
-    response: { schema: itemsSchema(schemas.TopicOperationalEventDtoSchema) }
+    response: { schema: itemsSchema(schemas.TopicOperationalEventDtoSchema) },
   },
   {
     method: 'get',
@@ -813,7 +853,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Get active and latest durable compaction state',
     tags: ['topics'],
     request: { params: stringParam('topicId') },
-    response: { schema: schemas.TopicCompactionStateDtoSchema }
+    response: { schema: schemas.TopicCompactionStateDtoSchema },
   },
   {
     method: 'post',
@@ -821,7 +861,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Accept a durable compaction job for a linked idle Pi conversation',
     tags: ['topics'],
     request: { params: stringParam('topicId'), body: { schema: schemas.CreateCompactionRequestSchema } },
-    response: { schema: schemas.CompactionOperationDtoSchema, statusCode: 202, description: 'Accepted' }
+    response: { schema: schemas.CompactionOperationDtoSchema, statusCode: 202, description: 'Accepted' },
   },
   {
     method: 'get',
@@ -829,7 +869,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Get a durable compaction operation',
     tags: ['topics'],
     request: { params: z.object({ topicId: z.string(), operationId: z.string() }) },
-    response: { schema: schemas.CompactionOperationDtoSchema }
+    response: { schema: schemas.CompactionOperationDtoSchema },
   },
   {
     method: 'post',
@@ -837,7 +877,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Retry a terminally failed recovery-checkpoint dispatch',
     tags: ['topics'],
     request: { params: z.object({ topicId: z.string(), operationId: z.string() }) },
-    response: { schema: schemas.TopicCompactionStateDtoSchema }
+    response: { schema: schemas.TopicCompactionStateDtoSchema },
   },
 
   // Forum-native forks
@@ -847,7 +887,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Get the active and latest durable forum-native fork operations',
     tags: ['topics'],
     request: { params: stringParam('topicId') },
-    response: { schema: schemas.TopicForkStateDtoSchema }
+    response: { schema: schemas.TopicForkStateDtoSchema },
   },
   {
     method: 'get',
@@ -855,7 +895,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'List stable canonical user-message fork boundaries',
     tags: ['topics'],
     request: { params: stringParam('topicId') },
-    response: { schema: itemsSchema(schemas.ForkBoundaryDtoSchema) }
+    response: { schema: itemsSchema(schemas.ForkBoundaryDtoSchema) },
   },
   {
     method: 'post',
@@ -863,7 +903,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Accept a durable before-user fork operation',
     tags: ['topics'],
     request: { params: stringParam('topicId'), body: { schema: schemas.CreateForkRequestSchema } },
-    response: { schema: schemas.ForkOperationDtoSchema, statusCode: 202, description: 'Accepted' }
+    response: { schema: schemas.ForkOperationDtoSchema, statusCode: 202, description: 'Accepted' },
   },
   {
     method: 'get',
@@ -871,7 +911,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Get a durable forum-native fork operation',
     tags: ['topics'],
     request: { params: z.object({ topicId: z.string(), operationId: z.string() }) },
-    response: { schema: schemas.ForkOperationDtoSchema }
+    response: { schema: schemas.ForkOperationDtoSchema },
   },
 
   // Posts
@@ -881,7 +921,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'List posts',
     tags: ['posts'],
     request: { params: stringParam('topicId'), query: listPostsQuerySchema },
-    response: { schema: postListResponseSchema }
+    response: { schema: postListResponseSchema },
   },
   {
     method: 'post',
@@ -889,7 +929,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Create post',
     tags: ['posts'],
     request: { params: stringParam('topicId'), body: { schema: createPostSchema } },
-    response: { schema: schemas.PostDtoSchema }
+    response: { schema: schemas.PostDtoSchema },
   },
   {
     method: 'post',
@@ -897,7 +937,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Dispatch post to robot',
     tags: ['posts'],
     request: { params: stringParam('postId'), body: { schema: postDispatchSchema } },
-    response: { schema: okDispatchedSchema }
+    response: { schema: okDispatchedSchema },
   },
   {
     method: 'patch',
@@ -905,7 +945,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Update post',
     tags: ['posts'],
     request: { params: stringParam('postId'), body: { schema: updatePostSchema } },
-    response: { schema: schemas.PostDtoSchema }
+    response: { schema: schemas.PostDtoSchema },
   },
   {
     method: 'delete',
@@ -913,7 +953,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Delete post',
     tags: ['posts'],
     request: { params: stringParam('postId') },
-    response: { schema: schemas.PostDtoSchema }
+    response: { schema: schemas.PostDtoSchema },
   },
 
   // Reactions
@@ -923,7 +963,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Add reaction',
     tags: ['reactions'],
     request: { params: stringParam('postId'), body: { schema: z.object({ emoji: z.string() }) } },
-    response: { schema: okSchema }
+    response: { schema: okSchema },
   },
   {
     method: 'delete',
@@ -931,7 +971,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Remove reaction',
     tags: ['reactions'],
     request: { params: z.object({ postId: z.string(), emoji: z.string() }) },
-    response: { schema: okSchema }
+    response: { schema: okSchema },
   },
   {
     method: 'get',
@@ -939,7 +979,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'List reactions',
     tags: ['reactions'],
     request: { params: stringParam('postId') },
-    response: { schema: reactionListSchema }
+    response: { schema: reactionListSchema },
   },
   {
     method: 'get',
@@ -947,7 +987,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Reaction counts',
     tags: ['reactions'],
     request: { params: stringParam('postId') },
-    response: { schema: reactionCountsSchema }
+    response: { schema: reactionCountsSchema },
   },
 
   // Recent posts
@@ -957,7 +997,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'List recent posts',
     tags: ['posts'],
     request: { query: recentPostsQuerySchema },
-    response: { schema: recentPostsResponseSchema }
+    response: { schema: recentPostsResponseSchema },
   },
 
   // Search
@@ -967,7 +1007,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Search',
     tags: ['search'],
     request: { query: searchQuerySchema },
-    response: { schema: searchResponseSchema }
+    response: { schema: searchResponseSchema },
   },
 
   // Identities + profiles
@@ -977,7 +1017,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Get identity',
     tags: ['identities'],
     request: { params: stringParam('identityId') },
-    response: { schema: schemas.IdentityDtoSchema }
+    response: { schema: schemas.IdentityDtoSchema },
   },
   {
     method: 'patch',
@@ -985,15 +1025,18 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Update identity',
     tags: ['identities'],
     request: { params: stringParam('identityId'), body: { schema: updateIdentitySchema } },
-    response: { schema: schemas.IdentityDtoSchema }
+    response: { schema: schemas.IdentityDtoSchema },
   },
   {
     method: 'post',
     path: '/identities/{identityId}/avatar',
     summary: 'Upload avatar',
     tags: ['identities'],
-    request: { params: stringParam('identityId'), body: { schema: fileUploadSchema, contentType: 'multipart/form-data' } },
-    response: { schema: avatarUploadResponseSchema }
+    request: {
+      params: stringParam('identityId'),
+      body: { schema: fileUploadSchema, contentType: 'multipart/form-data' },
+    },
+    response: { schema: avatarUploadResponseSchema },
   },
   {
     method: 'get',
@@ -1001,7 +1044,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Get profile',
     tags: ['profiles'],
     request: { params: stringParam('identityId') },
-    response: { schema: schemas.UserProfileDtoSchema }
+    response: { schema: schemas.UserProfileDtoSchema },
   },
   {
     method: 'get',
@@ -1009,7 +1052,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'List profile posts',
     tags: ['profiles'],
     request: { params: stringParam('identityId'), query: paginationQuerySchema },
-    response: { schema: schemas.UserPostHistoryResponseDtoSchema }
+    response: { schema: schemas.UserPostHistoryResponseDtoSchema },
   },
 
   // Private autosaved drafts (browser-session only)
@@ -1094,71 +1137,132 @@ export const apiRoutes: ApiRoute[] = [
 
   // Private Notepad (browser-session only)
   {
-    method: 'get', path: '/notepad', summary: 'List and search my Notepad', tags: ['notepad'],
+    method: 'get',
+    path: '/notepad',
+    summary: 'List and search my Notepad',
+    tags: ['notepad'],
     request: { query: schemas.NotepadListQuerySchema },
-    response: { schema: schemas.NotepadListResponseDtoSchema }
+    response: { schema: schemas.NotepadListResponseDtoSchema },
   },
   {
-    method: 'get', path: '/notepad/{id}', summary: 'Get one of my notes', tags: ['notepad'],
-    request: { params: stringParam('id') }, response: { schema: schemas.NotepadEntryResponseDtoSchema }
+    method: 'get',
+    path: '/notepad/{id}',
+    summary: 'Get one of my notes',
+    tags: ['notepad'],
+    request: { params: stringParam('id') },
+    response: { schema: schemas.NotepadEntryResponseDtoSchema },
   },
   {
-    method: 'post', path: '/notepad', summary: 'Create a note', tags: ['notepad'],
-    request: { body: { schema: schemas.NotepadEntryWriteRequestSchema } }, response: { schema: schemas.NotepadEntryResponseDtoSchema }
+    method: 'post',
+    path: '/notepad',
+    summary: 'Create a note',
+    tags: ['notepad'],
+    request: { body: { schema: schemas.NotepadEntryWriteRequestSchema } },
+    response: { schema: schemas.NotepadEntryResponseDtoSchema },
   },
   {
-    method: 'patch', path: '/notepad/{id}', summary: 'Update a note', tags: ['notepad'],
-    request: { params: stringParam('id'), body: { schema: schemas.NotepadEntryUpdateRequestSchema } }, response: { schema: schemas.NotepadEntryResponseDtoSchema }
+    method: 'patch',
+    path: '/notepad/{id}',
+    summary: 'Update a note',
+    tags: ['notepad'],
+    request: { params: stringParam('id'), body: { schema: schemas.NotepadEntryUpdateRequestSchema } },
+    response: { schema: schemas.NotepadEntryResponseDtoSchema },
   },
   {
-    method: 'delete', path: '/notepad/{id}', summary: 'Permanently delete a note', tags: ['notepad'],
-    request: { params: stringParam('id'), query: schemas.NotepadDeleteQuerySchema }, response: { schema: okSchema }
+    method: 'delete',
+    path: '/notepad/{id}',
+    summary: 'Permanently delete a note',
+    tags: ['notepad'],
+    request: { params: stringParam('id'), query: schemas.NotepadDeleteQuerySchema },
+    response: { schema: okSchema },
   },
 
   // Message templates
   {
-    method: 'get', path: '/message-templates/effective', summary: 'List effective message templates', tags: ['message-templates'],
-    request: { query: messageTemplateEffectiveQuerySchema }, response: { schema: schemas.MessageTemplateListResponseDtoSchema }
+    method: 'get',
+    path: '/message-templates/effective',
+    summary: 'List effective message templates',
+    tags: ['message-templates'],
+    request: { query: messageTemplateEffectiveQuerySchema },
+    response: { schema: schemas.MessageTemplateListResponseDtoSchema },
   },
   {
-    method: 'get', path: '/message-templates/mine', summary: 'List personal message templates', tags: ['message-templates'],
-    response: { schema: schemas.MessageTemplateListResponseDtoSchema }
+    method: 'get',
+    path: '/message-templates/mine',
+    summary: 'List personal message templates',
+    tags: ['message-templates'],
+    response: { schema: schemas.MessageTemplateListResponseDtoSchema },
   },
   {
-    method: 'post', path: '/message-templates', summary: 'Create personal message template', tags: ['message-templates'],
-    request: { body: { schema: messageTemplateWriteSchema } }, response: { schema: schemas.MessageTemplateDtoSchema }
+    method: 'post',
+    path: '/message-templates',
+    summary: 'Create personal message template',
+    tags: ['message-templates'],
+    request: { body: { schema: messageTemplateWriteSchema } },
+    response: { schema: schemas.MessageTemplateDtoSchema },
   },
   {
-    method: 'patch', path: '/message-templates/{id}', summary: 'Update personal message template', tags: ['message-templates'],
-    request: { params: stringParam('id'), body: { schema: messageTemplateUpdateSchema } }, response: { schema: schemas.MessageTemplateDtoSchema }
+    method: 'patch',
+    path: '/message-templates/{id}',
+    summary: 'Update personal message template',
+    tags: ['message-templates'],
+    request: { params: stringParam('id'), body: { schema: messageTemplateUpdateSchema } },
+    response: { schema: schemas.MessageTemplateDtoSchema },
   },
   {
-    method: 'delete', path: '/message-templates/{id}', summary: 'Delete personal message template', tags: ['message-templates'],
-    request: { params: stringParam('id'), query: messageTemplateDeleteQuerySchema }, response: { schema: okResponseSchema }
+    method: 'delete',
+    path: '/message-templates/{id}',
+    summary: 'Delete personal message template',
+    tags: ['message-templates'],
+    request: { params: stringParam('id'), query: messageTemplateDeleteQuerySchema },
+    response: { schema: okResponseSchema },
   },
   {
-    method: 'post', path: '/message-templates/reorder', summary: 'Reorder personal message templates', tags: ['message-templates'],
-    request: { body: { schema: messageTemplateReorderSchema } }, response: { schema: schemas.MessageTemplateListResponseDtoSchema }
+    method: 'post',
+    path: '/message-templates/reorder',
+    summary: 'Reorder personal message templates',
+    tags: ['message-templates'],
+    request: { body: { schema: messageTemplateReorderSchema } },
+    response: { schema: schemas.MessageTemplateListResponseDtoSchema },
   },
   {
-    method: 'get', path: '/admin/message-templates', summary: 'List system message templates', tags: ['admin', 'message-templates'],
-    response: { schema: schemas.MessageTemplateListResponseDtoSchema }
+    method: 'get',
+    path: '/admin/message-templates',
+    summary: 'List system message templates',
+    tags: ['admin', 'message-templates'],
+    response: { schema: schemas.MessageTemplateListResponseDtoSchema },
   },
   {
-    method: 'post', path: '/admin/message-templates', summary: 'Create system message template', tags: ['admin', 'message-templates'],
-    request: { body: { schema: messageTemplateWriteSchema } }, response: { schema: schemas.MessageTemplateDtoSchema }
+    method: 'post',
+    path: '/admin/message-templates',
+    summary: 'Create system message template',
+    tags: ['admin', 'message-templates'],
+    request: { body: { schema: messageTemplateWriteSchema } },
+    response: { schema: schemas.MessageTemplateDtoSchema },
   },
   {
-    method: 'patch', path: '/admin/message-templates/{id}', summary: 'Update system message template', tags: ['admin', 'message-templates'],
-    request: { params: stringParam('id'), body: { schema: messageTemplateUpdateSchema } }, response: { schema: schemas.MessageTemplateDtoSchema }
+    method: 'patch',
+    path: '/admin/message-templates/{id}',
+    summary: 'Update system message template',
+    tags: ['admin', 'message-templates'],
+    request: { params: stringParam('id'), body: { schema: messageTemplateUpdateSchema } },
+    response: { schema: schemas.MessageTemplateDtoSchema },
   },
   {
-    method: 'delete', path: '/admin/message-templates/{id}', summary: 'Delete system message template', tags: ['admin', 'message-templates'],
-    request: { params: stringParam('id'), query: messageTemplateDeleteQuerySchema }, response: { schema: okResponseSchema }
+    method: 'delete',
+    path: '/admin/message-templates/{id}',
+    summary: 'Delete system message template',
+    tags: ['admin', 'message-templates'],
+    request: { params: stringParam('id'), query: messageTemplateDeleteQuerySchema },
+    response: { schema: okResponseSchema },
   },
   {
-    method: 'post', path: '/admin/message-templates/reorder', summary: 'Reorder system message templates', tags: ['admin', 'message-templates'],
-    request: { body: { schema: messageTemplateReorderSchema } }, response: { schema: schemas.MessageTemplateListResponseDtoSchema }
+    method: 'post',
+    path: '/admin/message-templates/reorder',
+    summary: 'Reorder system message templates',
+    tags: ['admin', 'message-templates'],
+    request: { body: { schema: messageTemplateReorderSchema } },
+    response: { schema: schemas.MessageTemplateListResponseDtoSchema },
   },
   // Topic extras
   {
@@ -1167,7 +1271,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'List topic identities',
     tags: ['topics'],
     request: { params: stringParam('topicId'), query: listIdentitiesQuerySchema },
-    response: { schema: identityListResponseSchema }
+    response: { schema: identityListResponseSchema },
   },
   {
     method: 'get',
@@ -1175,7 +1279,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'List topic personas',
     tags: ['topics'],
     request: { params: stringParam('topicId') },
-    response: { schema: topicPersonaResponseSchema }
+    response: { schema: topicPersonaResponseSchema },
   },
   {
     method: 'get',
@@ -1183,7 +1287,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Get robot state',
     tags: ['robot'],
     request: { params: stringParam('topicId'), query: robotStateQuerySchema },
-    response: { schema: schemas.RobotStateDtoSchema.nullable() }
+    response: { schema: schemas.RobotStateDtoSchema.nullable() },
   },
   {
     method: 'get',
@@ -1191,7 +1295,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Get auto-run state',
     tags: ['robot'],
     request: { params: stringParam('topicId') },
-    response: { schema: schemas.TopicAutoRunDtoSchema }
+    response: { schema: schemas.TopicAutoRunDtoSchema },
   },
   {
     method: 'patch',
@@ -1199,7 +1303,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Update auto-run state',
     tags: ['robot'],
     request: { params: stringParam('topicId'), body: { schema: topicAutoRunUpdateSchema } },
-    response: { schema: schemas.TopicAutoRunDtoSchema }
+    response: { schema: schemas.TopicAutoRunDtoSchema },
   },
   {
     method: 'post',
@@ -1207,7 +1311,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Run auto-run',
     tags: ['robot'],
     request: { params: stringParam('topicId'), body: { schema: autoRunRunSchema } },
-    response: { schema: okMessageSchema }
+    response: { schema: okMessageSchema },
   },
   {
     method: 'post',
@@ -1215,7 +1319,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Interrupt robot',
     tags: ['robot'],
     request: { params: stringParam('topicId') },
-    response: { schema: schemas.RobotStopResultDtoSchema }
+    response: { schema: schemas.RobotStopResultDtoSchema },
   },
   {
     method: 'get',
@@ -1223,7 +1327,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Get session by topic',
     tags: ['robot'],
     request: { params: stringParam('topicId') },
-    response: { schema: schemas.SessionDtoSchema.nullable() }
+    response: { schema: schemas.SessionDtoSchema.nullable() },
   },
   {
     method: 'get',
@@ -1231,7 +1335,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Inspect session',
     tags: ['robot'],
     request: { params: stringParam('sessionId') },
-    response: { schema: schemas.SessionInspectorDtoSchema }
+    response: { schema: schemas.SessionInspectorDtoSchema },
   },
 
   // Notifications
@@ -1241,7 +1345,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'List notifications',
     tags: ['notifications'],
     request: { query: listNotificationsQuerySchema },
-    response: { schema: notificationListSchema }
+    response: { schema: notificationListSchema },
   },
   {
     method: 'patch',
@@ -1249,14 +1353,14 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Update notification',
     tags: ['notifications'],
     request: { params: stringParam('id'), body: { schema: notificationPatchSchema } },
-    response: { schema: notificationResponseSchema }
+    response: { schema: notificationResponseSchema },
   },
   {
     method: 'post',
     path: '/notifications/mark-all-read',
     summary: 'Mark all notifications read',
     tags: ['notifications'],
-    response: { schema: okReadCountSchema }
+    response: { schema: okReadCountSchema },
   },
   {
     method: 'get',
@@ -1264,7 +1368,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Get topic unread state',
     tags: ['notifications'],
     request: { params: stringParam('topicId') },
-    response: { schema: schemas.TopicUnreadDtoSchema }
+    response: { schema: schemas.TopicUnreadDtoSchema },
   },
   {
     method: 'put',
@@ -1272,7 +1376,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Mark topic read',
     tags: ['notifications'],
     request: { params: stringParam('topicId'), body: { schema: topicReadSchema } },
-    response: { schema: schemas.TopicUnreadDtoSchema }
+    response: { schema: schemas.TopicUnreadDtoSchema },
   },
   {
     method: 'get',
@@ -1280,7 +1384,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Get topic subscription',
     tags: ['notifications'],
     request: { params: stringParam('topicId') },
-    response: { schema: schemas.TopicSubscriptionDtoSchema }
+    response: { schema: schemas.TopicSubscriptionDtoSchema },
   },
   {
     method: 'put',
@@ -1288,31 +1392,47 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Update topic subscription',
     tags: ['notifications'],
     request: { params: stringParam('topicId'), body: { schema: topicSubscriptionSchema } },
-    response: { schema: schemas.TopicSubscriptionDtoSchema }
+    response: { schema: schemas.TopicSubscriptionDtoSchema },
   },
   {
     method: 'get',
     path: '/me/subscriptions',
     summary: 'List topic subscriptions',
     tags: ['notifications'],
-    response: { schema: subscriptionsResponseSchema }
+    response: { schema: subscriptionsResponseSchema },
   },
 
   // Attachments & files
   {
     method: 'get',
     path: '/user-files',
-    summary: 'List user files',
+    summary: 'List standalone user files (legacy array response)',
     tags: ['attachments'],
-    response: { schema: userFilesResponseSchema }
+    response: { schema: legacyUserFilesResponseSchema },
+  },
+  {
+    method: 'get',
+    path: '/user-files/page',
+    summary: 'List and filter user files with cursor pagination',
+    tags: ['attachments'],
+    request: { query: schemas.UserFileListQuerySchema },
+    response: { schema: userFilesResponseSchema },
   },
   {
     method: 'post',
     path: '/user-files',
     summary: 'Upload user file',
     tags: ['attachments'],
-    request: { body: { schema: fileUploadSchema, contentType: 'multipart/form-data' } },
-    response: { schema: schemas.UserFileDtoSchema }
+    request: { body: { schema: userFileUploadSchema, contentType: 'multipart/form-data' } },
+    response: { schema: schemas.UserFileDtoSchema },
+  },
+  {
+    method: 'patch',
+    path: '/user-files/{fileId}',
+    summary: 'Update standalone file visibility and retention',
+    tags: ['attachments'],
+    request: { params: stringParam('fileId'), body: { schema: schemas.UserFileUpdateRequestSchema } },
+    response: { schema: schemas.UserFileDtoSchema },
   },
   {
     method: 'get',
@@ -1320,7 +1440,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Download user file',
     tags: ['attachments'],
     request: { params: stringParam('fileId') },
-    response: { schema: attachmentContentSchema, contentType: 'application/octet-stream' }
+    response: { schema: attachmentContentSchema, contentType: 'application/octet-stream' },
   },
   {
     method: 'delete',
@@ -1328,7 +1448,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Delete user file',
     tags: ['attachments'],
     request: { params: stringParam('fileId') },
-    response: { schema: okSchema }
+    response: { schema: okSchema },
   },
   {
     method: 'get',
@@ -1336,7 +1456,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'List topic attachments grouped by post',
     tags: ['attachments'],
     request: { params: stringParam('topicId') },
-    response: { schema: topicAttachmentsResponseSchema }
+    response: { schema: topicAttachmentsResponseSchema },
   },
   {
     method: 'get',
@@ -1344,7 +1464,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'List post attachments',
     tags: ['attachments'],
     request: { params: stringParam('postId') },
-    response: { schema: attachmentsResponseSchema }
+    response: { schema: attachmentsResponseSchema },
   },
   {
     method: 'post',
@@ -1352,7 +1472,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Upload post attachment',
     tags: ['attachments'],
     request: { params: stringParam('postId'), body: { schema: fileUploadSchema, contentType: 'multipart/form-data' } },
-    response: { schema: schemas.AttachmentDtoSchema }
+    response: { schema: schemas.AttachmentDtoSchema },
   },
   {
     method: 'post',
@@ -1364,9 +1484,9 @@ export const apiRoutes: ApiRoute[] = [
       schema: z.object({
         uploadId: z.string(),
         chunkBytes: z.number(),
-        totalChunks: z.number()
-      })
-    }
+        totalChunks: z.number(),
+      }),
+    },
   },
   {
     method: 'post',
@@ -1376,9 +1496,9 @@ export const apiRoutes: ApiRoute[] = [
     request: {
       params: z.object({ postId: z.string(), uploadId: z.string() }),
       query: chunkIndexQuerySchema,
-      body: { schema: fileUploadSchema, contentType: 'multipart/form-data' }
+      body: { schema: fileUploadSchema, contentType: 'multipart/form-data' },
     },
-    response: { schema: chunkUploadResponseSchema }
+    response: { schema: chunkUploadResponseSchema },
   },
   {
     method: 'post',
@@ -1386,7 +1506,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Complete chunked upload',
     tags: ['attachments'],
     request: { params: z.object({ postId: z.string(), uploadId: z.string() }) },
-    response: { schema: schemas.AttachmentDtoSchema }
+    response: { schema: schemas.AttachmentDtoSchema },
   },
   {
     method: 'post',
@@ -1394,7 +1514,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Abort chunked upload',
     tags: ['attachments'],
     request: { params: z.object({ postId: z.string(), uploadId: z.string() }) },
-    response: { schema: okSchema }
+    response: { schema: okSchema },
   },
   {
     method: 'get',
@@ -1402,7 +1522,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Download attachment',
     tags: ['attachments'],
     request: { params: stringParam('attachmentId') },
-    response: { schema: attachmentContentSchema, contentType: 'application/octet-stream' }
+    response: { schema: attachmentContentSchema, contentType: 'application/octet-stream' },
   },
   {
     method: 'delete',
@@ -1410,7 +1530,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Delete attachment',
     tags: ['attachments'],
     request: { params: stringParam('attachmentId') },
-    response: { schema: okSchema }
+    response: { schema: okSchema },
   },
   {
     method: 'post',
@@ -1418,7 +1538,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Generate TTS attachment',
     tags: ['attachments'],
     request: { params: stringParam('postId') },
-    response: { schema: schemas.AttachmentDtoSchema }
+    response: { schema: schemas.AttachmentDtoSchema },
   },
 
   // Adapters
@@ -1427,21 +1547,21 @@ export const apiRoutes: ApiRoute[] = [
     path: '/adapters/discord/status',
     summary: 'Discord status',
     tags: ['adapters'],
-    response: { schema: schemas.DiscordBridgeStatusDtoSchema }
+    response: { schema: schemas.DiscordBridgeStatusDtoSchema },
   },
   {
     method: 'post',
     path: '/adapters/discord/connect',
     summary: 'Connect Discord adapter',
     tags: ['adapters'],
-    response: { schema: discordConnectResponseSchema }
+    response: { schema: discordConnectResponseSchema },
   },
   {
     method: 'post',
     path: '/adapters/discord/disconnect',
     summary: 'Disconnect Discord adapter',
     tags: ['adapters'],
-    response: { schema: okMessageSchema }
+    response: { schema: okMessageSchema },
   },
   {
     method: 'post',
@@ -1449,7 +1569,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Map Discord channel',
     tags: ['adapters'],
     request: { body: { schema: z.object({ channelId: z.string(), forumId: z.string().optional() }) } },
-    response: { schema: discordMapResponseSchema }
+    response: { schema: discordMapResponseSchema },
   },
   {
     method: 'delete',
@@ -1457,28 +1577,28 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Unmap Discord channel',
     tags: ['adapters'],
     request: { params: stringParam('channelId') },
-    response: { schema: okSchema }
+    response: { schema: okSchema },
   },
   {
     method: 'get',
     path: '/adapters/matrix/status',
     summary: 'Matrix status',
     tags: ['adapters'],
-    response: { schema: schemas.MatrixBridgeStatusDtoSchema }
+    response: { schema: schemas.MatrixBridgeStatusDtoSchema },
   },
   {
     method: 'post',
     path: '/adapters/matrix/connect',
     summary: 'Connect Matrix adapter',
     tags: ['adapters'],
-    response: { schema: matrixConnectResponseSchema }
+    response: { schema: matrixConnectResponseSchema },
   },
   {
     method: 'post',
     path: '/adapters/matrix/disconnect',
     summary: 'Disconnect Matrix adapter',
     tags: ['adapters'],
-    response: { schema: okMessageSchema }
+    response: { schema: okMessageSchema },
   },
   {
     method: 'post',
@@ -1486,7 +1606,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Map Matrix room',
     tags: ['adapters'],
     request: { body: { schema: z.object({ roomId: z.string(), forumId: z.string().optional() }) } },
-    response: { schema: matrixMapResponseSchema }
+    response: { schema: matrixMapResponseSchema },
   },
   {
     method: 'delete',
@@ -1494,7 +1614,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Unmap Matrix room',
     tags: ['adapters'],
     request: { params: stringParam('roomId') },
-    response: { schema: okSchema }
+    response: { schema: okSchema },
   },
 
   // Admin - users
@@ -1504,7 +1624,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'List users',
     tags: ['admin'],
     request: { query: paginationQuerySchema },
-    response: { schema: adminUserListSchema }
+    response: { schema: adminUserListSchema },
   },
   {
     method: 'post',
@@ -1512,7 +1632,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Create user',
     tags: ['admin'],
     request: { body: { schema: adminUserCreateSchema } },
-    response: { schema: schemas.AdminUserDtoSchema }
+    response: { schema: schemas.AdminUserDtoSchema },
   },
   {
     method: 'patch',
@@ -1520,7 +1640,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Update user',
     tags: ['admin'],
     request: { params: stringParam('userId'), body: { schema: adminUserUpdateSchema } },
-    response: { schema: schemas.AdminUserDtoSchema }
+    response: { schema: schemas.AdminUserDtoSchema },
   },
   {
     method: 'delete',
@@ -1528,7 +1648,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Delete user',
     tags: ['admin'],
     request: { params: stringParam('userId') },
-    response: { schema: okSchema }
+    response: { schema: okSchema },
   },
 
   // Admin - forums/personas/access
@@ -1537,7 +1657,7 @@ export const apiRoutes: ApiRoute[] = [
     path: '/admin/forums',
     summary: 'List admin forums',
     tags: ['admin'],
-    response: { schema: adminForumListSchema }
+    response: { schema: adminForumListSchema },
   },
   {
     method: 'post',
@@ -1545,7 +1665,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Create admin forum',
     tags: ['admin'],
     request: { body: { schema: adminForumCreateSchema } },
-    response: { schema: schemas.AdminForumDtoSchema }
+    response: { schema: schemas.AdminForumDtoSchema },
   },
   {
     method: 'patch',
@@ -1553,7 +1673,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Update admin forum',
     tags: ['admin'],
     request: { params: stringParam('forumId'), body: { schema: adminForumUpdateSchema } },
-    response: { schema: schemas.AdminForumDtoSchema }
+    response: { schema: schemas.AdminForumDtoSchema },
   },
   {
     method: 'delete',
@@ -1561,7 +1681,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Delete admin forum',
     tags: ['admin'],
     request: { params: stringParam('forumId') },
-    response: { schema: okSchema }
+    response: { schema: okSchema },
   },
   {
     method: 'get',
@@ -1569,7 +1689,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'List admin personas',
     tags: ['admin'],
     request: { params: stringParam('forumId') },
-    response: { schema: adminForumPersonaResponseSchema }
+    response: { schema: adminForumPersonaResponseSchema },
   },
   {
     method: 'post',
@@ -1577,7 +1697,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Create admin persona',
     tags: ['admin'],
     request: { params: stringParam('forumId'), body: { schema: adminPersonaCreateSchema } },
-    response: { schema: schemas.AdminRobotPersonaDtoSchema }
+    response: { schema: schemas.AdminRobotPersonaDtoSchema },
   },
   {
     method: 'patch',
@@ -1585,7 +1705,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Update admin persona',
     tags: ['admin'],
     request: { params: z.object({ forumId: z.string(), key: z.string() }), body: { schema: adminPersonaUpdateSchema } },
-    response: { schema: schemas.AdminRobotPersonaDtoSchema }
+    response: { schema: schemas.AdminRobotPersonaDtoSchema },
   },
   {
     method: 'delete',
@@ -1593,7 +1713,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Delete admin persona',
     tags: ['admin'],
     request: { params: z.object({ forumId: z.string(), key: z.string() }) },
-    response: { schema: okSchema }
+    response: { schema: okSchema },
   },
   {
     method: 'get',
@@ -1601,7 +1721,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'List forum access rules',
     tags: ['admin'],
     request: { params: stringParam('forumId') },
-    response: { schema: forumAccessRuleResponseSchema }
+    response: { schema: forumAccessRuleResponseSchema },
   },
   {
     method: 'post',
@@ -1609,7 +1729,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Create forum access rule',
     tags: ['admin'],
     request: { params: stringParam('forumId'), body: { schema: createForumAccessRuleSchema } },
-    response: { schema: schemas.AccessRuleDtoSchema }
+    response: { schema: schemas.AccessRuleDtoSchema },
   },
   {
     method: 'get',
@@ -1617,7 +1737,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'List topic access rules',
     tags: ['admin'],
     request: { params: stringParam('topicId') },
-    response: { schema: topicAccessRuleResponseSchema }
+    response: { schema: topicAccessRuleResponseSchema },
   },
   {
     method: 'post',
@@ -1625,7 +1745,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Create topic access rule',
     tags: ['admin'],
     request: { params: stringParam('topicId'), body: { schema: createTopicAccessRuleSchema } },
-    response: { schema: schemas.AccessRuleDtoSchema }
+    response: { schema: schemas.AccessRuleDtoSchema },
   },
   {
     method: 'post',
@@ -1633,7 +1753,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Move topic',
     tags: ['admin'],
     request: { params: stringParam('topicId'), body: { schema: moveTopicSchema } },
-    response: { schema: topicMoveResponseSchema }
+    response: { schema: topicMoveResponseSchema },
   },
   {
     method: 'delete',
@@ -1641,7 +1761,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Delete access rule',
     tags: ['admin'],
     request: { params: stringParam('ruleId') },
-    response: { schema: accessRuleDeleteSchema }
+    response: { schema: accessRuleDeleteSchema },
   },
 
   // Admin - deploy
@@ -1650,28 +1770,28 @@ export const apiRoutes: ApiRoute[] = [
     path: '/admin/deploy/status',
     summary: 'Get deploy status',
     tags: ['admin'],
-    response: { schema: deployStatusSchema }
+    response: { schema: deployStatusSchema },
   },
   {
     method: 'post',
     path: '/admin/deploy',
     summary: 'Trigger deploy',
     tags: ['admin'],
-    response: { schema: deployResponseSchema }
+    response: { schema: deployResponseSchema },
   },
   {
     method: 'post',
     path: '/admin/deploy/on-finish',
     summary: 'Deploy on finish',
     tags: ['admin'],
-    response: { schema: deployOnFinishSchema }
+    response: { schema: deployOnFinishSchema },
   },
   {
     method: 'post',
     path: '/admin/deploy/on-finish/cancel',
     summary: 'Cancel deploy on finish',
     tags: ['admin'],
-    response: { schema: deployCancelSchema }
+    response: { schema: deployCancelSchema },
   },
 
   // Admin - robot automation
@@ -1680,7 +1800,7 @@ export const apiRoutes: ApiRoute[] = [
     path: '/admin/robot/automations',
     summary: 'List automations',
     tags: ['admin'],
-    response: { schema: robotAutomationListSchema }
+    response: { schema: robotAutomationListSchema },
   },
   {
     method: 'post',
@@ -1688,7 +1808,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Create automation',
     tags: ['admin'],
     request: { body: { schema: automationCreateSchema } },
-    response: { schema: schemas.RobotAutomationDtoSchema }
+    response: { schema: schemas.RobotAutomationDtoSchema },
   },
   {
     method: 'patch',
@@ -1696,7 +1816,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Update automation',
     tags: ['admin'],
     request: { params: stringParam('automationId'), body: { schema: automationUpdateSchema } },
-    response: { schema: schemas.RobotAutomationDtoSchema }
+    response: { schema: schemas.RobotAutomationDtoSchema },
   },
   {
     method: 'delete',
@@ -1704,7 +1824,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Delete automation',
     tags: ['admin'],
     request: { params: stringParam('automationId') },
-    response: { schema: okSchema }
+    response: { schema: okSchema },
   },
   {
     method: 'post',
@@ -1712,7 +1832,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Run automation',
     tags: ['admin'],
     request: { params: stringParam('automationId') },
-    response: { schema: okSchema }
+    response: { schema: okSchema },
   },
   {
     method: 'get',
@@ -1720,7 +1840,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'List automation runs',
     tags: ['admin'],
     request: { params: stringParam('automationId') },
-    response: { schema: robotAutomationRunListSchema }
+    response: { schema: robotAutomationRunListSchema },
   },
   {
     method: 'get',
@@ -1728,14 +1848,14 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Forum and canonical Pi analytics',
     tags: ['admin'],
     request: { query: schemas.AdminAnalyticsQuerySchema },
-    response: { schema: schemas.AdminAnalyticsDtoSchema }
+    response: { schema: schemas.AdminAnalyticsDtoSchema },
   },
   {
     method: 'get',
     path: '/admin/robot/dashboard',
     summary: 'Robot dashboard',
     tags: ['admin'],
-    response: { schema: schemas.RobotDashboardDtoSchema }
+    response: { schema: schemas.RobotDashboardDtoSchema },
   },
   {
     method: 'patch',
@@ -1743,7 +1863,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Update robot settings',
     tags: ['admin'],
     request: { body: { schema: robotSettingsSchema } },
-    response: { schema: z.object({ maxConcurrentTurns: z.number() }) }
+    response: { schema: z.object({ maxConcurrentTurns: z.number() }) },
   },
 
   // Admin - skills & tampers
@@ -1752,14 +1872,14 @@ export const apiRoutes: ApiRoute[] = [
     path: '/admin/skills',
     summary: 'List skills',
     tags: ['admin'],
-    response: { schema: adminSkillListSchema }
+    response: { schema: adminSkillListSchema },
   },
   {
     method: 'get',
     path: '/admin/tampers/plugins',
     summary: 'List tamper plugins',
     tags: ['admin'],
-    response: { schema: tamperPluginsResponseSchema }
+    response: { schema: tamperPluginsResponseSchema },
   },
   {
     method: 'get',
@@ -1767,7 +1887,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'List tamper configs',
     tags: ['admin'],
     request: { query: z.object({ forumId: z.string().optional() }) },
-    response: { schema: tamperConfigsResponseSchema }
+    response: { schema: tamperConfigsResponseSchema },
   },
   {
     method: 'post',
@@ -1775,7 +1895,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Create tamper config',
     tags: ['admin'],
     request: { body: { schema: createTamperConfigSchema } },
-    response: { schema: schemas.TamperConfigDtoSchema }
+    response: { schema: schemas.TamperConfigDtoSchema },
   },
   {
     method: 'patch',
@@ -1783,7 +1903,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Update tamper config',
     tags: ['admin'],
     request: { params: stringParam('configId'), body: { schema: updateTamperConfigSchema } },
-    response: { schema: schemas.TamperConfigDtoSchema }
+    response: { schema: schemas.TamperConfigDtoSchema },
   },
   {
     method: 'delete',
@@ -1791,7 +1911,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Delete tamper config',
     tags: ['admin'],
     request: { params: stringParam('configId') },
-    response: { schema: okSchema }
+    response: { schema: okSchema },
   },
   {
     method: 'post',
@@ -1799,7 +1919,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Test tamper config',
     tags: ['admin'],
     request: { body: { schema: tamperTestSchema } },
-    response: { schema: schemas.TamperTestResultDtoSchema }
+    response: { schema: schemas.TamperTestResultDtoSchema },
   },
 
   // Webhooks
@@ -1808,7 +1928,7 @@ export const apiRoutes: ApiRoute[] = [
     path: '/webhooks',
     summary: 'List webhooks',
     tags: ['admin'],
-    response: { schema: webhookListSchema }
+    response: { schema: webhookListSchema },
   },
   {
     method: 'post',
@@ -1816,7 +1936,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Create webhook',
     tags: ['admin'],
     request: { body: { schema: webhookCreateSchema } },
-    response: { schema: webhookResponseSchema }
+    response: { schema: webhookResponseSchema },
   },
   {
     method: 'patch',
@@ -1824,7 +1944,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Update webhook',
     tags: ['admin'],
     request: { params: stringParam('webhookId'), body: { schema: webhookUpdateSchema } },
-    response: { schema: webhookResponseSchema }
+    response: { schema: webhookResponseSchema },
   },
   {
     method: 'delete',
@@ -1832,7 +1952,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Delete webhook',
     tags: ['admin'],
     request: { params: stringParam('webhookId') },
-    response: { schema: okSchema }
+    response: { schema: okSchema },
   },
 
   // Tenants / roles
@@ -1841,7 +1961,7 @@ export const apiRoutes: ApiRoute[] = [
     path: '/tenants',
     summary: 'List tenants',
     tags: ['admin'],
-    response: { schema: tenantListSchema }
+    response: { schema: tenantListSchema },
   },
   {
     method: 'post',
@@ -1849,7 +1969,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Create tenant',
     tags: ['admin'],
     request: { body: { schema: tenantCreateSchema } },
-    response: { schema: tenantSchema }
+    response: { schema: tenantSchema },
   },
   {
     method: 'get',
@@ -1857,7 +1977,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Get tenant',
     tags: ['admin'],
     request: { params: stringParam('tenantId') },
-    response: { schema: tenantSchema }
+    response: { schema: tenantSchema },
   },
   {
     method: 'patch',
@@ -1865,7 +1985,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Update tenant',
     tags: ['admin'],
     request: { params: stringParam('tenantId'), body: { schema: tenantUpdateSchema } },
-    response: { schema: tenantSchema }
+    response: { schema: tenantSchema },
   },
   {
     method: 'delete',
@@ -1873,7 +1993,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Delete tenant',
     tags: ['admin'],
     request: { params: stringParam('tenantId') },
-    response: { schema: okSchema }
+    response: { schema: okSchema },
   },
   {
     method: 'get',
@@ -1881,7 +2001,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'List roles',
     tags: ['admin'],
     request: { query: z.object({ tenantId: z.string().optional() }) },
-    response: { schema: roleListSchema }
+    response: { schema: roleListSchema },
   },
   {
     method: 'post',
@@ -1889,7 +2009,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Create role',
     tags: ['admin'],
     request: { body: { schema: roleCreateSchema } },
-    response: { schema: roleSchema }
+    response: { schema: roleSchema },
   },
   {
     method: 'patch',
@@ -1897,7 +2017,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Update role',
     tags: ['admin'],
     request: { params: stringParam('roleId'), body: { schema: roleUpdateSchema } },
-    response: { schema: roleSchema }
+    response: { schema: roleSchema },
   },
   {
     method: 'delete',
@@ -1905,7 +2025,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Delete role',
     tags: ['admin'],
     request: { params: stringParam('roleId') },
-    response: { schema: okSchema }
+    response: { schema: okSchema },
   },
   {
     method: 'post',
@@ -1913,7 +2033,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'Assign role to identity',
     tags: ['admin'],
     request: { params: stringParam('identityId'), body: { schema: identityRoleUpdateSchema } },
-    response: { schema: okSchema }
+    response: { schema: okSchema },
   },
   {
     method: 'delete',
@@ -1922,9 +2042,9 @@ export const apiRoutes: ApiRoute[] = [
     tags: ['admin'],
     request: {
       params: z.object({ identityId: z.string(), roleId: z.string() }),
-      query: z.object({ tenantId: z.string().optional() })
+      query: z.object({ tenantId: z.string().optional() }),
     },
-    response: { schema: okSchema }
+    response: { schema: okSchema },
   },
   {
     method: 'get',
@@ -1932,7 +2052,7 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'List identity roles',
     tags: ['admin'],
     request: { params: stringParam('identityId'), query: z.object({ tenantId: z.string().optional() }) },
-    response: { schema: identityRoleListSchema }
+    response: { schema: identityRoleListSchema },
   },
   {
     method: 'get',
@@ -1940,7 +2060,6 @@ export const apiRoutes: ApiRoute[] = [
     summary: 'List identity permissions',
     tags: ['admin'],
     request: { params: stringParam('identityId'), query: z.object({ tenantId: z.string().optional() }) },
-    response: { schema: identityPermissionListSchema }
-  }
+    response: { schema: identityPermissionListSchema },
+  },
 ];
-

@@ -85,7 +85,7 @@ const breadcrumbs = computed((): BreadcrumbItem[] => {
 
   if (route.name === 'user.files') {
     crumbs.push({ label: 'User Control Panel', to: { name: 'user.profile' } });
-    crumbs.push({ label: 'File Storage' });
+    crumbs.push({ label: 'User Files' });
   }
 
   if (route.name === 'user.notepad') {

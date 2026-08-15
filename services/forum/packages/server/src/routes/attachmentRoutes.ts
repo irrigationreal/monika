@@ -1,3 +1,4 @@
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import {
   createReadStream,
   createWriteStream,
@@ -5,30 +6,37 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   unlinkSync,
-  writeFileSync
+  writeFileSync,
 } from 'node:fs';
-import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
-import type { FastifyInstance } from 'fastify';
-import { AttachmentChunkedStartRequestSchema } from '@irrigationreal/codex-forum-contracts';
-import type { ForumStore } from '../store';
-import type { AccessHelpers } from '../utils/access';
-import type { StreamBusInterface } from '../streamBus';
-import { buildTtsStoragePath, generateTtsMp3, isTtsStoragePath } from '../tts';
-import { shouldInlineAttachment } from '../utils/attachments';
-import { mapAttachmentRowToDomain, mapUserFileRowToDomain } from '../mappers/db';
-import { mapAttachmentToDto, mapUserFileToDto } from '../mappers/dto';
-import { parseBody } from '../utils/validation';
+
 import {
+  AttachmentChunkedStartRequestSchema,
+  UserFileListQuerySchema,
+  UserFileUpdateRequestSchema,
+} from '@irrigationreal/codex-forum-contracts';
+import {
+  NotepadExpirationPresetValues,
+  canUseStandaloneFile,
+  notepadExpiresAt,
+} from '@irrigationreal/codex-forum-core';
+
+import { mapAttachmentRowToDomain } from '../mappers/db';
+import { mapAttachmentToDto } from '../mappers/dto';
+import {
+  INTERNAL_API_TOKEN,
   MAX_ATTACHMENT_BYTES,
   MAX_CHUNK_BYTES,
   MAX_REQUEST_BODY_BYTES,
   MAX_TOTAL_ATTACHMENTS_BYTES,
   MAX_TOTAL_USER_FILES_BYTES,
+  PENDING_ATTACHMENTS_DIR,
+  PENDING_ATTACHMENT_TTL_MS,
   TTS_AVAILABLE,
   TTS_MAX_CHARS,
   TTS_SCRIPT,
@@ -36,23 +44,38 @@ import {
   UPLOAD_SESSION_TTL_MS,
   UPLOAD_TEMP_DIR,
   USER_FILES_DIR,
-  PENDING_ATTACHMENTS_DIR,
-  PENDING_ATTACHMENT_TTL_MS,
-  INTERNAL_API_TOKEN
 } from '../runtimeConfig';
+import { buildTtsStoragePath, generateTtsMp3, isTtsStoragePath } from '../tts';
+import { shouldInlineAttachment } from '../utils/attachments';
+import { parseBody } from '../utils/validation';
+
+import type { UserFileDto } from '@irrigationreal/codex-forum-contracts';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
+
+import type { ForumStore } from '../store';
+import type { StreamBusInterface } from '../streamBus';
+import type { AccessHelpers } from '../utils/access';
 
 export function registerAttachmentRoutes({
   app,
   store,
   access,
-  bus
+  bus,
 }: {
   app: FastifyInstance;
   store: ForumStore;
   access: AccessHelpers;
   bus?: StreamBusInterface;
 }): void {
-  const { getCurrentUser, requireModerator, requireScope, requireTopicVisible, requirePostVisible } = access;
+  const {
+    getCurrentUser,
+    getIdentityFromRequest,
+    canViewTopic,
+    requireModerator,
+    requireScope,
+    requireTopicVisible,
+    requirePostVisible,
+  } = access;
 
   function tokenMatches(value: string | null): boolean {
     if (!value || !INTERNAL_API_TOKEN) return false;
@@ -83,9 +106,140 @@ export function registerAttachmentRoutes({
     return createHash('sha256').update(readFileSync(path)).digest('hex');
   }
 
+  async function sha256FileStream(path: string): Promise<string> {
+    const hash = createHash('sha256');
+    for await (const chunk of createReadStream(path)) hash.update(chunk as Buffer);
+    return hash.digest('hex');
+  }
+
+  function unlinkUnclaimedStorage(storagePath: string): void {
+    if (existsSync(storagePath) && !store.hasBlobAtStoragePath(storagePath)) unlinkSync(storagePath);
+  }
+
+  function findUsableUserFile(identityId: string, sha256: string, sizeBytes: number) {
+    const file = store.findUserFileByHash(identityId, sha256, sizeBytes);
+    if (!file) return null;
+    const blob = store.getUserFileBlob(file.id);
+    if (!blob || !existsSync(blob.storage_path)) {
+      if (blob) store.markBlobMissing(blob.id);
+      return null;
+    }
+    return file;
+  }
+
+  function contentDisposition(disposition: 'attachment' | 'inline', filename: string): string {
+    const fallback = filename.replace(/[^\x20-\x7e]/g, '_').replace(/[\\\r\n"]/g, '_') || 'download';
+    return `${disposition}; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+  }
+
+  function encodeFileCursor(createdAt: string, id: string): string {
+    return Buffer.from(JSON.stringify([createdAt, id]), 'utf8').toString('base64url');
+  }
+
+  function decodeFileCursor(value: string): { createdAt: string; id: string } {
+    try {
+      const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as unknown;
+      if (
+        !Array.isArray(parsed) ||
+        parsed.length !== 2 ||
+        typeof parsed[0] !== 'string' ||
+        !Number.isFinite(Date.parse(parsed[0])) ||
+        typeof parsed[1] !== 'string' ||
+        !parsed[1]
+      )
+        throw new Error('invalid cursor');
+      return { createdAt: parsed[0], id: parsed[1] };
+    } catch {
+      throw app.httpErrors.badRequest('invalid file cursor');
+    }
+  }
+
+  function visibleAssociations(fileId: string, request: FastifyRequest) {
+    const viewer = getIdentityFromRequest(request);
+    return store.listFileAssociations(fileId).filter((association) => {
+      const topic = store.getTopic(association.topic_id);
+      if (!topic) return false;
+      const forum = store.getForum(topic.forum_id);
+      return Boolean(forum && canViewTopic(topic, forum, viewer));
+    });
+  }
+
+  function toUserFileDto(
+    file: ReturnType<ForumStore['getUserFile']>,
+    request: FastifyRequest,
+    deduplicated?: boolean
+  ): UserFileDto {
+    if (!file) throw app.httpErrors.notFound('file not found');
+    const blob = store.getUserFileBlob(file.id);
+    const dto: UserFileDto = {
+      id: file.id,
+      ownerId: file.identity_id,
+      filename: file.filename,
+      mimeType: file.mime_type,
+      sizeBytes: file.size_bytes,
+      standalone: Boolean(file.standalone),
+      visibility: file.visibility,
+      expiresAt: file.expires_at,
+      revision: file.revision,
+      blobState: blob?.state ?? 'missing',
+      associations: visibleAssociations(file.id, request).map((association) => ({
+        id: association.id,
+        postId: association.post_id,
+        topicId: association.topic_id,
+        topicTitle: association.topic_title,
+        postNumber: association.post_number,
+        filename: association.filename,
+        mimeType: association.mime_type,
+        deletedAt: association.deleted_at,
+      })),
+      createdAt: file.created_at,
+      updatedAt: file.updated_at,
+    };
+    if (deduplicated !== undefined) dto.deduplicated = deduplicated;
+    return dto;
+  }
+
+  function requireOwnerLibraryUser(request: FastifyRequest, scope: 'read' | 'write') {
+    const user = requireScope(getCurrentUser(request), scope);
+    if (user.authType === 'impersonation') throw app.httpErrors.forbidden('Impersonation cannot access User Files');
+    return user;
+  }
+
+  function canDownloadFile(file: NonNullable<ReturnType<ForumStore['getUserFile']>>, request: FastifyRequest): boolean {
+    const auth = getCurrentUser(request);
+    const viewer = getIdentityFromRequest(request);
+    const hasActiveAssociation = store.listFileAssociations(file.id).some((association) => !association.deleted_at);
+    if (
+      auth?.authType !== 'impersonation' &&
+      file.identity_id &&
+      viewer?.id === file.identity_id &&
+      (Boolean(file.standalone) || hasActiveAssociation)
+    )
+      return true;
+    if (file.standalone && file.visibility && file.identity_id) {
+      const owner = store.getIdentity(file.identity_id);
+      if (
+        canUseStandaloneFile({
+          visibility: file.visibility,
+          ownerIdentityId: file.identity_id,
+          viewerIdentityId:
+            auth?.authType === 'impersonation' && file.visibility === 'private' ? null : (viewer?.id ?? null),
+          ownerTenantId: owner?.tenant_id ?? null,
+          viewerTenantId: viewer?.tenant_id ?? null,
+        })
+      )
+        return true;
+    }
+    return visibleAssociations(file.id, request).some((association) => !association.deleted_at);
+  }
+
   function findExistingTtsAttachment(postId: string) {
     const attachments = store.listAttachmentsByPost(postId);
-    return attachments.find((attachment) => isTtsStoragePath(UPLOADS_DIR, attachment.storage_path)) ?? null;
+    return (
+      attachments.find(
+        (attachment) => !attachment.deleted_at && isTtsStoragePath(UPLOADS_DIR, attachment.storage_path)
+      ) ?? null
+    );
   }
 
   function emitChatAttachment(postId: string, attachment: ReturnType<ForumStore['createAttachment']>) {
@@ -97,15 +251,12 @@ export function registerAttachmentRoutes({
       data: {
         roomId: post.topic_id,
         postId,
-        attachment: mapAttachmentToDto(mapAttachmentRowToDomain(attachment))
-      }
+        attachment: mapAttachmentToDto(mapAttachmentRowToDomain(attachment)),
+      },
     });
   }
 
   async function ensureTtsAttachment(postId: string, text: string) {
-    const existing = findExistingTtsAttachment(postId);
-    if (existing) return existing;
-
     const trimmed = text.trim();
     if (!trimmed) {
       throw app.httpErrors.badRequest('post body is empty');
@@ -115,13 +266,16 @@ export function registerAttachmentRoutes({
     const storageId = `tts_${hash}`;
     const storagePath = buildTtsStoragePath(UPLOADS_DIR, storageId);
     const filename = `${storageId}.mp3`;
+    const existing = findExistingTtsAttachment(postId);
+    const existingBlob = existing ? store.getAttachmentBlob(existing.id) : null;
+    if (existing && existingBlob?.state === 'ready' && existsSync(existingBlob.storage_path)) return existing;
 
     if (!existsSync(storagePath)) {
       const result = await generateTtsMp3({
         scriptPath: TTS_SCRIPT,
         text: trimmed,
         outPath: storagePath,
-        maxChars: Number.isFinite(TTS_MAX_CHARS) ? TTS_MAX_CHARS : 2500
+        maxChars: Number.isFinite(TTS_MAX_CHARS) ? TTS_MAX_CHARS : 2500,
       });
       if (!result.ok) {
         throw app.httpErrors.badRequest(result.error ?? 'TTS generation failed');
@@ -129,13 +283,21 @@ export function registerAttachmentRoutes({
     }
 
     const sizeBytes = statSync(storagePath).size;
+    const sha256 = sha256File(storagePath);
+    if (existing && existingBlob) {
+      store.restoreBlob({ blobId: existingBlob.id, storagePath, sha256, sizeBytes });
+      return store.getAttachment(existing.id) ?? existing;
+    }
+    if (existing) store.deleteAttachment(existing.id, 'missing_tts_replaced');
     return store.createAttachment({
       postId,
       filename,
       mimeType: 'audio/mpeg',
       sizeBytes,
       storagePath,
-      sha256: sha256File(storagePath)
+      sha256,
+      ownerIdentityId: null,
+      dedupeSystemByPath: true,
     });
   }
 
@@ -302,14 +464,14 @@ export function registerAttachmentRoutes({
       sizeBytes,
       totalChunks,
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
     };
     writeUploadMeta(uploadId, meta);
 
     return {
       uploadId,
       chunkBytes: MAX_CHUNK_BYTES,
-      totalChunks
+      totalChunks,
     };
   });
 
@@ -418,8 +580,11 @@ export function registerAttachmentRoutes({
       throw app.httpErrors.badRequest('uploaded size does not match');
     }
 
-    const existingAttachments = store.listAttachmentsByPost(postId);
-    const existingTotalBytes = existingAttachments.reduce((total, attachmentItem) => total + attachmentItem.size_bytes, 0);
+    const existingAttachments = store.listAttachmentsByPost(postId).filter((item) => !item.deleted_at);
+    const existingTotalBytes = existingAttachments.reduce(
+      (total, attachmentItem) => total + attachmentItem.size_bytes,
+      0
+    );
     if (existingTotalBytes + assembledBytes > MAX_TOTAL_ATTACHMENTS_BYTES) {
       if (existsSync(storagePath)) {
         unlinkSync(storagePath);
@@ -430,15 +595,36 @@ export function registerAttachmentRoutes({
       );
     }
 
-    const attachment = store.createAttachment({
-      postId,
-      filename: meta.filename,
-      mimeType: meta.mimeType,
-      sizeBytes: assembledBytes,
-      storagePath,
-      sha256: sha256File(storagePath)
-    });
+    const sha256 = await sha256FileStream(storagePath);
+    const existingFile = findUsableUserFile(user.identityId, sha256, assembledBytes);
+    if (!existingFile && store.getIdentityBlobBytes(user.identityId) + assembledBytes > MAX_TOTAL_USER_FILES_BYTES) {
+      if (existsSync(storagePath)) unlinkSync(storagePath);
+      deleteUploadSession(uploadId);
+      throw app.httpErrors.badRequest(
+        `Total stored files exceed limit of ${MAX_TOTAL_USER_FILES_BYTES / (1024 * 1024)}MB`
+      );
+    }
+    if (existingFile && existsSync(storagePath)) unlinkSync(storagePath);
+    let attachment: ReturnType<ForumStore['createAttachment']>;
+    try {
+      attachment = store.createAttachment({
+        postId,
+        filename: meta.filename,
+        mimeType: meta.mimeType,
+        sizeBytes: assembledBytes,
+        storagePath,
+        sha256,
+        ownerIdentityId: user.identityId,
+        maxOwnerBytes: MAX_TOTAL_USER_FILES_BYTES,
+      });
+    } catch (error) {
+      unlinkUnclaimedStorage(storagePath);
+      deleteUploadSession(uploadId);
+      throw error;
+    }
 
+    const persistedPath = store.getAttachmentBlob(attachment.id)?.storage_path;
+    if (persistedPath && persistedPath !== storagePath && existsSync(storagePath)) unlinkSync(storagePath);
     deleteUploadSession(uploadId);
 
     emitChatAttachment(postId, attachment);
@@ -488,16 +674,22 @@ export function registerAttachmentRoutes({
     const sizeBytes = data.file.bytesRead;
     const sha256 = sha256File(storagePath);
     const expiresAt = new Date(Date.now() + PENDING_ATTACHMENT_TTL_MS).toISOString();
-    const pending = store.createPendingAttachment({
-      topicId,
-      filename: data.filename,
-      mimeType: data.mimetype || 'application/octet-stream',
-      sizeBytes,
-      storagePath,
-      sha256,
-      createdBy: 'agent',
-      expiresAt,
-    });
+    let pending: ReturnType<ForumStore['createPendingAttachment']>;
+    try {
+      pending = store.createPendingAttachment({
+        topicId,
+        filename: data.filename,
+        mimeType: data.mimetype || 'application/octet-stream',
+        sizeBytes,
+        storagePath,
+        sha256,
+        createdBy: 'agent',
+        expiresAt,
+      });
+    } catch (error) {
+      unlinkUnclaimedStorage(storagePath);
+      throw error;
+    }
     return {
       id: pending.id,
       pendingAttachmentId: pending.id,
@@ -510,16 +702,178 @@ export function registerAttachmentRoutes({
     };
   });
 
-  // User file storage
-  app.get('/user-files', async (request) => {
-    const user = requireScope(getCurrentUser(request), 'read');
-
-    const files = store.listUserFilesByIdentity(user.identityId);
-    return files.map((file) => mapUserFileToDto(mapUserFileRowToDomain(file)));
+  // User file storage. The owner library is logical metadata; only the GC
+  // worker below unlinks shared blobs.
+  // Compatibility endpoint: preserve the original array response for SDK and
+  // REST consumers. The new owner-library UI uses /user-files/page.
+  app.get('/user-files', async (request, reply) => {
+    const user = requireOwnerLibraryUser(request, 'read');
+    reply.header('Cache-Control', 'private, no-store');
+    store.expireUserFiles();
+    return store.listUserFilesByIdentity(user.identityId, 'standalone').map((file) => toUserFileDto(file, request));
   });
 
-  app.post('/user-files', { bodyLimit: MAX_REQUEST_BODY_BYTES }, async (request) => {
+  app.get('/user-files/page', async (request, reply) => {
+    const user = requireOwnerLibraryUser(request, 'read');
+    reply.header('Cache-Control', 'private, no-store');
+    store.expireUserFiles();
+    const queryResult = UserFileListQuerySchema.safeParse(request.query);
+    if (!queryResult.success) throw app.httpErrors.badRequest('invalid file filter');
+    const filter = queryResult.data.filter ?? 'standalone';
+    const limit = queryResult.data.limit ?? 30;
+    const cursor = queryResult.data.cursor ? decodeFileCursor(queryResult.data.cursor) : null;
+    const rows = store.listUserFilesByIdentity(user.identityId, filter as 'standalone' | 'all' | 'post_attachments', {
+      beforeCreatedAt: cursor?.createdAt ?? '9999-12-31T23:59:59.999Z',
+      beforeId: cursor?.id ?? '\uffff',
+      limit: limit + 1,
+    });
+    const hasMore = rows.length > limit;
+    const page = rows.slice(0, limit);
+    const last = page.at(-1);
+    return {
+      items: page.map((file) => toUserFileDto(file, request)),
+      nextCursor: hasMore && last ? encodeFileCursor(last.created_at, last.id) : null,
+    };
+  });
+
+  app.post('/user-files', { bodyLimit: MAX_REQUEST_BODY_BYTES }, async (request, reply) => {
+    const user = requireOwnerLibraryUser(request, 'write');
+    reply.header('Cache-Control', 'private, no-store');
+    const data = await request.file();
+    if (!data) throw app.httpErrors.badRequest('file is required');
+
+    const stagePath = join(USER_FILES_DIR, `.staging-${randomUUID()}`);
+    await pipeline(data.file, createWriteStream(stagePath, { flags: 'wx' }));
+    if (data.file.truncated) {
+      unlinkSync(stagePath);
+      throw app.httpErrors.badRequest(`File size exceeds limit of ${MAX_ATTACHMENT_BYTES / (1024 * 1024)}MB`);
+    }
+    const sizeBytes = data.file.bytesRead;
+    const sha256 = await sha256FileStream(stagePath);
+    const existing = findUsableUserFile(user.identityId, sha256, sizeBytes);
+    if (!existing && store.getIdentityBlobBytes(user.identityId) + sizeBytes > MAX_TOTAL_USER_FILES_BYTES) {
+      unlinkSync(stagePath);
+      throw app.httpErrors.badRequest(
+        `Total stored files exceed limit of ${MAX_TOTAL_USER_FILES_BYTES / (1024 * 1024)}MB`
+      );
+    }
+    const fields = data.fields as Record<string, { value?: unknown }>;
+    const visibilityField = fields['visibility']?.value;
+    const expirationField = fields['expiration']?.value;
+    const visibilityValue = typeof visibilityField === 'string' ? visibilityField : 'private';
+    const expirationValue = typeof expirationField === 'string' ? expirationField : 'one_month';
+    if (!['private', 'members', 'public'].includes(visibilityValue)) {
+      unlinkSync(stagePath);
+      throw app.httpErrors.badRequest('invalid visibility');
+    }
+    if (!(NotepadExpirationPresetValues as readonly string[]).includes(expirationValue)) {
+      unlinkSync(stagePath);
+      throw app.httpErrors.badRequest('invalid expiration');
+    }
+    let storagePath = stagePath;
+    if (existing) {
+      unlinkSync(stagePath);
+      storagePath = store.getUserFileBlob(existing.id)?.storage_path ?? stagePath;
+    } else {
+      storagePath = join(USER_FILES_DIR, randomUUID());
+      renameSync(stagePath, storagePath);
+    }
+    const now = new Date().toISOString();
+    let file: ReturnType<ForumStore['createUserFile']>;
+    try {
+      file = store.createUserFile({
+        identityId: user.identityId,
+        filename: data.filename,
+        mimeType: data.mimetype || 'application/octet-stream',
+        sizeBytes,
+        storagePath,
+        sha256,
+        visibility: visibilityValue as 'private' | 'members' | 'public',
+        expiresAt: notepadExpiresAt(expirationValue as (typeof NotepadExpirationPresetValues)[number], now),
+        maxOwnerBytes: MAX_TOTAL_USER_FILES_BYTES,
+      });
+    } catch (uploadError) {
+      unlinkUnclaimedStorage(storagePath);
+      throw uploadError;
+    }
+    const persistedPath = store.getUserFileBlob(file.id)?.storage_path;
+    if (persistedPath && persistedPath !== storagePath && existsSync(storagePath)) unlinkSync(storagePath);
+    return toUserFileDto(file, request, Boolean(existing) || persistedPath !== storagePath);
+  });
+
+  app.patch('/user-files/:fileId', async (request, reply) => {
+    const user = requireOwnerLibraryUser(request, 'write');
+    reply.header('Cache-Control', 'private, no-store');
+    const { fileId } = request.params as { fileId: string };
+    const body = parseBody(app, UserFileUpdateRequestSchema, request.body);
+    const updated = store.updateUserFile(
+      fileId,
+      user.identityId,
+      body.expectedRevision,
+      body.visibility,
+      body.expiration === 'keep' ? undefined : notepadExpiresAt(body.expiration, new Date().toISOString())
+    );
+    if (updated === 'missing') throw app.httpErrors.notFound('file not found');
+    if (updated === 'conflict') throw app.httpErrors.conflict('file changed in another session');
+    return toUserFileDto(updated, request);
+  });
+
+  app.get('/user-files/:fileId', async (request, reply) => {
+    store.expireUserFiles();
+    const { fileId } = request.params as { fileId: string };
+    const file = store.getUserFile(fileId);
+    if (!file || !canDownloadFile(file, request)) throw app.httpErrors.notFound('file not found');
+    const blob = store.getUserFileBlob(fileId);
+    if (!blob || blob.state !== 'ready' || !existsSync(blob.storage_path)) {
+      if (blob) store.markBlobMissing(blob.id);
+      throw app.httpErrors.notFound('file not found');
+    }
+    reply.header('Cache-Control', 'private, no-store');
+    reply.header('X-Content-Type-Options', 'nosniff');
+    reply.header('Content-Type', file.mime_type);
+    reply.header('Content-Disposition', contentDisposition('attachment', file.filename));
+    return reply.send(createReadStream(blob.storage_path));
+  });
+
+  app.delete('/user-files/:fileId', async (request, reply) => {
+    const user = requireOwnerLibraryUser(request, 'write');
+    reply.header('Cache-Control', 'private, no-store');
+    const { fileId } = request.params as { fileId: string };
+    const file = store.getUserFile(fileId);
+    if (!file || file.identity_id !== user.identityId || !file.standalone)
+      throw app.httpErrors.notFound('file not found');
+    store.deleteUserFile(fileId, user.identityId);
+    return { ok: true };
+  });
+
+  // Only allow author to upload attachments within 5 minutes of creating a post
+  app.post('/posts/:postId/attachments', { bodyLimit: MAX_REQUEST_BODY_BYTES }, async (request) => {
     const user = requireScope(getCurrentUser(request), 'write');
+
+    const { postId } = request.params as { postId: string };
+
+    const post = store.getPost(postId);
+    if (!post) {
+      throw app.httpErrors.notFound('post not found');
+    }
+    requireTopicVisible(post.topic_id, request);
+
+    // Only the post author can add attachments
+    if (post.author_id !== user.identityId) {
+      throw app.httpErrors.forbidden('Only the post author can add attachments');
+    }
+
+    // Only allow uploads within 5 minutes of post creation
+    const postAge = Date.now() - new Date(post.created_at).getTime();
+    const maxAge = 5 * 60 * 1000; // 5 minutes
+    if (postAge > maxAge) {
+      throw app.httpErrors.forbidden('Attachments can only be added within 5 minutes of posting');
+    }
+
+    const topic = store.getTopic(post.topic_id);
+    if (topic && (topic.status === 'locked' || topic.status === 'archived')) {
+      throw app.httpErrors.forbidden('topic is locked or archived');
+    }
 
     const data = await request.file();
     if (!data) {
@@ -529,180 +883,83 @@ export function registerAttachmentRoutes({
     const fileId = randomUUID();
     const ext = data.filename.includes('.') ? data.filename.split('.').pop() : '';
     const storageName = ext ? `${fileId}.${ext}` : fileId;
-    const storagePath = join(USER_FILES_DIR, storageName);
+    const storagePath = join(UPLOADS_DIR, storageName);
 
+    // Save file to disk
     await pipeline(data.file, createWriteStream(storagePath));
 
+    // Check if file was truncated (exceeded size limit)
     if (data.file.truncated) {
       unlinkSync(storagePath);
       throw app.httpErrors.badRequest(`File size exceeds limit of ${MAX_ATTACHMENT_BYTES / (1024 * 1024)}MB`);
     }
 
+    // Get actual file size from stream
     const sizeBytes = data.file.bytesRead;
-    const existingFiles = store.listUserFilesByIdentity(user.identityId);
-    const existingTotalBytes = existingFiles.reduce((total, file) => total + file.size_bytes, 0);
-    if (existingTotalBytes + sizeBytes > MAX_TOTAL_USER_FILES_BYTES) {
+
+    const existingAttachments = store.listAttachmentsByPost(postId).filter((item) => !item.deleted_at);
+    const existingTotalBytes = existingAttachments.reduce(
+      (total, attachmentItem) => total + attachmentItem.size_bytes,
+      0
+    );
+    if (existingTotalBytes + sizeBytes > MAX_TOTAL_ATTACHMENTS_BYTES) {
       unlinkSync(storagePath);
+      throw app.httpErrors.badRequest(
+        `Total attachments exceed limit of ${MAX_TOTAL_ATTACHMENTS_BYTES / (1024 * 1024)}MB`
+      );
+    }
+
+    const sha256 = await sha256FileStream(storagePath);
+    const existingFile = findUsableUserFile(user.identityId, sha256, sizeBytes);
+    if (!existingFile && store.getIdentityBlobBytes(user.identityId) + sizeBytes > MAX_TOTAL_USER_FILES_BYTES) {
+      if (existsSync(storagePath)) unlinkSync(storagePath);
       throw app.httpErrors.badRequest(
         `Total stored files exceed limit of ${MAX_TOTAL_USER_FILES_BYTES / (1024 * 1024)}MB`
       );
     }
-
-    const fileRecord = store.createUserFile({
-      identityId: user.identityId,
-      filename: data.filename,
-      mimeType: data.mimetype,
-      sizeBytes,
-      storagePath
-    });
-
-    return mapUserFileToDto(mapUserFileRowToDomain(fileRecord));
-  });
-
-  app.get('/user-files/:fileId', async (request, reply) => {
-    const user = requireScope(getCurrentUser(request), 'read');
-    const { fileId } = request.params as { fileId: string };
-    const file = store.getUserFile(fileId);
-    if (!file) {
-      throw app.httpErrors.notFound('file not found');
-    }
-    if (file.identity_id !== user.identityId) {
-      const fileOwner = store.getIdentity(file.identity_id);
-      requireModerator(request, fileOwner?.tenant_id ?? null);
-    }
-    if (!existsSync(file.storage_path)) {
-      throw app.httpErrors.notFound('file not found');
-    }
-
-    reply.header('Content-Type', file.mime_type);
-    const safeName = file.filename.replace(/[\r\n"]/g, '');
-    reply.header('Content-Disposition', `attachment; filename="${safeName}"`);
-
-    return reply.send(createReadStream(file.storage_path));
-  });
-
-  app.delete('/user-files/:fileId', async (request) => {
-    const user = requireScope(getCurrentUser(request), 'write');
-
-    const { fileId } = request.params as { fileId: string };
-    const file = store.getUserFile(fileId);
-    if (!file) {
-      throw app.httpErrors.notFound('file not found');
-    }
-    if (file.identity_id !== user.identityId) {
-      const fileOwner = store.getIdentity(file.identity_id);
-      requireModerator(request, fileOwner?.tenant_id ?? null);
-    }
-
-    if (existsSync(file.storage_path)) {
-      unlinkSync(file.storage_path);
-    }
-    store.deleteUserFile(fileId);
-
-    return { ok: true };
-  });
-
-  // Only allow author to upload attachments within 5 minutes of creating a post
-  app.post(
-    '/posts/:postId/attachments',
-    { bodyLimit: MAX_REQUEST_BODY_BYTES },
-    async (request) => {
-      const user = requireScope(getCurrentUser(request), 'write');
-
-      const { postId } = request.params as { postId: string };
-
-      const post = store.getPost(postId);
-      if (!post) {
-        throw app.httpErrors.notFound('post not found');
-      }
-      requireTopicVisible(post.topic_id, request);
-
-      // Only the post author can add attachments
-      if (post.author_id !== user.identityId) {
-        throw app.httpErrors.forbidden('Only the post author can add attachments');
-      }
-
-      // Only allow uploads within 5 minutes of post creation
-      const postAge = Date.now() - new Date(post.created_at).getTime();
-      const maxAge = 5 * 60 * 1000; // 5 minutes
-      if (postAge > maxAge) {
-        throw app.httpErrors.forbidden('Attachments can only be added within 5 minutes of posting');
-      }
-
-      const topic = store.getTopic(post.topic_id);
-      if (topic && (topic.status === 'locked' || topic.status === 'archived')) {
-        throw app.httpErrors.forbidden('topic is locked or archived');
-      }
-
-      const data = await request.file();
-      if (!data) {
-        throw app.httpErrors.badRequest('file is required');
-      }
-
-      const fileId = randomUUID();
-      const ext = data.filename.includes('.') ? data.filename.split('.').pop() : '';
-      const storageName = ext ? `${fileId}.${ext}` : fileId;
-      const storagePath = join(UPLOADS_DIR, storageName);
-
-      // Save file to disk
-      await pipeline(data.file, createWriteStream(storagePath));
-
-      // Check if file was truncated (exceeded size limit)
-      if (data.file.truncated) {
-        unlinkSync(storagePath);
-        throw app.httpErrors.badRequest(`File size exceeds limit of ${MAX_ATTACHMENT_BYTES / (1024 * 1024)}MB`);
-      }
-
-      // Get actual file size from stream
-      const sizeBytes = data.file.bytesRead;
-
-      const existingAttachments = store.listAttachmentsByPost(postId);
-      const existingTotalBytes = existingAttachments.reduce((total, attachmentItem) => total + attachmentItem.size_bytes, 0);
-      if (existingTotalBytes + sizeBytes > MAX_TOTAL_ATTACHMENTS_BYTES) {
-        unlinkSync(storagePath);
-        throw app.httpErrors.badRequest(
-          `Total attachments exceed limit of ${MAX_TOTAL_ATTACHMENTS_BYTES / (1024 * 1024)}MB`
-        );
-      }
-
-      const attachment = store.createAttachment({
+    if (existingFile && existsSync(storagePath)) unlinkSync(storagePath);
+    let attachment: ReturnType<ForumStore['createAttachment']>;
+    try {
+      attachment = store.createAttachment({
         postId,
         filename: data.filename,
-        mimeType: data.mimetype,
+        mimeType: data.mimetype || 'application/octet-stream',
         sizeBytes,
         storagePath,
-        sha256: sha256File(storagePath)
+        sha256,
+        ownerIdentityId: user.identityId,
+        maxOwnerBytes: MAX_TOTAL_USER_FILES_BYTES,
       });
-
-      emitChatAttachment(postId, attachment);
-
-      return mapAttachmentToDto(mapAttachmentRowToDomain(attachment));
+    } catch (uploadError) {
+      unlinkUnclaimedStorage(storagePath);
+      throw uploadError;
     }
-  );
+
+    const persistedPath = store.getAttachmentBlob(attachment.id)?.storage_path;
+    if (persistedPath && persistedPath !== storagePath && existsSync(storagePath)) unlinkSync(storagePath);
+    emitChatAttachment(postId, attachment);
+
+    return mapAttachmentToDto(mapAttachmentRowToDomain(attachment));
+  });
 
   app.get('/attachments/:attachmentId', async (request, reply) => {
     const { attachmentId } = request.params as { attachmentId: string };
 
     const attachment = store.getAttachment(attachmentId);
-    if (!attachment) {
+    if (!attachment || attachment.deleted_at || !attachment.file_id)
+      throw app.httpErrors.notFound('attachment not found');
+    const file = store.getUserFile(attachment.file_id);
+    const blob = store.getAttachmentBlob(attachmentId);
+    if (!file || !blob || blob.state !== 'ready' || !canDownloadFile(file, request) || !existsSync(blob.storage_path)) {
+      if (blob && !existsSync(blob.storage_path)) store.markBlobMissing(blob.id);
       throw app.httpErrors.notFound('attachment not found');
     }
-    const post = store.getPost(attachment.post_id);
-    if (!post) {
-      throw app.httpErrors.notFound('post not found');
-    }
-    requireTopicVisible(post.topic_id, request);
-
-    if (!existsSync(attachment.storage_path)) {
-      throw app.httpErrors.notFound('attachment file not found');
-    }
-
-    const safeName = attachment.filename.replace(/[\r\n"]/g, '');
     const disposition = shouldInlineAttachment(attachment.mime_type) ? 'inline' : 'attachment';
+    reply.header('Cache-Control', 'private, no-store');
+    reply.header('X-Content-Type-Options', 'nosniff');
     reply.header('Content-Type', attachment.mime_type);
-    reply.header('Content-Disposition', `${disposition}; filename="${safeName}"`);
-
-    return reply.send(createReadStream(attachment.storage_path));
+    reply.header('Content-Disposition', contentDisposition(disposition, attachment.filename));
+    return reply.send(createReadStream(blob.storage_path));
   });
 
   app.delete('/attachments/:attachmentId', async (request) => {
@@ -731,17 +988,13 @@ export function registerAttachmentRoutes({
     }
     requireTopicVisible(post.topic_id, request);
 
-    if (post.author_id !== user.identityId) {
+    const associatedFile = attachment.file_id ? store.getUserFile(attachment.file_id) : null;
+    if (post.author_id !== user.identityId && associatedFile?.identity_id !== user.identityId) {
       requireModerator(request, post.tenant_id);
     }
 
-    // Delete file from disk
-    if (existsSync(attachment.storage_path)) {
-      unlinkSync(attachment.storage_path);
-    }
-
-    // Delete from database
-    store.deleteAttachment(attachmentId);
+    // Detach only this post reference. Shared bytes are reclaimed later by GC.
+    store.deleteAttachment(attachmentId, 'attachment_deleted');
 
     return { ok: true };
   });

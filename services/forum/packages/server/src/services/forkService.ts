@@ -203,12 +203,15 @@ export class ForkService {
         body: post.body,
         editedAt: post.edited_at,
         deletedAt: post.deleted_at,
-        attachments: this.store.listAttachmentsByPost(post.id).map((attachment) => ({
-          id: attachment.id,
-          sizeBytes: attachment.size_bytes,
-          storagePath: attachment.storage_path,
-          sha256: attachment.sha256,
-        })),
+        attachments: this.store
+          .listAttachmentsByPost(post.id)
+          .filter((attachment) => !attachment.deleted_at)
+          .map((attachment) => ({
+            id: attachment.id,
+            sizeBytes: attachment.size_bytes,
+            storagePath: attachment.storage_path,
+            sha256: attachment.sha256,
+          })),
       }))
     );
     const prestaged: Array<{
@@ -226,6 +229,7 @@ export class ForkService {
         throw new ForkConflictError('Fork attachment prestage path is unsafe');
       for (const post of inheritedSourcePosts) {
         for (const attachment of this.store.listAttachmentsByPost(post.id)) {
+          if (attachment.deleted_at) continue;
           const destination = join(
             stageRoot,
             `${attachment.id}-${attachment.filename.replace(/[^a-zA-Z0-9._-]/g, '_')}`
@@ -265,12 +269,15 @@ export class ForkService {
           body: post.body,
           editedAt: post.edited_at,
           deletedAt: post.deleted_at,
-          attachments: this.store.listAttachmentsByPost(post.id).map((attachment) => ({
-            id: attachment.id,
-            sizeBytes: attachment.size_bytes,
-            storagePath: attachment.storage_path,
-            sha256: attachment.sha256,
-          })),
+          attachments: this.store
+            .listAttachmentsByPost(post.id)
+            .filter((attachment) => !attachment.deleted_at)
+            .map((attachment) => ({
+              id: attachment.id,
+              sizeBytes: attachment.size_bytes,
+              storagePath: attachment.storage_path,
+              sha256: attachment.sha256,
+            })),
         }))
       );
       if (currentBoundaryIndex !== boundaryIndex || currentSnapshot !== sourceSnapshot)

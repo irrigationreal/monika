@@ -18,9 +18,9 @@ import type {
   AccessRuleScopeKind,
   CompactionOperation,
   CreatePostInput,
+  CreateTopicInput,
   ForkBoundary,
   ForkOperation,
-  CreateTopicInput,
   ForumListOptions,
   ForumStatus,
   ForumVisibility,
@@ -43,6 +43,7 @@ import type {
   ChatRoomRow,
   CompactionOperationRow,
   ExternalRefRow,
+  FileBlobRow,
   ForkOperationRow,
   ForumRow,
   IdentityRoleRow,
@@ -381,18 +382,19 @@ export type AttachmentHandoffInput = {
 };
 
 function pendingAttachmentId(handoff: AttachmentHandoffInput): string | null {
-  const value = handoff.sourceRef['pendingAttachmentId']
-    ?? handoff.sourceRef['pending_attachment_id']
-    ?? handoff.sourceRef['id'];
+  const value =
+    handoff.sourceRef['pendingAttachmentId'] ?? handoff.sourceRef['pending_attachment_id'] ?? handoff.sourceRef['id'];
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 /** Structured v2 references supersede legacy text markers for the same staged file. */
 function dedupeAttachmentHandoffs(handoffs: AttachmentHandoffInput[]): AttachmentHandoffInput[] {
-  const structuredPendingIds = new Set(handoffs
-    .filter((handoff) => handoff.sourceKind === 'structured-pending')
-    .map(pendingAttachmentId)
-    .filter((id): id is string => Boolean(id)));
+  const structuredPendingIds = new Set(
+    handoffs
+      .filter((handoff) => handoff.sourceKind === 'structured-pending')
+      .map(pendingAttachmentId)
+      .filter((id): id is string => Boolean(id))
+  );
   const seenRefs = new Set<string>();
   const seenPending = new Set<string>();
   return handoffs.filter((handoff) => {
@@ -482,6 +484,9 @@ export interface CreateAttachmentInput {
   sizeBytes: number;
   storagePath: string;
   sha256?: string | null;
+  ownerIdentityId?: string | null;
+  dedupeSystemByPath?: boolean;
+  maxOwnerBytes?: number;
 }
 
 export interface CreateUserFileInput {
@@ -490,6 +495,10 @@ export interface CreateUserFileInput {
   mimeType: string;
   sizeBytes: number;
   storagePath: string;
+  sha256?: string | null;
+  visibility?: 'private' | 'members' | 'public';
+  expiresAt?: string | null;
+  maxOwnerBytes?: number;
 }
 
 export interface ReactionCount {
@@ -1164,16 +1173,29 @@ export class ForumStore {
       const postIds = this.db.prepare('select id from posts where topic_id = ?').all(topicId) as { id: string }[];
       for (const { id: postId } of postIds) {
         this.db.prepare('delete from reactions where post_id = ?').run(postId);
-        this.db.prepare('delete from attachments where post_id = ?').run(postId);
+        this.db
+          .prepare(
+            "update attachments set deleted_at = coalesce(deleted_at, ?), delete_reason = 'topic_deleted' where post_id = ?"
+          )
+          .run(nowIso(), postId);
       }
 
       // Projection handoffs own pending attachment custody and cascade from the
-      // projection. Remove them before their post/session foreign keys.
+      // projection. Queue their bytes before removing rows so filesystem cleanup
+      // remains retryable if the unlink cannot complete immediately.
+      this.db
+        .prepare(
+          `insert into file_deletion_queue (storage_path, reason, created_at)
+         select storage_path, 'topic_deleted_pending_attachment', ? from pending_attachments where topic_id = ?
+         on conflict(storage_path) do nothing`
+        )
+        .run(nowIso(), topicId);
       this.db.prepare('delete from assistant_projections where topic_id = ?').run(topicId);
       this.db.prepare('delete from pending_attachments where topic_id = ?').run(topicId);
 
       // Canonical-session projection state references both sessions and posts.
-      const piSessionIds = this.db.prepare('select pi_session_id from pi_session_links where topic_id = ?')
+      const piSessionIds = this.db
+        .prepare('select pi_session_id from pi_session_links where topic_id = ?')
         .all(topicId) as Array<{ pi_session_id: string }>;
       for (const { pi_session_id: piSessionId } of piSessionIds) {
         this.db.prepare('delete from pi_message_links where pi_session_id = ?').run(piSessionId);
@@ -1194,6 +1216,7 @@ export class ForumStore {
       this.db.prepare('delete from tool_runs where topic_id = ?').run(topicId);
       this.db.prepare('delete from plans where topic_id = ?').run(topicId);
       this.db.prepare('delete from sessions where topic_id = ?').run(topicId);
+      this.markUnreferencedBlobsForGc();
       this.db.prepare('delete from posts where topic_id = ?').run(topicId);
       this.db.prepare('delete from topic_moves where topic_id = ?').run(topicId);
       this.db.prepare('delete from notifications where topic_id = ?').run(topicId);
@@ -1221,34 +1244,34 @@ export class ForumStore {
           .get(input.draft.id, input.authorId, input.forumId, input.draft.revision, now);
         if (!draft) throw new Error('draft changed in another session');
       }
-    this.db
-      .prepare(
-        'insert into topics (id, forum_id, tenant_id, title, status, tags_json, robot_mode, created_by, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-      )
-      .run(
-        topicId,
-        input.forumId,
-        null,
-        input.title,
-        'open',
-        JSON.stringify([]),
-        input.robotMode ?? 'auto',
-        input.authorId,
-        now,
-        now
-      );
-    if (input.autoCompactEnabled) {
-      const supportsAutoCompact = this.db
-        .prepare("select 1 from pragma_table_info('topics') where name = 'auto_compact_enabled'")
-        .get();
+      this.db
+        .prepare(
+          'insert into topics (id, forum_id, tenant_id, title, status, tags_json, robot_mode, created_by, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        )
+        .run(
+          topicId,
+          input.forumId,
+          null,
+          input.title,
+          'open',
+          JSON.stringify([]),
+          input.robotMode ?? 'auto',
+          input.authorId,
+          now,
+          now
+        );
+      if (input.autoCompactEnabled) {
+        const supportsAutoCompact = this.db
+          .prepare("select 1 from pragma_table_info('topics') where name = 'auto_compact_enabled'")
+          .get();
         if (supportsAutoCompact)
-        this.db.prepare('update topics set auto_compact_enabled = 1 where id = ?').run(topicId);
+          this.db.prepare('update topics set auto_compact_enabled = 1 where id = ?').run(topicId);
       }
-    this.db
-      .prepare(
-        'insert into posts (id, topic_id, tenant_id, parent_post_id, author_id, body, source_message_id, silent, created_at, edited_at, deleted_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-      )
-      .run(postId, topicId, null, null, input.authorId, input.body, null, input.silent ? 1 : 0, now, null, null);
+      this.db
+        .prepare(
+          'insert into posts (id, topic_id, tenant_id, parent_post_id, author_id, body, source_message_id, silent, created_at, edited_at, deleted_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        )
+        .run(postId, topicId, null, null, input.authorId, input.body, null, input.silent ? 1 : 0, now, null, null);
       if (input.draft)
         this.db
           .prepare('delete from message_drafts where id = ? and owner_identity_id = ? and revision = ?')
@@ -1424,24 +1447,32 @@ export class ForumStore {
   listPosts(topicId: string, page = 1, pageSize = 200): PostRow[] {
     const offset = (page - 1) * pageSize;
     return this.db
-      .prepare(`select p.* from posts p where p.topic_id = ?
+      .prepare(
+        `select p.* from posts p where p.topic_id = ?
         and not exists (select 1 from assistant_projections ap where ap.post_id = p.id and ap.status <> 'projected')
-        order by p.created_at asc limit ? offset ?`)
+        order by p.created_at asc limit ? offset ?`
+      )
       .all(topicId, pageSize, offset) as PostRow[];
   }
 
   countPostsByTopic(topicId: string): number {
     const row = this.db
-      .prepare(`select count(*) as count from posts p where p.topic_id = ? and p.deleted_at is null
-        and not exists (select 1 from assistant_projections ap where ap.post_id = p.id and ap.status <> 'projected')`)
+      .prepare(
+        `select count(*) as count from posts p where p.topic_id = ? and p.deleted_at is null
+        and not exists (select 1 from assistant_projections ap where ap.post_id = p.id and ap.status <> 'projected')`
+      )
       .get(topicId) as { count: number } | undefined;
     return row?.count ?? 0;
   }
 
   listAllPosts(topicId: string): PostRow[] {
-    return this.db.prepare(`select p.* from posts p where p.topic_id = ?
+    return this.db
+      .prepare(
+        `select p.* from posts p where p.topic_id = ?
       and not exists (select 1 from assistant_projections ap where ap.post_id = p.id and ap.status <> 'projected')
-      order by p.created_at asc`).all(topicId) as PostRow[];
+      order by p.created_at asc`
+      )
+      .all(topicId) as PostRow[];
   }
 
   /**
@@ -1844,9 +1875,12 @@ export class ForumStore {
       throw new Error('post already deleted');
     }
     const now = nowIso();
-    this.db
-      .prepare('update posts set deleted_at = ?, body = ? where id = ?')
-      .run(now, '[This post has been deleted]', postId);
+    this.db.transaction(() => {
+      this.db
+        .prepare('update posts set deleted_at = ?, body = ? where id = ?')
+        .run(now, '[This post has been deleted]', postId);
+      this.detachPostAttachments(postId, 'post_deleted');
+    })();
     this.invalidateTopicStatsCache(existing.topic_id);
     const topic = this.getTopic(existing.topic_id);
     if (topic) {
@@ -2426,8 +2460,7 @@ export class ForumStore {
         ? (this.db
             .prepare('select role, has_visible_text from pi_entry_index where pi_session_id = ? and entry_id = ?')
             .get(link.pi_session_id, message.pi_message_id) as
-            | { role: string | null; has_visible_text: number }
-            | undefined)
+            { role: string | null; has_visible_text: number } | undefined)
         : undefined;
       let singleton = false;
       try {
@@ -2452,15 +2485,24 @@ export class ForumStore {
         Boolean(current.message && current.entry?.has_visible_text && active.has(current.message.pi_message_id));
       const inheritedHasAssistant = projected
         .slice(0, index)
-        .some((candidate) =>
-          !candidate.post.deleted_at &&
-          candidate.entry?.role === 'assistant' &&
-          Boolean(candidate.entry.has_visible_text && candidate.message && active.has(candidate.message.pi_message_id))
+        .some(
+          (candidate) =>
+            !candidate.post.deleted_at &&
+            candidate.entry?.role === 'assistant' &&
+            Boolean(
+              candidate.entry.has_visible_text && candidate.message && active.has(candidate.message.pi_message_id)
+            )
         );
       // V1 materialization requires an inherited forum prefix and at least one
       // inherited assistant response. Never advertise a before-first-user
       // boundary that the durable worker must later reject.
-      if (!prefixComplete || index === 0 || !inheritedHasAssistant || current.entry?.role !== 'user' || !current.singleton)
+      if (
+        !prefixComplete ||
+        index === 0 ||
+        !inheritedHasAssistant ||
+        current.entry?.role !== 'user' ||
+        !current.singleton
+      )
         continue;
       const response = projected[index + 1];
       const activeIndex = current.message ? activeIds.indexOf(current.message.pi_message_id) : -1;
@@ -2550,8 +2592,7 @@ export class ForumStore {
   finalizeForkAttachmentPaths(id: string, fromRoot: string, toRoot: string): void {
     this.db.transaction(() => {
       const row = this.db.prepare('select prestaged_attachments_json from fork_operations where id = ?').get(id) as
-        | { prestaged_attachments_json: string }
-        | undefined;
+        { prestaged_attachments_json: string } | undefined;
       if (!row) throw new Error('fork operation not found');
       const prestaged = JSON.parse(row.prestaged_attachments_json) as EnqueueForkOperationInput['prestagedAttachments'];
       const normalizedFrom = `${fromRoot.replace(/\/$/, '')}/`;
@@ -2565,10 +2606,18 @@ export class ForumStore {
       for (let index = 0; index < prestaged.length; index += 1) {
         const before = prestaged[index]!;
         const after = finalized[index]!;
-        if (before.storagePath !== after.storagePath)
-          this.db.prepare('update attachments set storage_path = ? where storage_path = ?').run(after.storagePath, before.storagePath);
+        if (before.storagePath !== after.storagePath) {
+          this.db
+            .prepare('update attachments set storage_path = ? where storage_path = ?')
+            .run(after.storagePath, before.storagePath);
+          this.db
+            .prepare('update file_blobs set storage_path = ?, updated_at = ? where storage_path = ?')
+            .run(after.storagePath, nowIso(), before.storagePath);
+        }
       }
-      this.db.prepare('update fork_operations set prestaged_attachments_json = ? where id = ?').run(JSON.stringify(finalized), id);
+      this.db
+        .prepare('update fork_operations set prestaged_attachments_json = ? where id = ?')
+        .run(JSON.stringify(finalized), id);
     })();
   }
 
@@ -2645,7 +2694,9 @@ export class ForumStore {
 
   requeueForkOperation(id: string, message: string, retryAt: string): void {
     this.db
-      .prepare("update fork_operations set status = 'pending', error_message = ?, next_attempt_at = ? where id = ? and status = 'running'")
+      .prepare(
+        "update fork_operations set status = 'pending', error_message = ?, next_attempt_at = ? where id = ? and status = 'running'"
+      )
       .run(message.slice(0, 1000), retryAt, id);
   }
 
@@ -2705,7 +2756,7 @@ export class ForumStore {
           topicId: created.topic.id,
           authorId: source.author_id,
           body: source.body,
-          parentPostId: source.parent_post_id ? postMap.get(source.parent_post_id) ?? null : null,
+          parentPostId: source.parent_post_id ? (postMap.get(source.parent_post_id) ?? null) : null,
           silent: Boolean(source.silent),
         });
         if (source.follow_up) this.db.prepare('update posts set follow_up = 1 where id = ?').run(copied.id);
@@ -2724,7 +2775,7 @@ export class ForumStore {
               ...sourceMetadata,
               contributorPostIds: Array.isArray(sourceMetadata['contributorPostIds'])
                 ? sourceMetadata['contributorPostIds'].map((postId) =>
-                    typeof postId === 'string' ? postMap.get(postId) ?? postId : postId
+                    typeof postId === 'string' ? (postMap.get(postId) ?? postId) : postId
                   )
                 : [postMap.get(source.id)!],
             }
@@ -2776,7 +2827,7 @@ export class ForumStore {
         topicId: created.topic.id,
         authorId: row.initiated_by,
         body: row.opening_body,
-        parentPostId: boundary.parent_post_id ? postMap.get(boundary.parent_post_id) ?? null : null,
+        parentPostId: boundary.parent_post_id ? (postMap.get(boundary.parent_post_id) ?? null) : null,
       });
       if (boundary.follow_up) this.db.prepare('update posts set follow_up = 1 where id = ?').run(opening.id);
       for (const attachment of prestaged.filter((item) => item.sourcePostId === row.boundary_post_id)) {
@@ -2801,7 +2852,12 @@ export class ForumStore {
       this.db
         .prepare("update post_dispatches set next_attempt_at = '9999-12-31T23:59:59.999Z' where id = ?")
         .run(openingDispatch.id);
-      this.upsertRobotState({ topicId: created.topic.id, sessionId: childSession.id, activity: 'idle', currentPlanId: null });
+      this.upsertRobotState({
+        topicId: created.topic.id,
+        sessionId: childSession.id,
+        activity: 'idle',
+        currentPlanId: null,
+      });
       this.db
         .prepare(
           'update fork_operations set agent_result_json = ?, child_topic_id = ?, child_session_id = ?, child_session_path = ?, error_message = null where id = ?'
@@ -2815,7 +2871,9 @@ export class ForumStore {
     this.db.transaction(() => {
       const now = nowIso();
       this.db
-        .prepare("update fork_operations set status = 'succeeded', error_message = null, next_attempt_at = null, finished_at = ? where id = ? and status = 'running'")
+        .prepare(
+          "update fork_operations set status = 'succeeded', error_message = null, next_attempt_at = null, finished_at = ? where id = ? and status = 'running'"
+        )
         .run(now, id);
       this.db
         .prepare(
@@ -3078,8 +3136,17 @@ export class ForumStore {
           null, null, 0, null, ?, null, null, ?, ?, ?, ?, ?)`
         )
         .run(
-          randomUUID(), operation.topicId, postId, operation.sessionId, operation.topicId, now, now, now,
-          normalizedOriginKey(origin), JSON.stringify(origin), JSON.stringify([postId])
+          randomUUID(),
+          operation.topicId,
+          postId,
+          operation.sessionId,
+          operation.topicId,
+          now,
+          now,
+          now,
+          normalizedOriginKey(origin),
+          JSON.stringify(origin),
+          JSON.stringify([postId])
         );
       const event = this.createTopicOperationalEvent({
         topicId: operation.topicId,
@@ -3120,11 +3187,15 @@ export class ForumStore {
       .prepare("select * from external_refs where mapped_post_id = ? and kind = 'post' order by rowid asc limit 1")
       .get(postId) as ExternalRefRow | undefined;
     if (!ref) {
-      const first = this.db.prepare('select id from posts where topic_id = ? order by rowid asc limit 1').get(post.topic_id) as { id: string } | undefined;
+      const first = this.db
+        .prepare('select id from posts where topic_id = ? order by rowid asc limit 1')
+        .get(post.topic_id) as { id: string } | undefined;
       if (first?.id === post.id) {
-        ref = this.db.prepare(
-          "select * from external_refs where mapped_topic_id = ? and kind = 'topic' order by rowid asc limit 1"
-        ).get(post.topic_id) as ExternalRefRow | undefined;
+        ref = this.db
+          .prepare(
+            "select * from external_refs where mapped_topic_id = ? and kind = 'topic' order by rowid asc limit 1"
+          )
+          .get(post.topic_id) as ExternalRefRow | undefined;
       }
     }
     if (!ref) {
@@ -3254,8 +3325,10 @@ export class ForumStore {
   }
 
   getActiveTurnOrigin(topicId: string): ActiveTurnOriginRow | null {
-    return (this.db.prepare('select * from active_turn_origins where topic_id = ?').get(topicId) as
-      ActiveTurnOriginRow | undefined) ?? null;
+    return (
+      (this.db.prepare('select * from active_turn_origins where topic_id = ?').get(topicId) as
+        ActiveTurnOriginRow | undefined) ?? null
+    );
   }
 
   recordActiveTurnOrigin(input: {
@@ -3265,8 +3338,9 @@ export class ForumStore {
     origin: UtteranceOrigin;
   }): ActiveTurnOriginRow | null {
     const now = nowIso();
-    const result = this.db.prepare(
-      `insert into active_turn_origins
+    const result = this.db
+      .prepare(
+        `insert into active_turn_origins
        (topic_id, dispatch_id, generation, origin_key, origin_json, accepted_at, updated_at)
        select ?, ?, ?, ?, ?, ?, ?
        where ? = (select generation from post_dispatch_generations where topic_id = ?)
@@ -3275,10 +3349,18 @@ export class ForumStore {
          origin_key = excluded.origin_key, origin_json = excluded.origin_json,
          accepted_at = excluded.accepted_at, updated_at = excluded.updated_at
        where excluded.generation = (select generation from post_dispatch_generations where topic_id = excluded.topic_id)`
-    ).run(
-      input.topicId, input.dispatchId, input.generation, normalizedOriginKey(input.origin), JSON.stringify(input.origin),
-      now, now, input.generation, input.topicId
-    );
+      )
+      .run(
+        input.topicId,
+        input.dispatchId,
+        input.generation,
+        normalizedOriginKey(input.origin),
+        JSON.stringify(input.origin),
+        now,
+        now,
+        input.generation,
+        input.topicId
+      );
     return result.changes === 1 ? this.getActiveTurnOrigin(input.topicId) : null;
   }
 
@@ -3300,9 +3382,12 @@ export class ForumStore {
   }
 
   clearActiveTurnOrigin(topicId: string, generation?: number): boolean {
-    const result = generation === undefined
-      ? this.db.prepare('delete from active_turn_origins where topic_id = ?').run(topicId)
-      : this.db.prepare('delete from active_turn_origins where topic_id = ? and generation = ?').run(topicId, generation);
+    const result =
+      generation === undefined
+        ? this.db.prepare('delete from active_turn_origins where topic_id = ?').run(topicId)
+        : this.db
+            .prepare('delete from active_turn_origins where topic_id = ? and generation = ?')
+            .run(topicId, generation);
     return result.changes === 1;
   }
 
@@ -3375,26 +3460,35 @@ export class ForumStore {
       try {
         const parsed = JSON.parse(trigger.contributor_post_ids_json) as unknown;
         if (Array.isArray(parsed)) durableContributors = parsed.filter((id): id is string => typeof id === 'string');
-      } catch { /* malformed legacy state is safely rebuilt from the claimed rows */ }
-      const hasPriorGroup = durableContributors.length > 1
-        || (durableContributors.length === 1 && durableContributors[0] !== trigger.post_id);
+      } catch {
+        /* malformed legacy state is safely rebuilt from the claimed rows */
+      }
+      const hasPriorGroup =
+        durableContributors.length > 1 ||
+        (durableContributors.length === 1 && durableContributors[0] !== trigger.post_id);
       const contributorPostIds = hasPriorGroup
         ? [...new Set([...durableContributors, ...rows.map((row) => row.post_id)])]
         : rows.map((row) => row.post_id);
       const now = nowIso();
       if (trigger.status === 'pending') {
         const current = this.db
-          .prepare("select id from post_dispatches where id in (select value from json_each(?)) and status in ('pending', 'dispatching')")
+          .prepare(
+            "select id from post_dispatches where id in (select value from json_each(?)) and status in ('pending', 'dispatching')"
+          )
           .all(JSON.stringify(rows.map((row) => row.id))) as Array<{ id: string }>;
         if (current.length !== rows.length) return null;
         for (const row of rows.slice(0, -1)) {
-          this.db.prepare(
-            "update post_dispatches set status = 'superseded', next_attempt_at = null, error_message = ?, updated_at = ? where id = ? and status in ('pending', 'dispatching')"
-          ).run('Included in same-origin dispatch group.', now, row.id);
+          this.db
+            .prepare(
+              "update post_dispatches set status = 'superseded', next_attempt_at = null, error_message = ?, updated_at = ? where id = ? and status in ('pending', 'dispatching')"
+            )
+            .run('Included in same-origin dispatch group.', now, row.id);
         }
-        this.db.prepare(
-          'update post_dispatches set contributor_post_ids_json = ?, updated_at = ? where id = ? and status = ?'
-        ).run(JSON.stringify(contributorPostIds), now, trigger.id, trigger.status);
+        this.db
+          .prepare(
+            'update post_dispatches set contributor_post_ids_json = ?, updated_at = ? where id = ? and status = ?'
+          )
+          .run(JSON.stringify(contributorPostIds), now, trigger.id, trigger.status);
       }
       return this.claimPostDispatch(trigger.id, trigger);
     })();
@@ -4777,9 +4871,11 @@ export class ForumStore {
   // Canonical assistant projection and attachment handoff management
 
   getAssistantProjection(piSessionId: string, piMessageId: string): AssistantProjectionRow | null {
-    return (this.db.prepare(
-      'select * from assistant_projections where pi_session_id = ? and pi_message_id = ?'
-    ).get(piSessionId, piMessageId) as AssistantProjectionRow | undefined) ?? null;
+    return (
+      (this.db
+        .prepare('select * from assistant_projections where pi_session_id = ? and pi_message_id = ?')
+        .get(piSessionId, piMessageId) as AssistantProjectionRow | undefined) ?? null
+    );
   }
 
   beginAssistantProjection(input: BeginAssistantProjectionInput): AssistantProjectionRow {
@@ -4788,9 +4884,11 @@ export class ForumStore {
       const existing = this.getAssistantProjection(input.piSessionId, input.piMessageId);
       if (existing) {
         if (input.completionPayload != null && existing.completion_payload_json == null) {
-          this.db.prepare(
-            'update assistant_projections set completion_payload_json = ?, completion_state = case when status = \'projected\' then 1 else completion_state end, updated_at = ? where id = ?'
-          ).run(JSON.stringify(input.completionPayload), nowIso(), existing.id);
+          this.db
+            .prepare(
+              "update assistant_projections set completion_payload_json = ?, completion_state = case when status = 'projected' then 1 else completion_state end, updated_at = ? where id = ?"
+            )
+            .run(JSON.stringify(input.completionPayload), nowIso(), existing.id);
         }
         return this.getAssistantProjection(input.piSessionId, input.piMessageId) as AssistantProjectionRow;
       }
@@ -4798,42 +4896,74 @@ export class ForumStore {
       const projectionId = randomUUID();
       const existingLink = this.getPiMessageLink(input.piSessionId, input.piMessageId);
       const linkedPost = existingLink?.post_id
-        ? this.db.prepare('select * from posts where id = ? and topic_id = ?').get(existingLink.post_id, input.topicId) as PostRow | undefined
+        ? (this.db
+            .prepare('select * from posts where id = ? and topic_id = ?')
+            .get(existingLink.post_id, input.topicId) as PostRow | undefined)
         : undefined;
       const linkedSessionMessage = existingLink?.session_message_id
-        ? this.db.prepare('select id from session_messages where id = ?').get(existingLink.session_message_id) as { id: string } | undefined
+        ? (this.db.prepare('select id from session_messages where id = ?').get(existingLink.session_message_id) as
+            { id: string } | undefined)
         : undefined;
       const sessionMessageId = linkedSessionMessage?.id ?? randomUUID();
       if (!linkedSessionMessage) {
-        this.db.prepare(
-          `insert into session_messages (id, session_id, role, content, created_at, visibility)
+        this.db
+          .prepare(
+            `insert into session_messages (id, session_id, role, content, created_at, visibility)
            values (?, ?, 'assistant', ?, ?, 'public')`
-        ).run(sessionMessageId, input.sessionId, input.body, now);
+          )
+          .run(sessionMessageId, input.sessionId, input.body, now);
       }
-      const followUp = Boolean((input.metadata as Record<string, unknown> | null)?.['sourceKind'] === 'subagent-completion');
-      this.db.prepare(
-        `insert into assistant_projections
+      const followUp = Boolean(
+        (input.metadata as Record<string, unknown> | null)?.['sourceKind'] === 'subagent-completion'
+      );
+      this.db
+        .prepare(
+          `insert into assistant_projections
          (id, pi_session_id, pi_message_id, utterance_id, topic_id, post_id, session_message_id, status,
           origin_json, projection_json, completion_payload_json, completion_state, attempt_count, created_at, updated_at)
          values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`
-      ).run(
-        projectionId, input.piSessionId, input.piMessageId, input.utteranceId, input.topicId, linkedPost?.id ?? null,
-        sessionMessageId, handoffs.length > 0 ? 'linking' : 'pending', JSON.stringify(input.origin ?? null),
-        JSON.stringify({
-          sessionId: input.sessionId, body: input.body, authorId: input.authorId,
-          parentPostId: input.parentPostId ?? null, metadata: input.metadata ?? null, followUp,
-        }), input.completionPayload == null ? null : JSON.stringify(input.completionPayload), now, now
-      );
+        )
+        .run(
+          projectionId,
+          input.piSessionId,
+          input.piMessageId,
+          input.utteranceId,
+          input.topicId,
+          linkedPost?.id ?? null,
+          sessionMessageId,
+          handoffs.length > 0 ? 'linking' : 'pending',
+          JSON.stringify(input.origin ?? null),
+          JSON.stringify({
+            sessionId: input.sessionId,
+            body: input.body,
+            authorId: input.authorId,
+            parentPostId: input.parentPostId ?? null,
+            metadata: input.metadata ?? null,
+            followUp,
+          }),
+          input.completionPayload == null ? null : JSON.stringify(input.completionPayload),
+          now,
+          now
+        );
       for (const handoff of handoffs) {
-        this.db.prepare(
-          `insert or ignore into attachment_handoffs
+        this.db
+          .prepare(
+            `insert or ignore into attachment_handoffs
            (id, projection_id, ref_entry_id, source_kind, source_ref_json, expected_sha256,
             expected_size_bytes, status, attempt_count, created_at, updated_at)
            values (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)`
-        ).run(
-          randomUUID(), projectionId, handoff.refEntryId, handoff.sourceKind, JSON.stringify(handoff.sourceRef),
-          handoff.expectedSha256 ?? null, handoff.expectedSizeBytes ?? null, now, now
-        );
+          )
+          .run(
+            randomUUID(),
+            projectionId,
+            handoff.refEntryId,
+            handoff.sourceKind,
+            JSON.stringify(handoff.sourceRef),
+            handoff.expectedSha256 ?? null,
+            handoff.expectedSizeBytes ?? null,
+            now,
+            now
+          );
       }
       return this.getAssistantProjection(input.piSessionId, input.piMessageId) as AssistantProjectionRow;
     })();
@@ -4842,40 +4972,47 @@ export class ForumStore {
   }
 
   listAttachmentHandoffsForProjection(projectionId: string): AttachmentHandoffRow[] {
-    return this.db.prepare(
-      'select * from attachment_handoffs where projection_id = ? order by rowid asc'
-    ).all(projectionId) as AttachmentHandoffRow[];
+    return this.db
+      .prepare('select * from attachment_handoffs where projection_id = ? order by rowid asc')
+      .all(projectionId) as AttachmentHandoffRow[];
   }
 
   listDueAttachmentHandoffs(limit = 20): AttachmentHandoffRow[] {
-    return this.db.prepare(
-      `select h.* from attachment_handoffs h
+    return this.db
+      .prepare(
+        `select h.* from attachment_handoffs h
        join assistant_projections p on p.id = h.projection_id
        where h.status in ('pending', 'failed') and (h.next_attempt_at is null or h.next_attempt_at <= ?)
        order by p.rowid asc, h.rowid asc limit ?`
-    ).all(nowIso(), limit) as AttachmentHandoffRow[];
+      )
+      .all(nowIso(), limit) as AttachmentHandoffRow[];
   }
 
   reclaimStaleAttachmentHandoffs(staleBefore: string, excludedClaimTokens: readonly string[] = []): number {
-    const exclusion = excludedClaimTokens.length > 0
-      ? ` and (claim_token is null or claim_token not in (${excludedClaimTokens.map(() => '?').join(', ')}))`
-      : '';
-    return this.db.prepare(
-      `update attachment_handoffs set status = 'failed', claim_token = null, next_attempt_at = null,
+    const exclusion =
+      excludedClaimTokens.length > 0
+        ? ` and (claim_token is null or claim_token not in (${excludedClaimTokens.map(() => '?').join(', ')}))`
+        : '';
+    return this.db
+      .prepare(
+        `update attachment_handoffs set status = 'failed', claim_token = null, next_attempt_at = null,
        error_message = coalesce(error_message, 'Recovered stale linking lease.'), updated_at = ?
        where status = 'linking' and updated_at <= ?${exclusion}`
-    ).run(nowIso(), staleBefore, ...excludedClaimTokens).changes;
+      )
+      .run(nowIso(), staleBefore, ...excludedClaimTokens).changes;
   }
 
   claimAttachmentHandoff(id: string): AttachmentHandoffRow | null {
     return this.db.transaction(() => {
       const token = randomUUID();
       const now = nowIso();
-      const changed = this.db.prepare(
-        `update attachment_handoffs set status = 'linking', claim_token = ?, attempt_count = attempt_count + 1,
+      const changed = this.db
+        .prepare(
+          `update attachment_handoffs set status = 'linking', claim_token = ?, attempt_count = attempt_count + 1,
          next_attempt_at = null, error_message = null, updated_at = ?
          where id = ? and status in ('pending', 'failed') and (next_attempt_at is null or next_attempt_at <= ?)`
-      ).run(token, now, id, now).changes;
+        )
+        .run(token, now, id, now).changes;
       if (changed !== 1) return null;
       const handoff = this.db.prepare('select * from attachment_handoffs where id = ?').get(id) as AttachmentHandoffRow;
       if (handoff.source_kind !== 'legacy-artifact') {
@@ -4887,12 +5024,12 @@ export class ForumStore {
         });
         if (pendingId) {
           const pending = this.getPendingAttachment(pendingId);
-          const existingReservation = this.db.prepare(
-            'select projection_id from pending_attachment_reservations where pending_attachment_id = ?'
-          ).get(pendingId) as { projection_id: string } | undefined;
+          const existingReservation = this.db
+            .prepare('select projection_id from pending_attachment_reservations where pending_attachment_id = ?')
+            .get(pendingId) as { projection_id: string } | undefined;
           const owner = pending
             ? this.reservePendingAttachment(handoff, pending)
-            : existingReservation?.projection_id ?? null;
+            : (existingReservation?.projection_id ?? null);
           if (owner && owner !== handoff.projection_id) {
             return this.markAttachmentReservationConflict(handoff, owner);
           }
@@ -4906,31 +5043,41 @@ export class ForumStore {
     const projection = this.getAssistantProjectionById(handoff.projection_id);
     if (!projection || projection.topic_id !== pending.topic_id) return '';
     const now = nowIso();
-    this.db.prepare(
-      `insert or ignore into pending_attachment_reservations
+    this.db
+      .prepare(
+        `insert or ignore into pending_attachment_reservations
        (pending_attachment_id, topic_id, projection_id, handoff_id, created_at, updated_at)
        values (?, ?, ?, ?, ?, ?)`
-    ).run(pending.id, pending.topic_id, handoff.projection_id, handoff.id, now, now);
-    const reservation = this.db.prepare(
-      'select projection_id from pending_attachment_reservations where pending_attachment_id = ?'
-    ).get(pending.id) as { projection_id: string } | undefined;
+      )
+      .run(pending.id, pending.topic_id, handoff.projection_id, handoff.id, now, now);
+    const reservation = this.db
+      .prepare('select projection_id from pending_attachment_reservations where pending_attachment_id = ?')
+      .get(pending.id) as { projection_id: string } | undefined;
     return reservation?.projection_id ?? '';
   }
 
-  private markAttachmentReservationConflict(handoff: AttachmentHandoffRow, ownerProjectionId: string): AttachmentHandoffRow {
+  private markAttachmentReservationConflict(
+    handoff: AttachmentHandoffRow,
+    ownerProjectionId: string
+  ): AttachmentHandoffRow {
     const projection = this.getAssistantProjectionById(handoff.projection_id);
     if (!projection) return handoff;
     const now = nowIso();
     const message = `Pending attachment is already reserved by assistant projection ${ownerProjectionId}.`;
-    this.db.prepare(
-      `update attachment_handoffs set status = 'needs_manual_review', claim_token = null, next_attempt_at = null,
+    this.db
+      .prepare(
+        `update attachment_handoffs set status = 'needs_manual_review', claim_token = null, next_attempt_at = null,
        error_message = ?, updated_at = ? where id = ?`
-    ).run(message.slice(0, 1000), now, handoff.id);
-    this.db.prepare(
-      "update assistant_projections set status = 'needs_manual_review', error_message = ?, updated_at = ? where id = ?"
-    ).run(message.slice(0, 1000), now, projection.id);
-    this.db.prepare(
-      `insert into pi_sync_anomalies
+      )
+      .run(message.slice(0, 1000), now, handoff.id);
+    this.db
+      .prepare(
+        "update assistant_projections set status = 'needs_manual_review', error_message = ?, updated_at = ? where id = ?"
+      )
+      .run(message.slice(0, 1000), now, projection.id);
+    this.db
+      .prepare(
+        `insert into pi_sync_anomalies
        (id, pi_session_id, pi_message_id, topic_id, session_id, role, status, reason, preview,
         first_seen_at, last_seen_at, last_checked_at, next_retry_at, retry_count, post_id, metadata_json)
        values (?, ?, ?, ?, (select id from sessions where topic_id = ? limit 1), 'assistant',
@@ -4938,28 +5085,43 @@ export class ForumStore {
        on conflict(pi_session_id, pi_message_id, reason) do update set
          status = 'needs_manual_review', last_seen_at = excluded.last_seen_at,
          preview = excluded.preview, post_id = excluded.post_id, metadata_json = excluded.metadata_json`
-    ).run(
-      randomUUID(), projection.pi_session_id, projection.pi_message_id, projection.topic_id, projection.topic_id,
-      message.slice(0, 500), now, now, now, projection.post_id,
-      JSON.stringify({ handoffId: handoff.id, ownerProjectionId, error: message.slice(0, 1000) })
-    );
+      )
+      .run(
+        randomUUID(),
+        projection.pi_session_id,
+        projection.pi_message_id,
+        projection.topic_id,
+        projection.topic_id,
+        message.slice(0, 500),
+        now,
+        now,
+        now,
+        projection.post_id,
+        JSON.stringify({ handoffId: handoff.id, ownerProjectionId, error: message.slice(0, 1000) })
+      );
     return this.db.prepare('select * from attachment_handoffs where id = ?').get(handoff.id) as AttachmentHandoffRow;
   }
 
-  completeAttachmentHandoff(id: string, claimToken: string, pending: PendingAttachmentRow): AttachmentHandoffRow | null {
+  completeAttachmentHandoff(
+    id: string,
+    claimToken: string,
+    pending: PendingAttachmentRow
+  ): AttachmentHandoffRow | null {
     return this.db.transaction(() => {
-      const handoff = this.db.prepare(
-        "select * from attachment_handoffs where id = ? and status = 'linking' and claim_token = ?"
-      ).get(id, claimToken) as AttachmentHandoffRow | undefined;
+      const handoff = this.db
+        .prepare("select * from attachment_handoffs where id = ? and status = 'linking' and claim_token = ?")
+        .get(id, claimToken) as AttachmentHandoffRow | undefined;
       if (!handoff) return null;
       const owner = this.reservePendingAttachment(handoff, pending);
       if (owner !== handoff.projection_id) return this.markAttachmentReservationConflict(handoff, owner || 'unknown');
       const now = nowIso();
       const sourceRef = JSON.parse(handoff.source_ref_json) as Record<string, unknown>;
-      this.db.prepare(
-        `update attachment_handoffs set status = 'linked', claim_token = null, next_attempt_at = null,
+      this.db
+        .prepare(
+          `update attachment_handoffs set status = 'linked', claim_token = null, next_attempt_at = null,
          error_message = null, source_ref_json = ?, updated_at = ? where id = ?`
-      ).run(JSON.stringify({ ...sourceRef, pendingAttachmentId: pending.id }), now, id);
+        )
+        .run(JSON.stringify({ ...sourceRef, pendingAttachmentId: pending.id }), now, id);
       return this.db.prepare('select * from attachment_handoffs where id = ?').get(id) as AttachmentHandoffRow;
     })();
   }
@@ -4971,22 +5133,27 @@ export class ForumStore {
     opts: { retryAt?: string | null; terminal?: boolean } = {}
   ): AttachmentHandoffRow | null {
     return this.db.transaction(() => {
-      const handoff = this.db.prepare(
-        "select * from attachment_handoffs where id = ? and status = 'linking' and claim_token = ?"
-      ).get(id, claimToken) as AttachmentHandoffRow | undefined;
+      const handoff = this.db
+        .prepare("select * from attachment_handoffs where id = ? and status = 'linking' and claim_token = ?")
+        .get(id, claimToken) as AttachmentHandoffRow | undefined;
       if (!handoff) return null;
-      const projection = this.db.prepare('select * from assistant_projections where id = ?').get(handoff.projection_id) as AssistantProjectionRow;
+      const projection = this.db
+        .prepare('select * from assistant_projections where id = ?')
+        .get(handoff.projection_id) as AssistantProjectionRow;
       const now = nowIso();
       const status = opts.terminal ? 'needs_manual_review' : 'failed';
-      this.db.prepare(
-        'update attachment_handoffs set status = ?, claim_token = null, next_attempt_at = ?, error_message = ?, updated_at = ? where id = ?'
-      ).run(status, opts.retryAt ?? null, message.slice(0, 1000), now, id);
-      this.db.prepare(
-        'update assistant_projections set status = ?, error_message = ?, updated_at = ? where id = ?'
-      ).run(opts.terminal ? 'needs_manual_review' : 'failed', message.slice(0, 1000), now, projection.id);
+      this.db
+        .prepare(
+          'update attachment_handoffs set status = ?, claim_token = null, next_attempt_at = ?, error_message = ?, updated_at = ? where id = ?'
+        )
+        .run(status, opts.retryAt ?? null, message.slice(0, 1000), now, id);
+      this.db
+        .prepare('update assistant_projections set status = ?, error_message = ?, updated_at = ? where id = ?')
+        .run(opts.terminal ? 'needs_manual_review' : 'failed', message.slice(0, 1000), now, projection.id);
       if (opts.terminal) {
-        this.db.prepare(
-          `insert into pi_sync_anomalies
+        this.db
+          .prepare(
+            `insert into pi_sync_anomalies
            (id, pi_session_id, pi_message_id, topic_id, session_id, role, status, reason, preview,
             first_seen_at, last_seen_at, last_checked_at, next_retry_at, retry_count, post_id, metadata_json)
            values (?, ?, ?, ?, (select id from sessions where topic_id = ? limit 1), 'assistant',
@@ -4994,11 +5161,20 @@ export class ForumStore {
            on conflict(pi_session_id, pi_message_id, reason) do update set
              status = 'needs_manual_review', last_seen_at = excluded.last_seen_at,
              preview = excluded.preview, post_id = excluded.post_id, metadata_json = excluded.metadata_json`
-        ).run(
-          randomUUID(), projection.pi_session_id, projection.pi_message_id, projection.topic_id, projection.topic_id,
-          message.slice(0, 500), now, now, now, projection.post_id,
-          JSON.stringify({ handoffId: id, error: message.slice(0, 1000) })
-        );
+          )
+          .run(
+            randomUUID(),
+            projection.pi_session_id,
+            projection.pi_message_id,
+            projection.topic_id,
+            projection.topic_id,
+            message.slice(0, 500),
+            now,
+            now,
+            now,
+            projection.post_id,
+            JSON.stringify({ handoffId: id, error: message.slice(0, 1000) })
+          );
       }
       return this.db.prepare('select * from attachment_handoffs where id = ?').get(id) as AttachmentHandoffRow;
     })();
@@ -5006,38 +5182,55 @@ export class ForumStore {
 
   finalizeAssistantProjection(projectionId: string): AssistantProjectionRow | null {
     const finalized = this.db.transaction(() => {
-      let projection = this.db.prepare('select * from assistant_projections where id = ?').get(projectionId) as AssistantProjectionRow | undefined;
+      let projection = this.db.prepare('select * from assistant_projections where id = ?').get(projectionId) as
+        AssistantProjectionRow | undefined;
       if (!projection) return null;
       if (projection.status === 'projected') return projection;
-      const earlierIncomplete = this.db.prepare(
-        `select 1 from assistant_projections earlier
+      const earlierIncomplete = this.db
+        .prepare(
+          `select 1 from assistant_projections earlier
          where earlier.pi_session_id = ? and earlier.topic_id = ?
            and earlier.rowid < (select rowid from assistant_projections where id = ?)
            and earlier.status in ('pending', 'linking', 'failed')
          limit 1`
-      ).get(projection.pi_session_id, projection.topic_id, projectionId);
+        )
+        .get(projection.pi_session_id, projection.topic_id, projectionId);
       // rowid is the durable canonical arrival order. Terminal manual-review
       // anomalies are intentionally gaps: they remain visible to operators but
       // cannot deadlock every later canonical outward item in the session.
       if (earlierIncomplete) return projection;
-      const remaining = this.db.prepare(
-        "select count(*) as count from attachment_handoffs where projection_id = ? and status <> 'linked'"
-      ).get(projectionId) as { count: number };
+      const remaining = this.db
+        .prepare("select count(*) as count from attachment_handoffs where projection_id = ? and status <> 'linked'")
+        .get(projectionId) as { count: number };
       if (remaining.count > 0) return projection;
       const payload = JSON.parse(projection.projection_json) as {
-        sessionId: string; body: string; authorId: string; parentPostId: string | null;
-        metadata: unknown; followUp?: boolean;
+        sessionId: string;
+        body: string;
+        authorId: string;
+        parentPostId: string | null;
+        metadata: unknown;
+        followUp?: boolean;
       };
       const now = nowIso();
       let postId = projection.post_id;
       if (!postId) {
         postId = randomUUID();
-        this.db.prepare(
-          `insert into posts
+        this.db
+          .prepare(
+            `insert into posts
            (id, topic_id, tenant_id, parent_post_id, author_id, body, source_message_id, silent, follow_up, created_at, edited_at, deleted_at)
            values (?, ?, null, ?, ?, ?, ?, 0, ?, ?, null, null)`
-        ).run(postId, projection.topic_id, payload.parentPostId, payload.authorId, payload.body,
-          projection.session_message_id, payload.followUp ? 1 : 0, now);
+          )
+          .run(
+            postId,
+            projection.topic_id,
+            payload.parentPostId,
+            payload.authorId,
+            payload.body,
+            projection.session_message_id,
+            payload.followUp ? 1 : 0,
+            now
+          );
       } else if (payload.followUp) {
         this.db.prepare('update posts set follow_up = 1 where id = ?').run(postId);
       }
@@ -5048,20 +5241,25 @@ export class ForumStore {
         const pendingId = typeof ref['pendingAttachmentId'] === 'string' ? ref['pendingAttachmentId'] : null;
         const pending = pendingId ? this.getPendingAttachment(pendingId) : null;
         if (!pending) throw new Error(`linked attachment handoff ${handoff.id} lost source custody`);
-        const reservation = this.db.prepare(
-          'select projection_id from pending_attachment_reservations where pending_attachment_id = ?'
-        ).get(pending.id) as { projection_id: string } | undefined;
+        const reservation = this.db
+          .prepare('select projection_id from pending_attachment_reservations where pending_attachment_id = ?')
+          .get(pending.id) as { projection_id: string } | undefined;
         if (reservation?.projection_id !== projectionId) {
           throw new Error(`linked attachment handoff ${handoff.id} does not own source custody`);
         }
-        this.db.prepare(
-          `insert into attachments (id, post_id, filename, mime_type, size_bytes, storage_path, sha256, created_at)
-           values (?, ?, ?, ?, ?, ?, ?, ?)`
-        ).run(randomUUID(), postId, pending.filename, pending.mime_type, pending.size_bytes,
-          pending.storage_path, pending.sha256, now);
+        this.createAttachment({
+          postId,
+          filename: pending.filename,
+          mimeType: pending.mime_type,
+          sizeBytes: pending.size_bytes,
+          storagePath: pending.storage_path,
+          sha256: pending.sha256,
+          ownerIdentityId: null,
+        });
         pendingIds.push(pending.id);
       }
-      for (const pendingId of new Set(pendingIds)) this.db.prepare('delete from pending_attachments where id = ?').run(pendingId);
+      for (const pendingId of new Set(pendingIds))
+        this.db.prepare('delete from pending_attachments where id = ?').run(pendingId);
       this.createPiMessageLink({
         piSessionId: projection.pi_session_id,
         piMessageId: projection.pi_message_id,
@@ -5070,13 +5268,17 @@ export class ForumStore {
         role: 'assistant',
         metadata: payload.metadata,
       });
-      this.db.prepare(
-        `update assistant_projections set post_id = ?, status = 'projected', claim_token = null,
+      this.db
+        .prepare(
+          `update assistant_projections set post_id = ?, status = 'projected', claim_token = null,
          next_attempt_at = null, error_message = null,
          completion_state = case when completion_payload_json is null then 0 else 1 end,
          completion_claim_token = null, updated_at = ? where id = ?`
-      ).run(postId, now, projectionId);
-      projection = this.db.prepare('select * from assistant_projections where id = ?').get(projectionId) as AssistantProjectionRow;
+        )
+        .run(postId, now, projectionId);
+      projection = this.db
+        .prepare('select * from assistant_projections where id = ?')
+        .get(projectionId) as AssistantProjectionRow;
       return projection;
     })();
     if (finalized?.status === 'projected') this.invalidateTopicStatsCache(finalized.topic_id);
@@ -5084,25 +5286,31 @@ export class ForumStore {
   }
 
   listIncompleteAssistantProjections(): AssistantProjectionRow[] {
-    return this.db.prepare(
-      "select * from assistant_projections where status in ('pending', 'linking', 'failed') order by rowid asc"
-    ).all() as AssistantProjectionRow[];
+    return this.db
+      .prepare(
+        "select * from assistant_projections where status in ('pending', 'linking', 'failed') order by rowid asc"
+      )
+      .all() as AssistantProjectionRow[];
   }
 
   reclaimStaleAssistantProjectionCompletions(staleBefore: string, excludedClaimTokens: readonly string[] = []): number {
-    const exclusion = excludedClaimTokens.length > 0
-      ? ` and (completion_claim_token is null or completion_claim_token not in (${excludedClaimTokens.map(() => '?').join(', ')}))`
-      : '';
-    return this.db.prepare(
-      `update assistant_projections set completion_state = 1, completion_claim_token = null, updated_at = ?
+    const exclusion =
+      excludedClaimTokens.length > 0
+        ? ` and (completion_claim_token is null or completion_claim_token not in (${excludedClaimTokens.map(() => '?').join(', ')}))`
+        : '';
+    return this.db
+      .prepare(
+        `update assistant_projections set completion_state = 1, completion_claim_token = null, updated_at = ?
        where completion_state = 2 and updated_at <= ?${exclusion}`
-    ).run(nowIso(), staleBefore, ...excludedClaimTokens).changes;
+      )
+      .run(nowIso(), staleBefore, ...excludedClaimTokens).changes;
   }
 
   claimAssistantProjectionCompletion(id: string): AssistantProjectionRow | null {
     const token = randomUUID();
-    const changed = this.db.prepare(
-      `update assistant_projections set completion_state = 2, completion_claim_token = ?, updated_at = ?
+    const changed = this.db
+      .prepare(
+        `update assistant_projections set completion_state = 2, completion_claim_token = ?, updated_at = ?
        where id = ? and status = 'projected' and completion_state = 1
          and not exists (
            select 1 from assistant_projections earlier
@@ -5111,33 +5319,45 @@ export class ForumStore {
              and earlier.rowid < assistant_projections.rowid
              and earlier.status = 'projected' and earlier.completion_state in (1, 2)
          )`
-    ).run(token, nowIso(), id).changes;
+      )
+      .run(token, nowIso(), id).changes;
     if (changed !== 1) return null;
     return this.getAssistantProjectionById(id);
   }
 
   completeAssistantProjectionCompletion(id: string, claimToken: string): boolean {
-    return this.db.prepare(
-      `update assistant_projections set completion_state = 0, completion_claim_token = null, updated_at = ?
+    return (
+      this.db
+        .prepare(
+          `update assistant_projections set completion_state = 0, completion_claim_token = null, updated_at = ?
        where id = ? and completion_state = 2 and completion_claim_token = ?`
-    ).run(nowIso(), id, claimToken).changes === 1;
+        )
+        .run(nowIso(), id, claimToken).changes === 1
+    );
   }
 
   releaseAssistantProjectionCompletion(id: string, claimToken: string): void {
-    this.db.prepare(
-      `update assistant_projections set completion_state = 1, completion_claim_token = null, updated_at = ?
+    this.db
+      .prepare(
+        `update assistant_projections set completion_state = 1, completion_claim_token = null, updated_at = ?
        where id = ? and completion_state = 2 and completion_claim_token = ?`
-    ).run(nowIso(), id, claimToken);
+      )
+      .run(nowIso(), id, claimToken);
   }
 
   listPendingAssistantProjectionCompletions(): AssistantProjectionRow[] {
-    return this.db.prepare(
-      "select * from assistant_projections where status = 'projected' and completion_state = 1 order by rowid asc"
-    ).all() as AssistantProjectionRow[];
+    return this.db
+      .prepare(
+        "select * from assistant_projections where status = 'projected' and completion_state = 1 order by rowid asc"
+      )
+      .all() as AssistantProjectionRow[];
   }
 
   getAssistantProjectionById(id: string): AssistantProjectionRow | null {
-    return (this.db.prepare('select * from assistant_projections where id = ?').get(id) as AssistantProjectionRow | undefined) ?? null;
+    return (
+      (this.db.prepare('select * from assistant_projections where id = ?').get(id) as
+        AssistantProjectionRow | undefined) ?? null
+    );
   }
 
   // Attachment management
@@ -5171,9 +5391,9 @@ export class ForumStore {
   }
 
   deletePendingAttachment(id: string): void {
-    const reservation = this.db.prepare(
-      'select 1 from pending_attachment_reservations where pending_attachment_id = ?'
-    ).get(id);
+    const reservation = this.db
+      .prepare('select 1 from pending_attachment_reservations where pending_attachment_id = ?')
+      .get(id);
     if (reservation) return;
     this.db.prepare('delete from pending_attachments where id = ?').run(id);
   }
@@ -5187,101 +5407,605 @@ export class ForumStore {
       select 1 from pending_attachment_reservations r
       where r.pending_attachment_id = pending_attachments.id
     )`;
-    const rows = this.db
-      .prepare(`select * from pending_attachments where expires_at <= ? and ${protectedPredicate}`)
-      .all(now) as PendingAttachmentRow[];
-    this.db.prepare(`delete from pending_attachments where expires_at <= ? and ${protectedPredicate}`).run(now);
-    return rows;
+    return this.db.transaction(() => {
+      const rows = this.db
+        .prepare(`select * from pending_attachments where expires_at <= ? and ${protectedPredicate}`)
+        .all(now) as PendingAttachmentRow[];
+      const enqueue = this.db.prepare(
+        `insert into file_deletion_queue (storage_path, reason, created_at) values (?, 'expired_pending_attachment', ?)
+         on conflict(storage_path) do nothing`
+      );
+      for (const row of rows) enqueue.run(row.storage_path, now);
+      this.db.prepare(`delete from pending_attachments where expires_at <= ? and ${protectedPredicate}`).run(now);
+      return rows;
+    })();
   }
 
   createAttachment(input: CreateAttachmentInput): AttachmentRow {
     const id = randomUUID();
     const now = nowIso();
-    this.db
-      .prepare(
-        'insert into attachments (id, post_id, filename, mime_type, size_bytes, storage_path, sha256, created_at) values (?, ?, ?, ?, ?, ?, ?, ?)'
-      )
-      .run(
-        id,
-        input.postId,
-        input.filename,
-        input.mimeType,
-        input.sizeBytes,
-        input.storagePath,
-        input.sha256 ?? null,
-        now
-      );
-    return this.getAttachment(id) as AttachmentRow;
+    return this.db.transaction(() => {
+      let file =
+        input.ownerIdentityId && input.sha256
+          ? this.findUserFileByHash(input.ownerIdentityId, input.sha256, input.sizeBytes, [
+              'ready',
+              'missing',
+              'gc_pending',
+            ])
+          : null;
+      if (file?.blob_id) {
+        const blob = this.db.prepare('select * from file_blobs where id = ?').get(file.blob_id) as
+          FileBlobRow | undefined;
+        if (blob?.state === 'gc_pending') {
+          this.db.prepare("update file_blobs set state = 'ready', updated_at = ? where id = ?").run(now, blob.id);
+        } else if (blob?.state === 'missing') {
+          const replacementBlobId = randomUUID();
+          this.db
+            .prepare(
+              `insert into file_blobs (id, owner_identity_id, sha256, size_bytes, storage_path, state, created_at, updated_at)
+               values (?, ?, ?, ?, ?, 'ready', ?, ?)`
+            )
+            .run(
+              replacementBlobId,
+              input.ownerIdentityId,
+              input.sha256 ?? null,
+              input.sizeBytes,
+              input.storagePath,
+              now,
+              now
+            );
+          this.db.prepare('update user_files set blob_id = ? where blob_id = ?').run(replacementBlobId, blob.id);
+          this.db.prepare("update file_blobs set state = 'gc_pending', updated_at = ? where id = ?").run(now, blob.id);
+          file = this.getUserFile(file.id);
+        }
+      }
+      if (!file && input.ownerIdentityId == null && input.dedupeSystemByPath) {
+        file =
+          (this.db
+            .prepare(
+              `select uf.* from user_files uf join file_blobs b on b.id = uf.blob_id
+               where uf.identity_id is null and b.storage_path = ? and b.state in ('ready', 'gc_pending') limit 1`
+            )
+            .get(input.storagePath) as UserFileRow | undefined) ?? null;
+        if (file?.blob_id) {
+          this.db
+            .prepare("update file_blobs set state = 'ready', updated_at = ? where id = ? and state = 'gc_pending'")
+            .run(now, file.blob_id);
+        }
+      }
+      if (!file) {
+        if (
+          input.ownerIdentityId &&
+          input.maxOwnerBytes !== undefined &&
+          this.getIdentityBlobBytes(input.ownerIdentityId) + input.sizeBytes > input.maxOwnerBytes
+        ) {
+          throw new Error('file quota exceeded');
+        }
+        const blobId = randomUUID();
+        const fileId = randomUUID();
+        this.db
+          .prepare(
+            `insert into file_blobs (id, owner_identity_id, sha256, size_bytes, storage_path, state, created_at, updated_at)
+           values (?, ?, ?, ?, ?, 'ready', ?, ?)`
+          )
+          .run(
+            blobId,
+            input.ownerIdentityId ?? null,
+            input.sha256 ?? null,
+            input.sizeBytes,
+            input.storagePath,
+            now,
+            now
+          );
+        this.db
+          .prepare(
+            `insert into user_files
+           (id, identity_id, blob_id, filename, mime_type, size_bytes, standalone, visibility, expires_at, revision, created_at, updated_at)
+           values (?, ?, ?, ?, ?, ?, 0, null, null, 1, ?, ?)`
+          )
+          .run(
+            fileId,
+            input.ownerIdentityId ?? null,
+            blobId,
+            input.filename,
+            input.mimeType,
+            input.sizeBytes,
+            now,
+            now
+          );
+        file = this.getUserFile(fileId);
+      }
+      const existingAssociation = this.db
+        .prepare('select id from attachments where file_id = ? and post_id = ? and deleted_at is null limit 1')
+        .get(file!.id, input.postId) as { id: string } | undefined;
+      if (existingAssociation) return this.getAttachment(existingAssociation.id)!;
+      this.db
+        .prepare(
+          `insert into attachments
+         (id, file_id, post_id, filename, mime_type, size_bytes, storage_path, sha256, created_at, deleted_at, delete_reason)
+         values (?, ?, ?, ?, ?, ?, null, null, ?, null, null)`
+        )
+        .run(id, file!.id, input.postId, input.filename, input.mimeType, input.sizeBytes, now);
+      return this.getAttachment(id)!;
+    })();
   }
 
   getAttachment(attachmentId: string): AttachmentRow | null {
-    const row = this.db.prepare('select * from attachments where id = ?').get(attachmentId) as
-      AttachmentRow | undefined;
-    return row ?? null;
+    return (
+      (this.db
+        .prepare(
+          `select a.id, a.file_id, a.post_id, a.filename, a.mime_type, a.size_bytes,
+        coalesce(b.storage_path, a.storage_path) as storage_path, coalesce(b.sha256, a.sha256) as sha256,
+        a.created_at, a.deleted_at, a.delete_reason
+       from attachments a left join user_files f on f.id = a.file_id left join file_blobs b on b.id = f.blob_id
+       where a.id = ?`
+        )
+        .get(attachmentId) as AttachmentRow | undefined) ?? null
+    );
+  }
+
+  getAttachmentBlob(attachmentId: string): FileBlobRow | null {
+    return (
+      (this.db
+        .prepare(
+          'select b.* from attachments a join user_files f on f.id = a.file_id join file_blobs b on b.id = f.blob_id where a.id = ?'
+        )
+        .get(attachmentId) as FileBlobRow | undefined) ?? null
+    );
   }
 
   listAttachmentsByPost(postId: string): AttachmentRow[] {
     return this.db
-      .prepare('select * from attachments where post_id = ? order by created_at asc')
+      .prepare(
+        `select a.id, a.file_id, a.post_id, a.filename, a.mime_type, a.size_bytes,
+        coalesce(b.storage_path, a.storage_path) as storage_path, coalesce(b.sha256, a.sha256) as sha256,
+        a.created_at, a.deleted_at, a.delete_reason
+       from attachments a left join user_files f on f.id = a.file_id left join file_blobs b on b.id = f.blob_id
+       where a.post_id = ? order by a.created_at asc`
+      )
       .all(postId) as AttachmentRow[];
   }
 
   listAttachmentsByPostIds(postIds: string[]): Map<string, AttachmentRow[]> {
-    const attachmentsByPost = new Map<string, AttachmentRow[]>();
-    if (postIds.length === 0) {
-      return attachmentsByPost;
-    }
-    const placeholders = postIds.map(() => '?').join(', ');
+    const result = new Map<string, AttachmentRow[]>();
+    if (!postIds.length) return result;
     const rows = this.db
-      .prepare(`select * from attachments where post_id in (${placeholders}) order by created_at asc`)
+      .prepare(
+        `select a.id, a.file_id, a.post_id, a.filename, a.mime_type, a.size_bytes,
+        coalesce(b.storage_path, a.storage_path) as storage_path, coalesce(b.sha256, a.sha256) as sha256,
+        a.created_at, a.deleted_at, a.delete_reason
+       from attachments a left join user_files f on f.id = a.file_id left join file_blobs b on b.id = f.blob_id
+       where a.post_id in (${postIds.map(() => '?').join(', ')}) order by a.created_at asc`
+      )
       .all(...postIds) as AttachmentRow[];
-    for (const row of rows) {
-      const existing = attachmentsByPost.get(row.post_id);
-      if (existing) {
-        existing.push(row);
-      } else {
-        attachmentsByPost.set(row.post_id, [row]);
-      }
-    }
-    return attachmentsByPost;
+    for (const row of rows) result.set(row.post_id, [...(result.get(row.post_id) ?? []), row]);
+    return result;
   }
 
-  deleteAttachment(attachmentId: string): void {
-    this.db.prepare('delete from attachments where id = ?').run(attachmentId);
+  deleteAttachment(attachmentId: string, reason = 'removed'): void {
+    this.db
+      .prepare(
+        'update attachments set deleted_at = coalesce(deleted_at, ?), delete_reason = coalesce(delete_reason, ?) where id = ?'
+      )
+      .run(nowIso(), reason, attachmentId);
+    this.markUnreferencedBlobsForGc();
+  }
+
+  detachPostAttachments(postId: string, reason: string): void {
+    this.db
+      .prepare(
+        'update attachments set deleted_at = coalesce(deleted_at, ?), delete_reason = coalesce(delete_reason, ?) where post_id = ?'
+      )
+      .run(nowIso(), reason, postId);
+    this.markUnreferencedBlobsForGc();
   }
 
   getAttachmentByStoragePath(storagePath: string): AttachmentRow | null {
-    const row = this.db.prepare('select * from attachments where storage_path = ? limit 1').get(storagePath) as
-      AttachmentRow | undefined;
-    return row ?? null;
+    return (
+      (this.db
+        .prepare(
+          `select a.* from attachments a join user_files f on f.id = a.file_id join file_blobs b on b.id = f.blob_id
+       where b.storage_path = ? limit 1`
+        )
+        .get(storagePath) as AttachmentRow | undefined) ?? null
+    );
   }
 
   // User file management
 
+  findUserFileByHash(
+    identityId: string,
+    sha256: string,
+    sizeBytes: number,
+    states: readonly ('ready' | 'missing' | 'gc_pending')[] = ['ready']
+  ): UserFileRow | null {
+    const placeholders = states.map(() => '?').join(', ');
+    return (
+      (this.db
+        .prepare(
+          `select f.* from user_files f join file_blobs b on b.id = f.blob_id
+       where f.identity_id = ? and b.sha256 = ? and b.size_bytes = ? and b.state in (${placeholders})
+       order by f.created_at asc, f.id asc limit 1`
+        )
+        .get(identityId, sha256, sizeBytes, ...states) as UserFileRow | undefined) ?? null
+    );
+  }
+
   createUserFile(input: CreateUserFileInput): UserFileRow {
-    const id = randomUUID();
     const now = nowIso();
-    this.db
-      .prepare(
-        'insert into user_files (id, identity_id, filename, mime_type, size_bytes, storage_path, created_at) values (?, ?, ?, ?, ?, ?, ?)'
-      )
-      .run(id, input.identityId, input.filename, input.mimeType, input.sizeBytes, input.storagePath, now);
-    return this.getUserFile(id) as UserFileRow;
+    return this.db.transaction(() => {
+      const existing = input.sha256
+        ? this.findUserFileByHash(input.identityId, input.sha256, input.sizeBytes, ['ready', 'missing', 'gc_pending'])
+        : null;
+      if (existing) {
+        const existingBlob = existing.blob_id
+          ? (this.db.prepare('select * from file_blobs where id = ?').get(existing.blob_id) as FileBlobRow | undefined)
+          : undefined;
+        if (existingBlob?.state === 'gc_pending') {
+          this.db
+            .prepare("update file_blobs set state = 'ready', updated_at = ? where id = ?")
+            .run(now, existingBlob.id);
+        } else if (existingBlob?.state === 'missing') {
+          const replacementBlobId = randomUUID();
+          this.db
+            .prepare(
+              `insert into file_blobs (id, owner_identity_id, sha256, size_bytes, storage_path, state, created_at, updated_at)
+               values (?, ?, ?, ?, ?, 'ready', ?, ?)`
+            )
+            .run(
+              replacementBlobId,
+              input.identityId,
+              input.sha256 ?? null,
+              input.sizeBytes,
+              input.storagePath,
+              now,
+              now
+            );
+          this.db
+            .prepare('update user_files set blob_id = ? where blob_id = ?')
+            .run(replacementBlobId, existingBlob.id);
+          this.db
+            .prepare("update file_blobs set state = 'gc_pending', updated_at = ? where id = ?")
+            .run(now, existingBlob.id);
+        }
+        this.db
+          .prepare(
+            `update user_files set standalone = 1, visibility = ?, expires_at = ?,
+             filename = ?, mime_type = ?, size_bytes = ?, revision = revision + 1, updated_at = ? where id = ?`
+          )
+          .run(
+            input.visibility ?? 'private',
+            input.expiresAt ?? null,
+            input.filename,
+            input.mimeType,
+            input.sizeBytes,
+            now,
+            existing.id
+          );
+        return this.getUserFile(existing.id)!;
+      }
+      if (
+        input.maxOwnerBytes !== undefined &&
+        this.getIdentityBlobBytes(input.identityId) + input.sizeBytes > input.maxOwnerBytes
+      ) {
+        throw new Error('file quota exceeded');
+      }
+      const id = randomUUID();
+      const blobId = randomUUID();
+      this.db
+        .prepare(
+          `insert into file_blobs (id, owner_identity_id, sha256, size_bytes, storage_path, state, created_at, updated_at)
+         values (?, ?, ?, ?, ?, 'ready', ?, ?)`
+        )
+        .run(blobId, input.identityId, input.sha256 ?? null, input.sizeBytes, input.storagePath, now, now);
+      this.db
+        .prepare(
+          `insert into user_files
+         (id, identity_id, blob_id, filename, mime_type, size_bytes, standalone, visibility, expires_at, revision, created_at, updated_at)
+         values (?, ?, ?, ?, ?, ?, 1, ?, ?, 1, ?, ?)`
+        )
+        .run(
+          id,
+          input.identityId,
+          blobId,
+          input.filename,
+          input.mimeType,
+          input.sizeBytes,
+          input.visibility ?? 'private',
+          input.expiresAt ?? null,
+          now,
+          now
+        );
+      return this.getUserFile(id)!;
+    })();
   }
 
   getUserFile(fileId: string): UserFileRow | null {
-    const row = this.db.prepare('select * from user_files where id = ?').get(fileId) as UserFileRow | undefined;
-    return row ?? null;
+    return (
+      (this.db.prepare('select * from user_files where id = ?').get(fileId) as UserFileRow | undefined) ??
+      (this.db
+        .prepare('select f.* from user_file_aliases a join user_files f on f.id = a.file_id where a.alias_id = ?')
+        .get(fileId) as UserFileRow | undefined) ??
+      null
+    );
   }
 
-  listUserFilesByIdentity(identityId: string): UserFileRow[] {
+  getUserFileBlob(fileId: string): FileBlobRow | null {
+    const file = this.getUserFile(fileId);
+    if (!file?.blob_id) return null;
+    return (
+      (this.db.prepare('select * from file_blobs where id = ?').get(file.blob_id) as FileBlobRow | undefined) ?? null
+    );
+  }
+
+  hasBlobAtStoragePath(storagePath: string): boolean {
+    return Boolean(this.db.prepare('select 1 from file_blobs where storage_path = ? limit 1').get(storagePath));
+  }
+
+  hasPendingAttachmentAtStoragePath(storagePath: string): boolean {
+    return Boolean(
+      this.db.prepare('select 1 from pending_attachments where storage_path = ? limit 1').get(storagePath)
+    );
+  }
+
+  getIdentityBlobBytes(identityId: string): number {
+    const row = this.db
+      .prepare(
+        "select coalesce(sum(size_bytes), 0) as total from file_blobs where owner_identity_id = ? and state in ('ready','staging')"
+      )
+      .get(identityId) as { total: number };
+    return row.total;
+  }
+
+  listUserFilesByIdentity(
+    identityId: string,
+    filter: 'standalone' | 'all' | 'post_attachments' = 'all',
+    page?: { beforeCreatedAt: string; beforeId: string; limit: number }
+  ): UserFileRow[] {
+    const predicate =
+      filter === 'standalone'
+        ? 'and f.standalone = 1'
+        : filter === 'post_attachments'
+          ? 'and exists (select 1 from attachments a where a.file_id = f.id and a.deleted_at is null)'
+          : 'and (f.standalone = 1 or exists (select 1 from attachments a where a.file_id = f.id and a.deleted_at is null))';
+    const cursor = page ? 'and (f.created_at < ? or (f.created_at = ? and f.id < ?))' : '';
+    const limit = page?.limit ?? -1;
+    const args: Array<string | number> = [identityId];
+    if (page) args.push(page.beforeCreatedAt, page.beforeCreatedAt, page.beforeId);
+    args.push(limit);
     return this.db
-      .prepare('select * from user_files where identity_id = ? order by created_at desc')
-      .all(identityId) as UserFileRow[];
+      .prepare(
+        `select f.* from user_files f where f.identity_id = ? ${predicate} ${cursor}
+         order by f.created_at desc, f.id desc limit ?`
+      )
+      .all(...args) as UserFileRow[];
   }
 
-  deleteUserFile(fileId: string): void {
-    this.db.prepare('delete from user_files where id = ?').run(fileId);
+  listFileAssociations(
+    fileId: string
+  ): Array<AttachmentRow & { topic_id: string; topic_title: string; post_number: number }> {
+    const resolved = this.getUserFile(fileId);
+    if (!resolved) return [];
+    return this.db
+      .prepare(
+        `select a.*, p.topic_id, t.title as topic_title,
+        (select count(*) from posts p2 where p2.topic_id = p.topic_id and p2.rowid <= p.rowid) as post_number
+       from attachments a join posts p on p.id = a.post_id join topics t on t.id = p.topic_id
+       where a.file_id = ? order by a.created_at asc`
+      )
+      .all(resolved.id) as Array<AttachmentRow & { topic_id: string; topic_title: string; post_number: number }>;
+  }
+
+  updateUserFile(
+    fileId: string,
+    identityId: string,
+    expectedRevision: number,
+    visibility: 'private' | 'members' | 'public',
+    expiresAt: string | null | undefined
+  ): UserFileRow | 'missing' | 'conflict' {
+    const file = this.getUserFile(fileId);
+    if (!file || file.identity_id !== identityId || !file.standalone) return 'missing';
+    if (file.revision !== expectedRevision) return 'conflict';
+    this.db
+      .prepare(
+        `update user_files set visibility = ?, expires_at = case when ? then expires_at else ? end,
+         revision = revision + 1, updated_at = ? where id = ?`
+      )
+      .run(visibility, expiresAt === undefined ? 1 : 0, expiresAt ?? null, nowIso(), file.id);
+    return this.getUserFile(file.id)!;
+  }
+
+  deleteUserFile(fileId: string, identityId?: string): void {
+    const file = this.getUserFile(fileId);
+    if (!file) return;
+    const suffix = identityId ? ' and identity_id = ?' : '';
+    this.db
+      .prepare(
+        `update user_files set standalone = 0, visibility = null, expires_at = null,
+      revision = revision + 1, updated_at = ? where id = ?${suffix}`
+      )
+      .run(nowIso(), file.id, ...(identityId ? [identityId] : []));
+    this.markUnreferencedBlobsForGc();
+  }
+
+  expireUserFiles(now: string = nowIso()): number {
+    const changed = this.db
+      .prepare(
+        `update user_files set standalone = 0, visibility = null, expires_at = null, revision = revision + 1, updated_at = ?
+       where standalone = 1 and expires_at is not null and expires_at <= ?`
+      )
+      .run(now, now).changes;
+    this.markUnreferencedBlobsForGc();
+    return changed;
+  }
+
+  markUnreferencedBlobsForGc(): number {
+    return this.db
+      .prepare(
+        `update file_blobs set state = 'gc_pending', updated_at = ? where state in ('ready','missing') and not exists (
+        select 1 from user_files f where f.blob_id = file_blobs.id and (f.standalone = 1 or exists (
+          select 1 from attachments a where a.file_id = f.id and a.deleted_at is null
+        ))
+      )`
+      )
+      .run(nowIso()).changes;
+  }
+
+  listReadyBlobs(limit = 50): FileBlobRow[] {
+    return this.db
+      .prepare("select * from file_blobs where state = 'ready' order by updated_at limit ?")
+      .all(limit) as FileBlobRow[];
+  }
+
+  touchReadyBlob(blobId: string, now: string = nowIso()): void {
+    this.db.prepare("update file_blobs set updated_at = ? where id = ? and state = 'ready'").run(now, blobId);
+  }
+
+  listQueuedFileDeletions(limit = 50): Array<{ storage_path: string; reason: string; attempt_count: number }> {
+    return this.db
+      .prepare('select storage_path, reason, attempt_count from file_deletion_queue order by created_at limit ?')
+      .all(limit) as Array<{ storage_path: string; reason: string; attempt_count: number }>;
+  }
+
+  completeQueuedFileDeletion(storagePath: string): void {
+    this.db.prepare('delete from file_deletion_queue where storage_path = ?').run(storagePath);
+  }
+
+  failQueuedFileDeletion(storagePath: string, error: string): void {
+    this.db
+      .prepare(
+        'update file_deletion_queue set attempt_count = attempt_count + 1, last_error = ? where storage_path = ?'
+      )
+      .run(error.slice(0, 1000), storagePath);
+  }
+
+  listUnverifiedBlobs(limit = 10): FileBlobRow[] {
+    return this.db
+      .prepare("select * from file_blobs where state = 'ready' and sha256 is null order by updated_at limit ?")
+      .all(limit) as FileBlobRow[];
+  }
+
+  verifyBlob(blobId: string, sha256: string, actualSize: number): void {
+    this.db.transaction(() => {
+      const blob = this.db.prepare('select * from file_blobs where id = ?').get(blobId) as FileBlobRow | undefined;
+      if (!blob || blob.state !== 'ready') return;
+      if (blob.size_bytes !== actualSize) {
+        this.markBlobMissing(blobId);
+        return;
+      }
+      const duplicate = blob.owner_identity_id
+        ? (this.db
+            .prepare(
+              "select * from file_blobs where id <> ? and owner_identity_id = ? and sha256 = ? and size_bytes = ? and state = 'ready' limit 1"
+            )
+            .get(blobId, blob.owner_identity_id, sha256, actualSize) as FileBlobRow | undefined)
+        : undefined;
+      if (duplicate) {
+        const files = this.db
+          .prepare('select * from user_files where blob_id in (?, ?) order by standalone desc, created_at asc, id asc')
+          .all(duplicate.id, blobId) as UserFileRow[];
+        const canonical = files[0];
+        if (!canonical) return;
+        const standaloneFiles = files.filter((file) => Boolean(file.standalone));
+        const rank = (visibility: string | null): number =>
+          visibility === 'public' ? 3 : visibility === 'members' ? 2 : 1;
+        const effectiveVisibility =
+          standaloneFiles.map((file) => file.visibility).sort((a, b) => rank(b) - rank(a))[0] ?? null;
+        const effectiveExpiry = standaloneFiles.some((file) => file.expires_at === null)
+          ? null
+          : (standaloneFiles
+              .map((file) => file.expires_at)
+              .filter((value): value is string => Boolean(value))
+              .sort()
+              .at(-1) ?? null);
+        this.db
+          .prepare(
+            `update user_files set blob_id = ?, standalone = ?, visibility = ?, expires_at = ?,
+             revision = revision + 1, updated_at = ? where id = ?`
+          )
+          .run(
+            duplicate.id,
+            standaloneFiles.length > 0 ? 1 : 0,
+            standaloneFiles.length > 0 ? effectiveVisibility : null,
+            standaloneFiles.length > 0 ? effectiveExpiry : null,
+            nowIso(),
+            canonical.id
+          );
+        for (const loser of files.slice(1)) {
+          this.db.prepare('update attachments set file_id = ? where file_id = ?').run(canonical.id, loser.id);
+          this.db.prepare('update user_file_aliases set file_id = ? where file_id = ?').run(canonical.id, loser.id);
+          this.db
+            .prepare(
+              'insert into user_file_aliases (alias_id, file_id, created_at) values (?, ?, ?) on conflict(alias_id) do update set file_id = excluded.file_id'
+            )
+            .run(loser.id, canonical.id, nowIso());
+          this.db.prepare('delete from user_files where id = ?').run(loser.id);
+        }
+        this.db
+          .prepare("update file_blobs set state = 'gc_pending', updated_at = ? where id = ?")
+          .run(nowIso(), blobId);
+      } else {
+        this.db.prepare('update file_blobs set sha256 = ?, updated_at = ? where id = ?').run(sha256, nowIso(), blobId);
+      }
+    })();
+  }
+
+  listGcPendingBlobs(limit = 50): FileBlobRow[] {
+    return this.db
+      .prepare("select * from file_blobs where state = 'gc_pending' order by updated_at limit ?")
+      .all(limit) as FileBlobRow[];
+  }
+
+  claimBlobForGc(blobId: string): string | null {
+    return this.db.transaction(() => {
+      const blob = this.db.prepare("select * from file_blobs where id = ? and state = 'gc_pending'").get(blobId) as
+        FileBlobRow | undefined;
+      if (!blob) return null;
+      const referenced = this.db
+        .prepare(
+          `select 1 from user_files f where f.blob_id = ? and (f.standalone = 1 or exists (
+             select 1 from attachments a where a.file_id = f.id and a.deleted_at is null
+           )) limit 1`
+        )
+        .get(blobId);
+      if (referenced) {
+        this.db.prepare("update file_blobs set state = 'ready', updated_at = ? where id = ?").run(nowIso(), blobId);
+        return null;
+      }
+      this.db
+        .prepare(
+          `insert into file_deletion_queue (storage_path, reason, created_at)
+           values (?, 'unreferenced_blob', ?)
+           on conflict(storage_path) do nothing`
+        )
+        .run(blob.storage_path, nowIso());
+      this.db.prepare('update user_files set blob_id = null where blob_id = ?').run(blobId);
+      this.db.prepare('delete from file_blobs where id = ?').run(blobId);
+      return blob.storage_path;
+    })();
+  }
+
+  restoreBlob(input: { blobId: string; storagePath: string; sha256: string | null; sizeBytes: number }): void {
+    this.db.transaction(() => {
+      const existing = this.db.prepare('select storage_path from file_blobs where id = ?').get(input.blobId) as
+        { storage_path: string } | undefined;
+      if (!existing) return;
+      this.db
+        .prepare(
+          `update file_blobs set storage_path = ?, sha256 = ?, size_bytes = ?, state = 'ready', updated_at = ?
+           where id = ?`
+        )
+        .run(input.storagePath, input.sha256, input.sizeBytes, nowIso(), input.blobId);
+      // A repaired shared path must not remain eligible for an older queued
+      // deletion from an interrupted cleanup cycle.
+      this.db
+        .prepare('delete from file_deletion_queue where storage_path in (?, ?)')
+        .run(existing.storage_path, input.storagePath);
+    })();
+  }
+
+  markBlobMissing(blobId: string): void {
+    this.db.prepare("update file_blobs set state = 'missing', updated_at = ? where id = ?").run(nowIso(), blobId);
   }
 
   // Reaction management

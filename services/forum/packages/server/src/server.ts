@@ -76,6 +76,7 @@ import {
   MONIKA_PI_SYNC_ENABLED,
   MONIKA_PI_SYNC_INTERVAL_MS,
   PASSWORD_LOGIN_ENABLED,
+  PENDING_ATTACHMENTS_DIR,
   PORT,
   PROMPT_ENHANCER_ENABLED,
   REASONING_EFFORT,
@@ -93,6 +94,7 @@ import { AnalyticsService } from './services/analyticsService';
 import { AutoRunDirector } from './services/autoRunDirector';
 import { CompactionService } from './services/compactionService';
 import { getEmailService } from './services/emailService';
+import { FileStorageMaintenance } from './services/fileStorageMaintenance';
 import { ForkService } from './services/forkService';
 import { PiSessionSyncService } from './services/piSessionSyncService';
 import { PostDispatchService } from './services/postDispatchService';
@@ -387,6 +389,18 @@ if (!existsSync(AVATARS_DIR)) {
 if (!existsSync(USER_FILES_DIR)) {
   mkdirSync(USER_FILES_DIR, { recursive: true });
 }
+const fileStorageMaintenance = new FileStorageMaintenance(
+  store,
+  UPLOADS_DIR,
+  USER_FILES_DIR,
+  UPLOAD_TEMP_DIR,
+  PENDING_ATTACHMENTS_DIR
+);
+void fileStorageMaintenance.run().catch((error) => console.error('[files] startup maintenance failed', error));
+const fileStorageCleanupTimer = setInterval(() => {
+  void fileStorageMaintenance.run().catch((error) => console.error('[files] maintenance failed', error));
+}, 60_000);
+fileStorageCleanupTimer.unref();
 // Expose only generated avatars from upload storage, plus the built Vue app.
 // Other uploads remain behind authenticated routes. Hidden files are denied in
 // both roots by the shared production registration.

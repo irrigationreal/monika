@@ -522,6 +522,7 @@ export interface PendingAttachmentRow {
 
 export interface AttachmentRow {
   id: string;
+  file_id: string | null;
   post_id: string;
   filename: string;
   mime_type: string;
@@ -529,6 +530,19 @@ export interface AttachmentRow {
   storage_path: string;
   sha256: string | null;
   created_at: string;
+  deleted_at: string | null;
+  delete_reason: string | null;
+}
+
+export interface FileBlobRow {
+  id: string;
+  owner_identity_id: string | null;
+  sha256: string | null;
+  size_bytes: number;
+  storage_path: string;
+  state: 'staging' | 'ready' | 'gc_pending' | 'missing';
+  created_at: string;
+  updated_at: string;
 }
 
 export interface AssistantProjectionRow {
@@ -618,12 +632,17 @@ export interface MessageTemplateRow {
 
 export interface UserFileRow {
   id: string;
-  identity_id: string;
+  identity_id: string | null;
+  blob_id: string | null;
   filename: string;
   mime_type: string;
   size_bytes: number;
-  storage_path: string;
+  standalone: number;
+  visibility: 'private' | 'members' | 'public' | null;
+  expires_at: string | null;
+  revision: number;
   created_at: string;
+  updated_at: string;
 }
 
 export interface ReactionRow {

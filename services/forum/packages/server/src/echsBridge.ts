@@ -2,16 +2,17 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { normalizedOriginKey } from '@irrigationreal/codex-forum-core';
+
 import { EchsClient } from './echsClient';
 import { InMemoryMessageTamperLayer } from './messageTamper';
+import { renderPersonaIndexMarkdown, safePersonaKey } from './personaPrompt';
 import { AssistantProjectionService } from './services/assistantProjectionService';
 import { AttachmentHandoffService } from './services/attachmentHandoffService';
-import { renderPersonaIndexMarkdown, safePersonaKey } from './personaPrompt';
 import { buildTtsStoragePath, generateTtsMp3 } from './tts';
 import { truncateText } from './utils/automation';
 
-import { normalizedOriginKey } from '@irrigationreal/codex-forum-core';
-
+import type { RobotStopResultDto } from '@irrigationreal/codex-forum-contracts';
 import type {
   MessageTamperContext,
   MessageTamperLayer,
@@ -19,11 +20,16 @@ import type {
   MessageTamperTrailEntry,
   UtteranceOrigin,
 } from '@irrigationreal/codex-forum-core';
-import type { RobotStopResultDto } from '@irrigationreal/codex-forum-contracts';
 
 import type { AssistantProjectionRow } from './db';
+import type {
+  EchsCancellationResult,
+  EchsConversationRecord,
+  EchsEvent,
+  EchsSubagentRetention,
+  EchsSubagentWorkload,
+} from './echsClient';
 import type { AssistantProjectionInput } from './services/assistantProjectionService';
-import type { EchsCancellationResult, EchsConversationRecord, EchsEvent, EchsSubagentRetention, EchsSubagentWorkload } from './echsClient';
 import type { ForumStore } from './store';
 import type { StreamBusInterface } from './streamBus';
 
@@ -700,24 +706,30 @@ export class EchsBridge {
     await this.client.acknowledgeForumFork(operationId, childSessionId);
   }
 
-  async compactTopicConversation(topicId: string, opts: {
-    operationId: string;
-    expectedLeafId: string;
-    customInstructions?: string | null;
-  }): Promise<Record<string, unknown>> {
+  async compactTopicConversation(
+    topicId: string,
+    opts: {
+      operationId: string;
+      expectedLeafId: string;
+      customInstructions?: string | null;
+    }
+  ): Promise<Record<string, unknown>> {
     const opened = await this.openTopicConversation(topicId);
     const result = await this.client.compactConversation(opened.conversationId, opts);
     void this.emitContext(topicId);
     return result;
   }
 
-  async createLinkedHandoffConversation(topicId: string, opts: {
-    parentPiSessionId?: string | null;
-    parentPiSessionPath?: string | null;
-    cwd: string;
-    model?: string | null;
-    reasoningEffort?: string | null;
-  }): Promise<EchsConversationRecord> {
+  async createLinkedHandoffConversation(
+    topicId: string,
+    opts: {
+      parentPiSessionId?: string | null;
+      parentPiSessionPath?: string | null;
+      cwd: string;
+      model?: string | null;
+      reasoningEffort?: string | null;
+    }
+  ): Promise<EchsConversationRecord> {
     const session = this.store.ensureSession({ topicId });
     const conversation = await this.client.createConversationRecord({
       cwd: opts.cwd || this.config.workDir,
@@ -826,7 +838,10 @@ export class EchsBridge {
         }
         this.emitState(link.topic_id);
       } catch (error) {
-        console.warn(`[ECHS] cancellation reconcile failed topicId=${link.topic_id}:`, error instanceof Error ? error.message : error);
+        console.warn(
+          `[ECHS] cancellation reconcile failed topicId=${link.topic_id}:`,
+          error instanceof Error ? error.message : error
+        );
         this.store.setRobotActivity(link.topic_id, 'uncertain');
         this.emitState(link.topic_id);
       }
@@ -850,7 +865,8 @@ export class EchsBridge {
         );
         this.store.clearSessionAgentThread(session.id);
         const current = this.store.getRobotState(session.topic_id)?.activity;
-        if (!['stopping', 'stopped', 'uncertain'].includes(current ?? '')) this.store.setRobotActivity(session.topic_id, 'idle');
+        if (!['stopping', 'stopped', 'uncertain'].includes(current ?? ''))
+          this.store.setRobotActivity(session.topic_id, 'idle');
         this.emitState(session.topic_id);
         missing += 1;
         continue;
@@ -909,7 +925,8 @@ export class EchsBridge {
       }
       if (!conversationActive) {
         const current = this.store.getRobotState(session.topic_id)?.activity;
-        if (!['stopping', 'stopped', 'uncertain'].includes(current ?? '')) this.store.setRobotActivity(session.topic_id, 'idle');
+        if (!['stopping', 'stopped', 'uncertain'].includes(current ?? ''))
+          this.store.setRobotActivity(session.topic_id, 'idle');
         this.emitState(session.topic_id);
       }
       reattached += 1;
@@ -937,7 +954,11 @@ export class EchsBridge {
       sessionId: session.id,
       body,
       parentPostId,
-      options: { ...(options ?? {}), dispatchId: randomUUID(), generation: this.store.getTopicDispatchGeneration(topicId) },
+      options: {
+        ...(options ?? {}),
+        dispatchId: randomUUID(),
+        generation: this.store.getTopicDispatchGeneration(topicId),
+      },
       queuedAt: new Date().toISOString(),
     };
     if (this.shouldQueueTurn()) {
@@ -960,7 +981,12 @@ export class EchsBridge {
       sessionId: session.id,
       body,
       parentPostId,
-      options: { ...(options ?? {}), mode: 'steer', dispatchId: randomUUID(), generation: this.store.getTopicDispatchGeneration(topicId) },
+      options: {
+        ...(options ?? {}),
+        mode: 'steer',
+        dispatchId: randomUUID(),
+        generation: this.store.getTopicDispatchGeneration(topicId),
+      },
       queuedAt: new Date().toISOString(),
     };
     if (this.shouldQueueTurn()) {
@@ -1062,22 +1088,48 @@ export class EchsBridge {
     setTimeout(() => this.locallyResetCancellationOperations.delete(operationId), 60_000).unref?.();
     let result: EchsCancellationResult;
     try {
-      if (canonical) result = await this.client.cancelPiSession(canonical, { operationId, generation: fence.generation });
+      if (canonical)
+        result = await this.client.cancelPiSession(canonical, { operationId, generation: fence.generation });
       else if (threadId) result = await this.client.interruptConversation(threadId, fence.generation, operationId);
       else if (!priorActivity || ['idle', 'waiting', 'stopped'].includes(priorActivity)) {
-        result = { ok: true, operation_id: operationId, generation: fence.generation, state: 'stopped',
-          targets: 0, unresolved_count: 0, effects_unknown_count: 0, error_count: 0, message: 'Robot execution is stopped.' };
+        result = {
+          ok: true,
+          operation_id: operationId,
+          generation: fence.generation,
+          state: 'stopped',
+          targets: 0,
+          unresolved_count: 0,
+          effects_unknown_count: 0,
+          error_count: 0,
+          message: 'Robot execution is stopped.',
+        };
       } else {
-        result = { ok: false, operation_id: operationId, generation: fence.generation, state: 'uncertain', targets: 0,
-          unresolved_count: 0, effects_unknown_count: 0, error_count: 1,
-          message: 'Termination is uncertain; retry or inspect the administrative workload.' };
+        result = {
+          ok: false,
+          operation_id: operationId,
+          generation: fence.generation,
+          state: 'uncertain',
+          targets: 0,
+          unresolved_count: 0,
+          effects_unknown_count: 0,
+          error_count: 1,
+          message: 'Termination is uncertain; retry or inspect the administrative workload.',
+        };
       }
     } catch (err) {
       // The forum fence is already durable. A deadline or transport failure is
       // therefore an uncertain cancellation, never an all-or-nothing failure.
-      result = { ok: false, operation_id: operationId, generation: fence.generation, state: 'uncertain',
-        targets: 0, unresolved_count: 0, effects_unknown_count: 0, error_count: 1,
-        message: 'Termination is uncertain; retry or inspect the administrative workload.' };
+      result = {
+        ok: false,
+        operation_id: operationId,
+        generation: fence.generation,
+        state: 'uncertain',
+        targets: 0,
+        unresolved_count: 0,
+        effects_unknown_count: 0,
+        error_count: 1,
+        message: 'Termination is uncertain; retry or inspect the administrative workload.',
+      };
     }
     // Only the current generation may publish terminal projection state. An
     // older out-of-order response is observational and cannot thaw the fence.
@@ -1094,11 +1146,12 @@ export class EchsBridge {
       unresolvedCount: result.unresolved_count,
       effectsUnknownCount: result.effects_unknown_count,
       errorCount: result.error_count,
-      message: result.state === 'stopped'
-        ? `Stopped robot; cancelled ${localCancelled} local and ${fence.cancelled} durable queued dispatch(es).`
-        : result.state === 'stopping'
-          ? 'Stop accepted; waiting for local execution to become terminal.'
-          : 'Stop is fenced but local termination is uncertain; retry Stop or inspect the Robot Dashboard.',
+      message:
+        result.state === 'stopped'
+          ? `Stopped robot; cancelled ${localCancelled} local and ${fence.cancelled} durable queued dispatch(es).`
+          : result.state === 'stopping'
+            ? 'Stop accepted; waiting for local execution to become terminal.'
+            : 'Stop is fenced but local termination is uncertain; retry Stop or inspect the Robot Dashboard.',
     };
   }
 
@@ -1191,7 +1244,8 @@ export class EchsBridge {
                 `[ECHS] healthCheck: ECHS idle but bridge active threadId=${threadId} topicId=${ctx.topicId}, resyncing`
               );
               const current = this.store.getRobotState(ctx.topicId)?.activity;
-              if (!['stopping', 'stopped', 'uncertain'].includes(current ?? '')) this.store.setRobotActivity(ctx.topicId, 'idle');
+              if (!['stopping', 'stopped', 'uncertain'].includes(current ?? ''))
+                this.store.setRobotActivity(ctx.topicId, 'idle');
               ctx.currentTurnId = null;
               ctx.turnStartedAt = null;
               this.store.clearActiveTurnOrigin?.(ctx.topicId);
@@ -1305,7 +1359,8 @@ export class EchsBridge {
           console.warn('Failed to dispatch queued turn:', err instanceof Error ? err.message : err);
           const state = this.store.getRobotState(next.topicId);
           if (state) {
-            if (!['stopping', 'stopped', 'uncertain'].includes(state.activity)) this.store.setRobotActivity(next.topicId, 'idle');
+            if (!['stopping', 'stopped', 'uncertain'].includes(state.activity))
+              this.store.setRobotActivity(next.topicId, 'idle');
             this.emitState(next.topicId);
           }
         }
@@ -1321,20 +1376,18 @@ export class EchsBridge {
     }
   }
 
-  private replaceAssistantBackfillTimer(
-    threadId: string,
-    delayMs: number,
-    backfill: () => void | Promise<void>
-  ): void {
+  private replaceAssistantBackfillTimer(threadId: string, delayMs: number, backfill: () => void | Promise<void>): void {
     if (this.stopped) return;
     const existing = this.assistantBackfillTimers.get(threadId);
     if (existing) clearTimeout(existing);
     const timer = setTimeout(() => {
       if (this.stopped || this.assistantBackfillTimers.get(threadId) !== timer) return;
       this.assistantBackfillTimers.delete(threadId);
-      Promise.resolve().then(backfill).catch((error: unknown) => {
-        console.error('[ECHS] assistant backfill failed:', error instanceof Error ? error.message : error);
-      });
+      Promise.resolve()
+        .then(backfill)
+        .catch((error: unknown) => {
+          console.error('[ECHS] assistant backfill failed:', error instanceof Error ? error.message : error);
+        });
     }, delayMs);
     timer.unref?.();
     this.assistantBackfillTimers.set(threadId, timer);
@@ -1383,8 +1436,10 @@ export class EchsBridge {
       const { topicId, body, parentPostId, options } = turn;
       const dispatchId = options?.dispatchId;
       const generation = options?.generation;
-      if (!dispatchId || generation === undefined) throw new Error('forum dispatch identity and generation are required');
-      if (!this.store.isTopicDispatchGenerationCurrent(topicId, generation)) throw new Error('stale_dispatch_generation');
+      if (!dispatchId || generation === undefined)
+        throw new Error('forum dispatch identity and generation are required');
+      if (!this.store.isTopicDispatchGenerationCurrent(topicId, generation))
+        throw new Error('stale_dispatch_generation');
       const session = this.store.getSession(turn.sessionId) ?? this.store.ensureSession({ topicId });
       const piSessionLink = this.store.getPiSessionLinkByTopic(topicId);
       const model = options?.model ?? this.config.model;
@@ -1627,18 +1682,21 @@ export class EchsBridge {
       if (triggerPost?.silent) triggerFlags.push('silent');
       if (triggerPost?.deleted_at) triggerFlags.push('deleted');
       const triggerAttachments = triggerPost
-        ? this.store.listAttachmentsByPost(triggerPost.id).map((attachment) => ({
-            id: attachment.id,
-            postId: attachment.post_id,
-            filename: attachment.filename,
-            mimeType: attachment.mime_type,
-            sizeBytes: attachment.size_bytes,
-            storagePath: attachment.storage_path,
-            sha256: attachment.sha256 ?? null,
-            url: this.config.apiBaseUrl?.trim()
-              ? `${this.config.apiBaseUrl.trim().replace(/\/$/, '')}/attachments/${attachment.id}`
-              : `/attachments/${attachment.id}`,
-          }))
+        ? this.store
+            .listAttachmentsByPost(triggerPost.id)
+            .filter((attachment) => !attachment.deleted_at)
+            .map((attachment) => ({
+              id: attachment.id,
+              postId: attachment.post_id,
+              filename: attachment.filename,
+              mimeType: attachment.mime_type,
+              sizeBytes: attachment.size_bytes,
+              storagePath: attachment.storage_path,
+              sha256: attachment.sha256 ?? null,
+              url: this.config.apiBaseUrl?.trim()
+                ? `${this.config.apiBaseUrl.trim().replace(/\/$/, '')}/attachments/${attachment.id}`
+                : `/attachments/${attachment.id}`,
+            }))
         : [];
 
       const forumTurnMetadata = [
@@ -1777,11 +1835,16 @@ export class EchsBridge {
           generation,
           configure,
           attachments: triggerAttachments,
-          provenance: parentPostId ? {
-            origin: 'forum', topicId, postId: parentPostId, version: 2,
-            utteranceIds: options?.contributorPostIds ?? [parentPostId],
-            executionOrigins: options?.origin ? [options.origin] : [],
-          } : undefined,
+          provenance: parentPostId
+            ? {
+                origin: 'forum',
+                topicId,
+                postId: parentPostId,
+                version: 2,
+                utteranceIds: options?.contributorPostIds ?? [parentPostId],
+                executionOrigins: options?.origin ? [options.origin] : [],
+              }
+            : undefined,
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -1807,11 +1870,16 @@ export class EchsBridge {
             generation,
             configure,
             attachments: triggerAttachments,
-            provenance: parentPostId ? {
-              origin: 'forum', topicId, postId: parentPostId, version: 2,
-              utteranceIds: options?.contributorPostIds ?? [parentPostId],
-              executionOrigins: options?.origin ? [options.origin] : [],
-            } : undefined,
+            provenance: parentPostId
+              ? {
+                  origin: 'forum',
+                  topicId,
+                  postId: parentPostId,
+                  version: 2,
+                  utteranceIds: options?.contributorPostIds ?? [parentPostId],
+                  executionOrigins: options?.origin ? [options.origin] : [],
+                }
+              : undefined,
           });
         } else {
           throw err;
@@ -1835,13 +1903,16 @@ export class EchsBridge {
       // An interrupt may advance the durable generation while enqueue is
       // awaiting agentd. Never let the superseded completion restore local
       // activity or turn bookkeeping after the interrupt published idle.
-      if (!this.publishAcceptedDispatchState({
-        topicId,
-        sessionId: session.id,
-        generation,
-        model,
-        reasoningEffort,
-      })) return;
+      if (
+        !this.publishAcceptedDispatchState({
+          topicId,
+          sessionId: session.id,
+          generation,
+          model,
+          reasoningEffort,
+        })
+      )
+        return;
 
       const messageId = enqueueResult.messageId;
       void this.emitContext(topicId);
@@ -1943,9 +2014,10 @@ export class EchsBridge {
       case 'turn_started': {
         const data = event.data as any;
         ctx.currentTurnId = data?.turn_id ?? data?.turnId ?? data?.message_id ?? data?.messageId ?? null;
-        const boundOrigin = typeof ctx.currentTurnId === 'string'
-          ? this.store.recordActiveTurnOriginFromDispatch?.(ctx.topicId, ctx.currentTurnId) ?? null
-          : null;
+        const boundOrigin =
+          typeof ctx.currentTurnId === 'string'
+            ? (this.store.recordActiveTurnOriginFromDispatch?.(ctx.topicId, ctx.currentTurnId) ?? null)
+            : null;
         if (!boundOrigin) this.store.clearActiveTurnOrigin?.(ctx.topicId);
         const priorBackfill = this.assistantBackfillTimers.get(threadId);
         if (priorBackfill) clearTimeout(priorBackfill);
@@ -2109,7 +2181,9 @@ export class EchsBridge {
           const assistant = normalizeCanonicalAssistantItem(data, ctx.topicId, ctx.currentContinuation);
           if (assistant) {
             if (!assistant.piMessageId) {
-              console.warn(`[ECHS] assistant item missing canonical Pi message id topic=${ctx.topicId} thread=${threadId}`);
+              console.warn(
+                `[ECHS] assistant item missing canonical Pi message id topic=${ctx.topicId} thread=${threadId}`
+              );
               break;
             }
             this.enqueueAssistantProjection(threadId, async () => {
@@ -2164,11 +2238,16 @@ export class EchsBridge {
         break;
       }
       case 'turn_interrupted': {
-        const interruptionData = event.data && typeof event.data === 'object' && !Array.isArray(event.data)
-          ? event.data as Record<string, unknown> : {};
+        const interruptionData =
+          event.data && typeof event.data === 'object' && !Array.isArray(event.data)
+            ? (event.data as Record<string, unknown>)
+            : {};
         const generation = interruptionData['generation'];
-        if (typeof generation !== 'number' || !Number.isSafeInteger(generation)
-          || !this.store.isTopicDispatchGenerationCurrent(ctx.topicId, generation)) {
+        if (
+          typeof generation !== 'number' ||
+          !Number.isSafeInteger(generation) ||
+          !this.store.isTopicDispatchGenerationCurrent(ctx.topicId, generation)
+        ) {
           break;
         }
         ctx.currentTurnId = null;
@@ -2176,10 +2255,14 @@ export class EchsBridge {
         ctx.currentContinuation = null;
         this.store.clearActiveTurnOrigin?.(ctx.topicId, generation);
         const cancellation = interruptionData['cancellation'];
-        const cancellationState = cancellation && typeof cancellation === 'object' && !Array.isArray(cancellation)
-          ? (cancellation as Record<string, unknown>)['state'] : null;
-        const interruptedActivity = cancellationState === 'stopping' || cancellationState === 'stopped' || cancellationState === 'uncertain'
-          ? cancellationState : 'uncertain';
+        const cancellationState =
+          cancellation && typeof cancellation === 'object' && !Array.isArray(cancellation)
+            ? (cancellation as Record<string, unknown>)['state']
+            : null;
+        const interruptedActivity =
+          cancellationState === 'stopping' || cancellationState === 'stopped' || cancellationState === 'uncertain'
+            ? cancellationState
+            : 'uncertain';
         const rawOperationId = interruptionData['operation_id'];
         const operationId = typeof rawOperationId === 'string' ? rawOperationId : null;
         if (!operationId || !this.locallyResetCancellationOperations.delete(operationId)) {
@@ -2564,14 +2647,15 @@ export class EchsBridge {
         model: state.model,
         reasoningEffort: state.reasoning_effort,
         lastUpdatedAt: state.last_updated_at,
-        lastTurnError: state.last_error_message && state.last_error_at
-          ? {
-              message: state.last_error_message,
-              at: state.last_error_at,
-              postId: state.last_error_post_id ?? null,
-              turnId: state.last_error_turn_id ?? null,
-            }
-          : null,
+        lastTurnError:
+          state.last_error_message && state.last_error_at
+            ? {
+                message: state.last_error_message,
+                at: state.last_error_at,
+                postId: state.last_error_post_id ?? null,
+                turnId: state.last_error_turn_id ?? null,
+              }
+            : null,
         currentPlan: plan
           ? {
               id: plan.id,
@@ -2634,8 +2718,7 @@ export class EchsBridge {
     const topicId = typeof payload['topicId'] === 'string' ? payload['topicId'] : projection.topic_id;
     const sessionId = typeof payload['sessionId'] === 'string' ? payload['sessionId'] : null;
     const threadId = typeof payload['threadId'] === 'string' ? payload['threadId'] : null;
-    const trail = Array.isArray(payload['tamperTrail'])
-      ? payload['tamperTrail'] as MessageTamperTrailEntry[] : [];
+    const trail = Array.isArray(payload['tamperTrail']) ? (payload['tamperTrail'] as MessageTamperTrailEntry[]) : [];
     if (sessionId && trail.length > 0) {
       this.persistTamperTrail({
         topicId,
@@ -2712,7 +2795,9 @@ export class EchsBridge {
         const assistant = normalizeCanonicalAssistantItem(historyEvent['data'], ctx.topicId, null);
         if (!assistant) continue;
         if (!assistant.piMessageId) {
-          console.warn(`[ECHS] assistant history item missing canonical Pi message id topic=${ctx.topicId} thread=${threadId}`);
+          console.warn(
+            `[ECHS] assistant history item missing canonical Pi message id topic=${ctx.topicId} thread=${threadId}`
+          );
           continue;
         }
         try {
@@ -2876,16 +2961,19 @@ export class EchsBridge {
       const flags: string[] = [];
       if (post.silent) flags.push('silent');
       if (post.deleted_at) flags.push('deleted');
-      const attachments = this.store.listAttachmentsByPost(post.id).map((attachment) => ({
-        id: attachment.id,
-        filename: attachment.filename,
-        postId: attachment.post_id,
-        mimeType: attachment.mime_type,
-        sizeBytes: attachment.size_bytes,
-        storagePath: attachment.storage_path,
-        sha256: attachment.sha256 ?? null,
-        url: apiBase ? `${apiBase}/attachments/${attachment.id}` : `/attachments/${attachment.id}`,
-      }));
+      const attachments = this.store
+        .listAttachmentsByPost(post.id)
+        .filter((attachment) => !attachment.deleted_at)
+        .map((attachment) => ({
+          id: attachment.id,
+          filename: attachment.filename,
+          postId: attachment.post_id,
+          mimeType: attachment.mime_type,
+          sizeBytes: attachment.size_bytes,
+          storagePath: attachment.storage_path,
+          sha256: attachment.sha256 ?? null,
+          url: apiBase ? `${apiBase}/attachments/${attachment.id}` : `/attachments/${attachment.id}`,
+        }));
       lines.push(
         formatForumPostEnvelope({
           postId: post.id,
@@ -2921,9 +3009,7 @@ type CanonicalAssistantItem = {
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
 }
 
 function nonEmptyId(...values: unknown[]): string | null {
@@ -2947,27 +3033,31 @@ function normalizeCanonicalAssistantItem(
 
   const text = extractAssistantText(item);
   const piMessageId = nonEmptyId(
-    data['pi_message_id'], data['piMessageId'], item['pi_message_id'], item['piMessageId'], item['id']
+    data['pi_message_id'],
+    data['piMessageId'],
+    item['pi_message_id'],
+    item['piMessageId'],
+    item['id']
   );
-  const utteranceId = nonEmptyId(
-    item['utterance_id'], item['utteranceId'], data['utterance_id'], data['utteranceId']
-  ) ?? piMessageId;
-  const rawOrigins = item['execution_origins'] ?? item['executionOrigins']
-    ?? data['execution_origins'] ?? data['executionOrigins'];
+  const utteranceId =
+    nonEmptyId(item['utterance_id'], item['utteranceId'], data['utterance_id'], data['utteranceId']) ?? piMessageId;
+  const rawOrigins =
+    item['execution_origins'] ?? item['executionOrigins'] ?? data['execution_origins'] ?? data['executionOrigins'];
   const origins = Array.isArray(rawOrigins)
     ? rawOrigins.map(asRecord).filter((origin): origin is Record<string, unknown> => origin !== null)
     : [];
-  const origin = origins.find((candidate) =>
-    candidate['topicId'] === topicId || candidate['topic_id'] === topicId
-  ) ?? origins[0] ?? null;
+  const origin =
+    origins.find((candidate) => candidate['topicId'] === topicId || candidate['topic_id'] === topicId) ??
+    origins[0] ??
+    null;
 
   return {
     text,
     piMessageId,
     utteranceId,
     continuation: [data, item, item['metadata'], continuationFallback],
-    attachmentRefs: item['attachment_refs'] ?? item['attachmentRefs']
-      ?? data['attachment_refs'] ?? data['attachmentRefs'] ?? [],
+    attachmentRefs:
+      item['attachment_refs'] ?? item['attachmentRefs'] ?? data['attachment_refs'] ?? data['attachmentRefs'] ?? [],
     origin,
   };
 }

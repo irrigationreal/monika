@@ -16,8 +16,8 @@ import { useForumState } from '../composables/useForumState';
 import { useMarkdown } from '../composables/useMarkdown';
 import { applyTemplateToTextarea } from '../composables/useMessageTemplateInsertion';
 import { api } from '../lib/apiClient';
-import { copyTextToClipboard } from '../lib/clipboard';
 import { createClientOperationId } from '../lib/clientOperationId';
+import { copyTextToClipboard } from '../lib/clipboard';
 import { parseReasoningSteps } from '../lib/reasoning';
 import { getToolMiniModel, toolKindIcon, traceToneForKind } from '../lib/toolMiniView';
 import { toolHumanTitle } from '../lib/toolTimeline';
@@ -507,12 +507,12 @@ async function submitCompaction(): Promise<void> {
         if (refreshed) clearCompactionIntent(topicId);
         compactionError.value =
           refreshed && compactionFence.value
-          ? ''
-          : refreshed
-            ? err instanceof Error
-              ? err.message
-              : 'Compaction request conflicted with current topic state.'
-            : 'Compaction request conflicted; checking the authoritative server status.';
+            ? ''
+            : refreshed
+              ? err instanceof Error
+                ? err.message
+                : 'Compaction request conflicted with current topic state.'
+              : 'Compaction request conflicted; checking the authoritative server status.';
       } else {
         clearCompactionIntent(topicId);
         compactionOperation.value = null;
@@ -3269,342 +3269,350 @@ onUnmounted(() => {
       </div>
 
       <template v-for="(post, idx) in threadSearchQuery ? filteredPosts : state.currentPosts.value" :key="post.id">
-      <div
-        class="vb-post"
-        :id="String(postNumberForPostId(post.id) ?? postNumberForIndex(idx))"
-        :class="{ 'vb-post--has-operational-events': operationalEventsAfter(post.id).length > 0 }"
-      >
-        <div class="vb-post-header">
-          <div>● {{ state.formatDate(post.createdAt) }}</div>
-          <div class="vb-post-header-right">
-            <a
-              class="vb-post-anchor"
-              :href="`#${postNumberForPostId(post.id) ?? postNumberForIndex(idx)}`"
-              :title="`Jump to post #${postNumberForPostId(post.id) ?? postNumberForIndex(idx)}`"
-              >#{{ postNumberForPostId(post.id) ?? postNumberForIndex(idx) }}</a
-            >
-            <span v-if="post.silent" class="vb-post-silent-pill">[Silent]</span>
+        <div
+          class="vb-post"
+          :id="String(postNumberForPostId(post.id) ?? postNumberForIndex(idx))"
+          :class="{ 'vb-post--has-operational-events': operationalEventsAfter(post.id).length > 0 }"
+        >
+          <div class="vb-post-header">
+            <div>● {{ state.formatDate(post.createdAt) }}</div>
+            <div class="vb-post-header-right">
+              <a
+                class="vb-post-anchor"
+                :href="`#${postNumberForPostId(post.id) ?? postNumberForIndex(idx)}`"
+                :title="`Jump to post #${postNumberForPostId(post.id) ?? postNumberForIndex(idx)}`"
+                >#{{ postNumberForPostId(post.id) ?? postNumberForIndex(idx) }}</a
+              >
+              <span v-if="post.silent" class="vb-post-silent-pill">[Silent]</span>
+            </div>
           </div>
-        </div>
-        <a
+          <a
             v-if="
               state.isRobotPost(post) && post.followUp && post.parentPostId && postNumberForPostId(post.parentPostId)
             "
-          class="vb-follow-up-origin"
-          :href="`#${postNumberForPostId(post.parentPostId)}`"
+            class="vb-follow-up-origin"
+            :href="`#${postNumberForPostId(post.parentPostId)}`"
             >Background follow-up to #{{ postNumberForPostId(post.parentPostId) }}</a
           >
-        <div
-          class="vb-post-body"
-          :class="{ 'vb-post-body--multipost': isRobotOrSystemPost(post) && hasMultipostSegments(post.body) }"
-        >
-          <template v-if="isRobotOrSystemPost(post) && hasMultipostSegments(post.body)">
-            <div class="vb-post-content vb-post-content--multipost">
-              <PostTracePanel
-                v-if="state.isRobotPost(post) && hasTraceForPost(post)"
-                :reasoningSteps="planStepsForPost(post)"
-                :reasoningFallbackHtml="
+          <div
+            class="vb-post-body"
+            :class="{ 'vb-post-body--multipost': isRobotOrSystemPost(post) && hasMultipostSegments(post.body) }"
+          >
+            <template v-if="isRobotOrSystemPost(post) && hasMultipostSegments(post.body)">
+              <div class="vb-post-content vb-post-content--multipost">
+                <PostTracePanel
+                  v-if="state.isRobotPost(post) && hasTraceForPost(post)"
+                  :reasoningSteps="planStepsForPost(post)"
+                  :reasoningFallbackHtml="
                     planForPost(post)
                       ? renderPost(planForPost(post)?.summary || planForPost(post)?.content || '')
                       : null
-                "
-                :toolRuns="toolRunsForPost(post)"
-                :traceId="post.id"
-                :topicId="routeTopicId"
-                :reasoningCheckpoints="planForPost(post)?.reasoningCheckpoints ?? null"
-                :rawPlanText="planForPost(post)?.summary ?? planForPost(post)?.content ?? null"
-              />
+                  "
+                  :toolRuns="toolRunsForPost(post)"
+                  :traceId="post.id"
+                  :topicId="routeTopicId"
+                  :reasoningCheckpoints="planForPost(post)?.reasoningCheckpoints ?? null"
+                  :rawPlanText="planForPost(post)?.summary ?? planForPost(post)?.content ?? null"
+                />
 
-              <div class="vb-post-heading">
-                <span>{{ state.selectedTopic.value?.title }}</span>
+                <div class="vb-post-heading">
+                  <span>{{ state.selectedTopic.value?.title }}</span>
                   <span v-if="isRecoveryCheckpoint(post.id)" class="vb-recovery-checkpoint-badge"
                     >Automated recovery checkpoint</span
                   >
-                <button
-                  v-if="state.isRobotPost(post)"
-                  class="vb-tts-inline"
-                  type="button"
-                  :disabled="ttsLoadingByPost[post.id]"
-                  @click="playRobotVoice(post)"
-                  title="Play voice"
-                >
-                  <span v-if="ttsLoadingByPost[post.id]" class="vb-spinner vb-spinner-dark"></span>
-                  <svg
-                    v-else
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
+                  <button
+                    v-if="state.isRobotPost(post)"
+                    class="vb-tts-inline"
+                    type="button"
+                    :disabled="ttsLoadingByPost[post.id]"
+                    @click="playRobotVoice(post)"
+                    title="Play voice"
                   >
-                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-                    <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
-                    <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
-                  </svg>
-                </button>
-              </div>
-              <div v-if="ttsErrorsByPost[post.id]" class="vb-tts-inline-error">{{ ttsErrorsByPost[post.id] }}</div>
-              <audio
-                v-if="ttsUrlForPost(post.id)"
-                class="vb-tts-audio-hidden"
-                :id="`tts-audio-${post.id}`"
-                :src="ttsUrlForPost(post.id) ?? undefined"
-                preload="none"
-              ></audio>
+                    <span v-if="ttsLoadingByPost[post.id]" class="vb-spinner vb-spinner-dark"></span>
+                    <svg
+                      v-else
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                      <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                      <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+                    </svg>
+                  </button>
+                </div>
+                <div v-if="ttsErrorsByPost[post.id]" class="vb-tts-inline-error">{{ ttsErrorsByPost[post.id] }}</div>
+                <audio
+                  v-if="ttsUrlForPost(post.id)"
+                  class="vb-tts-audio-hidden"
+                  :id="`tts-audio-${post.id}`"
+                  :src="ttsUrlForPost(post.id) ?? undefined"
+                  preload="none"
+                ></audio>
 
-              <div class="vb-multipost">
-                <div
-                  v-for="(segment, segIdx) in parseMultipostSegments(post.body)"
-                  :key="`${post.id}:${segIdx}`"
-                  class="vb-post-body vb-post-body--virtual"
-                  :id="segmentAnchorId(post.id, segIdx)"
-                >
-                  <aside class="vb-post-user">
-                    <div class="vb-user-name" :style="personaNameStyle(segment.personaKey)">
-                      {{ personaDisplayName(segment.personaKey) }}
-                    </div>
-                    <div class="vb-user-title">{{ personaTitle(segment.personaKey) }}</div>
-                    <img class="vb-avatar" :src="personaAvatar(segment.personaKey)" alt="" />
-                    <div class="vb-user-meta">
-                      <div><span>Persona:</span> {{ segment.personaKey ?? 'narration' }}</div>
-                    </div>
-                  </aside>
-                  <div class="vb-post-content">
-                    <div class="vb-multipost-segment-header">
-                      <a class="vb-segment-link" :href="`#${segmentAnchorId(post.id, segIdx)}`">#</a>
-                    </div>
+                <div class="vb-multipost">
+                  <div
+                    v-for="(segment, segIdx) in parseMultipostSegments(post.body)"
+                    :key="`${post.id}:${segIdx}`"
+                    class="vb-post-body vb-post-body--virtual"
+                    :id="segmentAnchorId(post.id, segIdx)"
+                  >
+                    <aside class="vb-post-user">
+                      <div class="vb-user-name" :style="personaNameStyle(segment.personaKey)">
+                        {{ personaDisplayName(segment.personaKey) }}
+                      </div>
+                      <div class="vb-user-title">{{ personaTitle(segment.personaKey) }}</div>
+                      <img class="vb-avatar" :src="personaAvatar(segment.personaKey)" alt="" />
+                      <div class="vb-user-meta">
+                        <div><span>Persona:</span> {{ segment.personaKey ?? 'narration' }}</div>
+                      </div>
+                    </aside>
+                    <div class="vb-post-content">
+                      <div class="vb-multipost-segment-header">
+                        <a class="vb-segment-link" :href="`#${segmentAnchorId(post.id, segIdx)}`">#</a>
+                      </div>
                       <div
                         v-enhance-mermaid
                         class="vb-post-text vb-rendered-content"
                         v-html="renderPost(segment.body)"
                       ></div>
-                    <div v-if="personaSignature(segment.personaKey)" class="vb-post-signature">
-                      <div class="vb-signature-line"></div>
-                      <div
-                        class="vb-signature-text vb-rendered-content"
-                        v-html="renderSignature(personaSignature(segment.personaKey))"
-                      ></div>
+                      <div v-if="personaSignature(segment.personaKey)" class="vb-post-signature">
+                        <div class="vb-signature-line"></div>
+                        <div
+                          class="vb-signature-text vb-rendered-content"
+                          v-html="renderSignature(personaSignature(segment.personaKey))"
+                        ></div>
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
 
-              <div v-if="visibleAttachmentsForPost(post.id).length > 0" class="vb-post-attachments">
-                <div class="vb-attachments-header">Attachments</div>
-                <ul class="vb-attachments-list">
-                  <li
-                    v-for="attachment in visibleAttachmentsForPost(post.id)"
-                    :key="attachment.id"
-                    class="vb-attachment-item"
-                  >
-                    <a
-                      class="vb-attachment-link"
-                      :href="`/api/attachments/${attachment.id}`"
-                      target="_blank"
-                      rel="noopener"
+                <div v-if="visibleAttachmentsForPost(post.id).length > 0" class="vb-post-attachments">
+                  <div class="vb-attachments-header">Attachments</div>
+                  <ul class="vb-attachments-list">
+                    <li
+                      v-for="attachment in visibleAttachmentsForPost(post.id)"
+                      :key="attachment.id"
+                      class="vb-attachment-item"
                     >
-                      {{ attachment.filename }}
-                    </a>
-                    <span class="vb-attachment-meta"
-                      >{{ formatBytes(attachment.sizeBytes) }} ·
-                      {{ new Date(attachment.createdAt).toLocaleString() }}</span
-                    >
-                    <button
-                      v-if="isPostOwner(post)"
-                      class="vb-small-btn vb-btn-danger"
-                      :disabled="deletingByAttachment[attachment.id]"
-                      type="button"
-                      @click="removeAttachment(post.id, attachment.id)"
-                    >
-                      {{ deletingByAttachment[attachment.id] ? 'Removing...' : 'Remove' }}
-                    </button>
-                  </li>
-                </ul>
+                      <span v-if="attachment.deletedAt" class="vb-attachment-deleted">
+                        Attachment deleted: {{ attachment.filename }}
+                      </span>
+                      <a
+                        v-else
+                        class="vb-attachment-link"
+                        :href="`/api/attachments/${attachment.id}`"
+                        target="_blank"
+                        rel="noopener"
+                      >
+                        {{ attachment.filename }}
+                      </a>
+                      <span v-if="!attachment.deletedAt" class="vb-attachment-meta"
+                        >{{ formatBytes(attachment.sizeBytes) }} ·
+                        {{ new Date(attachment.createdAt).toLocaleString() }}</span
+                      >
+                      <button
+                        v-if="isPostOwner(post) && !attachment.deletedAt"
+                        class="vb-small-btn vb-btn-danger"
+                        :disabled="deletingByAttachment[attachment.id]"
+                        type="button"
+                        @click="removeAttachment(post.id, attachment.id)"
+                      >
+                        {{ deletingByAttachment[attachment.id] ? 'Removing...' : 'Remove' }}
+                      </button>
+                    </li>
+                  </ul>
+                </div>
               </div>
-            </div>
-          </template>
+            </template>
 
-          <template v-else>
-            <aside class="vb-post-user">
-              <router-link class="vb-user-name" :to="{ name: 'user.view', params: { identityId: post.authorId } }">{{
-                state.identityName(post.authorId)
-              }}</router-link>
-              <div class="vb-user-title">{{ getUserRank(post.authorId) }}</div>
-              <img class="vb-avatar" :src="state.avatarFor(post.authorId)" alt="" />
-              <div class="vb-user-meta">
-                <div><span>Join Date:</span> {{ getUserJoinDate(post.authorId) }}</div>
-                <div><span>Location:</span> {{ getUserLocation(post.authorId) }}</div>
-                <div><span>Posts:</span> {{ getUserPostCount(post.authorId) }}</div>
-              </div>
-            </aside>
-            <div class="vb-post-content">
-              <PostTracePanel
-                v-if="state.isRobotPost(post) && hasTraceForPost(post)"
-                :reasoningSteps="planStepsForPost(post)"
-                :reasoningFallbackHtml="
+            <template v-else>
+              <aside class="vb-post-user">
+                <router-link class="vb-user-name" :to="{ name: 'user.view', params: { identityId: post.authorId } }">{{
+                  state.identityName(post.authorId)
+                }}</router-link>
+                <div class="vb-user-title">{{ getUserRank(post.authorId) }}</div>
+                <img class="vb-avatar" :src="state.avatarFor(post.authorId)" alt="" />
+                <div class="vb-user-meta">
+                  <div><span>Join Date:</span> {{ getUserJoinDate(post.authorId) }}</div>
+                  <div><span>Location:</span> {{ getUserLocation(post.authorId) }}</div>
+                  <div><span>Posts:</span> {{ getUserPostCount(post.authorId) }}</div>
+                </div>
+              </aside>
+              <div class="vb-post-content">
+                <PostTracePanel
+                  v-if="state.isRobotPost(post) && hasTraceForPost(post)"
+                  :reasoningSteps="planStepsForPost(post)"
+                  :reasoningFallbackHtml="
                     planForPost(post)
                       ? renderPost(planForPost(post)?.summary || planForPost(post)?.content || '')
                       : null
-                "
-                :toolRuns="toolRunsForPost(post)"
-                :traceId="post.id"
-                :topicId="routeTopicId"
-                :reasoningCheckpoints="planForPost(post)?.reasoningCheckpoints ?? null"
-                :rawPlanText="planForPost(post)?.summary ?? planForPost(post)?.content ?? null"
-              />
-              <div class="vb-post-heading">
-                <span>{{ state.selectedTopic.value?.title }}</span>
+                  "
+                  :toolRuns="toolRunsForPost(post)"
+                  :traceId="post.id"
+                  :topicId="routeTopicId"
+                  :reasoningCheckpoints="planForPost(post)?.reasoningCheckpoints ?? null"
+                  :rawPlanText="planForPost(post)?.summary ?? planForPost(post)?.content ?? null"
+                />
+                <div class="vb-post-heading">
+                  <span>{{ state.selectedTopic.value?.title }}</span>
                   <span v-if="isRecoveryCheckpoint(post.id)" class="vb-recovery-checkpoint-badge"
                     >Automated recovery checkpoint</span
                   >
-                <button
-                  v-if="state.isRobotPost(post)"
-                  class="vb-tts-inline"
-                  type="button"
-                  :disabled="ttsLoadingByPost[post.id]"
-                  @click="playRobotVoice(post)"
-                  title="Play voice"
-                >
-                  <span v-if="ttsLoadingByPost[post.id]" class="vb-spinner vb-spinner-dark"></span>
-                  <svg
-                    v-else
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
+                  <button
+                    v-if="state.isRobotPost(post)"
+                    class="vb-tts-inline"
+                    type="button"
+                    :disabled="ttsLoadingByPost[post.id]"
+                    @click="playRobotVoice(post)"
+                    title="Play voice"
                   >
-                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-                    <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
-                    <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
-                  </svg>
-                </button>
-              </div>
-              <div v-if="ttsErrorsByPost[post.id]" class="vb-tts-inline-error">{{ ttsErrorsByPost[post.id] }}</div>
-              <audio
-                v-if="ttsUrlForPost(post.id)"
-                class="vb-tts-audio-hidden"
-                :id="`tts-audio-${post.id}`"
-                :src="ttsUrlForPost(post.id) ?? undefined"
-                preload="none"
-              ></audio>
-              <div v-enhance-mermaid class="vb-post-text vb-rendered-content" v-html="renderPost(post.body)"></div>
-              <div v-if="visibleAttachmentsForPost(post.id).length > 0" class="vb-post-attachments">
-                <div class="vb-attachments-header">Attachments</div>
-                <ul class="vb-attachments-list">
-                  <li
-                    v-for="attachment in visibleAttachmentsForPost(post.id)"
-                    :key="attachment.id"
-                    class="vb-attachment-item"
-                  >
-                    <a
-                      class="vb-attachment-link"
-                      :href="`/api/attachments/${attachment.id}`"
-                      target="_blank"
-                      rel="noopener"
+                    <span v-if="ttsLoadingByPost[post.id]" class="vb-spinner vb-spinner-dark"></span>
+                    <svg
+                      v-else
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
                     >
-                      {{ attachment.filename }}
-                    </a>
-                    <span class="vb-attachment-meta"
-                      >{{ formatBytes(attachment.sizeBytes) }} ·
-                      {{ new Date(attachment.createdAt).toLocaleString() }}</span
+                      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                      <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                      <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+                    </svg>
+                  </button>
+                </div>
+                <div v-if="ttsErrorsByPost[post.id]" class="vb-tts-inline-error">{{ ttsErrorsByPost[post.id] }}</div>
+                <audio
+                  v-if="ttsUrlForPost(post.id)"
+                  class="vb-tts-audio-hidden"
+                  :id="`tts-audio-${post.id}`"
+                  :src="ttsUrlForPost(post.id) ?? undefined"
+                  preload="none"
+                ></audio>
+                <div v-enhance-mermaid class="vb-post-text vb-rendered-content" v-html="renderPost(post.body)"></div>
+                <div v-if="visibleAttachmentsForPost(post.id).length > 0" class="vb-post-attachments">
+                  <div class="vb-attachments-header">Attachments</div>
+                  <ul class="vb-attachments-list">
+                    <li
+                      v-for="attachment in visibleAttachmentsForPost(post.id)"
+                      :key="attachment.id"
+                      class="vb-attachment-item"
                     >
-                    <button
-                      v-if="isPostOwner(post)"
-                      class="vb-small-btn vb-btn-danger"
-                      :disabled="deletingByAttachment[attachment.id]"
-                      type="button"
-                      @click="removeAttachment(post.id, attachment.id)"
-                    >
-                      {{ deletingByAttachment[attachment.id] ? 'Removing...' : 'Remove' }}
-                    </button>
-                  </li>
-                </ul>
+                      <span v-if="attachment.deletedAt" class="vb-attachment-deleted">
+                        Attachment deleted: {{ attachment.filename }}
+                      </span>
+                      <a
+                        v-else
+                        class="vb-attachment-link"
+                        :href="`/api/attachments/${attachment.id}`"
+                        target="_blank"
+                        rel="noopener"
+                      >
+                        {{ attachment.filename }}
+                      </a>
+                      <span v-if="!attachment.deletedAt" class="vb-attachment-meta"
+                        >{{ formatBytes(attachment.sizeBytes) }} ·
+                        {{ new Date(attachment.createdAt).toLocaleString() }}</span
+                      >
+                      <button
+                        v-if="isPostOwner(post) && !attachment.deletedAt"
+                        class="vb-small-btn vb-btn-danger"
+                        :disabled="deletingByAttachment[attachment.id]"
+                        type="button"
+                        @click="removeAttachment(post.id, attachment.id)"
+                      >
+                        {{ deletingByAttachment[attachment.id] ? 'Removing...' : 'Remove' }}
+                      </button>
+                    </li>
+                  </ul>
+                </div>
+                <div v-if="getUserSignature(post.authorId)" class="vb-post-signature">
+                  <div class="vb-signature-line"></div>
+                  <div
+                    class="vb-signature-text vb-rendered-content"
+                    v-html="renderSignature(getUserSignature(post.authorId))"
+                  ></div>
+                </div>
               </div>
-              <div v-if="getUserSignature(post.authorId)" class="vb-post-signature">
-                <div class="vb-signature-line"></div>
-                <div
-                  class="vb-signature-text vb-rendered-content"
-                  v-html="renderSignature(getUserSignature(post.authorId))"
-                ></div>
-              </div>
-            </div>
-          </template>
-        </div>
-        <div class="vb-post-footer">
-          <button
-            v-if="canEditPost(post)"
-            class="vb-control-btn"
-            :disabled="state.isTopicLocked() || compactionFence || !!post.deletedAt"
-            @click="openEditModal(post)"
-          >
-            Edit
-          </button>
-          <button
-            class="vb-control-btn"
-            :disabled="state.isTopicLocked() || !!post.deletedAt"
-            @click="quotePost(post)"
-          >
-            Quote
-          </button>
-          <button
-            class="vb-control-btn"
-            type="button"
-            title="Copy exact post source"
-            :disabled="!!post.deletedAt"
-            aria-live="polite"
-            @click="copyPostSource(post)"
-          >
-            {{ copiedPostSourceId === post.id ? 'Copied' : 'Copy' }}
-          </button>
-          <button
-            class="vb-control-btn"
-            type="button"
-            :title="`Copy link to post #${postNumberForPostId(post.id) ?? postNumberForIndex(idx)}`"
-            aria-live="polite"
-            @click="copyPostLink(post)"
-          >
-            {{ copiedLinkPostId === post.id ? 'Copied' : 'Link' }}
-          </button>
-          <button
-            v-if="canDeletePost(post)"
-            class="vb-control-btn"
-            :disabled="state.isTopicLocked() || compactionFence || !!post.deletedAt"
-            @click="confirmDelete(post)"
-          >
-            Delete
-          </button>
-        </div>
-        <div v-if="showDeleteConfirm === post.id" class="vb-delete-confirm">
-          <span>Delete this post?</span>
+            </template>
+          </div>
+          <div class="vb-post-footer">
+            <button
+              v-if="canEditPost(post)"
+              class="vb-control-btn"
+              :disabled="state.isTopicLocked() || compactionFence || !!post.deletedAt"
+              @click="openEditModal(post)"
+            >
+              Edit
+            </button>
+            <button
+              class="vb-control-btn"
+              :disabled="state.isTopicLocked() || !!post.deletedAt"
+              @click="quotePost(post)"
+            >
+              Quote
+            </button>
+            <button
+              class="vb-control-btn"
+              type="button"
+              title="Copy exact post source"
+              :disabled="!!post.deletedAt"
+              aria-live="polite"
+              @click="copyPostSource(post)"
+            >
+              {{ copiedPostSourceId === post.id ? 'Copied' : 'Copy' }}
+            </button>
+            <button
+              class="vb-control-btn"
+              type="button"
+              :title="`Copy link to post #${postNumberForPostId(post.id) ?? postNumberForIndex(idx)}`"
+              aria-live="polite"
+              @click="copyPostLink(post)"
+            >
+              {{ copiedLinkPostId === post.id ? 'Copied' : 'Link' }}
+            </button>
+            <button
+              v-if="canDeletePost(post)"
+              class="vb-control-btn"
+              :disabled="state.isTopicLocked() || compactionFence || !!post.deletedAt"
+              @click="confirmDelete(post)"
+            >
+              Delete
+            </button>
+          </div>
+          <div v-if="showDeleteConfirm === post.id" class="vb-delete-confirm">
+            <span>Delete this post?</span>
             <button
               class="vb-small-btn vb-btn-danger"
               :disabled="state.loading.value || compactionFence"
               @click="handleDelete(post.id)"
             >
-            Yes, Delete
-          </button>
-          <button class="vb-small-btn" @click="cancelDelete">Cancel</button>
+              Yes, Delete
+            </button>
+            <button class="vb-small-btn" @click="cancelDelete">Cancel</button>
+          </div>
         </div>
-      </div>
-      <div v-if="operationalEventsAfter(post.id).length > 0" class="vb-operational-event-group">
-        <OperationalEventBar
-          v-for="event in operationalEventsAfter(post.id)"
-          :key="event.id"
-          :event="event"
-          :can-recover="isAdmin"
-          :recover-disabled="!canCompact"
-          @recover="openCompactionModal"
-        />
-      </div>
+        <div v-if="operationalEventsAfter(post.id).length > 0" class="vb-operational-event-group">
+          <OperationalEventBar
+            v-for="event in operationalEventsAfter(post.id)"
+            :key="event.id"
+            :event="event"
+            :can-recover="isAdmin"
+            :recover-disabled="!canCompact"
+            @recover="openCompactionModal"
+          />
+        </div>
       </template>
 
       <LiveAssistantTurn
@@ -3682,141 +3690,141 @@ onUnmounted(() => {
       </div>
     </div>
 
-  <div v-if="showHandoffModal" ref="handoffPanelRef" class="vb-handoff-inline">
-    <div class="vb-quick-reply vb-handoff-panel">
-      <div class="vb-table-header">
-        <span>{{ handoffStage === 'generate' ? 'Generate Handoff Draft' : 'Create Handoff Thread' }}</span>
-        <button class="vb-modal-close" type="button" @click="closeHandoffModal">&times;</button>
-      </div>
-      <div class="vb-new-body">
-        <div v-if="handoffError" class="vb-login-error">{{ handoffError }}</div>
+    <div v-if="showHandoffModal" ref="handoffPanelRef" class="vb-handoff-inline">
+      <div class="vb-quick-reply vb-handoff-panel">
+        <div class="vb-table-header">
+          <span>{{ handoffStage === 'generate' ? 'Generate Handoff Draft' : 'Create Handoff Thread' }}</span>
+          <button class="vb-modal-close" type="button" @click="closeHandoffModal">&times;</button>
+        </div>
+        <div class="vb-new-body">
+          <div v-if="handoffError" class="vb-login-error">{{ handoffError }}</div>
 
-        <template v-if="handoffStage === 'generate'">
-          <div class="vb-form-section">
-            <div class="vb-form-section-header">Goal</div>
-            <div class="vb-form-section-body">
-              <textarea
-                v-model="handoffGoal"
-                class="vb-option-textarea vb-handoff-textarea"
-                rows="7"
-                placeholder="What should the next thread accomplish?"
-              ></textarea>
+          <template v-if="handoffStage === 'generate'">
+            <div class="vb-form-section">
+              <div class="vb-form-section-header">Goal</div>
+              <div class="vb-form-section-body">
+                <textarea
+                  v-model="handoffGoal"
+                  class="vb-option-textarea vb-handoff-textarea"
+                  rows="7"
+                  placeholder="What should the next thread accomplish?"
+                ></textarea>
+              </div>
             </div>
-          </div>
-          <div class="vb-form-section">
-            <div class="vb-form-section-header">Draft Generation</div>
-            <div class="vb-form-section-body">
+            <div class="vb-form-section">
+              <div class="vb-form-section-header">Draft Generation</div>
+              <div class="vb-form-section-body">
                 <button
                   class="vb-small-btn"
                   type="button"
                   @click="showHandoffDraftModelAdvanced = !showHandoffDraftModelAdvanced"
                 >
-                {{ showHandoffDraftModelAdvanced ? 'Hide model options' : 'Advanced model options' }}
-              </button>
-              <div v-if="showHandoffDraftModelAdvanced" class="vb-reply-options">
-                <div class="vb-option-group">
-                  <label>Draft model:</label>
-                  <select v-model="handoffDraftModel" class="vb-option-select">
-                    <option value="">Current/default</option>
-                    <option v-for="model in replyModels" :key="model" :value="model">{{ model }}</option>
-                  </select>
-                </div>
-                <div v-if="handoffDraftSupportsReasoning" class="vb-option-group">
-                  <label>Reasoning:</label>
-                  <select v-model="handoffDraftReasoning" class="vb-option-select">
+                  {{ showHandoffDraftModelAdvanced ? 'Hide model options' : 'Advanced model options' }}
+                </button>
+                <div v-if="showHandoffDraftModelAdvanced" class="vb-reply-options">
+                  <div class="vb-option-group">
+                    <label>Draft model:</label>
+                    <select v-model="handoffDraftModel" class="vb-option-select">
+                      <option value="">Current/default</option>
+                      <option v-for="model in replyModels" :key="model" :value="model">{{ model }}</option>
+                    </select>
+                  </div>
+                  <div v-if="handoffDraftSupportsReasoning" class="vb-option-group">
+                    <label>Reasoning:</label>
+                    <select v-model="handoffDraftReasoning" class="vb-option-select">
                       <option v-for="option in handoffDraftReasoningOptions" :key="option" :value="option">
                         {{ formatReasoningLabel(option) }}
                       </option>
-                  </select>
+                    </select>
+                  </div>
                 </div>
-              </div>
                 <button
                   class="vb-small-btn"
                   type="button"
                   @click="showHandoffAdvancedPrompt = !showHandoffAdvancedPrompt"
                 >
-                {{ showHandoffAdvancedPrompt ? 'Hide generation prompt' : 'Customize generation prompt' }}
-              </button>
-              <div v-if="showHandoffAdvancedPrompt" class="vb-form-row">
-                <div class="vb-form-hint">Edit this prompt or clear it to let agentd use its built-in default.</div>
-                <textarea
-                  v-model="handoffSystemPrompt"
-                  class="vb-option-textarea vb-handoff-textarea"
-                  rows="8"
-                  placeholder="Leave blank to use the default handoff generation prompt."
-                ></textarea>
-                <button class="vb-small-btn" type="button" @click="resetHandoffSystemPrompt">Reset to default</button>
+                  {{ showHandoffAdvancedPrompt ? 'Hide generation prompt' : 'Customize generation prompt' }}
+                </button>
+                <div v-if="showHandoffAdvancedPrompt" class="vb-form-row">
+                  <div class="vb-form-hint">Edit this prompt or clear it to let agentd use its built-in default.</div>
+                  <textarea
+                    v-model="handoffSystemPrompt"
+                    class="vb-option-textarea vb-handoff-textarea"
+                    rows="8"
+                    placeholder="Leave blank to use the default handoff generation prompt."
+                  ></textarea>
+                  <button class="vb-small-btn" type="button" @click="resetHandoffSystemPrompt">Reset to default</button>
+                </div>
               </div>
             </div>
-          </div>
-        </template>
+          </template>
 
-        <template v-else>
-          <div class="vb-form-section">
-            <div class="vb-form-section-header">Destination</div>
-            <div class="vb-form-section-body">
-              <div class="vb-form-row">
-                <label class="vb-form-label">Thread title:</label>
-                <input v-model="handoffTitle" class="vb-option-input" maxlength="255" />
-              </div>
-              <div class="vb-form-row">
-                <label class="vb-form-label">Forum:</label>
-                <select v-model="handoffDestinationForumId" class="vb-option-input">
+          <template v-else>
+            <div class="vb-form-section">
+              <div class="vb-form-section-header">Destination</div>
+              <div class="vb-form-section-body">
+                <div class="vb-form-row">
+                  <label class="vb-form-label">Thread title:</label>
+                  <input v-model="handoffTitle" class="vb-option-input" maxlength="255" />
+                </div>
+                <div class="vb-form-row">
+                  <label class="vb-form-label">Forum:</label>
+                  <select v-model="handoffDestinationForumId" class="vb-option-input">
                     <option v-for="forum in moveForumOptions" :key="forum.id" :value="forum.id">
                       {{ forumOptionLabel(forum) }}
                     </option>
-                </select>
-              </div>
-              <div class="vb-form-row">
-                <label class="vb-checkbox-label">
-                  <input v-model="handoffOverrideCwd" type="checkbox" />
-                  <span>Override workspace</span>
-                </label>
-                <input
-                  v-if="handoffOverrideCwd"
-                  v-model="handoffCwdOverride"
-                  class="vb-option-input"
-                  placeholder="/path/to/workspace"
-                />
+                  </select>
+                </div>
+                <div class="vb-form-row">
+                  <label class="vb-checkbox-label">
+                    <input v-model="handoffOverrideCwd" type="checkbox" />
+                    <span>Override workspace</span>
+                  </label>
+                  <input
+                    v-if="handoffOverrideCwd"
+                    v-model="handoffCwdOverride"
+                    class="vb-option-input"
+                    placeholder="/path/to/workspace"
+                  />
                   <div v-else class="vb-form-hint">
                     Workspace: {{ handoffEffectiveCwd || 'forum/default runtime workspace' }}
                   </div>
-              </div>
+                </div>
                 <button
                   class="vb-small-btn"
                   type="button"
                   @click="showHandoffLaunchAdvanced = !showHandoffLaunchAdvanced"
                 >
-                {{ showHandoffLaunchAdvanced ? 'Hide launch model options' : 'Advanced launch model options' }}
-              </button>
-              <div v-if="showHandoffLaunchAdvanced" class="vb-reply-options">
-                <div class="vb-option-group">
-                  <label>New thread model:</label>
-                  <select v-model="handoffLaunchModel" class="vb-option-select">
-                    <option value="">Current/default</option>
-                    <option v-for="model in replyModels" :key="model" :value="model">{{ model }}</option>
-                  </select>
-                </div>
-                <div v-if="handoffLaunchSupportsReasoning" class="vb-option-group">
-                  <label>Reasoning:</label>
-                  <select v-model="handoffLaunchReasoning" class="vb-option-select">
+                  {{ showHandoffLaunchAdvanced ? 'Hide launch model options' : 'Advanced launch model options' }}
+                </button>
+                <div v-if="showHandoffLaunchAdvanced" class="vb-reply-options">
+                  <div class="vb-option-group">
+                    <label>New thread model:</label>
+                    <select v-model="handoffLaunchModel" class="vb-option-select">
+                      <option value="">Current/default</option>
+                      <option v-for="model in replyModels" :key="model" :value="model">{{ model }}</option>
+                    </select>
+                  </div>
+                  <div v-if="handoffLaunchSupportsReasoning" class="vb-option-group">
+                    <label>Reasoning:</label>
+                    <select v-model="handoffLaunchReasoning" class="vb-option-select">
                       <option v-for="option in handoffLaunchReasoningOptions" :key="option" :value="option">
                         {{ formatReasoningLabel(option) }}
                       </option>
-                  </select>
+                    </select>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-          <div class="vb-form-section">
-            <div class="vb-form-section-header">Editable Handoff Draft</div>
-            <div class="vb-form-section-body">
-              <textarea v-model="handoffDraft" class="vb-option-textarea vb-handoff-textarea" rows="18"></textarea>
+            <div class="vb-form-section">
+              <div class="vb-form-section-header">Editable Handoff Draft</div>
+              <div class="vb-form-section-body">
+                <textarea v-model="handoffDraft" class="vb-option-textarea vb-handoff-textarea" rows="18"></textarea>
+              </div>
             </div>
-          </div>
-        </template>
-      </div>
-      <div class="vb-modal-actions">
+          </template>
+        </div>
+        <div class="vb-modal-actions">
           <button
             v-if="handoffStage === 'edit'"
             class="vb-btn vb-btn-secondary"
@@ -3824,8 +3832,8 @@ onUnmounted(() => {
             :disabled="handoffLoading"
             @click="handoffStage = 'generate'"
           >
-          Back
-        </button>
+            Back
+          </button>
           <button class="vb-btn vb-btn-secondary" type="button" :disabled="handoffLoading" @click="closeHandoffModal">
             Cancel
           </button>
@@ -3836,14 +3844,14 @@ onUnmounted(() => {
             :disabled="handoffLoading"
             @click="generateHandoffDraft"
           >
-          {{ handoffLoading ? 'Generating...' : 'Generate Draft' }}
-        </button>
-        <button v-else class="vb-btn" type="button" :disabled="handoffLoading" @click="createHandoffThread">
-          {{ handoffLoading ? 'Creating...' : 'Create Handoff Thread' }}
-        </button>
+            {{ handoffLoading ? 'Generating...' : 'Generate Draft' }}
+          </button>
+          <button v-else class="vb-btn" type="button" :disabled="handoffLoading" @click="createHandoffThread">
+            {{ handoffLoading ? 'Creating...' : 'Create Handoff Thread' }}
+          </button>
+        </div>
       </div>
     </div>
-  </div>
 
     <div
       id="quick-reply-composer"
@@ -3915,43 +3923,43 @@ onUnmounted(() => {
       </div>
       <div id="quick-reply-dock-body" v-show="!quickReplyDocked || quickReplyExpanded" class="vb-quick-reply-dock-body">
         <div class="vb-quick-reply-scroll-region">
-      <div v-if="state.isTopicLocked()" class="vb-locked-notice">
-        This topic is {{ state.selectedTopic.value?.status }}. No new replies can be posted.
-      </div>
-      <div v-else-if="!state.isLoggedIn.value" class="vb-login-notice">
-        <template v-if="state.canShowRegisterLink.value">
+          <div v-if="state.isTopicLocked()" class="vb-locked-notice">
+            This topic is {{ state.selectedTopic.value?.status }}. No new replies can be posted.
+          </div>
+          <div v-else-if="!state.isLoggedIn.value" class="vb-login-notice">
+            <template v-if="state.canShowRegisterLink.value">
               <router-link to="/login">Log in</router-link> or <router-link to="/register">register</router-link> to
               post a reply.
-        </template>
-        <template v-else> <router-link to="/login">Log in</router-link> to post a reply. </template>
-      </div>
-      <div v-else class="vb-new-body">
-        <div v-if="quickReplyWillSteerRobot" class="vb-steer-notice">
-          Robot is responding right now.
-          <button
-            class="vb-btn vb-small-btn vb-btn-danger"
-            :disabled="state.robotControlPending.value"
-            @click="requestStopRobot"
-          >
-            {{ state.robotControlPending.value ? 'Stopping...' : 'Stop Robot' }}
-          </button>
-        </div>
-        <div v-if="state.robotState.value?.lastTurnError" class="vb-robot-error-notice">
-          <strong>Robot turn failed.</strong>
-          <span
-            >The last turn stopped before producing a reply. The robot is idle; you can retry or send another
-            message.</span
-          >
-          <span class="vb-robot-error-detail">{{ state.robotState.value.lastTurnError.message }}</span>
-        </div>
-          <label for="quick-reply-message">Message:</label>
+            </template>
+            <template v-else> <router-link to="/login">Log in</router-link> to post a reply. </template>
+          </div>
+          <div v-else class="vb-new-body">
+            <div v-if="quickReplyWillSteerRobot" class="vb-steer-notice">
+              Robot is responding right now.
+              <button
+                class="vb-btn vb-small-btn vb-btn-danger"
+                :disabled="state.robotControlPending.value"
+                @click="requestStopRobot"
+              >
+                {{ state.robotControlPending.value ? 'Stopping...' : 'Stop Robot' }}
+              </button>
+            </div>
+            <div v-if="state.robotState.value?.lastTurnError" class="vb-robot-error-notice">
+              <strong>Robot turn failed.</strong>
+              <span
+                >The last turn stopped before producing a reply. The robot is idle; you can retry or send another
+                message.</span
+              >
+              <span class="vb-robot-error-detail">{{ state.robotState.value.lastTurnError.message }}</span>
+            </div>
+            <label for="quick-reply-message">Message:</label>
             <div id="quick-reply-template" v-show="quickReplyOptionsOpen" class="vb-quick-reply-options-panel">
-        <MessageTemplatePicker
-          context="reply"
-          :forum-id="state.selectedTopic.value?.forumId ?? null"
-          :has-draft="replyBody.length > 0"
-          @apply="applyQuickReplyTemplate"
-        />
+              <MessageTemplatePicker
+                context="reply"
+                :forum-id="state.selectedTopic.value?.forumId ?? null"
+                :has-draft="replyBody.length > 0"
+                @apply="applyQuickReplyTemplate"
+              />
               <router-link class="vb-small-btn" :to="{ name: 'topic.reply', params: { topicId: routeTopicId } }">
                 Open full editor
               </router-link>
@@ -3976,8 +3984,8 @@ onUnmounted(() => {
               :disabled="isPublishingReply"
             ></textarea>
             <div id="quick-reply-attachment-picker" v-show="quickReplyOptionsOpen" class="vb-reply-attachments">
-          <label class="vb-attachment-label">Attachments:</label>
-          <span class="vb-form-hint">Selected files are not included in autosaved drafts.</span>
+              <label class="vb-attachment-label">Attachments:</label>
+              <span class="vb-form-hint">Selected files are not included in autosaved drafts.</span>
               <input
                 ref="replyFileInputRef"
                 class="vb-attachment-input"
@@ -3985,7 +3993,7 @@ onUnmounted(() => {
                 multiple
                 @change="handleReplyFiles"
               />
-        </div>
+            </div>
             <div v-if="publishedReplyPostId || replyFiles.length > 0" class="vb-reply-attachments">
               <div v-if="publishedReplyPostId" class="vb-template-conflict" role="alert">
                 Reply posted; attachment upload is incomplete. Retrying cannot duplicate the reply. Complete it within
@@ -4028,26 +4036,26 @@ onUnmounted(() => {
             </select>
           </div>
               <div v-if="supportsReasoning" class="vb-option-group">
-            <label for="reasoning-select">Reasoning:</label>
-            <select
-              id="reasoning-select"
-              v-model="selectedReasoning"
-              class="vb-option-select"
-              :disabled="topicRobotMode === 'off'"
-            >
-              <option v-for="option in replyReasoningOptions" :key="option" :value="option">
-                {{ formatReasoningLabel(option) }}
-              </option>
-            </select>
-          </div>
-        </div>
+                <label for="reasoning-select">Reasoning:</label>
+                <select
+                  id="reasoning-select"
+                  v-model="selectedReasoning"
+                  class="vb-option-select"
+                  :disabled="topicRobotMode === 'off'"
+                >
+                  <option v-for="option in replyReasoningOptions" :key="option" :value="option">
+                    {{ formatReasoningLabel(option) }}
+                  </option>
+                </select>
+              </div>
+            </div>
             <span v-if="robotModeNotice" class="vb-reply-options-callout">{{ robotModeNotice }}</span>
             <div id="quick-reply-auto-compact" v-show="quickReplyOptionsOpen">
-            <AutoCompactOption
-              v-model="autoCompactEnabled"
-              :can-edit="isAdmin"
-              :busy="isRobotBusy || compactionFence"
-            />
+              <AutoCompactOption
+                v-model="autoCompactEnabled"
+                :can-edit="isAdmin"
+                :busy="isRobotBusy || compactionFence"
+              />
             </div>
             <div v-if="sessionContext" id="quick-reply-context" class="vb-reply-context-meter">
           <strong>Context:</strong>
@@ -4060,48 +4068,48 @@ onUnmounted(() => {
                 <span v-if="typeof sessionContext.percent === 'number'"
                   >({{ sessionContext.percent.toFixed(1) }}%)</span
                 >
-            <span v-if="!sessionContext.exact" class="vb-context-warning"
-              >best Pi usage; not exact current context</span
-            >
-          </span>
-          <span v-else>usage unavailable</span>
-          <span v-if="sessionContext.model" class="vb-context-model">· {{ sessionContext.model }}</span>
-        </div>
-        <div v-if="compactionFence" class="vb-reply-options-callout" role="status">
-          <template v-if="forkNeedsManualReview">
-            Replies are paused because a fork needs operator review; the canonical source remains fenced.
-          </template>
-          <template v-else>Replies are paused while a canonical operation is unresolved.</template>
-        </div>
+                <span v-if="!sessionContext.exact" class="vb-context-warning"
+                  >best Pi usage; not exact current context</span
+                >
+              </span>
+              <span v-else>usage unavailable</span>
+              <span v-if="sessionContext.model" class="vb-context-model">· {{ sessionContext.model }}</span>
+            </div>
+            <div v-if="compactionFence" class="vb-reply-options-callout" role="status">
+              <template v-if="forkNeedsManualReview">
+                Replies are paused because a fork needs operator review; the canonical source remains fenced.
+              </template>
+              <template v-else>Replies are paused while a canonical operation is unresolved.</template>
+            </div>
           </div>
         </div>
         <div v-if="state.isLoggedIn.value && !state.isTopicLocked()" class="vb-quick-reply-footer">
-        <button
+          <button
             class="vb-btn vb-quick-reply-submit"
-          :disabled="
-            state.loading.value ||
-            isReplying ||
-            isUploadingReply ||
-            !autosavedReply.hydrated.value ||
-            Boolean(publishedReplyPostId) ||
-            compactionFence ||
-            !replyBody.trim()
-          "
-          @click="reply"
-        >
-          <span v-if="isReplying" class="vb-spinner" style="width: 12px; height: 12px; margin-right: 4px"></span>
-          {{
-            isUploadingReply
-              ? 'Uploading...'
-              : isReplying
-                ? 'Posting...'
-                : quickReplyWillSteerRobot
-                  ? 'Steer Reply'
-                  : 'Post Quick Reply'
-          }}
-        </button>
+            :disabled="
+              state.loading.value ||
+              isReplying ||
+              isUploadingReply ||
+              !autosavedReply.hydrated.value ||
+              Boolean(publishedReplyPostId) ||
+              compactionFence ||
+              !replyBody.trim()
+            "
+            @click="reply"
+          >
+            <span v-if="isReplying" class="vb-spinner" style="width: 12px; height: 12px; margin-right: 4px"></span>
+            {{
+              isUploadingReply
+                ? 'Uploading...'
+                : isReplying
+                  ? 'Posting...'
+                  : quickReplyWillSteerRobot
+                    ? 'Steer Reply'
+                    : 'Post Quick Reply'
+            }}
+          </button>
+        </div>
       </div>
-    </div>
     </div>
 
     <div v-if="showRobotStatePanel" class="vb-robot-state">

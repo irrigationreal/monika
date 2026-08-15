@@ -736,7 +736,10 @@ export function useForumState() {
   }
 
   async function loadPosts(topicId: string): Promise<void> {
-    const res = await api.listPosts(topicId, { include: ['reactions'] });
+    // TopicView paginates this collection client-side, so load the complete
+    // canonical sequence. The former API default of 200 broke permalinks to
+    // later posts (including links from User Files).
+    const res = await api.listPosts(topicId, { page: 1, pageSize: 100_000, include: ['reactions'] });
     if (!isActiveTopic(topicId)) return;
     posts.value = res.items;
   }
@@ -1174,11 +1177,7 @@ export function useForumState() {
         const loadId = ++topicLoadCounter;
         await Promise.all([loadState(topicId), loadAutoRun(topicId), loadSession(topicId)]);
         await loadSessionInspector();
-        if (
-          requestId === topicSelectionRequestCounter &&
-          isActiveTopic(topicId) &&
-          loadId === topicLoadCounter
-        ) {
+        if (requestId === topicSelectionRequestCounter && isActiveTopic(topicId) && loadId === topicLoadCounter) {
           openStream(topicId);
         }
       }
@@ -1497,7 +1496,9 @@ export function useForumState() {
         const existing = attachmentsByPost.value[postId] ?? [];
         attachmentsByPost.value = {
           ...attachmentsByPost.value,
-          [postId]: existing.filter((item) => item.id !== attachmentId),
+          [postId]: existing.map((item) =>
+            item.id === attachmentId ? { ...item, deletedAt: new Date().toISOString() } : item
+          ),
         };
       }
     } finally {

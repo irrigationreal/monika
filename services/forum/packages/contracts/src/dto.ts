@@ -247,19 +247,44 @@ export interface AttachmentDto {
   mimeType: string;
   sizeBytes: number;
   createdAt: string;
+  deletedAt?: string | null;
 }
 
 export interface TopicAttachmentsDto {
   itemsByPostId: Record<string, AttachmentDto[]>;
 }
 
+export interface UserFilePostAssociationDto {
+  id: string;
+  postId: string;
+  topicId: string;
+  topicTitle: string;
+  postNumber: number;
+  filename: string;
+  mimeType: string;
+  deletedAt: string | null;
+}
+
 export interface UserFileDto {
   id: string;
-  ownerId: string;
+  ownerId: string | null;
   filename: string;
   mimeType: string;
   sizeBytes: number;
+  standalone: boolean;
+  visibility: 'private' | 'members' | 'public' | null;
+  expiresAt: string | null;
+  revision: number;
+  blobState: 'staging' | 'ready' | 'gc_pending' | 'missing';
+  associations: UserFilePostAssociationDto[];
   createdAt: string;
+  updatedAt: string;
+  deduplicated?: boolean;
+}
+
+export interface UserFileListResponseDto {
+  items: UserFileDto[];
+  nextCursor: string | null;
 }
 
 export interface MessageDraftDto {
