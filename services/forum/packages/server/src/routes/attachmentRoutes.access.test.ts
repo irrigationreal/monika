@@ -250,16 +250,16 @@ describe('Attachment routes access controls', () => {
     const owner = store.createIdentityWithPassword('Owner', 'multipart-owner', 'pw-hash', 'human');
     store.createAuthSession('multipart-owner-token', owner.id);
     const boundary = '----codex-user-file-boundary';
-    const multipartBody = (visibility?: string, expiration?: string) =>
+    const multipartBody = (visibility?: string, expiration?: string, filename = 'actual.txt') =>
       Buffer.from(
         [
           `--${boundary}\r\nContent-Disposition: form-data; name="visibility"\r\n\r\n${visibility ?? 'private'}\r\n`,
           `--${boundary}\r\nContent-Disposition: form-data; name="expiration"\r\n\r\n${expiration ?? 'one_month'}\r\n`,
-          `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="actual.txt"\r\nContent-Type: text/plain\r\n\r\nactual-bytes\r\n`,
+          `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: text/plain\r\n\r\nactual-bytes\r\n`,
           `--${boundary}--\r\n`,
         ].join('')
       );
-    const upload = async (visibility?: string, expiration?: string) =>
+    const upload = async (visibility?: string, expiration?: string, filename?: string) =>
       app.inject({
         method: 'POST',
         url: '/user-files',
@@ -267,7 +267,7 @@ describe('Attachment routes access controls', () => {
           authorization: 'Bearer multipart-owner-token',
           'content-type': `multipart/form-data; boundary=${boundary}`,
         },
-        payload: multipartBody(visibility, expiration),
+        payload: multipartBody(visibility, expiration, filename),
       });
     const first = await upload();
     expect(first.statusCode).toBe(200);
@@ -281,10 +281,19 @@ describe('Attachment routes access controls', () => {
     };
     expect(file.visibility).toBe('private');
     expect(Date.parse(file.expiresAt)).toBeGreaterThan(Date.now() + 29 * 24 * 60 * 60 * 1000);
-    const repeated = await upload('public', 'one_year');
+    const repeated = await upload('public', 'one_year', 'later-name.txt');
     expect(repeated.statusCode).toBe(200);
     expect((repeated.json() as { id: string; deduplicated?: boolean }).id).toBe(file.id);
+    expect((repeated.json() as { filename: string }).filename).toBe('actual.txt');
     expect((repeated.json() as { deduplicated?: boolean }).deduplicated).toBe(true);
+    const download = await app.inject({
+      method: 'GET',
+      url: `/user-files/${file.id}`,
+      headers: { authorization: 'Bearer multipart-owner-token' },
+    });
+    expect(download.statusCode).toBe(200);
+    expect(download.headers['content-disposition']).toContain('actual.txt');
+    expect(download.headers['content-disposition']).not.toContain('later-name.txt');
     const repeatedBody = repeated.json() as { revision: number };
     const patch = await app.inject({
       method: 'PATCH',

@@ -51,6 +51,7 @@ describe('unified user file lifecycle', () => {
       expiresAt: '2030-01-01T00:00:00.000Z',
     });
     expect(repeated.id).toBe(first.id);
+    expect(repeated.filename).toBe('first.txt');
     expect(repeated.visibility).toBe('public');
     expect(repeated.expires_at).toBe('2030-01-01T00:00:00.000Z');
     const association = store.createAttachment({
@@ -63,6 +64,8 @@ describe('unified user file lifecycle', () => {
       ownerIdentityId: owner.id,
     });
     expect(association.file_id).toBe(first.id);
+    expect(association.filename).toBe('post-name.txt');
+    expect(store.getUserFile(first.id)?.filename).toBe('first.txt');
     expect(store.expireUserFiles('2031-01-01T00:00:00.000Z')).toBe(1);
     expect(store.getUserFileBlob(first.id)?.state).toBe('ready');
     store.deleteAttachment(association.id);
@@ -128,7 +131,7 @@ describe('unified user file lifecycle', () => {
       expiresAt: '2030-01-01T00:00:00.000Z',
     });
     expect(repaired.id).toBe(original.id);
-    expect(repaired.filename).toBe('new.txt');
+    expect(repaired.filename).toBe('old.txt');
     expect(repaired.expires_at).toBe('2030-01-01T00:00:00.000Z');
     expect(store.getUserFileBlob(repaired.id)).toMatchObject({ storage_path: replacementPath, state: 'ready' });
     expect(store.claimBlobForGc(oldBlob.id)).toBe(missingPath);

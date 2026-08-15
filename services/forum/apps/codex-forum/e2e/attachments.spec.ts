@@ -787,11 +787,14 @@ test.describe('Attachment lifecycle', () => {
     await copyButton.click();
     await expect(page.locator('.vb-success-banner')).toContainText('Link copied to clipboard');
 
-    page.on('dialog', (dialog) => void dialog.accept());
     const deleteButton = page
       .locator('.vb-user-file-item', { hasText: 'beta.txt' })
       .locator('button', { hasText: 'Remove standalone copy' });
     await deleteButton.click();
+    await page
+      .getByRole('dialog', { name: 'Remove standalone copy?' })
+      .getByRole('button', { name: 'Remove standalone copy', exact: true })
+      .click();
 
     await expect(page.locator('.vb-user-file-name', { hasText: 'beta.txt' })).toHaveCount(0);
     await expect(page.locator('.vb-user-files-total')).toContainText('1 shown');
@@ -922,11 +925,14 @@ test.describe('Attachment lifecycle', () => {
     await expect(page.locator('.vb-attachment-selected')).toContainText('oversized.bin');
     await expect(page.locator('.vb-attachment-selected')).not.toContainText('good.txt');
 
-    page.on('dialog', (dialog) => void dialog.accept());
     const deleteButton = page
       .locator('.vb-user-file-item', { hasText: 'existing.txt' })
       .locator('button', { hasText: 'Remove standalone copy' });
     await deleteButton.click();
+    await page
+      .getByRole('dialog', { name: 'Remove standalone copy?' })
+      .getByRole('button', { name: 'Remove standalone copy', exact: true })
+      .click();
 
     await expect(page.locator('.vb-login-error')).toContainText('Delete failed');
     await expect(page.locator('.vb-user-file-name', { hasText: 'existing.txt' })).toBeVisible();
@@ -935,6 +941,10 @@ test.describe('Attachment lifecycle', () => {
       .locator('.vb-user-file-item', { hasText: 'recoverable.txt' })
       .locator('button', { hasText: 'Remove standalone copy' });
     await recoveryDelete.click();
+    await page
+      .getByRole('dialog', { name: 'Remove standalone copy?' })
+      .getByRole('button', { name: 'Remove standalone copy', exact: true })
+      .click();
 
     await expect(page.locator('.vb-user-file-name', { hasText: 'recoverable.txt' })).toHaveCount(0);
     await expect(page.locator('.vb-login-error')).toHaveCount(0);
