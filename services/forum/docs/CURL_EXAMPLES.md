@@ -89,7 +89,8 @@ curl -sS -X PATCH -b forum.cookies \
 ```
 
 The preference defaults to `false`, is returned by `/api/auth/me`, and is intentionally omitted from public profile
-responses. Temporary dock expansion, collapse, or undock actions do not update it.
+responses. When enabled, eligible topic views start with the dock collapsed on desktop and mobile. Temporary dock
+expansion, collapse, or undock actions do not update it.
 
 ## Private autosaved drafts
 
