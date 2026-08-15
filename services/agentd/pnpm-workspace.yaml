@@ -2,12 +2,14 @@ packages:
   - .
 
 minimumReleaseAge: 14400
+minimumReleaseAgeStrict: true
+minimumReleaseAgeIgnoreMissingTime: false
 minimumReleaseAgeExclude:
   - '@earendil-works/*'
 
 overrides:
   protobufjs: 7.6.5
 
-ignoredBuiltDependencies:
-  - '@google/genai'
-  - protobufjs
+allowBuilds:
+  '@google/genai': false
+  protobufjs: false

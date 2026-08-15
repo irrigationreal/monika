@@ -134,7 +134,7 @@ COPY --from=memstore-build /memstore /usr/local/bin/memstore
 WORKDIR /opt/agentd
 COPY services/agentd/package.json services/agentd/pnpm-lock.yaml services/agentd/pnpm-workspace.yaml ./
 RUN corepack enable && \
-    corepack prepare pnpm@10.26.2 --activate && \
+    corepack prepare pnpm@11.21.0 --activate && \
     pnpm install --prod --frozen-lockfile
 COPY services/agentd/src/ /opt/agentd/src/
 COPY services/agentd/test/ /opt/agentd/test/
@@ -146,13 +146,17 @@ RUN pnpm test
 RUN rm -f /usr/local/bin/pnpm /usr/local/bin/pnpx && \
     printf '%s\n' \
       '#!/bin/sh' \
-      'export NPM_CONFIG_MINIMUM_RELEASE_AGE=14400' \
-      'exec corepack pnpm@10.26.2 "$@"' \
+      'export PNPM_CONFIG_MINIMUM_RELEASE_AGE=14400' \
+      'export PNPM_CONFIG_MINIMUM_RELEASE_AGE_STRICT=true' \
+      'export PNPM_CONFIG_MINIMUM_RELEASE_AGE_IGNORE_MISSING_TIME=false' \
+      'exec corepack pnpm@11.21.0 "$@"' \
       > /usr/local/bin/pnpm && \
     printf '%s\n' \
       '#!/bin/sh' \
-      'export NPM_CONFIG_MINIMUM_RELEASE_AGE=14400' \
-      'exec corepack pnpm@10.26.2 dlx "$@"' \
+      'export PNPM_CONFIG_MINIMUM_RELEASE_AGE=14400' \
+      'export PNPM_CONFIG_MINIMUM_RELEASE_AGE_STRICT=true' \
+      'export PNPM_CONFIG_MINIMUM_RELEASE_AGE_IGNORE_MISSING_TIME=false' \
+      'exec corepack pnpm@11.21.0 dlx "$@"' \
       > /usr/local/bin/pnpx && \
     chmod +x /usr/local/bin/pnpm /usr/local/bin/pnpx
 WORKDIR /

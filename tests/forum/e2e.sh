@@ -9,8 +9,9 @@ UPLOADS_DIR="${CODEX_FORUM_UPLOADS_DIR:-${RUNNER_TEMP:-/tmp}/codex-forum-test-up
 mkdir -p "$UPLOADS_DIR"
 cd "$FORUM_DIR"
 
-corepack enable
-corepack prepare pnpm@10.26.2 --activate >/dev/null
+pnpm() {
+  corepack pnpm@11.21.0 "$@"
+}
 pnpm install --frozen-lockfile
 
 cd "$APP_DIR"
