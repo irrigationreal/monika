@@ -94,12 +94,13 @@ export const router = createRouter({
 });
 
 router.beforeEach(async (to) => {
+  const state = useForumState();
+  if (!state.authChecked.value) await state.checkAuth();
+
   const requiresAdmin = Boolean(to.meta['requiresAdmin']);
   const requiresAuth = Boolean(to.meta['requiresAuth']) || requiresAdmin;
   if (!requiresAuth) return true;
 
-  const state = useForumState();
-  if (!state.authChecked.value) await state.checkAuth();
   if (!state.isLoggedIn.value) {
     state.openLoginModal();
     return { name: 'forum.home' };

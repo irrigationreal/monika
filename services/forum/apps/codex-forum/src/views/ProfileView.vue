@@ -447,9 +447,9 @@ onMounted(async () => {
               <span class="vb-profile-value">{{ FORUM_THEME_BY_KEY[currentUser.theme ?? 'vmonika']?.label }}</span>
             </div>
             <div class="vb-profile-row">
-              <span class="vb-profile-label">Quick Reply:</span>
+              <span class="vb-profile-label">Quick Reply Style:</span>
               <span class="vb-profile-value">
-                {{ currentUser.quickReplyDockedByDefault ? 'Keep visible by default' : 'Inline by default' }}
+                {{ currentUser.quickReplyDockedByDefault ? 'Docked' : 'Inline' }}
               </span>
             </div>
             <div class="vb-modal-actions">
@@ -512,13 +512,14 @@ onMounted(async () => {
               <span class="vb-form-hint">Live preview: picking a theme applies instantly while you browse.</span>
             </div>
             <div class="vb-form-row">
-              <label class="vb-checkbox-row" for="quickReplyDockedByDefault">
-                <input id="quickReplyDockedByDefault" v-model="quickReplyDockedByDefault" type="checkbox" />
-                Keep Quick Reply visible while viewing topics
-              </label>
+              <label for="quickReplyStyle">Quick Reply Style:</label>
+              <select id="quickReplyStyle" v-model="quickReplyDockedByDefault">
+                <option :value="false">Inline</option>
+                <option :value="true">Docked</option>
+              </select>
               <span class="vb-form-hint">
-                Opens the bottom reply dock on desktop and its collapsed bar on mobile. Temporary collapse or unpin
-                actions do not change this account preference.
+                Chooses the default layout when opening topics. Temporary expand, collapse, or undock actions do not
+                change this account preference.
               </span>
             </div>
             <div class="vb-form-row">
