@@ -67,6 +67,8 @@ export function registerMessageDraftRoutes({
         canContinue: allowed,
       });
     }
+    if (draft.context === 'notepad')
+      return mapMessageDraftToDto(draft, { destinationName: 'My Notepad', canContinue: true });
     return mapMessageDraftToDto(draft);
   }
 
@@ -90,6 +92,31 @@ export function registerMessageDraftRoutes({
     return {
       drafts: (await service.listNewThreadByForum(user.identityId, forumId)).map((draft) => present(request, draft)),
     };
+  });
+  app.get('/notepad/draft', async (request, reply) => {
+    privateResponse(reply);
+    const user = owner(request);
+    const draft = await service.getNotepad(user.identityId);
+    return { draft: draft ? present(request, draft) : null };
+  });
+  app.put('/notepad/draft', async (request, reply) => {
+    privateResponse(reply);
+    const user = owner(request);
+    const body = parseBody(app, MessageDraftWriteRequestSchema, request.body);
+    try {
+      return {
+        draft: present(
+          request,
+          await service.saveNotepad(user.identityId, body.expectedRevision, {
+            title: body.title,
+            body: body.body,
+            options: body.options,
+          })
+        ),
+      };
+    } catch (error) {
+      return handle(error);
+    }
   });
   app.get('/topics/:topicId/draft', async (request, reply) => {
     privateResponse(reply);

@@ -5,6 +5,7 @@ import {
   MessageDraftQuotaError,
   MessageDraftValidationError,
 } from '../domain/messageDrafts';
+import { normalizeNotepadTags } from '../domain/notepad';
 
 import type { ForumId, IdentityId, TopicId } from '../domain/ids';
 import type { MessageDraft, MessageDraftWriteInput } from '../domain/messageDrafts';
@@ -31,6 +32,10 @@ export class MessageDraftService {
   listNewThreadByForum(ownerIdentityId: IdentityId, forumId: ForumId): Promise<MessageDraft[]> {
     return this.repository.listNewThreadByForum(ownerIdentityId, forumId, this.now());
   }
+  async getNotepad(ownerIdentityId: IdentityId): Promise<MessageDraft | null> {
+    const drafts = await this.repository.listOwner(ownerIdentityId, this.now());
+    return drafts.find((draft) => draft.context === 'notepad') ?? null;
+  }
 
   saveReply(
     ownerIdentityId: IdentityId,
@@ -48,6 +53,17 @@ export class MessageDraftService {
     id?: string
   ): Promise<MessageDraft> {
     return this.save(ownerIdentityId, 'new_thread', forumId, null, expectedRevision, value, id);
+  }
+  saveNotepad(
+    ownerIdentityId: IdentityId,
+    expectedRevision: number,
+    value: MessageDraftWriteInput
+  ): Promise<MessageDraft> {
+    const options = value.options ?? { tags: [], expiration: 'one_month' };
+    return this.save(ownerIdentityId, 'notepad', null, null, expectedRevision, {
+      ...value,
+      options: { ...options, tags: normalizeNotepadTags(options.tags) },
+    });
   }
 
   async delete(ownerIdentityId: IdentityId, id: string, expectedRevision?: number): Promise<void> {
@@ -80,8 +96,9 @@ export class MessageDraftService {
       context,
       forumId,
       topicId,
-      title: context === 'new_thread' ? (value.title ?? null) : null,
+      title: context === 'reply' ? null : (value.title ?? null),
       body: value.body,
+      options: context === 'notepad' ? (value.options ?? { tags: [], expiration: 'one_month' }) : null,
       revision: 1,
       createdAt: now,
       updatedAt: now,
@@ -108,11 +125,13 @@ function validateRevision(revision: number, allowZero: boolean): void {
 function validate(context: MessageDraft['context'], input: MessageDraftWriteInput): MessageDraftWriteInput {
   const title = input.title ?? null;
   if (context === 'reply' && title != null) throw new MessageDraftValidationError('Reply drafts cannot have titles');
+  if (context !== 'notepad' && input.options != null)
+    throw new MessageDraftValidationError('Draft options are only supported for Notepad drafts');
   if ((title?.length ?? 0) > MESSAGE_DRAFT_LIMITS.titleCharacters)
     throw new MessageDraftValidationError('Draft title must be at most 255 characters');
   if (new TextEncoder().encode(input.body).byteLength > MESSAGE_DRAFT_LIMITS.bodyUtf8Bytes)
     throw new MessageDraftValidationError('Draft body must be at most 64 KiB UTF-8');
-  if (!input.body.trim() && !(context === 'new_thread' && title?.trim()))
+  if (!input.body.trim() && !(context !== 'reply' && title?.trim()))
     throw new MessageDraftValidationError('Blank drafts are not stored');
-  return { title, body: input.body };
+  return { title, body: input.body, options: input.options ?? null };
 }

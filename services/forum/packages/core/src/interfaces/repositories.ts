@@ -21,6 +21,7 @@ import type {
   MessageTemplateScope,
   MessageTemplateWriteInput,
 } from '../domain/messageTemplates';
+import type { NotepadEntry, NotepadTagSummary } from '../domain/notepad';
 import type { ExternalRef, ExternalRefKind } from '../domain/surfaces';
 
 export interface ForumListOptions {
@@ -74,6 +75,40 @@ export interface MessageDraftRepository {
     ownerIdentityId: IdentityId,
     id: string,
     expectedRevision?: number
+  ): Promise<'deleted' | 'missing' | 'conflict'>;
+  purgeExpired(now: string): Promise<number>;
+}
+
+export interface NotepadRepository {
+  list(
+    ownerIdentityId: IdentityId,
+    input: { query?: string; tags: string[]; cursor?: string; limit: number }
+  ): Promise<{ entries: NotepadEntry[]; nextCursor: string | null }>;
+  get(ownerIdentityId: IdentityId, id: string): Promise<NotepadEntry | null>;
+  tags(ownerIdentityId: IdentityId): Promise<NotepadTagSummary[]>;
+  create(input: {
+    entry: NotepadEntry;
+    draft?: { id: string; revision: number };
+    quota: number;
+    now: string;
+  }): Promise<NotepadEntry | 'conflict' | 'quota'>;
+  update(input: {
+    ownerIdentityId: IdentityId;
+    id: string;
+    expectedRevision: number;
+    value: {
+      title: string | null;
+      body: string;
+      tags: string[];
+      pinned?: boolean;
+      expiresAt?: string | null;
+    };
+    now: string;
+  }): Promise<NotepadEntry | 'missing' | 'conflict'>;
+  delete(
+    ownerIdentityId: IdentityId,
+    id: string,
+    expectedRevision: number
   ): Promise<'deleted' | 'missing' | 'conflict'>;
   purgeExpired(now: string): Promise<number>;
 }

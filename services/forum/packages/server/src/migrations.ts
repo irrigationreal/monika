@@ -1722,6 +1722,74 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    version: 46,
+    name: 'private-notepad',
+    up: (db) => {
+      db.exec(`
+        alter table message_drafts rename to message_drafts_legacy;
+        create table message_drafts (
+          id text primary key,
+          owner_identity_id text not null,
+          context text not null check (context in ('reply', 'new_thread', 'notepad')),
+          forum_id text,
+          topic_id text,
+          title text,
+          body text not null,
+          options_json text,
+          revision integer not null default 1 check (revision >= 1),
+          created_at text not null,
+          updated_at text not null,
+          expires_at text not null,
+          check (
+            (context = 'reply' and topic_id is not null and forum_id is null and title is null and options_json is null)
+            or (context = 'new_thread' and forum_id is not null and topic_id is null and options_json is null)
+            or (context = 'notepad' and forum_id is null and topic_id is null)
+          ),
+          foreign key (owner_identity_id) references identities(id) on delete cascade,
+          foreign key (forum_id) references forums(id) on delete cascade,
+          foreign key (topic_id) references topics(id) on delete cascade
+        );
+        insert into message_drafts
+          (id, owner_identity_id, context, forum_id, topic_id, title, body, options_json, revision, created_at, updated_at, expires_at)
+          select id, owner_identity_id, context, forum_id, topic_id, title, body, null, revision, created_at, updated_at, expires_at
+          from message_drafts_legacy;
+        drop table message_drafts_legacy;
+        create unique index idx_message_drafts_reply on message_drafts(owner_identity_id, topic_id)
+          where context = 'reply';
+        create unique index idx_message_drafts_notepad on message_drafts(owner_identity_id)
+          where context = 'notepad';
+        create index idx_message_drafts_owner_updated on message_drafts(owner_identity_id, updated_at desc);
+        create index idx_message_drafts_expiry on message_drafts(expires_at);
+        create index idx_message_drafts_forum on message_drafts(owner_identity_id, forum_id, updated_at desc)
+          where context = 'new_thread';
+
+        create table notepad_entries (
+          id text primary key,
+          owner_identity_id text not null,
+          content_format text not null default 'plaintext-v1',
+          title text,
+          body text not null,
+          pinned integer not null default 0 check (pinned in (0, 1)),
+          revision integer not null default 1 check (revision >= 1),
+          created_at text not null,
+          updated_at text not null,
+          expires_at text,
+          foreign key (owner_identity_id) references identities(id) on delete cascade
+        );
+        create table notepad_entry_tags (
+          entry_id text not null,
+          tag text not null,
+          primary key (entry_id, tag),
+          foreign key (entry_id) references notepad_entries(id) on delete cascade
+        );
+        create index idx_notepad_owner_created on notepad_entries(owner_identity_id, created_at desc, id desc);
+        create index idx_notepad_expiry on notepad_entries(expires_at) where expires_at is not null;
+        create unique index idx_notepad_one_pinned on notepad_entries(owner_identity_id) where pinned = 1;
+        create index idx_notepad_tags_tag on notepad_entry_tags(tag, entry_id);
+      `);
+    },
+  },
 ];
 
 export const SCHEMA_VERSION: number = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;

@@ -125,8 +125,11 @@ and [`services/memstore/README.md`](../services/memstore/README.md).
 
 The forum is a UI and projection service. One topic maps to one canonical Pi
 session. Forum SQLite owns posts, identities, attachments, projection links,
-operational events, drafts, and other UI metadata, but agent execution and memory
-remain behind agentd. See [`docs/forum.md`](forum.md) for the cross-service contract
+operational events, drafts, private Notepad entries, and other UI/account metadata,
+but agent execution and memory remain behind agentd. Notepad entries are a separate
+owner-scoped forum-native aggregate rather than topics: they never create Pi
+sessions, enter conversation projections, or become memory origins. See
+[`docs/forum.md`](forum.md) for the cross-service contract
 and [`services/forum/README.md`](../services/forum/README.md) for the component.
 
 ### Subagents

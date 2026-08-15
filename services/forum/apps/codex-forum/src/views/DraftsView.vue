@@ -20,6 +20,7 @@ const filtered = computed(() => {
 });
 const replyDrafts = computed(() => filtered.value.filter((draft) => draft.context === 'reply'));
 const threadDrafts = computed(() => filtered.value.filter((draft) => draft.context === 'new_thread'));
+const notepadDrafts = computed(() => filtered.value.filter((draft) => draft.context === 'notepad'));
 const date = (value: string) =>
   new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
 const excerpt = (draft: MessageDraftDto) => draft.body.trim().replace(/\s+/g, ' ').slice(0, 180) || '(title only)';
@@ -27,9 +28,9 @@ function destination(draft: MessageDraftDto): string {
   return draft.destinationName ?? 'Destination unavailable';
 }
 function link(draft: MessageDraftDto) {
-  return draft.context === 'reply'
-    ? { name: 'topic.reply', params: { topicId: draft.topicId } }
-    : { name: 'forum.newthread', params: { forumId: draft.forumId }, query: { draft: draft.id } };
+  if (draft.context === 'reply') return { name: 'topic.reply', params: { topicId: draft.topicId } };
+  if (draft.context === 'notepad') return { name: 'user.notepad' };
+  return { name: 'forum.newthread', params: { forumId: draft.forumId }, query: { draft: draft.id } };
 }
 async function loadDrafts(): Promise<void> {
   drafts.value = (await api.listDrafts()).drafts;
@@ -104,6 +105,7 @@ onMounted(async () => {
       />
       <template
         v-for="group in [
+          { title: 'Notepad', items: notepadDrafts },
           { title: 'New threads', items: threadDrafts },
           { title: 'Replies', items: replyDrafts },
         ]"

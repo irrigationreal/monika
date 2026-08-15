@@ -40,6 +40,30 @@ describe('schema migrations', () => {
     });
   });
 
+  it('preserves populated private drafts while adding the Notepad context', () => {
+    runMigrations(db, { targetVersion: 45 });
+    db.prepare(
+      `insert into identities (id, display_name, kind, created_at, updated_at)
+       values ('owner-1', 'Owner', 'human', 'now', 'now')`
+    ).run();
+    db.prepare(
+      `insert into forums (id, name, status, visibility, created_at, updated_at)
+       values ('forum-1', 'Forum', 'active', 'public', 'now', 'now')`
+    ).run();
+    db.prepare(
+      `insert into message_drafts
+       (id, owner_identity_id, context, forum_id, topic_id, title, body, revision, created_at, updated_at, expires_at)
+       values ('draft-1', 'owner-1', 'new_thread', 'forum-1', null, 'Title', 'Body', 3, 'then', 'then', '2099')`
+    ).run();
+
+    runMigrations(db);
+
+    expect(db.prepare('select context, title, body, revision, options_json from message_drafts where id = ?').get('draft-1'))
+      .toEqual({ context: 'new_thread', title: 'Title', body: 'Body', revision: 3, options_json: null });
+    expect(db.prepare("select name from sqlite_master where type = 'table' and name = 'notepad_entries'").get())
+      .toBeTruthy();
+  });
+
   it('adds durable utterance origin and projection state', () => {
     runMigrations(db);
     const dispatchColumns = db.prepare('pragma table_info(post_dispatches)').all() as Array<{ name: string }>;

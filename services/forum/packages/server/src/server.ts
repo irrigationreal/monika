@@ -8,7 +8,7 @@ import rateLimit from '@fastify/rate-limit';
 import sensible from '@fastify/sensible';
 import Fastify from 'fastify';
 
-import { MessageDraftService, MessageTemplateService } from '@irrigationreal/codex-forum-core';
+import { MessageDraftService, MessageTemplateService, NotepadService } from '@irrigationreal/codex-forum-core';
 
 import { createAdapterRegistry } from './adapters/adapterRegistry';
 import { AgentBridge } from './agentBridge';
@@ -26,6 +26,7 @@ import { SqliteForumAnalyticsReadModel } from './readModels/analyticsReadModel';
 import { SqliteStatsReadModel } from './readModels/statsReadModel';
 import { SqliteMessageDraftRepository } from './repositories/sqliteMessageDraftRepository';
 import { SqliteMessageTemplateRepository } from './repositories/sqliteMessageTemplateRepository';
+import { SqliteNotepadRepository } from './repositories/sqliteNotepadRepository';
 import { registerAdapterRoutes } from './routes/adapterRoutes';
 import { registerAdminRoutes } from './routes/adminRoutes';
 import { registerAnalyticsRoutes } from './routes/analyticsRoutes';
@@ -35,6 +36,7 @@ import { registerChatRoutes } from './routes/chatRoutes';
 import { registerForumRoutes } from './routes/forumRoutes';
 import { registerMessageDraftRoutes } from './routes/messageDraftRoutes';
 import { registerMessageTemplateRoutes } from './routes/messageTemplateRoutes';
+import { registerNotepadRoutes } from './routes/notepadRoutes';
 import { registerNotificationRoutes } from './routes/notificationRoutes';
 import { registerProfileRoutes } from './routes/profileRoutes';
 import { registerRobotRoutes } from './routes/robotRoutes';
@@ -112,9 +114,13 @@ const { db } = openDb({ path: DB_PATH });
 migrate(db);
 const messageDraftService = new MessageDraftService(new SqliteMessageDraftRepository(db));
 const messageTemplateService = new MessageTemplateService(new SqliteMessageTemplateRepository(db));
+const notepadService = new NotepadService(new SqliteNotepadRepository(db));
 void messageDraftService.purgeExpired();
+void notepadService.purgeExpired();
 const draftCleanupTimer = setInterval(() => void messageDraftService.purgeExpired(), 24 * 60 * 60 * 1000);
 draftCleanupTimer.unref();
+const notepadCleanupTimer = setInterval(() => void notepadService.purgeExpired(), 60 * 1000);
+notepadCleanupTimer.unref();
 const bootstrapResult = bootstrap(db, {
   defaultWebIdentityId: DEFAULT_WEB_IDENTITY_ID,
   defaultWebIdentityUsername: DEFAULT_WEB_IDENTITY_USERNAME,
@@ -472,6 +478,7 @@ const registerApiRoutes: FastifyPluginAsync = async (api) => {
   registerRobotRoutes({ app: api, store, codex, bus, access, autoRunDirector });
   registerProfileRoutes({ app: api, store, access });
   registerMessageDraftRoutes({ app: api, store, access, service: messageDraftService });
+  registerNotepadRoutes({ app: api, access, service: notepadService });
   registerMessageTemplateRoutes({ app: api, access, service: messageTemplateService });
   registerSearchRoutes({ app: api, store, featureFlags, access });
   registerAdapterRoutes({

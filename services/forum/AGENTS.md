@@ -25,8 +25,9 @@ App:
 ## Architecture constraints
 
 - Pi JSONL sessions are canonical conversation state.
-- Forum SQLite is projection/metadata/blob metadata only.
-- One forum topic maps to one canonical Pi session.
+- Forum SQLite is projection/metadata/blob metadata for conversations and may be authoritative only for explicitly private,
+  non-conversation account state such as drafts and Notepad entries.
+- One forum topic maps to one canonical Pi session; private Notepad entries are not topics.
 - Memory save/dedupe identity uses canonical Pi session id/path.
 - Close/save lifecycle goes forum → agentd → Pi `session_shutdown` → stateful-memory.
 

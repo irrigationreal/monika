@@ -9,6 +9,8 @@ import {
   AnalyticsBucketValues,
   ForumVisibilityValues,
   MessageDraftContextValues,
+  NotepadContentFormatValues,
+  NotepadExpirationPresetValues,
   MessageTemplateContextValues,
   MessageTemplateForumScopeValues,
   MessageTemplateScopeValues,
@@ -74,6 +76,9 @@ import type {
   MessageDraftDto,
   MessageDraftListResponseDto,
   MessageDraftResponseDto,
+  NotepadEntryDto,
+  NotepadEntryResponseDto,
+  NotepadListResponseDto,
   MessageTemplateDto,
   MessageTemplateListResponseDto,
   ModelCatalogDto,
@@ -154,6 +159,8 @@ import type {
   MatrixMapRoomRequest,
   MatrixSendRequest,
   MessageDraftWriteRequest,
+  NotepadEntryUpdateRequest,
+  NotepadEntryWriteRequest,
   MessageTemplateReorderRequest,
   MessageTemplateUpdateRequest,
   MessageTemplateWriteRequest,
@@ -1350,6 +1357,11 @@ export const RegisterRequestSchema: z.ZodType<RegisterRequest> = z.object({
   inviteCode: z.string().min(1).max(256).optional(),
 });
 
+export const NotepadExpirationPresetSchema = z.enum(NotepadExpirationPresetValues);
+export const NotepadDraftOptionsSchema = z.object({
+  tags: z.array(z.string()).max(20),
+  expiration: NotepadExpirationPresetSchema,
+});
 export const MessageDraftContextSchema = z.enum(MessageDraftContextValues);
 export const MessageDraftDtoSchema: z.ZodType<MessageDraftDto> = z.object({
   id: z.string(),
@@ -1358,6 +1370,7 @@ export const MessageDraftDtoSchema: z.ZodType<MessageDraftDto> = z.object({
   topicId: nullableString,
   title: nullableString,
   body: z.string(),
+  options: NotepadDraftOptionsSchema.nullable(),
   revision: z.number().int().positive(),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -1376,8 +1389,50 @@ export const MessageDraftWriteRequestSchema: z.ZodType<MessageDraftWriteRequest>
     expectedRevision: z.number().int().nonnegative(),
     title: z.string().max(255).nullable().optional(),
     body: z.string(),
+    options: NotepadDraftOptionsSchema.nullable().optional(),
   })
   .strict();
+
+export const NotepadEntryDtoSchema: z.ZodType<NotepadEntryDto> = z.object({
+  id: z.string(),
+  contentFormat: z.enum(NotepadContentFormatValues),
+  title: nullableString,
+  body: z.string(),
+  tags: z.array(z.string()),
+  pinned: z.boolean(),
+  revision: z.number().int().positive(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  expiresAt: nullableString,
+});
+export const NotepadEntryResponseDtoSchema: z.ZodType<NotepadEntryResponseDto> = z.object({ entry: NotepadEntryDtoSchema });
+export const NotepadListResponseDtoSchema: z.ZodType<NotepadListResponseDto> = z.object({
+  entries: z.array(NotepadEntryDtoSchema),
+  tags: z.array(z.object({ tag: z.string(), count: z.number().int().nonnegative() })),
+  nextCursor: nullableString,
+});
+const NotepadBaseWriteSchema = z.object({
+  title: z.string().max(255).nullable().optional(),
+  body: z.string(),
+  tags: z.array(z.string()).max(20).optional(),
+  expiration: NotepadExpirationPresetSchema.optional(),
+});
+export const NotepadEntryWriteRequestSchema: z.ZodType<NotepadEntryWriteRequest> = NotepadBaseWriteSchema.extend({
+  draft: z.object({ id: z.string(), revision: z.number().int().positive() }),
+}).strict();
+export const NotepadEntryUpdateRequestSchema: z.ZodType<NotepadEntryUpdateRequest> = NotepadBaseWriteSchema.extend({
+  expectedRevision: z.number().int().positive(),
+  expiration: z.union([NotepadExpirationPresetSchema, z.literal('keep')]).optional(),
+  pinned: z.boolean().optional(),
+}).strict();
+export const NotepadListQuerySchema = z.object({
+  q: z.string().max(500).optional(),
+  tags: z.string().max(1000).optional(),
+  cursor: z.string().max(2000).optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+}).strict();
+export const NotepadDeleteQuerySchema = z.object({ revision: z.coerce.number().int().positive() }).strict();
+
 export const MessageDraftRevisionQuerySchema = z
   .object({
     revision: z.coerce.number().int().positive(),

@@ -16,8 +16,10 @@ The forum must **not** embed Pi or talk to memstore directly. The separation is:
   consumed by the forum bridge.
 
 Pi JSONL sessions remain canonical for agent conversation state. Forum SQLite is
-a projection/metadata layer: topics/posts, identities, uploads, mapping tables,
-reactions, sync state, and UI metadata.
+a projection/metadata layer for conversations—topics/posts, identities, uploads,
+mapping tables, reactions, and sync state—and is authoritative for private
+forum-native account state such as drafts and Notepad entries. Notepad entries are
+not topics, Pi sessions, conversation projections, or memory origins.
 
 Host mode has been removed. Pi tools operate inside the container by default; host
 or infrastructure access should be explicit through SSH/`relocate`.
@@ -446,8 +448,8 @@ Forum-specific authentication and migration remain in the
 ## Do not lose these design decisions
 
 - Pi JSONL sessions remain canonical for agent conversation state.
-- Forum SQLite is a projection/metadata layer.
-- One forum topic should map to one Pi session.
+- Forum SQLite is a projection/metadata layer for conversations and may own explicitly private, non-conversation account state.
+- One forum topic should map to one Pi session; private Notepad entries are not topics.
 - Historical import and ongoing sync include canonical user-facing sessions, but
   omit disposable pi-subagents child sessions by explicit agentd kind or dedicated
   child-root path. This applies equally to fresh and fork-context children.
@@ -462,7 +464,7 @@ Forum-specific authentication and migration remain in the
 
 ## Forum component features
 
-Message Templates and private drafts are documented in the
+Message Templates, private drafts, and the private Notepad are documented in the
 [forum README](../services/forum/README.md). Homepage freshness and component
 provenance live in
 [Monika-specific forum behavior](../services/forum/docs/MONIKA_BEHAVIOR.md), while
