@@ -865,7 +865,7 @@ const quickReplyWillDispatchRobot = computed(() => {
   const mode = topicRobotMode.value;
   if (mode === 'off') return false;
   if (mode === 'auto') return true;
-  return /@robot\\b/i.test(replyBody.value);
+  return /@robot\b/i.test(replyBody.value);
 });
 
 const quickReplyWillSteerRobot = computed(() => showRobotBusyNotice.value && quickReplyWillDispatchRobot.value);
@@ -1913,13 +1913,9 @@ function resetQuickReplyPresentation(): void {
 
 function applyQuickReplyDefault(): void {
   if (quickReplyPresentationTouched || !canDockQuickReply.value) return;
-  if (!state.currentUser.value?.quickReplyDockedByDefault) {
-    quickReplyPresentation.value = 'inline';
-    return;
-  }
-  quickReplyPresentation.value = window.matchMedia('(max-width: 600px)').matches
+  quickReplyPresentation.value = state.currentUser.value?.quickReplyDockedByDefault
     ? 'docked-collapsed'
-    : 'docked-expanded';
+    : 'inline';
 }
 
 async function quotePost(post: PostDto): Promise<void> {
@@ -2043,6 +2039,7 @@ async function confirmDiscardQuickDraft(): Promise<void> {
 
 async function reply(): Promise<void> {
   if (isReplying.value || !autosavedReply.hydrated.value || !replyBody.value.trim() || compactionFence.value) return;
+  const wasSteeringRobot = quickReplyWillSteerRobot.value;
   isReplying.value = true;
   isPublishingReply.value = true;
   let postCreated = false;
@@ -2085,6 +2082,9 @@ async function reply(): Promise<void> {
     await router.push({ query: nextQuery, hash: `#${lastIndex}` });
     await nextTick();
     scrollToAnchor('smooth');
+
+    quickReplyOptionsOpen.value = false;
+    if (quickReplyDocked.value && !wasSteeringRobot) await collapseQuickReply();
   } catch (err) {
     if (!postCreated) autosavedReply.resume();
     state.setError(
@@ -3692,11 +3692,7 @@ onUnmounted(() => {
             class="vb-small-btn"
             type="button"
             :aria-expanded="quickReplyOptionsOpen"
-            :aria-controls="
-              sessionContext
-                ? 'quick-reply-template quick-reply-attachment-picker quick-reply-model-options quick-reply-auto-compact quick-reply-context'
-                : 'quick-reply-template quick-reply-attachment-picker quick-reply-model-options quick-reply-auto-compact'
-            "
+            aria-controls="quick-reply-template quick-reply-attachment-picker quick-reply-auto-compact"
             @click="quickReplyOptionsOpen = !quickReplyOptionsOpen"
           >
             {{ quickReplyOptionsOpen ? 'Hide options' : 'Options' }}
@@ -3837,7 +3833,7 @@ onUnmounted(() => {
                 </ul>
               </div>
             </div>
-            <div id="quick-reply-model-options" v-show="quickReplyOptionsOpen" class="vb-reply-options">
+            <div id="quick-reply-model-options" class="vb-reply-options">
           <div class="vb-option-group">
             <label for="model-select">Model:</label>
             <select
@@ -3871,12 +3867,7 @@ onUnmounted(() => {
               :busy="isRobotBusy || compactionFence"
             />
             </div>
-            <div
-              v-if="sessionContext"
-              v-show="quickReplyOptionsOpen"
-              id="quick-reply-context"
-              class="vb-reply-context-meter"
-            >
+            <div v-if="sessionContext" id="quick-reply-context" class="vb-reply-context-meter">
           <strong>Context:</strong>
           <span
             v-if="sessionContext.usedTokens !== null && sessionContext.contextWindowTokens"

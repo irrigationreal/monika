@@ -58,6 +58,7 @@ type MockState = {
   messageTemplates: MessageTemplateDto[];
   drafts: Record<string, MessageDraftDto>;
   quickReplyDockedByDefault: boolean;
+  robotActivity: RobotStateDto['activity'];
   sessionContext: SessionContextDto | null;
 };
 
@@ -128,6 +129,7 @@ function createMockState(): MockState {
     compactionOperations: {},
     compactionRequests: [],
     quickReplyDockedByDefault: false,
+    robotActivity: 'idle',
     sessionContext: null,
     messageTemplates: [
       {
@@ -866,7 +868,7 @@ async function attachMockApi(target: Page | BrowserContext, state: MockState): P
       const statePayload: RobotStateDto = {
         topicId,
         sessionId: 'session-1',
-        activity: 'idle',
+        activity: state.robotActivity,
         model: null,
         reasoningEffort: null,
         lastUpdatedAt: nextTimestamp(state),
@@ -888,7 +890,7 @@ async function attachMockApi(target: Page | BrowserContext, state: MockState): P
       const streamState: RobotStateDto = {
         topicId,
         sessionId: 'session-1',
-        activity: 'idle',
+        activity: state.robotActivity,
         model: null,
         reasoningEffort: null,
         lastUpdatedAt: nextTimestamp(state),
@@ -1294,9 +1296,12 @@ test.describe('Threading and reply flows', () => {
     const textarea = quickReplyBox(page);
     const scrollRegion = composer.locator('.vb-quick-reply-scroll-region');
     const submit = composer.getByRole('button', { name: 'Post Quick Reply' });
+    await expect(composer).toHaveClass(/vb-quick-reply--collapsed/);
+    await expect(textarea).toBeHidden();
+    await expect(textarea).toHaveCount(1);
+    await composer.getByRole('button', { name: 'Expand' }).click();
     await expect(composer).toHaveClass(/vb-quick-reply--expanded/);
     await expect(textarea).toBeVisible();
-    await expect(textarea).toHaveCount(1);
     await expect(page.getByRole('button', { name: 'Quick Reply', exact: true })).toHaveCount(0);
 
     const options = composer.getByRole('button', { name: 'Options' });
@@ -1305,9 +1310,7 @@ test.describe('Threading and reply flows', () => {
     expect(controlledIds).toEqual([
       'quick-reply-template',
       'quick-reply-attachment-picker',
-      'quick-reply-model-options',
       'quick-reply-auto-compact',
-      'quick-reply-context',
     ]);
     for (const id of controlledIds) {
       const controlled = composer.locator(`#${id}`);
@@ -1315,6 +1318,8 @@ test.describe('Threading and reply flows', () => {
       await expect(controlled).toBeHidden();
     }
     await expect(textarea).toBeVisible();
+    await expect(composer.locator('#quick-reply-model-options')).toBeVisible();
+    await expect(composer.locator('#quick-reply-context')).toBeVisible();
     await expect(composer.getByRole('link', { name: 'Open full editor' })).toBeHidden();
     await expect(submit).toBeVisible();
     await options.click();
@@ -1436,12 +1441,16 @@ test.describe('Threading and reply flows', () => {
       .evaluate((element) => Number.parseFloat(getComputedStyle(element).paddingBottom));
     expect(reservedBottom).toBeCloseTo(dockBox.height + 12, 0);
 
-    await options.click();
+    await expect(options).toHaveAttribute('aria-expanded', 'true');
     await composer.locator('input[type="file"]').setInputFiles([]);
-    await textarea.fill('Post without closing the dock');
+    await textarea.fill('Post and return to reading');
     await submit.click();
-    await expect(composer).toHaveClass(/vb-quick-reply--docked/);
+    await expect(composer).toHaveClass(/vb-quick-reply--collapsed/);
     await expect(textarea).toHaveValue('');
+    await composer.getByRole('button', { name: 'Expand' }).click();
+    await expect(options).toHaveAttribute('aria-expanded', 'false');
+    await expect(composer.locator('#quick-reply-model-options')).toBeVisible();
+    await expect(composer.locator('#quick-reply-context')).toBeVisible();
 
     expect(fixture.lockedTopicId).not.toBeNull();
     await page.goto(`/topics/${fixture.lockedTopicId}`);
@@ -1450,8 +1459,22 @@ test.describe('Threading and reply flows', () => {
     await expect(composer.getByRole('button', { name: 'Keep Quick Reply visible while reading' })).toHaveCount(0);
     await page.goto(`/topics/${fixture.topicId}`);
     await expect(page.locator('.vb-locked-badge')).toHaveCount(0);
-    await expect(composer).toHaveClass(/vb-quick-reply--docked/);
+    await expect(composer).toHaveClass(/vb-quick-reply--collapsed/);
 
+    state.robotActivity = 'thinking';
+    await page.reload();
+    await expect(composer).toHaveClass(/vb-quick-reply--collapsed/);
+    await composer.getByRole('button', { name: 'Expand' }).click();
+    await options.click();
+    await textarea.fill('@robot steer without closing the composer');
+    const steer = composer.getByRole('button', { name: 'Steer Reply' });
+    await expect(steer).toBeVisible();
+    await steer.click();
+    await expect(composer).toHaveClass(/vb-quick-reply--expanded/);
+    await expect(options).toHaveAttribute('aria-expanded', 'false');
+    await expect(textarea).toHaveValue('');
+
+    state.robotActivity = 'idle';
     await page.setViewportSize({ width: 390, height: 800 });
     await page.reload();
     await expect(composer).toHaveClass(/vb-quick-reply--collapsed/);
@@ -1489,7 +1512,6 @@ test.describe('Threading and reply flows', () => {
     expect(controlledIds).toEqual([
       'quick-reply-template',
       'quick-reply-attachment-picker',
-      'quick-reply-model-options',
       'quick-reply-auto-compact',
     ]);
     for (const id of controlledIds) {

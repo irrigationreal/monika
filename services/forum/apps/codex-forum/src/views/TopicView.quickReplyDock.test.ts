@@ -42,7 +42,7 @@ describe('TopicView persistent Quick Reply dock', () => {
     expect(source).toContain('quickReplyTextareaRef.value?.focus({ preventScroll: true })');
   });
 
-  it('keeps the pre-dock control order and hides only optional controls behind truthful discontiguous disclosure', () => {
+  it('keeps operational state visible and hides only ancillary controls behind truthful disclosure', () => {
     const order = [
       'for="quick-reply-message"',
       'id="quick-reply-template"',
@@ -68,10 +68,12 @@ describe('TopicView persistent Quick Reply dock', () => {
     ]) {
       expect(source).toContain(`id="${id}"`);
     }
-    expect(source.match(/v-show="quickReplyOptionsOpen"/g)).toHaveLength(5);
+    expect(source.match(/v-show="quickReplyOptionsOpen"/g)).toHaveLength(3);
     expect(source).toContain(
-      "'quick-reply-template quick-reply-attachment-picker quick-reply-model-options quick-reply-auto-compact quick-reply-context'"
+      'aria-controls="quick-reply-template quick-reply-attachment-picker quick-reply-auto-compact"'
     );
+    expect(source).toContain('id="quick-reply-model-options" class="vb-reply-options"');
+    expect(source).toContain('v-if="sessionContext" id="quick-reply-context"');
     const templateStart = source.indexOf('id="quick-reply-template"');
     const templateEnd = source.indexOf('</div>', templateStart);
     expect(source.indexOf('Open full editor', templateStart)).toBeLessThan(templateEnd);
@@ -114,10 +116,20 @@ describe('TopicView persistent Quick Reply dock', () => {
     expect(source).toContain('topic.id === routeTopicId.value');
     expect(source).toContain("topic.status === 'open'");
     expect(source).toContain('if (routeTopicId.value !== topicId) return;');
-    expect(source).toContain("quickReplyPresentation.value = window.matchMedia('(max-width: 600px)').matches");
+    expect(source).toContain("? 'docked-collapsed'");
+    expect(source).not.toContain("window.matchMedia('(max-width: 600px)').matches");
     expect(source).toContain('onBeforeRouteLeave(async () =>');
     expect(source).toContain('return confirmReplyFileNavigation();');
     expect(source).not.toContain('applyQuickReplyDefault(true)');
+  });
+
+  it('resets options after successful submissions and collapses posts without collapsing steers', () => {
+    expect(source).toContain('const wasSteeringRobot = quickReplyWillSteerRobot.value;');
+    expect(source).toContain('quickReplyOptionsOpen.value = false;');
+    expect(source).toContain('if (quickReplyDocked.value && !wasSteeringRobot) await collapseQuickReply();');
+    expect(source.indexOf('quickReplyOptionsOpen.value = false;', source.indexOf('async function reply()'))).toBeGreaterThan(
+      source.indexOf("scrollToAnchor('smooth');", source.indexOf('async function reply()'))
+    );
   });
 
   it('stops stale topic-load continuations before topic-specific side effects', () => {
