@@ -273,7 +273,7 @@ onMounted(async () => {
       <textarea
         v-model="body"
         :disabled="publishing"
-        class="vb-textarea"
+        class="vb-modal-textarea vb-note-textarea"
         rows="6"
         placeholder="Write a note…"
         aria-label="Note body"
@@ -304,13 +304,13 @@ onMounted(async () => {
         /></label>
         <label
           >Expires
-          <select v-model="options.expiration" :disabled="publishing" class="vb-select">
+          <select v-model="options.expiration" :disabled="publishing" class="vb-option-select">
             <option v-for="item in expirationOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
           </select>
         </label>
       </div>
       <div v-if="showPreview" class="vb-note-preview" v-html="renderContent(body, null)"></div>
-      <button class="vb-button vb-note-post" type="submit" :disabled="!canPost">
+      <button class="vb-btn vb-note-post" type="submit" :disabled="!canPost">
         {{ publishing ? 'Posting…' : 'Post Note' }}
       </button>
     </form>
@@ -378,9 +378,7 @@ onMounted(async () => {
         </div>
       </article>
       <div v-if="!feed.length && !pinned && !loading" class="vb-empty">No notes yet.</div>
-      <button v-if="nextCursor" class="vb-button" type="button" :disabled="loading" @click="load(false)">
-        Load more
-      </button>
+      <button v-if="nextCursor" class="vb-btn" type="button" :disabled="loading" @click="load(false)">Load more</button>
     </div>
 
     <div v-if="editing" class="vb-modal-overlay" @click.self="editing = null">
@@ -390,11 +388,11 @@ onMounted(async () => {
         </div>
         <div class="vb-modal-body">
           <input v-model="editTitle" class="vb-text-input" maxlength="255" placeholder="Optional title" />
-          <textarea v-model="editBody" class="vb-textarea" rows="10"></textarea>
+          <textarea v-model="editBody" class="vb-modal-textarea" rows="10"></textarea>
           <label>Tags <input v-model="editTags" class="vb-text-input" /></label>
           <label
             >Expiration
-            <select v-model="editExpiration" class="vb-select">
+            <select v-model="editExpiration" class="vb-modal-select">
               <option value="keep">Keep current expiration</option>
               <option v-for="item in expirationOptions" :key="item.value" :value="item.value">
                 {{ item.label }} from save time
@@ -404,7 +402,7 @@ onMounted(async () => {
         </div>
         <div class="vb-modal-footer">
           <button type="button" class="vb-small-btn" @click="editing = null">Cancel</button
-          ><button class="vb-button" type="submit">Save Changes</button>
+          ><button class="vb-btn" type="submit">Save Changes</button>
         </div>
       </form>
     </div>
@@ -454,6 +452,16 @@ onMounted(async () => {
   border: 1px solid var(--border-muted);
   background: var(--bg-surface-alt);
   padding: 10px;
+}
+.vb-note-textarea {
+  width: 100%;
+  min-height: 120px;
+  box-sizing: border-box;
+}
+.vb-note-textarea:disabled,
+.vb-note-options .vb-option-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
 }
 .vb-note-post {
   width: 100%;

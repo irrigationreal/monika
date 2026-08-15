@@ -16,4 +16,11 @@ describe('Notepad draft safety', () => {
     expect(source).toContain("pending.kind === 'discard-draft'");
     expect(source).toContain('await autosavedDraft.discard()');
   });
+
+  it('uses the shared forum styles for note controls', () => {
+    expect(source).toContain('class="vb-modal-textarea vb-note-textarea"');
+    expect(source).toContain('class="vb-option-select"');
+    expect(source).toContain('class="vb-btn vb-note-post"');
+    expect(source).not.toMatch(/class="vb-(?:textarea|select|button)(?:\s|\")/);
+  });
 });
