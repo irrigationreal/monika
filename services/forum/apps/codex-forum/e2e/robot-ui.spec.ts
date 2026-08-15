@@ -1220,10 +1220,13 @@ test.describe('Robot UI (mocked)', () => {
       document.cookie = 'cforum_session=mock-access-token; path=/; SameSite=Lax';
     });
     await page.goto('/admin');
-    await page.waitForResponse((response) => response.url().includes('/api/admin/robot/automations'));
     await expect(page.locator('.vb-admin-tabs')).toBeVisible();
-    await expect(page.locator('.vb-admin-tab', { hasText: 'Robot Automations' })).toBeVisible();
-    await page.locator('.vb-admin-tab', { hasText: 'Robot Automations' }).click();
+    const robotAutomationsTab = page.locator('.vb-admin-tab', { hasText: 'Robot Automations' });
+    await expect(robotAutomationsTab).toBeVisible();
+    await Promise.all([
+      page.waitForResponse((response) => response.url().includes('/api/admin/robot/automations')),
+      robotAutomationsTab.click(),
+    ]);
     await expect(page.locator('.vb-form-hint', { hasText: 'Currently active' })).toContainText('1 / 2');
 
     await page.locator('.vb-admin-table').getByRole('button', { name: 'Run' }).first().click();
@@ -1254,8 +1257,10 @@ test.describe('Robot UI (mocked)', () => {
     }));
 
     await page.goto('/admin');
-    await page.waitForResponse((response) => response.url().includes('/api/admin/robot/automations'));
-    await page.locator('.vb-admin-tab', { hasText: 'Robot Automations' }).click();
+    await Promise.all([
+      page.waitForResponse((response) => response.url().includes('/api/admin/robot/automations')),
+      page.locator('.vb-admin-tab', { hasText: 'Robot Automations' }).click(),
+    ]);
     await expect(page.locator('.vb-form-hint', { hasText: 'Currently active' })).toContainText('0 / 2');
   });
 });
