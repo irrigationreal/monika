@@ -416,7 +416,15 @@ test.describe('Auth registration and profile flows', () => {
     await page.locator('button', { hasText: 'Go to Forum Now' }).click();
     await expect(page).toHaveURL('/');
     await expect(page.locator('.vb-welcome')).toContainText('Riley Walker');
+    await expect(page.locator('.vb-welcome-links a')).toHaveText([
+      'User CP',
+      'Drafts',
+      'Notepad',
+      'Files',
+      'Message Templates',
+    ]);
     await expect(page.locator('.vb-welcome-links')).toContainText('Log Out');
+    await expect(page.locator('.vb-nav-items a')).toHaveText(['Forum Home', 'Chat', 'Developers', 'API Docs']);
 
     await page.reload();
     await expect(page.locator('.vb-welcome')).toContainText('Riley Walker');
@@ -472,9 +480,16 @@ test.describe('Auth registration and profile flows', () => {
     await expect(page.locator('.vb-profile-row', { hasText: 'Theme' })).toContainText('classic-dark');
     await expect(page.locator('.vb-profile-avatar')).toHaveAttribute('src', /cdn\.example\.test/);
 
+    await page.setViewportSize({ width: 390, height: 720 });
+    const forumMenu = page.getByRole('button', { name: 'Toggle forum navigation' });
+    await expect(forumMenu).toHaveAttribute('aria-expanded', 'false');
+    await forumMenu.click();
+    await expect(forumMenu).toHaveAttribute('aria-expanded', 'true');
     await page.locator('.vb-nav-item', { hasText: 'Forum Home' }).click();
     await expect(page).toHaveURL('/');
+    await expect(forumMenu).toHaveAttribute('aria-expanded', 'false');
     await expect(page.locator('.vb-welcome')).toContainText('Riley Updated');
+    await page.setViewportSize({ width: 1280, height: 720 });
 
     await page.locator('.vb-welcome-links a', { hasText: 'User CP' }).click();
     await page.locator('button', { hasText: 'Edit Profile' }).click();

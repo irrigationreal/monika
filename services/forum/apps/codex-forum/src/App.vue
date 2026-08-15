@@ -11,6 +11,7 @@ import { api } from './lib/apiClient';
 import { themeLabel } from './themes/forumThemes';
 
 import type { PublicKeyCredentialRequestOptionsJSON } from '@simplewebauthn/browser';
+import type { RouteLocationRaw } from 'vue-router';
 
 const route = useRoute();
 const router = useRouter();
@@ -116,6 +117,42 @@ const displayName = computed(() => {
 });
 
 const isAdmin = computed(() => state.currentUser.value?.kind === 'admin');
+
+interface NavigationLink {
+  label: string;
+  to: RouteLocationRaw;
+}
+
+const accountLinks = computed<NavigationLink[]>(() =>
+  state.isLoggedIn.value
+    ? [
+        { label: 'User CP', to: { name: 'user.profile' } },
+        { label: 'Drafts', to: { name: 'user.drafts' } },
+        { label: 'Notepad', to: { name: 'user.notepad' } },
+        { label: 'Files', to: { name: 'user.files' } },
+        { label: 'Message Templates', to: { name: 'user.messageTemplates' } },
+      ]
+    : []
+);
+
+const forumLinks = computed<NavigationLink[]>(() => {
+  const links: NavigationLink[] = [{ label: 'Forum Home', to: { name: 'forum.home' } }];
+  if (isAdmin.value) {
+    links.push(
+      { label: 'Admin', to: { name: 'admin' } },
+      { label: 'Robot Dashboard', to: { name: 'admin.robotDashboard' } },
+      { label: 'Analytics', to: { name: 'admin.analytics' } }
+    );
+  }
+  if (state.isLoggedIn.value) {
+    links.push(
+      { label: 'Chat', to: { name: 'chat.home' } },
+      { label: 'Developers', to: { name: 'developer.portal' } },
+      { label: 'API Docs', to: { name: 'api.docs' } }
+    );
+  }
+  return links;
+});
 
 async function goHome(): Promise<void> {
   if (route.path !== '/') {
@@ -247,15 +284,8 @@ onMounted(async () => {
             <span class="vb-welcome-divider">•</span>
             <span class="vb-welcome-sub">Last visit: {{ new Date().toLocaleString() }}</span>
           </div>
-          <div class="vb-welcome-links">
-            <router-link v-if="state.isLoggedIn.value" :to="{ name: 'user.profile' }">User CP</router-link>
-            <router-link v-if="state.isLoggedIn.value" :to="{ name: 'user.files' }">Files</router-link>
-            <router-link v-if="state.isLoggedIn.value" :to="{ name: 'user.notepad' }">Notepad</router-link>
-            <router-link v-if="state.isLoggedIn.value" :to="{ name: 'chat.home' }">Chat</router-link>
-            <router-link v-if="state.isLoggedIn.value" :to="{ name: 'developer.portal' }">Developers</router-link>
-            <router-link v-if="state.isLoggedIn.value" :to="{ name: 'api.docs' }">API Docs</router-link>
-            <router-link v-if="isAdmin" :to="{ name: 'admin.analytics' }">Analytics</router-link>
-            <router-link v-if="isAdmin" :to="{ name: 'admin' }">Admin</router-link>
+          <nav class="vb-welcome-links" aria-label="Account navigation">
+            <router-link v-for="link in accountLinks" :key="link.label" :to="link.to">{{ link.label }}</router-link>
             <template v-if="state.isLoggedIn.value">
               <button ref="logoutButton" class="vb-link-btn" type="button" @click="handleLogout">Log Out</button>
             </template>
@@ -263,11 +293,17 @@ onMounted(async () => {
               <router-link v-if="state.canShowRegisterLink.value" :to="{ name: 'auth.register' }">Register</router-link>
               <button class="vb-link-btn" type="button" @click="openLoginForm">Log In</button>
             </template>
-            <button class="vb-theme-toggle" type="button" @click="cycleTheme" :title="`Theme: ${themeLabel(theme)}`">
+            <button
+              class="vb-theme-toggle"
+              type="button"
+              :aria-label="`Change theme. Current theme: ${themeLabel(theme)}`"
+              :title="`Theme: ${themeLabel(theme)}`"
+              @click="cycleTheme"
+            >
               <span v-if="resolvedTone === 'light'">&#9728;</span>
               <span v-else>&#9790;</span>
             </button>
-          </div>
+          </nav>
         </div>
       </header>
 
@@ -332,90 +368,29 @@ onMounted(async () => {
         </div>
       </div>
 
-      <nav class="vb-nav">
-        <button class="vb-nav-hamburger" type="button" aria-label="Toggle menu" @click="toggleMobileMenu">
+      <nav class="vb-nav" aria-label="Forum navigation">
+        <button
+          class="vb-nav-hamburger"
+          type="button"
+          aria-label="Toggle forum navigation"
+          aria-controls="forum-navigation-items"
+          :aria-expanded="mobileMenuOpen"
+          @click="toggleMobileMenu"
+        >
           <span class="vb-hamburger-line"></span>
           <span class="vb-hamburger-line"></span>
           <span class="vb-hamburger-line"></span>
         </button>
-        <div class="vb-nav-items" :class="{ 'vb-nav-open': mobileMenuOpen }">
-          <router-link class="vb-nav-item" :to="{ name: 'forum.home' }" @click="closeMobileMenu"
-            >Forum Home</router-link
-          >
+        <div id="forum-navigation-items" class="vb-nav-items" :class="{ 'vb-nav-open': mobileMenuOpen }">
           <router-link
-            v-if="state.isLoggedIn.value"
+            v-for="link in forumLinks"
+            :key="link.label"
             class="vb-nav-item"
-            :to="{ name: 'user.profile' }"
+            :to="link.to"
             @click="closeMobileMenu"
-            >Profile</router-link
           >
-          <router-link
-            v-if="state.isLoggedIn.value"
-            class="vb-nav-item"
-            :to="{ name: 'user.files' }"
-            @click="closeMobileMenu"
-            >Files</router-link
-          >
-          <router-link
-            v-if="state.isLoggedIn.value"
-            class="vb-nav-item"
-            :to="{ name: 'user.notepad' }"
-            @click="closeMobileMenu"
-            >Notepad</router-link
-          >
-          <router-link
-            v-if="state.isLoggedIn.value"
-            class="vb-nav-item"
-            :to="{ name: 'chat.home' }"
-            @click="closeMobileMenu"
-            >Chat</router-link
-          >
-          <router-link
-            v-if="state.isLoggedIn.value"
-            class="vb-nav-item"
-            :to="{ name: 'developer.portal' }"
-            @click="closeMobileMenu"
-            >Developers</router-link
-          >
-          <router-link
-            v-if="state.isLoggedIn.value"
-            class="vb-nav-item"
-            :to="{ name: 'api.docs' }"
-            @click="closeMobileMenu"
-            >API Docs</router-link
-          >
-          <router-link v-if="isAdmin" class="vb-nav-item" :to="{ name: 'admin' }" @click="closeMobileMenu"
-            >Admin</router-link
-          >
-          <router-link
-            v-if="!state.isLoggedIn.value && state.canShowRegisterLink.value"
-            class="vb-nav-item"
-            :to="{ name: 'auth.register' }"
-            @click="closeMobileMenu"
-            >Register</router-link
-          >
-          <button
-            v-if="!state.isLoggedIn.value"
-            class="vb-nav-item"
-            type="button"
-            @click="
-              closeMobileMenu();
-              openLoginForm();
-            "
-          >
-            Log In
-          </button>
-          <button
-            v-if="state.isLoggedIn.value"
-            class="vb-nav-item"
-            type="button"
-            @click="
-              closeMobileMenu();
-              handleLogout();
-            "
-          >
-            Log Out
-          </button>
+            {{ link.label }}
+          </router-link>
         </div>
       </nav>
 

@@ -1146,8 +1146,21 @@ test.describe('Robot UI (mocked)', () => {
 
     await page.goto('/');
     await expect(page.locator('.vb-forum-title', { hasText: context.forum.name }).first()).toBeVisible();
-    await page.locator('.vb-tools').locator('a', { hasText: 'Robot Dashboard' }).click();
-    await page.waitForResponse((response) => response.url().includes('/api/admin/robot/dashboard'));
+    await expect(page.locator('.vb-tools').getByText('Robot Dashboard', { exact: true })).toHaveCount(0);
+    await expect(page.locator('.vb-tools').getByText('Analytics', { exact: true })).toHaveCount(0);
+    await expect(page.locator('.vb-nav-items a')).toHaveText([
+      'Forum Home',
+      'Admin',
+      'Robot Dashboard',
+      'Analytics',
+      'Chat',
+      'Developers',
+      'API Docs',
+    ]);
+    await Promise.all([
+      page.waitForResponse((response) => response.url().includes('/api/admin/robot/dashboard')),
+      page.locator('.vb-nav-items').getByText('Robot Dashboard', { exact: true }).click(),
+    ]);
     const robotLoadPanel = page.locator('.vb-panel', { hasText: 'Robot Load' });
     await expect(robotLoadPanel.locator('.vb-kv', { hasText: 'Busy' })).toContainText('1');
     await expect(robotLoadPanel.locator('.vb-kv', { hasText: 'Queued' })).toContainText('2');

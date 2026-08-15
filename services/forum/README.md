@@ -70,6 +70,9 @@ packages/
 ### Web UI
 
 - Vue 3 app in `apps/codex-forum` with classic forum UI.
+- The header separates account navigation from forum navigation: the welcome strip owns personal pages, authentication
+  actions, and theme selection, while the primary navbar owns forum, admin, chat, developer, and API destinations.
+  Account links remain a single horizontally scrollable row on narrow viewports; forum links use the mobile menu.
 - Topic view exposes live reasoning + tool runs and supports inline moderation. Explicit delayed `follow_up` subagent
   continuations render beneath their origin with a **Follow-up** badge; `awaited` work stays part of the claiming parent
   synthesis and `silent` work creates no public continuation.
