@@ -21,6 +21,7 @@ import { createClientOperationId } from '../lib/clientOperationId';
 import { parseReasoningSteps } from '../lib/reasoning';
 import { getToolMiniModel, toolKindIcon, traceToneForKind } from '../lib/toolMiniView';
 import { toolHumanTitle } from '../lib/toolTimeline';
+import { buildLiveTraceItems, buildPersistedTraceItems } from '../lib/unifiedTrace';
 
 import type { RobotActivityEvent } from '../composables/useForumState';
 import type {
@@ -39,6 +40,7 @@ import type {
   TopicOperationalEventDto,
 } from '../lib/apiClient';
 import type { ReasoningStep } from '../lib/reasoning';
+import type { UnifiedTraceItem } from '../lib/unifiedTrace';
 
 type LiveTurnItem = {
   id: string;
@@ -76,6 +78,10 @@ const editingPost = ref<PostDto | null>(null);
 const editBody = ref('');
 const showDeleteConfirm = ref<string | null>(null);
 const showAllTools = ref(false);
+const toolUsageReasoningStorageKey = 'codex-forum:tool-usage:show-reasoning';
+const toolUsageResponseLimit = 20;
+const showToolReasoning = ref(readToolUsageReasoningPreference());
+const expandedReasoning = ref(new Set<string>());
 const showAdminPanel = ref(false);
 const editingTitle = ref(false);
 const newTitle = ref('');
@@ -265,6 +271,23 @@ const autoRunModelOptions = computed(() => {
 });
 const showAutoRunReasoning = computed(() => state.modelSupportsReasoning(autoRunModel.value));
 const autoRunReasoningOptions = computed(() => state.modelReasoningOptions(autoRunModel.value));
+
+function readToolUsageReasoningPreference(): boolean {
+  if (typeof window === 'undefined') return true;
+  try {
+    return window.localStorage.getItem(toolUsageReasoningStorageKey) !== 'false';
+  } catch {
+    return true;
+  }
+}
+
+watch(showToolReasoning, (showReasoning) => {
+  try {
+    window.localStorage.setItem(toolUsageReasoningStorageKey, String(showReasoning));
+  } catch {
+    // The in-memory preference still applies when browser storage is unavailable.
+  }
+});
 
 function operationalEventsAfter(postId: string): TopicOperationalEventDto[] {
   return state.operationalEvents.value
@@ -1653,10 +1676,169 @@ const routePostId = computed(() => {
   return String(raw);
 });
 
-const visibleToolRuns = computed(() => {
-  if (!state.robotState.value?.recentToolRuns) return [];
-  return showAllTools.value ? state.robotState.value.recentToolRuns : state.robotState.value.recentToolRuns.slice(0, 1);
+type ToolUsagePlan = SessionInspectorDto['plans'][number];
+
+interface ToolUsageTraceGroup {
+  id: string;
+  parentPostId: string | null;
+  latestAt: string;
+  live: boolean;
+  items: UnifiedTraceItem[];
+}
+
+interface MutableToolUsageGroup {
+  id: string;
+  parentPostId: string | null;
+  latestAt: string;
+  plan: ToolUsagePlan | null;
+  tools: ToolRunDto[];
+}
+
+function laterTimestamp(current: string, candidate: string | null | undefined): string {
+  return candidate && candidate > current ? candidate : current;
+}
+
+const toolUsageTraceGroups = computed<ToolUsageTraceGroup[]>(() => {
+  const planById = new Map<string, ToolUsagePlan>();
+  for (const plan of state.sessionInspector.value?.plans ?? []) planById.set(plan.id, plan);
+  const currentPlan = state.robotState.value?.currentPlan ?? null;
+  if (currentPlan) {
+    const persistedPlan = planById.get(currentPlan.id);
+    planById.set(currentPlan.id, {
+      ...persistedPlan,
+      ...currentPlan,
+      parentPostId: currentPlan.parentPostId ?? persistedPlan?.parentPostId ?? null
+    });
+  }
+
+  const toolById = new Map<string, ToolRunDto>();
+  for (const tool of state.sessionInspector.value?.toolRuns ?? []) toolById.set(tool.id, tool);
+  for (const tool of state.robotState.value?.recentToolRuns ?? []) toolById.set(tool.id, tool);
+
+  const groups = new Map<string, MutableToolUsageGroup>();
+  for (const plan of planById.values()) {
+    const parentPostId = plan.parentPostId ?? null;
+    const id = parentPostId ? `response:${parentPostId}` : `plan:${plan.id}`;
+    const existing = groups.get(id);
+    if (!existing) {
+      groups.set(id, {
+        id,
+        parentPostId,
+        latestAt: plan.updatedAt,
+        plan,
+        tools: []
+      });
+    } else {
+      existing.latestAt = laterTimestamp(existing.latestAt, plan.updatedAt);
+      if (!existing.plan || plan.updatedAt > existing.plan.updatedAt) existing.plan = plan;
+    }
+  }
+
+  for (const tool of toolById.values()) {
+    const parentPostId = tool.parentPostId ?? null;
+    const id = parentPostId ? `response:${parentPostId}` : `tool:${tool.id}`;
+    let group = groups.get(id);
+    if (!group) {
+      group = {
+        id,
+        parentPostId,
+        latestAt: tool.finishedAt ?? tool.startedAt,
+        plan: null,
+        tools: []
+      };
+      groups.set(id, group);
+    }
+    group.tools.push(tool);
+    group.latestAt = laterTimestamp(group.latestAt, tool.finishedAt ?? tool.startedAt);
+  }
+
+  const active = Boolean(state.robotState.value && state.robotState.value.activity !== 'idle');
+  const activeParentPostId = currentPlan?.parentPostId ?? null;
+  return [...groups.values()]
+    .map((group): ToolUsageTraceGroup => {
+      const isLive = Boolean(
+        active &&
+          currentPlan &&
+          (activeParentPostId
+            ? group.parentPostId === activeParentPostId
+            : group.plan?.id === currentPlan.id)
+      );
+      let items = isLive
+        ? buildLiveTraceItems({
+            segments: state.committedSegments.value,
+            reasoningDraft: state.reasoningDraft.value,
+            tools: group.tools
+          })
+        : [];
+      if (items.length === 0) {
+        items = buildPersistedTraceItems({
+          reasoningText: group.plan?.summary ?? group.plan?.content ?? null,
+          reasoningCheckpoints: group.plan?.reasoningCheckpoints ?? null,
+          tools: group.tools
+        });
+      }
+      return {
+        id: group.id,
+        parentPostId: group.parentPostId,
+        latestAt: group.latestAt,
+        live: isLive,
+        items
+      };
+    })
+    .filter((group) => group.items.length > 0)
+    .sort((a, b) => b.latestAt.localeCompare(a.latestAt))
+    .slice(0, toolUsageResponseLimit);
 });
+
+const showingAllToolUsageGroups = computed(
+  () => showAllTools.value && toolUsageTraceGroups.value.length > 1
+);
+
+const visibleToolUsageGroups = computed(() => {
+  const groups = showingAllToolUsageGroups.value
+    ? toolUsageTraceGroups.value
+    : toolUsageTraceGroups.value.slice(0, 1);
+  return groups.map((group) => ({
+    ...group,
+    items: showToolReasoning.value ? group.items : group.items.filter((item) => item.type === 'tool')
+  }));
+});
+
+function toolUsageReasoningKey(
+  group: ToolUsageTraceGroup,
+  item: Extract<UnifiedTraceItem, { type: 'reasoning' }>,
+  stepIndex: number
+): string {
+  return `${group.id}:reasoning:${item.segmentIndex}:${stepIndex}`;
+}
+
+function toggleToolUsageReasoning(key: string): void {
+  const next = new Set(expandedReasoning.value);
+  if (next.has(key)) next.delete(key);
+  else next.add(key);
+  expandedReasoning.value = next;
+}
+
+function toolUsageReasoningExpanded(key: string): boolean {
+  return expandedReasoning.value.has(key);
+}
+
+function toolUsageReasoningPreview(detail: string | null): string | null {
+  return compact(detail, 140);
+}
+
+function toolUsageReasoningStatus(
+  group: ToolUsageTraceGroup,
+  item: Extract<UnifiedTraceItem, { type: 'reasoning' }>,
+  stepIndex: number
+): 'thinking' | 'done' {
+  const isLiveTail = group.items.at(-1) === item && stepIndex === item.steps.length - 1;
+  return group.live && isLiveTail ? 'thinking' : 'done';
+}
+
+function renderToolUsageReasoning(detail: string): string {
+  return renderContent(detail, { topicId: routeTopicId.value });
+}
 
 function toggleTool(tool: ToolRunDto): void {
   const next = new Set(expandedTools.value);
@@ -4038,42 +4220,123 @@ onUnmounted(() => {
         <div class="vb-tool-list">
           <div class="vb-tool-title">
             <span>Tool Usage</span>
-            <button
-              class="vb-small-btn"
-              :disabled="!state.robotState.value || state.robotState.value.recentToolRuns.length === 0"
-              @click="showAllTools = !showAllTools"
-            >
-              {{ showAllTools ? 'Show Latest' : 'Show All' }}
-            </button>
-          </div>
-          <div v-if="!state.robotState.value || state.robotState.value.recentToolRuns.length === 0" class="vb-empty">
-            No tool runs yet.
-          </div>
-          <div v-for="tool in visibleToolRuns" :key="tool.id" class="vb-tool-item">
-            <button class="vb-tool-toggle vb-tool-toggle--compact" type="button" @click="toggleTool(tool)">
-              <span class="vb-tool-toggle-left">
-                <ToolMiniView :tool="tool" :showDetail="true" />
-              </span>
-              <span class="vb-tool-toggle-right">
-                <span class="vb-tool-meta">{{ state.formatToolTime(tool.startedAt) }}</span>
-                <span class="vb-tool-pill" :class="toolStatusClass(tool)">{{ toolStatusLabel(tool) }}</span>
-                <span v-if="toolDurationLabel(tool)" class="vb-tool-duration">{{ toolDurationLabel(tool) }}</span>
-                <span class="vb-tool-toggle-icon">{{ toolExpanded(tool) ? '−' : '+' }}</span>
-              </span>
-            </button>
-            <div v-if="toolExpanded(tool)" class="vb-tool-details">
-              <div v-if="toolMini(tool).input" class="vb-tool-block">
-                <div class="vb-tool-block-title">Input</div>
-                <pre class="vb-tool-pre">{{ toolMini(tool).input }}</pre>
-              </div>
-              <div v-if="toolMini(tool).output" class="vb-tool-block">
-                <div class="vb-tool-block-title">Output</div>
-                <pre class="vb-tool-pre">{{ toolMini(tool).output }}</pre>
-              </div>
+            <div class="vb-tool-title-actions">
+              <button
+                class="vb-small-btn"
+                type="button"
+                :aria-pressed="showToolReasoning"
+                @click="showToolReasoning = !showToolReasoning"
+              >
+                Reasoning: {{ showToolReasoning ? 'On' : 'Off' }}
+              </button>
+              <button
+                class="vb-small-btn"
+                type="button"
+                :disabled="toolUsageTraceGroups.length <= 1"
+                @click="showAllTools = !showAllTools"
+              >
+                {{ showingAllToolUsageGroups ? 'Show Latest' : 'Show All' }}
+              </button>
             </div>
           </div>
-          <div v-if="state.latestToolRun.value && !toolExpanded(state.latestToolRun.value)" class="vb-tool-hint">
-            Latest tool run shown. Expand for details.
+          <div v-if="toolUsageTraceGroups.length === 0" class="vb-empty">No trace activity yet.</div>
+          <div
+            v-for="group in visibleToolUsageGroups"
+            v-else
+            :key="group.id"
+            class="vb-tool-response"
+          >
+            <div v-if="showingAllToolUsageGroups" class="vb-tool-response-label">
+              Response · {{ state.formatDate(group.latestAt) }}
+            </div>
+            <div v-if="group.items.length === 0" class="vb-empty">No tool runs in this response.</div>
+            <template
+              v-for="item in group.items"
+              :key="item.type === 'tool' ? `tool:${item.tool.id}` : `reasoning:${item.segmentIndex}`"
+            >
+              <template v-if="item.type === 'reasoning'">
+                <div
+                  v-for="(step, stepIndex) in item.steps"
+                  :key="toolUsageReasoningKey(group, item, stepIndex)"
+                  class="vb-tool-item vb-tool-item--reasoning"
+                >
+                  <button
+                    class="vb-tool-toggle vb-tool-toggle--compact"
+                    type="button"
+                    :aria-expanded="toolUsageReasoningExpanded(toolUsageReasoningKey(group, item, stepIndex))"
+                    @click="toggleToolUsageReasoning(toolUsageReasoningKey(group, item, stepIndex))"
+                  >
+                    <span class="vb-tool-toggle-left">
+                      <span class="vb-tool-reasoning-mini">
+                        <span class="vb-tool-reasoning-icon" aria-hidden="true">●</span>
+                        <span class="vb-tool-mini-name">{{ step.title || 'Thinking' }}</span>
+                        <span v-if="toolUsageReasoningPreview(step.detail)" class="vb-tool-mini-summary">
+                          {{ toolUsageReasoningPreview(step.detail) }}
+                        </span>
+                      </span>
+                    </span>
+                    <span class="vb-tool-toggle-right">
+                      <span
+                        class="vb-tool-pill vb-tool-pill--reasoning"
+                        :class="{
+                          'vb-tool-pill--reasoning-active':
+                            toolUsageReasoningStatus(group, item, stepIndex) === 'thinking'
+                        }"
+                      >
+                        {{ toolUsageReasoningStatus(group, item, stepIndex) }}
+                      </span>
+                      <span class="vb-tool-toggle-icon">
+                        {{ toolUsageReasoningExpanded(toolUsageReasoningKey(group, item, stepIndex)) ? '−' : '+' }}
+                      </span>
+                    </span>
+                  </button>
+                  <div
+                    v-if="step.detail && toolUsageReasoningExpanded(toolUsageReasoningKey(group, item, stepIndex))"
+                    class="vb-tool-details"
+                  >
+                    <div
+                      class="vb-tool-block vb-tool-reasoning-detail vb-rendered-content"
+                      v-html="renderToolUsageReasoning(step.detail)"
+                    ></div>
+                  </div>
+                </div>
+              </template>
+              <div v-else class="vb-tool-item">
+                <button
+                  class="vb-tool-toggle vb-tool-toggle--compact"
+                  type="button"
+                  :aria-expanded="toolExpanded(item.tool)"
+                  @click="toggleTool(item.tool)"
+                >
+                  <span class="vb-tool-toggle-left">
+                    <ToolMiniView :tool="item.tool" :showDetail="true" />
+                  </span>
+                  <span class="vb-tool-toggle-right">
+                    <span class="vb-tool-meta">{{ state.formatToolTime(item.tool.startedAt) }}</span>
+                    <span class="vb-tool-pill" :class="toolStatusClass(item.tool)">
+                      {{ toolStatusLabel(item.tool) }}
+                    </span>
+                    <span v-if="toolDurationLabel(item.tool)" class="vb-tool-duration">
+                      {{ toolDurationLabel(item.tool) }}
+                    </span>
+                    <span class="vb-tool-toggle-icon">{{ toolExpanded(item.tool) ? '−' : '+' }}</span>
+                  </span>
+                </button>
+                <div v-if="toolExpanded(item.tool)" class="vb-tool-details">
+                  <div v-if="toolMini(item.tool).input" class="vb-tool-block">
+                    <div class="vb-tool-block-title">Input</div>
+                    <pre class="vb-tool-pre">{{ toolMini(item.tool).input }}</pre>
+                  </div>
+                  <div v-if="toolMini(item.tool).output" class="vb-tool-block">
+                    <div class="vb-tool-block-title">Output</div>
+                    <pre class="vb-tool-pre">{{ toolMini(item.tool).output }}</pre>
+                  </div>
+                </div>
+              </div>
+            </template>
+          </div>
+          <div v-if="!showingAllToolUsageGroups && toolUsageTraceGroups.length > 1" class="vb-tool-hint">
+            Latest response shown. Expand entries for details.
           </div>
         </div>
       </div>

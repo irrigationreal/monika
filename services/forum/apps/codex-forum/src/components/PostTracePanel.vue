@@ -73,12 +73,12 @@
 
           <!-- === Interleaved mode (with checkpoints) === -->
           <template v-if="hasCheckpoints">
-            <template v-for="item in interleavedItems" :key="item.type === 'reasoning' ? `seg-${item.segIdx}` : `tool-${item.toolIdx}`">
+            <template v-for="item in interleavedItems" :key="item.type === 'reasoning' ? `seg-${item.segmentIndex}` : `tool-${item.toolIndex}`">
               <!-- Reasoning segment -->
               <div v-if="item.type === 'reasoning'" class="vb-trace-reasoning-inline">
                 <div
                   v-for="(step, sIdx) in item.steps"
-                  :key="`interleaved-step-${item.segIdx}-${sIdx}`"
+                  :key="`interleaved-step-${item.segmentIndex}-${sIdx}`"
                   class="vb-trace-latest vb-trace-latest--reasoning"
                 >
                   <div class="vb-trace-latest-row">
@@ -175,7 +175,7 @@
 import { computed, ref } from 'vue';
 import type { ToolRunDto } from '../lib/apiClient';
 import type { ReasoningStep } from '../lib/reasoning';
-import { parseReasoningSteps } from '../lib/reasoning';
+import { buildPersistedTraceItems } from '../lib/unifiedTrace';
 import { useMarkdown } from '../composables/useMarkdown';
 import DecryptText from './DecryptText.vue';
 import ToolTimeline from './ToolTimeline.vue';
@@ -236,45 +236,17 @@ const olderSteps = computed(() => {
 });
 
 // --- Interleaved segments for checkpoint-based saved mode ---
-type InterleavedItem = 
-  | { type: 'reasoning'; steps: ReasoningStep[]; segIdx: number }
-  | { type: 'tool'; tool: ToolRunDto; toolIdx: number };
-
 const hasCheckpoints = computed(() => {
   return !!(props.reasoningCheckpoints && props.reasoningCheckpoints.length > 0 && props.rawPlanText);
 });
 
-const interleavedItems = computed<InterleavedItem[]>(() => {
-  if (!hasCheckpoints.value || !props.rawPlanText || !props.reasoningCheckpoints) return [];
-  const checkpoints = props.reasoningCheckpoints;
-  const raw = props.rawPlanText;
-  const sortedTools = [...props.toolRuns].sort((a, b) => (a.startedAt ?? '').localeCompare(b.startedAt ?? ''));
-  const items: InterleavedItem[] = [];
-  let cursor = 0;
-
-  for (let t = 0; t < sortedTools.length; t++) {
-    const cp = t < checkpoints.length ? checkpoints[t] : raw.length;
-    const segment = raw.slice(cursor, cp).trim();
-    if (segment) {
-      const steps = parseReasoningSteps(segment);
-      if (steps.length > 0) {
-        items.push({ type: 'reasoning', steps, segIdx: t });
-      }
-    }
-    cursor = cp;
-    items.push({ type: 'tool', tool: sortedTools[t], toolIdx: t });
-  }
-
-  // Remaining reasoning after last tool
-  const tail = raw.slice(cursor).trim();
-  if (tail) {
-    const steps = parseReasoningSteps(tail);
-    if (steps.length > 0) {
-      items.push({ type: 'reasoning', steps, segIdx: sortedTools.length });
-    }
-  }
-
-  return items;
+const interleavedItems = computed(() => {
+  if (!hasCheckpoints.value) return [];
+  return buildPersistedTraceItems({
+    reasoningText: props.rawPlanText,
+    reasoningCheckpoints: props.reasoningCheckpoints,
+    tools: props.toolRuns
+  });
 });
 
 // --- Helpers ---

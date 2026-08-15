@@ -134,10 +134,42 @@ The echsBridge stores checkpoint data for post-completion trace reconstruction:
 **Saved rendering (`PostTracePanel.vue`):**
 
 If `reasoningCheckpoints` is available from the session inspector API, the
-component splits the raw plan text at checkpoint boundaries, parses each segment
-with `parseReasoningSteps`, and interleaves with tools sorted by `startedAt`.
-Falls back to a compact non-interleaved view when checkpoints are absent
-(pre-existing data or imported sessions).
+component uses the shared `buildPersistedTraceItems` helper in
+`src/lib/unifiedTrace.ts` to split raw plan text at checkpoint boundaries and
+interleave parsed reasoning segments with tools sorted by `startedAt`. It falls
+back to a compact non-interleaved view when checkpoints are absent (pre-existing
+data or imported sessions).
+
+### Robot State Tool Usage trace
+
+The admin-only Robot State **Tool Usage** section is also a unified reasoning and
+tool trace. It groups plans and tool runs by `parentPostId`, shows the complete
+latest response by default, and lets the administrator expand the bounded set of
+available response groups with **Show All**. This scope control operates on
+responses rather than individual tools so reasoning is never detached from the
+tool calls it explains.
+
+Reasoning is shown by default. The accessible **Reasoning: On/Off** toggle filters
+reasoning cards without changing the selected responses or tools, and its value
+is remembered in browser-local storage. Reasoning cards show a compact preview
+and expand to sanitized Markdown detail. Assistant response text is intentionally
+excluded because canonical outward text is already rendered as forum posts.
+
+While a response is active, Tool Usage uses the append-only committed reasoning
+and tool segments plus the current reasoning draft. Completed responses use the
+session inspector's persisted plans, checkpoints, and tool runs through the same
+`src/lib/unifiedTrace.ts` ordering helper used by saved Trace History. The admin
+inspector returns complete plan and tool rows for the session; Tool Usage bounds
+presentation to the latest 20 response groups rather than truncating individual
+responses. Missing checkpoints fall back to reasoning followed by chronologically
+sorted tools. Equal tool timestamps converge through deterministic newest-first
+storage ordering and chronological reversal in the shared helper. This keeps
+ordering stable across live execution, completion, and refresh while remaining
+compatible with old and imported sessions.
+
+Tool **Output** details remain summaries rather than canonical full tool results.
+The bridge redacts and bounds ordinary summaries to 1,000 characters before
+storing them; the browser cannot expand beyond the stored summary.
 
 **Refresh resilience:** On page refresh or reconnect mid-response,
 `reconstructSegmentsFromState()` rebuilds committed segments from server state

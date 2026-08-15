@@ -1119,7 +1119,32 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
   font-weight: bold;
+}
+
+.vb-tool-title-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+.vb-tool-response + .vb-tool-response {
+  margin-top: 8px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border-default);
+}
+
+.vb-tool-response-label {
+  margin: 6px 0 2px;
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: bold;
+  text-transform: uppercase;
 }
 
 .vb-tool-toggle {
@@ -1182,8 +1207,38 @@
 }
 
 .vb-tool-mini-summary {
-  font-size: 10px;
+  min-width: 0;
+  overflow: hidden;
   color: var(--text-muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vb-tool-reasoning-mini {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.vb-tool-reasoning-icon {
+  flex: 0 0 auto;
+  color: var(--brand-secondary);
+  font-size: 8px;
+}
+
+.vb-tool-pill--reasoning {
+  background: var(--brand-secondary);
+}
+
+.vb-tool-pill--reasoning-active {
+  background: var(--brand-primary);
+}
+
+.vb-tool-reasoning-detail {
+  margin-top: 0;
 }
 
 .vb-tool-mini-detail {
