@@ -83,11 +83,11 @@ packages/
 
 ## Quick start (local)
 
-> Requires Node 20.9+ and pnpm 9+ (10.x recommended).
+> Requires Node 22.13+ and pnpm 11.21.0.
 
 ```bash
 corepack enable
-corepack prepare pnpm@10.26.2 --activate
+corepack prepare pnpm@11.21.0 --activate
 pnpm install
 ```
 

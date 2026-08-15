@@ -9,8 +9,14 @@ in prose.
 
 npm and pnpm resolution use a ten-day minimum release age. The npm policy is baked
 into the Monika image and remains active for interactive installs; pnpm policy
-lives in each workspace's `pnpm-workspace.yaml`. Frozen lockfiles remain
-authoritative during builds.
+lives in each workspace's `pnpm-workspace.yaml`. pnpm fails closed when no mature
+version satisfies a range or registry publication time is missing, and verifies
+frozen lockfiles against that policy during builds.
+
+Dependency lifecycle scripts are also fail-closed. Each workspace's `allowBuilds`
+map explicitly approves or denies the packages whose install scripts were reviewed;
+new unreviewed scripts fail installation rather than running or being silently
+ignored.
 
 The pnpm workspaces exempt `@earendil-works/*` so coordinated Pi releases can be
 adopted without waiting ten days. The image's exact global Pi install bypasses the
@@ -52,7 +58,7 @@ Regenerate the frozen agentd lockfile with the repository's pnpm version:
 
 ```bash
 cd services/agentd
-corepack pnpm@10.26.2 install --lockfile-only
+corepack pnpm@11.21.0 install --lockfile-only
 ```
 
 Then build and run the runtime smoke suite:

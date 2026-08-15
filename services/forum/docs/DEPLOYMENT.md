@@ -209,7 +209,7 @@ For forum-only development from `services/forum/`:
 
 ```bash
 corepack enable
-corepack prepare pnpm@10.26.2 --activate
+corepack prepare pnpm@11.21.0 --activate
 pnpm install
 pnpm test
 ```

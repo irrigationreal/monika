@@ -2,10 +2,32 @@ packages:
   - apps/*
   - packages/*
 
+# pnpm 11's portable deploy implementation requires injected workspace packages.
+injectWorkspacePackages: true
+
 minimumReleaseAge: 14400
+minimumReleaseAgeStrict: true
+minimumReleaseAgeIgnoreMissingTime: false
 minimumReleaseAgeExclude:
   - '@earendil-works/*'
   # Mermaid 11.16.1 fixes a host-realm architecture parser prototype-pollution bug in 11.16.0.
   - mermaid
 
-onlyBuiltDependencies: '["sharp"]'
+allowBuilds:
+  better-sqlite3: true
+  esbuild: true
+  sharp: true
+  unrs-resolver: false
+
+overrides:
+  '@isaacs/brace-expansion': '>=5.0.1'
+  'brace-expansion@1': 1.1.18
+  'brace-expansion@2': 2.1.4
+  'brace-expansion@5': 5.0.9
+  'fast-uri@3': 3.1.5
+  fast-xml-parser: '>=5.3.4'
+  'find-my-way@9': 9.7.0
+  'js-yaml@4': 4.3.1
+  lodash: 4.18.1
+  'postcss@8': 8.5.23
+  'undici@6': 6.28.0

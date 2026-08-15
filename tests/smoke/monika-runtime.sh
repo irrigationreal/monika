@@ -441,8 +441,8 @@ fi
 pass "npm dependency cooldown active: ${NPM_MIN_RELEASE_AGE} days"
 
 PNPM_VERSION="$(docker exec "$CONTAINER_NAME" pnpm --version)"
-if [ "$PNPM_VERSION" != "10.26.2" ]; then
-  echo "Expected pnpm 10.26.2, got: $PNPM_VERSION"
+if [ "$PNPM_VERSION" != "11.21.0" ]; then
+  echo "Expected pnpm 11.21.0, got: $PNPM_VERSION"
   exit 1
 fi
 pass "agentd package manager available: pnpm ${PNPM_VERSION}"
@@ -452,7 +452,17 @@ if [ "$PNPM_MIN_RELEASE_AGE" != "14400" ]; then
   echo "Expected pnpm minimumReleaseAge=14400, got: $PNPM_MIN_RELEASE_AGE"
   exit 1
 fi
-pass "pnpm dependency cooldown active: 10 days"
+PNPM_MIN_RELEASE_AGE_STRICT="$(docker exec "$CONTAINER_NAME" pnpm config get minimumReleaseAgeStrict)"
+if [ "$PNPM_MIN_RELEASE_AGE_STRICT" != "true" ]; then
+  echo "Expected pnpm minimumReleaseAgeStrict=true, got: $PNPM_MIN_RELEASE_AGE_STRICT"
+  exit 1
+fi
+PNPM_MIN_RELEASE_AGE_IGNORE_MISSING_TIME="$(docker exec "$CONTAINER_NAME" pnpm config get minimumReleaseAgeIgnoreMissingTime)"
+if [ "$PNPM_MIN_RELEASE_AGE_IGNORE_MISSING_TIME" != "false" ]; then
+  echo "Expected pnpm minimumReleaseAgeIgnoreMissingTime=false, got: $PNPM_MIN_RELEASE_AGE_IGNORE_MISSING_TIME"
+  exit 1
+fi
+pass "pnpm dependency cooldown active and fail-closed: 10 days"
 
 AGENT_BROWSER_VERSION="$(docker exec "$CONTAINER_NAME" agent-browser --version)"
 if [ "$AGENT_BROWSER_VERSION" != "agent-browser 0.31.1" ]; then

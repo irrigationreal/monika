@@ -9,10 +9,10 @@ ARG MONIKA_BUILD_COMMIT=""
 ARG MONIKA_BUILD_SOURCE=""
 ARG MONIKA_BUILD_DATE=""
 
-FROM node:20-slim AS base
+FROM node:22-slim AS base
 
 # Install pnpm
-RUN corepack enable && corepack prepare pnpm@10.26.2 --activate
+RUN corepack enable && corepack prepare pnpm@11.21.0 --activate
 
 # Install build dependencies for native modules (better-sqlite3)
 RUN apt-get update && apt-get install -y \
@@ -71,12 +71,12 @@ RUN VITE_BUILD_COMMIT="$MONIKA_BUILD_COMMIT" \
     pnpm run build:apps
 
 # Deploy the server package with only production dependencies.
-# pnpm deploy creates a standalone directory with the package, its workspace
-# dependencies (copied into node_modules), and only production npm packages.
+# pnpm's injected-workspace deploy creates a portable directory containing the
+# package, copied workspace dependencies, and only production npm packages.
 # Native runtime dependencies are deployed from the builder. better-sqlite3 is
 # compiled there; Sharp 0.35's platform packages and bundled libvips are carried
 # into the deployment without requiring a runtime build toolchain.
-RUN pnpm --filter @irrigationreal/codex-forum-server deploy --prod --legacy /app/deploy
+RUN pnpm --filter @irrigationreal/codex-forum-server deploy --prod /app/deploy
 
 # Every native architecture build must prove that the production deployment
 # contains a loadable Sharp addon/libvips pair before the image can be published.
@@ -86,7 +86,7 @@ RUN cd /app/deploy && node -e "const sharp=require('sharp'); (async()=>{const jp
 # -----------------------------------------------------------------------------
 # Stage 3: Production runtime
 # -----------------------------------------------------------------------------
-FROM node:20-slim AS runtime
+FROM node:22-slim AS runtime
 
 ARG MONIKA_BUILD_COMMIT
 ARG MONIKA_BUILD_SOURCE

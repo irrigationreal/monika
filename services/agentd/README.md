@@ -179,7 +179,7 @@ replacement during validation fail closed.
 Install and run the provider-independent suite:
 
 ```bash
-corepack pnpm@10.26.2 install --frozen-lockfile
+corepack pnpm@11.21.0 install --frozen-lockfile
 pnpm test
 ```
 
