@@ -9,9 +9,15 @@ test.describe('Forum discovery + navigation (read-only)', () => {
     await fixture.attach(page);
 
     await page.goto('/');
+    await expect(page.locator('.vb-welcome-links')).toHaveAttribute('aria-label', 'Account navigation');
+    await expect(page.locator('.vb-welcome-links')).toContainText('Log In');
     await expect(page.locator('.vb-welcome-links')).not.toContainText('Chat');
     await expect(page.locator('.vb-welcome-links')).not.toContainText('Developers');
     await expect(page.locator('.vb-welcome-links')).not.toContainText('API Docs');
+    await expect(page.locator('.vb-nav')).toHaveAttribute('aria-label', 'Forum navigation');
+    await expect(page.locator('.vb-nav-items a')).toHaveText(['Forum Home']);
+    await expect(page.locator('.vb-nav-items')).not.toContainText('Register');
+    await expect(page.locator('.vb-nav-items')).not.toContainText('Log In');
     await expect(page.locator('.vb-nav-items')).not.toContainText('Chat');
     await expect(page.locator('.vb-nav-items')).not.toContainText('Developers');
     await expect(page.locator('.vb-nav-items')).not.toContainText('API Docs');
