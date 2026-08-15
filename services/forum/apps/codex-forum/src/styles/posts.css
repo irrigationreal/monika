@@ -1905,68 +1905,189 @@
 }
 
 .vb-user-files-body {
-  padding: 12px;
+  display: grid;
+  gap: 14px;
+  padding: 14px;
   background: var(--bg-surface);
   border: 1px solid var(--border-strong);
 }
 
+.vb-user-files-messages:empty {
+  display: none;
+}
+
 .vb-user-files-card {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
   background: var(--bg-surface);
   border: 1px solid var(--border-default);
-  padding: 12px;
-  margin-bottom: 12px;
+}
+
+.vb-user-files-card h3,
+.vb-user-files-card h4,
+.vb-user-files-card p {
+  margin-top: 0;
 }
 
 .vb-user-files-card h3 {
-  margin: 0 0 6px 0;
+  margin-bottom: 6px;
   font-size: 13px;
 }
 
-.vb-user-files-hint {
-  margin: 0 0 8px 0;
+.vb-user-files-card h4 {
+  margin-bottom: 6px;
   font-size: 11px;
   color: var(--text-muted);
 }
 
-.vb-user-files-actions {
+.vb-user-files-hint {
+  margin-bottom: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.vb-user-files-control-grid,
+.vb-user-file-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 220px));
+  gap: 10px;
+}
+
+.vb-user-files-field {
+  display: grid;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: bold;
+  color: var(--brand-accent);
+}
+
+.vb-user-files-field .vb-option-select {
+  width: 100%;
+}
+
+.vb-user-files-picker,
+.vb-user-files-actions,
+.vb-user-file-buttons {
   display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
-  margin-top: 8px;
+}
+
+.vb-user-files-hidden-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.vb-user-files-selection-status,
+.vb-user-files-total,
+.vb-user-file-meta,
+.vb-user-file-association-name {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.vb-user-files-selection {
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-default);
+}
+
+.vb-user-files-selection-list,
+.vb-user-file-association-list {
+  display: grid;
+  gap: 6px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.vb-user-files-selection-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 6px 8px;
+  font-size: 11px;
+  background: var(--bg-surface-muted);
+  border: 1px solid var(--border-default);
+}
+
+.vb-user-files-selection-list li span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.vb-user-files-selection-list li span:last-child {
+  flex: 0 0 auto;
 }
 
 .vb-user-files-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  margin-bottom: 8px;
+  align-items: baseline;
+  gap: 12px;
 }
 
-.vb-user-files-total {
-  font-size: 11px;
-  color: var(--text-muted);
+.vb-user-files-header h3 {
+  margin-bottom: 0;
+}
+
+.vb-user-files-filter {
+  display: inline-flex;
+  align-items: stretch;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.vb-user-files-filter-button {
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border-color: var(--border-strong);
+}
+
+.vb-user-files-filter-button-selected,
+.vb-user-files-filter-button[aria-pressed='true'] {
+  color: var(--text-inverse);
+  font-weight: bold;
+  background: var(--brand-secondary);
+  border-color: var(--brand-primary);
+  box-shadow: inset 0 -2px 0 var(--brand-accent);
 }
 
 .vb-user-files-loading,
 .vb-user-files-empty {
+  padding: 18px 12px;
   font-size: 11px;
+  text-align: center;
   color: var(--text-muted);
-  padding: 6px 0;
+  background: var(--bg-surface-muted);
+  border: 1px dashed var(--border-default);
 }
 
 .vb-user-files-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
   display: grid;
-  gap: 10px;
+  gap: 12px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
 }
 
 .vb-user-file-item {
   display: grid;
-  gap: 8px;
-  border: 1px solid var(--border-default);
-  padding: 8px;
+  gap: 12px;
+  padding: 12px;
   background: var(--bg-surface-muted);
+  border: 1px solid var(--border-default);
 }
 
 .vb-user-file-main {
@@ -1976,34 +2097,102 @@
 }
 
 .vb-user-file-name {
+  overflow-wrap: anywhere;
   font-size: 12px;
   font-weight: bold;
 }
 
-.vb-user-file-meta {
-  font-size: 10px;
+.vb-user-file-associations,
+.vb-user-file-link {
+  padding-top: 10px;
+  border-top: 1px solid var(--border-default);
+}
+
+.vb-user-file-association {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 8px;
+  font-size: 11px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+}
+
+.vb-user-file-association > div,
+.vb-user-file-link {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.vb-user-file-association-deleted {
   color: var(--text-muted);
 }
 
-.vb-user-file-link {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+.vb-user-file-link label {
+  font-size: 11px;
+  font-weight: bold;
+  color: var(--brand-accent);
 }
 
 .vb-user-file-input {
   width: 100%;
+  padding: 6px 8px;
   font-size: 11px;
-  padding: 4px 6px;
-  border: 1px solid var(--border-strong);
-  background: var(--bg-surface);
   color: var(--text-primary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
 }
 
-.vb-user-file-buttons {
+.vb-user-file-input:focus {
+  outline: none;
+  border-color: var(--brand-secondary);
+  box-shadow: 0 0 0 2px rgba(92, 112, 153, 0.2);
+}
+
+.vb-user-files-load-more {
   display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
+  justify-content: center;
+  padding-top: 2px;
+}
+
+@media (max-width: 600px) {
+  .vb-user-files-body,
+  .vb-user-files-card {
+    gap: 12px;
+    padding: 10px;
+  }
+
+  .vb-user-files-control-grid,
+  .vb-user-file-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .vb-user-files-header,
+  .vb-user-file-association {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .vb-user-files-filter {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .vb-user-files-filter-button,
+  .vb-user-files-picker .vb-btn,
+  .vb-user-files-actions .vb-btn,
+  .vb-user-file-association .vb-small-btn,
+  .vb-user-files-load-more .vb-btn {
+    width: 100%;
+    text-align: center;
+  }
+
+  .vb-user-file-buttons > * {
+    flex: 1 1 auto;
+    text-align: center;
+  }
 }
 
 /* ========================================

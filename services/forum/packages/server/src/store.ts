@@ -5671,17 +5671,9 @@ export class ForumStore {
         this.db
           .prepare(
             `update user_files set standalone = 1, visibility = ?, expires_at = ?,
-             filename = ?, mime_type = ?, size_bytes = ?, revision = revision + 1, updated_at = ? where id = ?`
+             revision = revision + 1, updated_at = ? where id = ?`
           )
-          .run(
-            input.visibility ?? 'private',
-            input.expiresAt ?? null,
-            input.filename,
-            input.mimeType,
-            input.sizeBytes,
-            now,
-            existing.id
-          );
+          .run(input.visibility ?? 'private', input.expiresAt ?? null, now, existing.id);
         return this.getUserFile(existing.id)!;
       }
       if (

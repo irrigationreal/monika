@@ -10,11 +10,13 @@ const props = withDefaults(
     cancelLabel?: string;
     pending?: boolean;
     pendingLabel?: string;
+    restoreFocus?: boolean;
   }>(),
   {
     cancelLabel: 'Cancel',
     pending: false,
     pendingLabel: 'Working…',
+    restoreFocus: true,
   }
 );
 
@@ -34,8 +36,9 @@ let bodyOverflowBeforeOpen = '';
 function restoreEnvironment(): void {
   document.body.style.overflow = bodyOverflowBeforeOpen;
   const target = focusOrigin;
+  const shouldRestoreFocus = props.restoreFocus;
   focusOrigin = null;
-  void nextTick(() => target?.focus());
+  if (shouldRestoreFocus) void nextTick(() => target?.focus());
 }
 
 function cancel(): void {
@@ -55,7 +58,11 @@ function handleKeydown(event: KeyboardEvent): void {
   ).filter((element) => element.offsetParent !== null);
   const first = focusable.at(0);
   const last = focusable.at(-1);
-  if (!first || !last) return;
+  if (!first || !last) {
+    event.preventDefault();
+    dialogRef.value?.focus();
+    return;
+  }
   if (event.shiftKey && document.activeElement === first) {
     event.preventDefault();
     last.focus();
@@ -107,13 +114,7 @@ onBeforeUnmount(() => {
     >
       <div class="vb-modal-header">
         <span :id="titleId">{{ title }}</span>
-        <button
-          class="vb-modal-close"
-          type="button"
-          :aria-label="`Close ${title}`"
-          :disabled="pending"
-          @click="cancel"
-        >
+        <button class="vb-modal-close" type="button" :aria-label="`Close ${title}`" :disabled="pending" @click="cancel">
           &times;
         </button>
       </div>
@@ -121,21 +122,10 @@ onBeforeUnmount(() => {
         <p :id="descriptionId" class="vb-delete-warning">{{ message }}</p>
       </div>
       <div class="vb-modal-actions vb-confirmation-modal-actions">
-        <button
-          class="vb-btn vb-btn-danger"
-          type="button"
-          :disabled="pending"
-          @click="emit('confirm')"
-        >
+        <button class="vb-btn vb-btn-danger" type="button" :disabled="pending" @click="emit('confirm')">
           {{ pending ? pendingLabel : confirmLabel }}
         </button>
-        <button
-          ref="cancelRef"
-          class="vb-btn vb-btn-secondary"
-          type="button"
-          :disabled="pending"
-          @click="cancel"
-        >
+        <button ref="cancelRef" class="vb-btn vb-btn-secondary" type="button" :disabled="pending" @click="cancel">
           {{ cancelLabel }}
         </button>
       </div>
