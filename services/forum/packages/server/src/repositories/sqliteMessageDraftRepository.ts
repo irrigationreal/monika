@@ -47,6 +47,10 @@ export class SqliteMessageDraftRepository implements MessageDraftRepository {
         existing = this.db
           .prepare("select * from message_drafts where owner_identity_id = ? and context = 'reply' and topic_id = ?")
           .get(input.draft.ownerIdentityId, input.draft.topicId) as MessageDraftRow | undefined;
+      } else if (input.draft.context === 'notepad') {
+        existing = this.db
+          .prepare("select * from message_drafts where owner_identity_id = ? and context = 'notepad'")
+          .get(input.draft.ownerIdentityId) as MessageDraftRow | undefined;
       } else if (input.expectedRevision > 0) {
         existing = this.db
           .prepare("select * from message_drafts where owner_identity_id = ? and context = 'new_thread' and id = ?")
@@ -57,17 +61,20 @@ export class SqliteMessageDraftRepository implements MessageDraftRepository {
       }
       if (existing) {
         if (existing.revision !== input.expectedRevision) return 'conflict' as const;
-        const title = input.draft.context === 'new_thread' ? (input.value.title ?? null) : null;
-        if (existing.title === title && existing.body === input.value.body) return mapMessageDraftRowToDomain(existing);
+        const title = input.draft.context === 'reply' ? null : (input.value.title ?? null);
+        const optionsJson = input.draft.context === 'notepad' ? JSON.stringify(input.value.options ?? null) : null;
+        if (existing.title === title && existing.body === input.value.body && existing.options_json === optionsJson)
+          return mapMessageDraftRowToDomain(existing);
         const expiresAt = input.draft.expiresAt;
         const updated = this.db
           .prepare(
-            `update message_drafts set title = ?, body = ?, revision = revision + 1,
+            `update message_drafts set title = ?, body = ?, options_json = ?, revision = revision + 1,
           updated_at = ?, expires_at = ? where id = ? and owner_identity_id = ? and revision = ?`
           )
           .run(
             title,
             input.value.body,
+            optionsJson,
             input.now,
             expiresAt,
             existing.id,
@@ -85,8 +92,8 @@ export class SqliteMessageDraftRepository implements MessageDraftRepository {
       this.db
         .prepare(
           `insert into message_drafts
-        (id, owner_identity_id, context, forum_id, topic_id, title, body, revision, created_at, updated_at, expires_at)
-        values (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`
+        (id, owner_identity_id, context, forum_id, topic_id, title, body, options_json, revision, created_at, updated_at, expires_at)
+        values (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`
         )
         .run(
           input.draft.id,
@@ -94,8 +101,9 @@ export class SqliteMessageDraftRepository implements MessageDraftRepository {
           input.draft.context,
           input.draft.forumId,
           input.draft.topicId,
-          input.draft.context === 'new_thread' ? (input.value.title ?? null) : null,
+          input.draft.context === 'reply' ? null : (input.value.title ?? null),
           input.value.body,
+          input.draft.context === 'notepad' ? JSON.stringify(input.value.options ?? null) : null,
           input.now,
           input.now,
           input.draft.expiresAt

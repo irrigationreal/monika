@@ -1,4 +1,9 @@
-import type { MessageTemplateContext, MessageTemplateForumScope } from '@irrigationreal/codex-forum-core';
+import type {
+  MessageTemplateContext,
+  MessageTemplateForumScope,
+  NotepadDraftOptions,
+  NotepadExpirationPreset,
+} from '@irrigationreal/codex-forum-core';
 
 import type {
   AdminAnalyticsDto,
@@ -9,6 +14,8 @@ import type {
   MessageDraftResponseDto,
   MessageTemplateDto,
   MessageTemplateListResponseDto,
+  NotepadEntryResponseDto,
+  NotepadListResponseDto,
   PostDto,
   RobotStateDto,
   SessionDto,
@@ -41,6 +48,20 @@ export interface MessageDraftWriteRequest {
   expectedRevision: number;
   title?: string | null | undefined;
   body: string;
+  options?: NotepadDraftOptions | null | undefined;
+}
+
+export interface NotepadEntryWriteRequest {
+  title?: string | null | undefined;
+  body: string;
+  tags?: string[] | undefined;
+  expiration?: NotepadExpirationPreset | undefined;
+  draft: DraftReferenceRequest;
+}
+export interface NotepadEntryUpdateRequest extends Omit<NotepadEntryWriteRequest, 'draft' | 'expiration'> {
+  expectedRevision: number;
+  expiration?: NotepadExpirationPreset | 'keep' | undefined;
+  pinned?: boolean | undefined;
 }
 
 export interface CreateTopicRequest {
@@ -373,6 +394,18 @@ export interface ForumApi {
   createNewThreadDraft(forumId: string, req: MessageDraftWriteRequest): Promise<MessageDraftResponseDto>;
   updateDraft(id: string, req: MessageDraftWriteRequest): Promise<MessageDraftResponseDto>;
   deleteDraft(id: string, revision: number): Promise<{ ok: boolean }>;
+  getNotepadDraft(): Promise<MessageDraftResponseDto>;
+  saveNotepadDraft(req: MessageDraftWriteRequest): Promise<MessageDraftResponseDto>;
+  listNotepad(input?: {
+    query?: string;
+    tags?: string[];
+    cursor?: string;
+    limit?: number;
+  }): Promise<NotepadListResponseDto>;
+  getNotepadEntry(id: string): Promise<NotepadEntryResponseDto>;
+  createNotepadEntry(req: NotepadEntryWriteRequest): Promise<NotepadEntryResponseDto>;
+  updateNotepadEntry(id: string, req: NotepadEntryUpdateRequest): Promise<NotepadEntryResponseDto>;
+  deleteNotepadEntry(id: string, revision: number): Promise<{ ok: boolean }>;
   listEffectiveMessageTemplates(
     context: MessageTemplateContext,
     forumId: string

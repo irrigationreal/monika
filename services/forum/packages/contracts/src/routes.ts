@@ -1038,6 +1038,21 @@ export const apiRoutes: ApiRoute[] = [
   },
   {
     method: 'get',
+    path: '/notepad/draft',
+    summary: 'Get my Notepad capture draft',
+    tags: ['drafts', 'notepad'],
+    response: { schema: schemas.MessageDraftResponseDtoSchema },
+  },
+  {
+    method: 'put',
+    path: '/notepad/draft',
+    summary: 'Autosave my Notepad capture draft',
+    tags: ['drafts', 'notepad'],
+    request: { body: { schema: schemas.MessageDraftWriteRequestSchema } },
+    response: { schema: schemas.MessageDraftResponseDtoSchema },
+  },
+  {
+    method: 'get',
     path: '/topics/{topicId}/draft',
     summary: 'Get my reply draft',
     tags: ['drafts'],
@@ -1075,6 +1090,29 @@ export const apiRoutes: ApiRoute[] = [
     tags: ['drafts'],
     request: { params: stringParam('id'), query: schemas.MessageDraftRevisionQuerySchema },
     response: { schema: okSchema },
+  },
+
+  // Private Notepad (browser-session only)
+  {
+    method: 'get', path: '/notepad', summary: 'List and search my Notepad', tags: ['notepad'],
+    request: { query: schemas.NotepadListQuerySchema },
+    response: { schema: schemas.NotepadListResponseDtoSchema }
+  },
+  {
+    method: 'get', path: '/notepad/{id}', summary: 'Get one of my notes', tags: ['notepad'],
+    request: { params: stringParam('id') }, response: { schema: schemas.NotepadEntryResponseDtoSchema }
+  },
+  {
+    method: 'post', path: '/notepad', summary: 'Create a note', tags: ['notepad'],
+    request: { body: { schema: schemas.NotepadEntryWriteRequestSchema } }, response: { schema: schemas.NotepadEntryResponseDtoSchema }
+  },
+  {
+    method: 'patch', path: '/notepad/{id}', summary: 'Update a note', tags: ['notepad'],
+    request: { params: stringParam('id'), body: { schema: schemas.NotepadEntryUpdateRequestSchema } }, response: { schema: schemas.NotepadEntryResponseDtoSchema }
+  },
+  {
+    method: 'delete', path: '/notepad/{id}', summary: 'Permanently delete a note', tags: ['notepad'],
+    request: { params: stringParam('id'), query: schemas.NotepadDeleteQuerySchema }, response: { schema: okSchema }
   },
 
   // Message templates

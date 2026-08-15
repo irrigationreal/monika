@@ -128,6 +128,7 @@ export function mapMessageDraftRowToDomain(row: MessageDraftRow): MessageDraft {
     topicId: row.topic_id,
     title: row.title,
     body: row.body,
+    options: row.options_json ? (JSON.parse(row.options_json) as MessageDraft['options']) : null,
     revision: row.revision,
     createdAt: row.created_at,
     updatedAt: row.updated_at,

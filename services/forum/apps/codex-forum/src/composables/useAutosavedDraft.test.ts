@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useAutosavedDraft } from './useAutosavedDraft';
 
+import type { NotepadDraftOptions } from '../lib/apiClient';
+
 const api = vi.hoisted(() => ({
   getReplyDraft: vi.fn(),
   getDraft: vi.fn(),
@@ -12,6 +14,8 @@ const api = vi.hoisted(() => ({
   createNewThreadDraft: vi.fn(),
   updateDraft: vi.fn(),
   deleteDraft: vi.fn(),
+  getNotepadDraft: vi.fn(),
+  saveNotepadDraft: vi.fn(),
 }));
 vi.mock('../lib/apiClient', () => ({ api }));
 
@@ -22,6 +26,7 @@ const draft = {
   topicId: 'topic-1',
   title: null,
   body: 'saved',
+  options: null,
   revision: 1,
   createdAt: '2026-08-02T00:00:00Z',
   updatedAt: '2026-08-02T00:00:00Z',
@@ -45,6 +50,7 @@ describe('useAutosavedDraft', () => {
     api.getReplyDraft.mockResolvedValue({ draft: null });
     api.getDraft.mockResolvedValue({ draft: null });
     api.saveReplyDraft.mockResolvedValue({ draft });
+    api.getNotepadDraft.mockResolvedValue({ draft: null });
   });
   afterEach(() => {
     for (const wrapper of wrappers.splice(0)) wrapper.unmount();
@@ -80,6 +86,47 @@ describe('useAutosavedDraft', () => {
       },
     };
   }
+  it('restores and resets Notepad options through the shared draft lifecycle', async () => {
+    const saved = {
+      ...draft,
+      context: 'notepad' as const,
+      topicId: null,
+      body: 'private note',
+      options: { tags: ['saved'], expiration: 'never' as const },
+    };
+    api.getNotepadDraft.mockResolvedValue({ draft: saved });
+    api.saveNotepadDraft.mockResolvedValue({ draft: saved });
+    let exposed: ReturnType<typeof useAutosavedDraft> | undefined;
+    const body = ref('');
+    const title = ref('');
+    const options = ref<NotepadDraftOptions>({ tags: [], expiration: 'one_month' });
+    const contextId = ref<string | null>('me');
+    const wrapper = mount(
+      defineComponent({
+        setup() {
+          exposed = useAutosavedDraft({
+            context: 'notepad',
+            contextId,
+            body,
+            title,
+            options,
+            resetOptions: () => {
+              options.value = { tags: [], expiration: 'one_month' };
+            },
+          });
+          return { body };
+        },
+        template: '<textarea v-model="body" />',
+      })
+    );
+    wrappers.push(wrapper);
+    if (!exposed) throw new Error('composable not initialized');
+    await exposed.load();
+    expect(options.value).toEqual({ tags: ['saved'], expiration: 'never' });
+    await exposed.discard();
+    expect(options.value).toEqual({ tags: [], expiration: 'one_month' });
+  });
+
   it('hydrates without overwriting text typed before the response', async () => {
     let resolve!: (value: unknown) => void;
     api.getReplyDraft.mockReturnValue(

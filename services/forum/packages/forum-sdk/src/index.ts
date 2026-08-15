@@ -62,6 +62,13 @@ import type {
   MessageTemplateWriteRequest,
   ModelCatalogDto,
   ModelInfoDto,
+  NotepadDraftOptions,
+  NotepadEntryDto,
+  NotepadEntryResponseDto,
+  NotepadEntryUpdateRequest,
+  NotepadEntryWriteRequest,
+  NotepadExpirationPreset,
+  NotepadListResponseDto,
   NotificationDto,
   PageResponse,
   PiSessionDiagnosticsDto,
@@ -192,6 +199,13 @@ export type {
   MessageDraftListResponseDto,
   MessageDraftResponseDto,
   MessageDraftWriteRequest,
+  NotepadDraftOptions,
+  NotepadEntryDto,
+  NotepadEntryResponseDto,
+  NotepadEntryUpdateRequest,
+  NotepadEntryWriteRequest,
+  NotepadExpirationPreset,
+  NotepadListResponseDto,
   MessageTemplateDto,
   MessageTemplateListResponseDto,
   MessageTemplateReorderRequest,
@@ -349,6 +363,30 @@ function createApi({
       }),
     deleteDraft: (id: string, revision: number) =>
       json<{ ok: boolean }>(`/drafts/${encodeURIComponent(id)}?revision=${String(revision)}`, {
+        method: 'DELETE',
+      }),
+    getNotepadDraft: () => json<MessageDraftResponseDto>('/notepad/draft'),
+    saveNotepadDraft: (input: MessageDraftWriteRequest) =>
+      json<MessageDraftResponseDto>('/notepad/draft', { method: 'PUT', body: JSON.stringify(input) }),
+    listNotepad: (input: { query?: string; tags?: string[]; cursor?: string; limit?: number } = {}) => {
+      const params = new URLSearchParams();
+      if (input.query) params.set('q', input.query);
+      if (input.tags?.length) params.set('tags', input.tags.join(','));
+      if (input.cursor) params.set('cursor', input.cursor);
+      if (input.limit) params.set('limit', String(input.limit));
+      const suffix = params.size ? `?${params.toString()}` : '';
+      return json<NotepadListResponseDto>(`/notepad${suffix}`);
+    },
+    getNotepadEntry: (id: string) => json<NotepadEntryResponseDto>(`/notepad/${encodeURIComponent(id)}`),
+    createNotepadEntry: (input: NotepadEntryWriteRequest) =>
+      json<NotepadEntryResponseDto>('/notepad', { method: 'POST', body: JSON.stringify(input) }),
+    updateNotepadEntry: (id: string, input: NotepadEntryUpdateRequest) =>
+      json<NotepadEntryResponseDto>(`/notepad/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify(input),
+      }),
+    deleteNotepadEntry: (id: string, revision: number) =>
+      json<{ ok: boolean }>(`/notepad/${encodeURIComponent(id)}?revision=${String(revision)}`, {
         method: 'DELETE',
       }),
     listEffectiveMessageTemplates: (context: MessageTemplateDto['contexts'][number], forumId: string) =>

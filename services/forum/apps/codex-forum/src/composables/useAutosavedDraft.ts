@@ -4,20 +4,23 @@ import { api } from '../lib/apiClient';
 
 import type { Ref } from 'vue';
 
-import type { MessageDraftDto } from '../lib/apiClient';
+import type { MessageDraftDto, NotepadDraftOptions } from '../lib/apiClient';
 
 export type DraftSaveStatus = 'idle' | 'saving' | 'saved' | 'offline' | 'failed' | 'conflict' | 'auth' | 'too_large';
 
 interface DraftSnapshot {
   title: string | null;
   body: string;
+  options: NotepadDraftOptions | null;
 }
 
 export function useAutosavedDraft(input: {
-  context: 'reply' | 'new_thread';
+  context: 'reply' | 'new_thread' | 'notepad';
   contextId: Ref<string | null>;
   body: Ref<string>;
   title?: Ref<string>;
+  options?: Ref<NotepadDraftOptions>;
+  resetOptions?: () => void;
   initialDraftId?: Ref<string | null>;
   onDraftCreated?: (id: string) => void;
 }) {
@@ -43,7 +46,11 @@ export function useAutosavedDraft(input: {
   let reconciling = false;
   const acknowledged = ref('');
 
-  const snapshot = (): DraftSnapshot => ({ title: input.title?.value ?? null, body: input.body.value });
+  const snapshot = (): DraftSnapshot => ({
+    title: input.title?.value ?? null,
+    body: input.body.value,
+    options: input.options?.value ?? null,
+  });
   const signature = (value = snapshot()) => JSON.stringify(value);
   const isBlank = (value = snapshot()) => !value.body.trim() && !value.title?.trim();
   const expiresAt = computed(() => draft.value?.expiresAt ?? null);
@@ -88,9 +95,11 @@ export function useAutosavedDraft(input: {
       const response =
         input.context === 'reply'
           ? await api.getReplyDraft(contextId)
-          : requestedDraftId
-            ? await api.getDraft(requestedDraftId)
-            : { draft: null };
+          : input.context === 'notepad'
+            ? await api.getNotepadDraft()
+            : requestedDraftId
+              ? await api.getDraft(requestedDraftId)
+              : { draft: null };
       if (myGeneration !== generation || activeContextId !== contextId) return;
       if (
         input.context === 'new_thread' &&
@@ -104,10 +113,15 @@ export function useAutosavedDraft(input: {
       if (signature() === localBefore && response.draft) {
         input.body.value = response.draft.body;
         if (input.title) input.title.value = response.draft.title ?? '';
+        if (input.options && response.draft.options) input.options.value = response.draft.options;
       }
       acknowledged.value = response.draft
-        ? signature({ title: input.title ? (response.draft.title ?? '') : null, body: response.draft.body })
-        : signature({ title: input.title ? '' : null, body: '' });
+        ? signature({
+            title: input.title ? (response.draft.title ?? '') : null,
+            body: response.draft.body,
+            options: input.options ? (response.draft.options ?? input.options.value) : null,
+          })
+        : signature({ title: input.title ? '' : null, body: '', options: input.options?.value ?? null });
       status.value = response.draft ? 'saved' : 'idle';
     } catch (error) {
       if (myGeneration !== generation || activeContextId !== contextId) return;
@@ -165,13 +179,16 @@ export function useAutosavedDraft(input: {
         expectedRevision: baseDraftRevision ?? 0,
         title: value.title,
         body: value.body,
+        options: value.options,
       };
       const response =
         input.context === 'reply'
           ? await api.saveReplyDraft(contextId, { expectedRevision: payload.expectedRevision, body: payload.body })
-          : draft.value
-            ? await api.updateDraft(draft.value.id, payload)
-            : await api.createNewThreadDraft(contextId, payload);
+          : input.context === 'notepad'
+            ? await api.saveNotepadDraft(payload)
+            : draft.value
+              ? await api.updateDraft(draft.value.id, payload)
+              : await api.createNewThreadDraft(contextId, payload);
       if (myGeneration !== generation || activeContextId !== contextId) return;
       if (!response.draft) throw new Error('Draft save returned no draft');
       const created = !draft.value;
@@ -196,7 +213,9 @@ export function useAutosavedDraft(input: {
             ? (await api.getDraft(baseDraftId)).draft
             : input.context === 'reply'
               ? (await api.getReplyDraft(contextId)).draft
-              : null;
+              : input.context === 'notepad'
+                ? (await api.getNotepadDraft()).draft
+                : null;
           if (!conflictBaseIsCurrent()) return;
           remoteDraft.value = latest;
         } catch {
@@ -235,6 +254,7 @@ export function useAutosavedDraft(input: {
       remoteDraft.value = null;
       input.body.value = '';
       if (input.title) input.title.value = '';
+      input.resetOptions?.();
       acknowledged.value = signature();
       status.value = 'idle';
       loadError.value = null;
@@ -249,6 +269,7 @@ export function useAutosavedDraft(input: {
     draft.value = remoteDraft.value;
     input.body.value = remoteDraft.value.body;
     if (input.title) input.title.value = remoteDraft.value.title ?? '';
+    if (input.options && remoteDraft.value.options) input.options.value = remoteDraft.value.options;
     acknowledged.value = signature();
     remoteDraft.value = null;
     status.value = 'saved';
@@ -287,7 +308,7 @@ export function useAutosavedDraft(input: {
     draft.value = null;
     remoteDraft.value = null;
     if (input.context === 'new_thread') activeDraftId = null;
-    acknowledged.value = signature({ title: input.title ? '' : null, body: '' });
+    acknowledged.value = signature({ title: input.title ? '' : null, body: '', options: input.options?.value ?? null });
     status.value = 'idle';
     loadError.value = null;
     publicationSuspended.value = false;
@@ -335,7 +356,9 @@ export function useAutosavedDraft(input: {
         ? (await api.getDraft(baseId)).draft
         : input.context === 'reply'
           ? (await api.getReplyDraft(contextId)).draft
-          : null;
+          : input.context === 'notepad'
+            ? (await api.getNotepadDraft()).draft
+            : null;
     } catch (error) {
       const code = error && typeof error === 'object' && 'status' in error ? Number(error.status) : 0;
       if (code !== 404) return;
@@ -362,6 +385,7 @@ export function useAutosavedDraft(input: {
     remoteDraft.value = null;
     input.body.value = latest?.body ?? '';
     if (input.title) input.title.value = latest?.title ?? '';
+    if (input.options && latest?.options) input.options.value = latest.options;
     acknowledged.value = signature();
     status.value = latest ? 'saved' : 'idle';
   }
@@ -425,6 +449,7 @@ export function useAutosavedDraft(input: {
     status.value = 'idle';
   });
   watch([input.body, ...(input.title ? [input.title] : [])], schedule);
+  if (input.options) watch(input.options, schedule, { deep: true });
   const visibility = () => {
     if (pageIsActive()) void activate();
     else deactivate();

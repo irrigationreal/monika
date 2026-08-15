@@ -17,6 +17,7 @@ controls.
 Key capabilities:
 
 - **Canonical Pi session projection**: each topic maps to one durable Pi session with forum posts, attachments, and robot activity projected around it.
+- **Private Notepad**: each browser-session account has an owner-only reverse-chronological note feed with unified autosaved capture drafts, tags, search, pinning, and hard expiration/deletion. Notes are forum-native account data, not topics or Pi sessions.
 - **Post-bound attachments**: browser downloads use opaque attachment IDs associated with visible posts; arbitrary
   robot-output filesystem paths are never a public attachment surface.
 - **Live robot state + tool trace**: authenticated users can see reasoning steps, tool runs, and outputs inline in a
@@ -168,9 +169,11 @@ docks reserve enough topic space to keep the final content and scroll-to-top con
 
 ## Private autosaved drafts
 
-Authenticated browser users receive private server-side autosave for quick replies, full replies, and new threads. Reply
-composers share one draft per account/topic; new threads may have multiple ID-addressed drafts. Drafts contain only
-literal title/body text—never attachments, model/reasoning, silent mode, robot settings, or preview state—and expire 30
+Authenticated browser users receive private server-side autosave for quick replies, full replies, new threads, and the
+Notepad capture composer. Reply composers share one draft per account/topic; new threads may have multiple ID-addressed
+drafts; Notepad has one account-wide capture draft. Forum publication drafts contain only literal title/body text, while
+the Notepad draft also retains structured tags and its expiration preset. Drafts never retain attachments,
+model/reasoning, robot settings, or preview state, and expire 30
 days after their last material edit. Opening or saving identical content does not renew retention. Publishing atomically
 consumes the exact saved revision; ordinary navigation preserves it. A successfully published composer resets its consumed
 revision before accepting the next draft. Explicit discard and deletion from **My Drafts** require the forum's accessible
@@ -191,6 +194,31 @@ streams, webhooks, analytics, Pi sessions, or agentd. Direct database/backup ope
 infrastructure boundary. Selected browser files are tab-local and are not backed up with drafts. Draft endpoints use
 `401` for missing authentication, `403` for unsupported credentials or destination access, `404` for missing/foreign
 IDs, and `409` for stale optimistic revisions.
+
+## Private Notepad
+
+`/notepad` is a browser-session-only private capture surface. The composer appears above a reverse-chronological feed and
+uses the unified draft service; publishing atomically consumes the exact Notepad draft revision. Notes support optional
+titles, normalized structured tags, owner-scoped text search, clickable frequency-sorted tag filters, one pinned note per
+account, source/preview rendering, copy, explicit revision-checked editing, and permanent deletion. Pinned notes are shown
+once above the ordinary feed and retain their chosen expiration.
+
+New notes default to 30-day expiration and may instead use 1 day, 1 week, 2 weeks, 6 months, 1 year, or never. Editing
+keeps the existing absolute expiration unless the user explicitly chooses a new preset, which is calculated from the
+successful edit time. A one-minute server cleanup hard-deletes due notes and tag rows; read APIs do not hide notes before
+that transaction succeeds, and already-open browser snapshots remain stale until an ordinary refresh. Deletion creates no
+tombstone. Live deletion cannot promise immediate erasure from SQLite free pages, WAL files, or retained backups.
+
+Notepad routes use owner-qualified repository queries, `Cache-Control: no-store`, and generic `404` responses for foreign
+IDs. They reject API keys and impersonation tokens and provide no administrator browsing surface. Notepad content never
+enters ordinary posts/topics, recent activity, public profiles, global forum search, analytics, streams, notifications,
+webhooks, Pi sessions, agentd, or memstore. Plaintext notes remain readable to trusted database/backup operators; the UI
+states that they are not end-to-end encrypted.
+
+Entries carry a versioned `content_format` (`plaintext-v1` initially) so a future additive format can store an opaque
+per-entry ciphertext envelope. Services must not assume every future payload is searchable prose. Future encrypted notes
+will need explicit client key management, metadata/search decisions, and a disclosure boundary before decrypted text is
+copied into canonical agent context.
 
 ## Admin analytics
 

@@ -14,6 +14,7 @@ import type {
   InviteDto,
   MessageDraftDto,
   MessageTemplateDto,
+  NotepadEntryDto,
   PlanDto,
   PostDto,
   RobotPersonaDto,
@@ -38,6 +39,7 @@ import type {
   IdentityPrivate,
   MessageDraft,
   MessageTemplate,
+  NotepadEntry,
   PlanArtifact,
   RobotState,
   ToolRunSummary,
@@ -92,12 +94,28 @@ export function mapMessageDraftToDto(
     topicId: draft.topicId,
     title: draft.title,
     body: draft.body,
+    options: draft.options,
     revision: draft.revision,
     createdAt: draft.createdAt,
     updatedAt: draft.updatedAt,
     expiresAt: draft.expiresAt,
     destinationName: presentation.destinationName ?? null,
     canContinue: presentation.canContinue ?? false,
+  };
+}
+
+export function mapNotepadEntryToDto(entry: NotepadEntry): NotepadEntryDto {
+  return {
+    id: entry.id,
+    contentFormat: entry.contentFormat,
+    title: entry.title,
+    body: entry.body,
+    tags: entry.tags,
+    pinned: entry.pinned,
+    revision: entry.revision,
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt,
+    expiresAt: entry.expiresAt,
   };
 }
 

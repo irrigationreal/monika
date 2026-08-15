@@ -1,6 +1,7 @@
 import type { ForumId, IdentityId, TopicId } from './ids';
+import type { NotepadDraftOptions } from './notepad';
 
-export const MessageDraftContextValues = ['reply', 'new_thread'] as const;
+export const MessageDraftContextValues = ['reply', 'new_thread', 'notepad'] as const;
 export type MessageDraftContext = (typeof MessageDraftContextValues)[number];
 
 export interface MessageDraft {
@@ -11,6 +12,7 @@ export interface MessageDraft {
   topicId: TopicId | null;
   title: string | null;
   body: string;
+  options: NotepadDraftOptions | null;
   revision: number;
   createdAt: string;
   updatedAt: string;
@@ -20,6 +22,7 @@ export interface MessageDraft {
 export interface MessageDraftWriteInput {
   title?: string | null;
   body: string;
+  options?: NotepadDraftOptions | null;
 }
 
 export const MESSAGE_DRAFT_LIMITS = {

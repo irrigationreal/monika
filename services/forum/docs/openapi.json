@@ -6429,7 +6429,8 @@
                             "type": "string",
                             "enum": [
                               "reply",
-                              "new_thread"
+                              "new_thread",
+                              "notepad"
                             ]
                           },
                           "forumId": {
@@ -6446,6 +6447,35 @@
                           },
                           "body": {
                             "type": "string"
+                          },
+                          "options": {
+                            "type": "object",
+                            "nullable": true,
+                            "properties": {
+                              "tags": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                },
+                                "maxItems": 20
+                              },
+                              "expiration": {
+                                "type": "string",
+                                "enum": [
+                                  "one_day",
+                                  "one_week",
+                                  "two_weeks",
+                                  "one_month",
+                                  "six_months",
+                                  "one_year",
+                                  "never"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "tags",
+                              "expiration"
+                            ]
                           },
                           "revision": {
                             "type": "integer",
@@ -6476,6 +6506,7 @@
                           "topicId",
                           "title",
                           "body",
+                          "options",
                           "revision",
                           "createdAt",
                           "updatedAt",
@@ -6531,7 +6562,8 @@
                           "type": "string",
                           "enum": [
                             "reply",
-                            "new_thread"
+                            "new_thread",
+                            "notepad"
                           ]
                         },
                         "forumId": {
@@ -6548,6 +6580,35 @@
                         },
                         "body": {
                           "type": "string"
+                        },
+                        "options": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "tags": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              },
+                              "maxItems": 20
+                            },
+                            "expiration": {
+                              "type": "string",
+                              "enum": [
+                                "one_day",
+                                "one_week",
+                                "two_weeks",
+                                "one_month",
+                                "six_months",
+                                "one_year",
+                                "never"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "tags",
+                            "expiration"
+                          ]
                         },
                         "revision": {
                           "type": "integer",
@@ -6578,6 +6639,7 @@
                         "topicId",
                         "title",
                         "body",
+                        "options",
                         "revision",
                         "createdAt",
                         "updatedAt",
@@ -6629,6 +6691,35 @@
                   },
                   "body": {
                     "type": "string"
+                  },
+                  "options": {
+                    "type": "object",
+                    "nullable": true,
+                    "properties": {
+                      "tags": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "maxItems": 20
+                      },
+                      "expiration": {
+                        "type": "string",
+                        "enum": [
+                          "one_day",
+                          "one_week",
+                          "two_weeks",
+                          "one_month",
+                          "six_months",
+                          "one_year",
+                          "never"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "tags",
+                      "expiration"
+                    ]
                   }
                 },
                 "required": [
@@ -6659,7 +6750,8 @@
                           "type": "string",
                           "enum": [
                             "reply",
-                            "new_thread"
+                            "new_thread",
+                            "notepad"
                           ]
                         },
                         "forumId": {
@@ -6676,6 +6768,35 @@
                         },
                         "body": {
                           "type": "string"
+                        },
+                        "options": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "tags": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              },
+                              "maxItems": 20
+                            },
+                            "expiration": {
+                              "type": "string",
+                              "enum": [
+                                "one_day",
+                                "one_week",
+                                "two_weeks",
+                                "one_month",
+                                "six_months",
+                                "one_year",
+                                "never"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "tags",
+                            "expiration"
+                          ]
                         },
                         "revision": {
                           "type": "integer",
@@ -6706,6 +6827,7 @@
                         "topicId",
                         "title",
                         "body",
+                        "options",
                         "revision",
                         "createdAt",
                         "updatedAt",
@@ -6807,7 +6929,8 @@
                             "type": "string",
                             "enum": [
                               "reply",
-                              "new_thread"
+                              "new_thread",
+                              "notepad"
                             ]
                           },
                           "forumId": {
@@ -6824,6 +6947,35 @@
                           },
                           "body": {
                             "type": "string"
+                          },
+                          "options": {
+                            "type": "object",
+                            "nullable": true,
+                            "properties": {
+                              "tags": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                },
+                                "maxItems": 20
+                              },
+                              "expiration": {
+                                "type": "string",
+                                "enum": [
+                                  "one_day",
+                                  "one_week",
+                                  "two_weeks",
+                                  "one_month",
+                                  "six_months",
+                                  "one_year",
+                                  "never"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "tags",
+                              "expiration"
+                            ]
                           },
                           "revision": {
                             "type": "integer",
@@ -6854,6 +7006,7 @@
                           "topicId",
                           "title",
                           "body",
+                          "options",
                           "revision",
                           "createdAt",
                           "updatedAt",
@@ -6906,6 +7059,35 @@
                   },
                   "body": {
                     "type": "string"
+                  },
+                  "options": {
+                    "type": "object",
+                    "nullable": true,
+                    "properties": {
+                      "tags": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "maxItems": 20
+                      },
+                      "expiration": {
+                        "type": "string",
+                        "enum": [
+                          "one_day",
+                          "one_week",
+                          "two_weeks",
+                          "one_month",
+                          "six_months",
+                          "one_year",
+                          "never"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "tags",
+                      "expiration"
+                    ]
                   }
                 },
                 "required": [
@@ -6936,7 +7118,8 @@
                           "type": "string",
                           "enum": [
                             "reply",
-                            "new_thread"
+                            "new_thread",
+                            "notepad"
                           ]
                         },
                         "forumId": {
@@ -6953,6 +7136,35 @@
                         },
                         "body": {
                           "type": "string"
+                        },
+                        "options": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "tags": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              },
+                              "maxItems": 20
+                            },
+                            "expiration": {
+                              "type": "string",
+                              "enum": [
+                                "one_day",
+                                "one_week",
+                                "two_weeks",
+                                "one_month",
+                                "six_months",
+                                "one_year",
+                                "never"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "tags",
+                            "expiration"
+                          ]
                         },
                         "revision": {
                           "type": "integer",
@@ -6983,6 +7195,309 @@
                         "topicId",
                         "title",
                         "body",
+                        "options",
+                        "revision",
+                        "createdAt",
+                        "updatedAt",
+                        "expiresAt",
+                        "destinationName",
+                        "canContinue"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "draft"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notepad/draft": {
+      "get": {
+        "tags": [
+          "drafts",
+          "notepad"
+        ],
+        "summary": "Get my Notepad capture draft",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "draft": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "context": {
+                          "type": "string",
+                          "enum": [
+                            "reply",
+                            "new_thread",
+                            "notepad"
+                          ]
+                        },
+                        "forumId": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "topicId": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "title": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "body": {
+                          "type": "string"
+                        },
+                        "options": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "tags": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              },
+                              "maxItems": 20
+                            },
+                            "expiration": {
+                              "type": "string",
+                              "enum": [
+                                "one_day",
+                                "one_week",
+                                "two_weeks",
+                                "one_month",
+                                "six_months",
+                                "one_year",
+                                "never"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "tags",
+                            "expiration"
+                          ]
+                        },
+                        "revision": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        },
+                        "createdAt": {
+                          "type": "string"
+                        },
+                        "updatedAt": {
+                          "type": "string"
+                        },
+                        "expiresAt": {
+                          "type": "string"
+                        },
+                        "destinationName": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "canContinue": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "context",
+                        "forumId",
+                        "topicId",
+                        "title",
+                        "body",
+                        "options",
+                        "revision",
+                        "createdAt",
+                        "updatedAt",
+                        "expiresAt",
+                        "destinationName",
+                        "canContinue"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "draft"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "drafts",
+          "notepad"
+        ],
+        "summary": "Autosave my Notepad capture draft",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expectedRevision": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "title": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 255
+                  },
+                  "body": {
+                    "type": "string"
+                  },
+                  "options": {
+                    "type": "object",
+                    "nullable": true,
+                    "properties": {
+                      "tags": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "maxItems": 20
+                      },
+                      "expiration": {
+                        "type": "string",
+                        "enum": [
+                          "one_day",
+                          "one_week",
+                          "two_weeks",
+                          "one_month",
+                          "six_months",
+                          "one_year",
+                          "never"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "tags",
+                      "expiration"
+                    ]
+                  }
+                },
+                "required": [
+                  "expectedRevision",
+                  "body"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "draft": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "context": {
+                          "type": "string",
+                          "enum": [
+                            "reply",
+                            "new_thread",
+                            "notepad"
+                          ]
+                        },
+                        "forumId": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "topicId": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "title": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "body": {
+                          "type": "string"
+                        },
+                        "options": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "tags": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              },
+                              "maxItems": 20
+                            },
+                            "expiration": {
+                              "type": "string",
+                              "enum": [
+                                "one_day",
+                                "one_week",
+                                "two_weeks",
+                                "one_month",
+                                "six_months",
+                                "one_year",
+                                "never"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "tags",
+                            "expiration"
+                          ]
+                        },
+                        "revision": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        },
+                        "createdAt": {
+                          "type": "string"
+                        },
+                        "updatedAt": {
+                          "type": "string"
+                        },
+                        "expiresAt": {
+                          "type": "string"
+                        },
+                        "destinationName": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "canContinue": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "context",
+                        "forumId",
+                        "topicId",
+                        "title",
+                        "body",
+                        "options",
                         "revision",
                         "createdAt",
                         "updatedAt",
@@ -7037,7 +7552,8 @@
                           "type": "string",
                           "enum": [
                             "reply",
-                            "new_thread"
+                            "new_thread",
+                            "notepad"
                           ]
                         },
                         "forumId": {
@@ -7054,6 +7570,35 @@
                         },
                         "body": {
                           "type": "string"
+                        },
+                        "options": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "tags": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              },
+                              "maxItems": 20
+                            },
+                            "expiration": {
+                              "type": "string",
+                              "enum": [
+                                "one_day",
+                                "one_week",
+                                "two_weeks",
+                                "one_month",
+                                "six_months",
+                                "one_year",
+                                "never"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "tags",
+                            "expiration"
+                          ]
                         },
                         "revision": {
                           "type": "integer",
@@ -7084,6 +7629,7 @@
                         "topicId",
                         "title",
                         "body",
+                        "options",
                         "revision",
                         "createdAt",
                         "updatedAt",
@@ -7135,6 +7681,35 @@
                   },
                   "body": {
                     "type": "string"
+                  },
+                  "options": {
+                    "type": "object",
+                    "nullable": true,
+                    "properties": {
+                      "tags": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "maxItems": 20
+                      },
+                      "expiration": {
+                        "type": "string",
+                        "enum": [
+                          "one_day",
+                          "one_week",
+                          "two_weeks",
+                          "one_month",
+                          "six_months",
+                          "one_year",
+                          "never"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "tags",
+                      "expiration"
+                    ]
                   }
                 },
                 "required": [
@@ -7165,7 +7740,8 @@
                           "type": "string",
                           "enum": [
                             "reply",
-                            "new_thread"
+                            "new_thread",
+                            "notepad"
                           ]
                         },
                         "forumId": {
@@ -7182,6 +7758,35 @@
                         },
                         "body": {
                           "type": "string"
+                        },
+                        "options": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "tags": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              },
+                              "maxItems": 20
+                            },
+                            "expiration": {
+                              "type": "string",
+                              "enum": [
+                                "one_day",
+                                "one_week",
+                                "two_weeks",
+                                "one_month",
+                                "six_months",
+                                "one_year",
+                                "never"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "tags",
+                            "expiration"
+                          ]
                         },
                         "revision": {
                           "type": "integer",
@@ -7212,6 +7817,7 @@
                         "topicId",
                         "title",
                         "body",
+                        "options",
                         "revision",
                         "createdAt",
                         "updatedAt",
@@ -7223,6 +7829,586 @@
                   },
                   "required": [
                     "draft"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notepad": {
+      "get": {
+        "tags": [
+          "notepad"
+        ],
+        "summary": "List and search my Notepad",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 500
+            },
+            "required": false,
+            "name": "q",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 1000
+            },
+            "required": false,
+            "name": "tags",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 2000
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "entries": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "contentFormat": {
+                            "type": "string",
+                            "enum": [
+                              "plaintext-v1"
+                            ]
+                          },
+                          "title": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "body": {
+                            "type": "string"
+                          },
+                          "tags": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "pinned": {
+                            "type": "boolean"
+                          },
+                          "revision": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "exclusiveMinimum": true
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          },
+                          "updatedAt": {
+                            "type": "string"
+                          },
+                          "expiresAt": {
+                            "type": "string",
+                            "nullable": true
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "contentFormat",
+                          "title",
+                          "body",
+                          "tags",
+                          "pinned",
+                          "revision",
+                          "createdAt",
+                          "updatedAt",
+                          "expiresAt"
+                        ]
+                      }
+                    },
+                    "tags": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "tag": {
+                            "type": "string"
+                          },
+                          "count": {
+                            "type": "integer",
+                            "minimum": 0
+                          }
+                        },
+                        "required": [
+                          "tag",
+                          "count"
+                        ]
+                      }
+                    },
+                    "nextCursor": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "entries",
+                    "tags",
+                    "nextCursor"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "notepad"
+        ],
+        "summary": "Create a note",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 255
+                  },
+                  "body": {
+                    "type": "string"
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 20
+                  },
+                  "expiration": {
+                    "type": "string",
+                    "enum": [
+                      "one_day",
+                      "one_week",
+                      "two_weeks",
+                      "one_month",
+                      "six_months",
+                      "one_year",
+                      "never"
+                    ]
+                  },
+                  "draft": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "revision": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "exclusiveMinimum": true
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "revision"
+                    ]
+                  }
+                },
+                "required": [
+                  "body",
+                  "draft"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "entry": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "contentFormat": {
+                          "type": "string",
+                          "enum": [
+                            "plaintext-v1"
+                          ]
+                        },
+                        "title": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "body": {
+                          "type": "string"
+                        },
+                        "tags": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "pinned": {
+                          "type": "boolean"
+                        },
+                        "revision": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        },
+                        "createdAt": {
+                          "type": "string"
+                        },
+                        "updatedAt": {
+                          "type": "string"
+                        },
+                        "expiresAt": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "contentFormat",
+                        "title",
+                        "body",
+                        "tags",
+                        "pinned",
+                        "revision",
+                        "createdAt",
+                        "updatedAt",
+                        "expiresAt"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "entry"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notepad/{id}": {
+      "get": {
+        "tags": [
+          "notepad"
+        ],
+        "summary": "Get one of my notes",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "entry": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "contentFormat": {
+                          "type": "string",
+                          "enum": [
+                            "plaintext-v1"
+                          ]
+                        },
+                        "title": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "body": {
+                          "type": "string"
+                        },
+                        "tags": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "pinned": {
+                          "type": "boolean"
+                        },
+                        "revision": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        },
+                        "createdAt": {
+                          "type": "string"
+                        },
+                        "updatedAt": {
+                          "type": "string"
+                        },
+                        "expiresAt": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "contentFormat",
+                        "title",
+                        "body",
+                        "tags",
+                        "pinned",
+                        "revision",
+                        "createdAt",
+                        "updatedAt",
+                        "expiresAt"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "entry"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "notepad"
+        ],
+        "summary": "Update a note",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "nullable": true,
+                    "maxLength": 255
+                  },
+                  "body": {
+                    "type": "string"
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 20
+                  },
+                  "expiration": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "one_day",
+                          "one_week",
+                          "two_weeks",
+                          "one_month",
+                          "six_months",
+                          "one_year",
+                          "never"
+                        ]
+                      },
+                      {
+                        "type": "string",
+                        "enum": [
+                          "keep"
+                        ]
+                      }
+                    ]
+                  },
+                  "expectedRevision": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "exclusiveMinimum": true
+                  },
+                  "pinned": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "body",
+                  "expectedRevision"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "entry": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "contentFormat": {
+                          "type": "string",
+                          "enum": [
+                            "plaintext-v1"
+                          ]
+                        },
+                        "title": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "body": {
+                          "type": "string"
+                        },
+                        "tags": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "pinned": {
+                          "type": "boolean"
+                        },
+                        "revision": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        },
+                        "createdAt": {
+                          "type": "string"
+                        },
+                        "updatedAt": {
+                          "type": "string"
+                        },
+                        "expiresAt": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "contentFormat",
+                        "title",
+                        "body",
+                        "tags",
+                        "pinned",
+                        "revision",
+                        "createdAt",
+                        "updatedAt",
+                        "expiresAt"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "entry"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "notepad"
+        ],
+        "summary": "Permanently delete a note",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "exclusiveMinimum": true
+            },
+            "required": true,
+            "name": "revision",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok"
                   ]
                 }
               }

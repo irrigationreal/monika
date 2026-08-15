@@ -87,6 +87,10 @@ const breadcrumbs = computed((): BreadcrumbItem[] => {
     crumbs.push({ label: 'File Storage' });
   }
 
+  if (route.name === 'user.notepad') {
+    crumbs.push({ label: 'My Notepad' });
+  }
+
   if (route.name === 'admin') {
     crumbs.push({ label: 'Admin Panel' });
   }
@@ -246,6 +250,7 @@ onMounted(async () => {
           <div class="vb-welcome-links">
             <router-link v-if="state.isLoggedIn.value" :to="{ name: 'user.profile' }">User CP</router-link>
             <router-link v-if="state.isLoggedIn.value" :to="{ name: 'user.files' }">Files</router-link>
+            <router-link v-if="state.isLoggedIn.value" :to="{ name: 'user.notepad' }">Notepad</router-link>
             <router-link v-if="state.isLoggedIn.value" :to="{ name: 'chat.home' }">Chat</router-link>
             <router-link v-if="state.isLoggedIn.value" :to="{ name: 'developer.portal' }">Developers</router-link>
             <router-link v-if="state.isLoggedIn.value" :to="{ name: 'api.docs' }">API Docs</router-link>
@@ -350,6 +355,13 @@ onMounted(async () => {
             :to="{ name: 'user.files' }"
             @click="closeMobileMenu"
             >Files</router-link
+          >
+          <router-link
+            v-if="state.isLoggedIn.value"
+            class="vb-nav-item"
+            :to="{ name: 'user.notepad' }"
+            @click="closeMobileMenu"
+            >Notepad</router-link
           >
           <router-link
             v-if="state.isLoggedIn.value"

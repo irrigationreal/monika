@@ -11,6 +11,8 @@ import type {
   MessageTemplateContext,
   MessageTemplateForumScope,
   MessageTemplateScope,
+  NotepadContentFormat,
+  NotepadDraftOptions,
   RobotActivity,
   RobotMode,
   WebAuthnCredential,
@@ -267,6 +269,7 @@ export interface MessageDraftDto {
   topicId: string | null;
   title: string | null;
   body: string;
+  options: NotepadDraftOptions | null;
   revision: number;
   createdAt: string;
   updatedAt: string;
@@ -280,6 +283,31 @@ export interface MessageDraftResponseDto {
 }
 export interface MessageDraftListResponseDto {
   drafts: MessageDraftDto[];
+}
+
+export interface NotepadEntryDto {
+  id: string;
+  contentFormat: NotepadContentFormat;
+  title: string | null;
+  body: string;
+  tags: string[];
+  pinned: boolean;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string | null;
+}
+export interface NotepadTagDto {
+  tag: string;
+  count: number;
+}
+export interface NotepadListResponseDto {
+  entries: NotepadEntryDto[];
+  tags: NotepadTagDto[];
+  nextCursor: string | null;
+}
+export interface NotepadEntryResponseDto {
+  entry: NotepadEntryDto;
 }
 
 export interface MessageTemplateDto {
