@@ -19,6 +19,8 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
   flex-wrap: wrap;
 }
 
@@ -30,6 +32,8 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  flex: 0 0 auto;
+  margin-left: auto;
 }
 
 .vb-tool-meta {
@@ -1207,8 +1211,8 @@
 }
 
 .vb-tool-mini-detail--table {
-  background: var(--bg-surface-alt);
-  border: 1px solid var(--border-secondary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
   padding: 4px 6px;
   border-radius: 3px;
 }
