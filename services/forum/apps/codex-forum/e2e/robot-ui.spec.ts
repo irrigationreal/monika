@@ -842,6 +842,75 @@ test.describe('Robot UI (mocked)', () => {
     await expect(draftPanel).toContainText('List -la');
   });
 
+  test('keeps long tool details and controls inside the mobile viewport', async ({ page }) => {
+    const context = buildMockContext('admin');
+    const topicId = 'topic-mention';
+    const state = context.robotStates.get(topicId);
+    const topic = context.topics.get(topicId);
+    if (!state || !topic) throw new Error('missing mocked topic state');
+    context.topics.set(topicId, { ...topic, robotMode: 'auto' });
+
+    const longPath = `/${'deeply-nested-directory/'.repeat(20)}document.md`;
+    context.robotStates.set(topicId, {
+      ...state,
+      activity: 'running_tools',
+      recentToolRuns: [
+        {
+          id: `tool-${topicId}-long-read`,
+          tool: 'read',
+          parentPostId: `post-${topicId}-1`,
+          startedAt: context.now,
+          finishedAt: context.now,
+          exitCode: 0,
+          command: `read ${JSON.stringify({ path: longPath, offset: 1, limit: 2000 })}`,
+          filesTouched: [],
+          outputSummary: 'Read document',
+          redactionsApplied: false,
+          visibility: 'public'
+        }
+      ]
+    });
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await attachMockApi(page, context);
+    await page.goto('/');
+    await login(page, context.user.displayName);
+    await page.goto(`/topics/${topicId}`);
+
+    const toolToggle = page.locator('.vb-tool-list .vb-tool-toggle').first();
+    const toolControls = toolToggle.locator('.vb-tool-toggle-right');
+    const tableDetail = toolToggle.locator('.vb-tool-mini-detail--table');
+    await expect(toolToggle).toBeVisible();
+    await expect(toolControls).toBeVisible();
+    await expect(tableDetail).toBeVisible();
+
+    const [toggleBox, controlsBox] = await Promise.all([
+      toolToggle.boundingBox(),
+      toolControls.boundingBox()
+    ]);
+    if (!toggleBox || !controlsBox) throw new Error('tool usage controls have no layout box');
+    expect(controlsBox.x + controlsBox.width).toBeLessThanOrEqual(
+      toggleBox.x + toggleBox.width + 1
+    );
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)
+    ).toBe(true);
+
+    const surfaceColors = await toolToggle.evaluate((toggle) => {
+      const detail = toggle.querySelector<HTMLElement>('.vb-tool-mini-detail--table');
+      if (!detail) throw new Error('table detail not found');
+      return {
+        toggle: getComputedStyle(toggle).backgroundColor,
+        detail: getComputedStyle(detail).backgroundColor,
+        detailBorderStyle: getComputedStyle(detail).borderStyle,
+        detailBorderWidth: getComputedStyle(detail).borderWidth
+      };
+    });
+    expect(surfaceColors.detail).toBe(surfaceColors.toggle);
+    expect(surfaceColors.detailBorderStyle).toBe('solid');
+    expect(surfaceColors.detailBorderWidth).toBe('1px');
+  });
+
   test('requires a mobile-safe confirmation from both topic Stop controls', async ({ page }) => {
     const context = buildMockContext('admin');
     const topicId = 'topic-mention';
