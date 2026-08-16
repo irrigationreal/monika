@@ -38,6 +38,18 @@ class MockAuthApi {
   private sessions = new Map<string, string>();
   private invites = new Map<string, InviteRecord>();
   private verificationTokens = new Map<string, VerificationRecord>();
+  private notepadEntries: Array<{
+    id: string;
+    contentFormat: 'plaintext-v1';
+    title: string | null;
+    body: string;
+    tags: string[];
+    pinned: boolean;
+    revision: number;
+    createdAt: string;
+    updatedAt: string;
+    expiresAt: string | null;
+  }> = [];
   private baseUrl: string;
   private registrationMode: RegistrationModeDto['mode'];
 
@@ -68,6 +80,24 @@ class MockAuthApi {
       if (identity.displayName === displayName) return identity;
     }
     return null;
+  }
+
+  setNotepadBody(body: string): void {
+    const now = new Date().toISOString();
+    this.notepadEntries = [
+      {
+        id: 'note-rendering-fixture',
+        contentFormat: 'plaintext-v1',
+        title: 'Rendering fixture',
+        body,
+        tags: ['fixture'],
+        pinned: false,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+        expiresAt: null,
+      },
+    ];
   }
 
   async handle(request: Request): Promise<MockResponse> {
@@ -192,6 +222,21 @@ class MockAuthApi {
 
     if (method === 'GET' && path === '/me/webauthn/credentials') {
       return { status: this.getIdentityFromAuth(request) ? 200 : 401, body: { items: [] } };
+    }
+
+    if (method === 'GET' && path === '/notepad/draft') {
+      return this.getIdentityFromAuth(request)
+        ? { status: 200, body: { draft: null } }
+        : { status: 401, body: { message: 'Please log in to continue.' } };
+    }
+
+    if (method === 'GET' && path === '/notepad') {
+      return this.getIdentityFromAuth(request)
+        ? {
+            status: 200,
+            body: { entries: this.notepadEntries, tags: [{ tag: 'fixture', count: 1 }], nextCursor: null },
+          }
+        : { status: 401, body: { message: 'Please log in to continue.' } };
     }
 
     if (method === 'GET' && path === '/auth/me') {
@@ -636,6 +681,77 @@ test.describe('Auth registration and profile flows', () => {
     await page.goto('/profile');
     await expect(page).toHaveURL('/');
     await expect(page.locator('.vb-welcome')).toContainText('Guest_User');
+  });
+
+  test('renders Notepad Markdown with the shared forum presentation and Mermaid enhancement', async ({ page }) => {
+    const baseUrl = test.info().project.use.baseURL ?? 'http://localhost:5173';
+    const api = new MockAuthApi(baseUrl);
+    api.createVerifiedIdentity('Notepad User', 'notepad-user', 'sharedpass');
+    api.setNotepadBody(
+      [
+        '# Heading',
+        '',
+        'Before the divider.',
+        '',
+        '---',
+        '',
+        'After the divider.',
+        '',
+        '- one',
+        '- two',
+        '',
+        '> quoted text',
+        '',
+        '| Name | Value |',
+        '| --- | --- |',
+        '| Alpha | 1 |',
+        '',
+        '```ts',
+        'const answer = 42;',
+        '```',
+        '',
+        '[Forum](https://example.com)',
+        '',
+        '![Pixel](data:image/png;base64,iVBORw0KGgo=)',
+        '',
+        `long-${'x'.repeat(300)}`,
+        '',
+        '```mermaid',
+        'flowchart LR',
+        '  Notes --> Forum',
+        '```',
+      ].join('\n')
+    );
+    await attachMockApi(page.context(), api);
+
+    await page.goto('/');
+    await page.locator('.vb-link-btn', { hasText: 'Log In' }).click();
+    await page.locator('.vb-modal input[type="text"]').fill('notepad-user');
+    await page.locator('.vb-modal input[type="password"]').fill('sharedpass');
+    await page.locator('.vb-modal .vb-btn', { hasText: 'Log In' }).click();
+    await page.goto('/notepad');
+
+    const body = page.locator('.vb-note-body');
+    await expect(body).toHaveClass(/vb-rendered-content/);
+    await expect(body).toHaveClass(/vb-post-text/);
+    await expect(body.locator('h1')).toHaveText('Heading');
+    await expect(body.locator('li')).toHaveText(['one', 'two']);
+    await expect(body.locator('blockquote')).toContainText('quoted text');
+    await expect(body.locator('table')).toContainText('Alpha');
+    await expect(body.locator('.vb-code-content')).toContainText('const answer = 42;');
+    await expect(body.getByRole('link', { name: 'Forum' })).toHaveAttribute('target', '_blank');
+    await expect(body.locator('img.vb-user-image')).toHaveAttribute('alt', 'Pixel');
+    await expect(body).toHaveCSS('display', 'block');
+    await expect(body).toHaveCSS('overflow-wrap', 'anywhere');
+
+    const ruleBox = await body.locator('hr').boundingBox();
+    if (!ruleBox) throw new Error('Notepad horizontal rule has no layout box');
+    expect(ruleBox.width).toBeGreaterThan(ruleBox.height * 10);
+
+    const mermaid = body.locator('.vb-mermaid-block');
+    await mermaid.scrollIntoViewIfNeeded();
+    await expect(mermaid).toHaveAttribute('data-mermaid-state', 'rendered', { timeout: 20_000 });
+    await expect(mermaid.locator('.vb-mermaid-render iframe')).toHaveAttribute('sandbox', '');
   });
 
   test('keeps parallel cookie sessions consistent after reload', async ({ browser }) => {

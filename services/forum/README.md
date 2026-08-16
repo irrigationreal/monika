@@ -234,7 +234,9 @@ IDs, and `409` for stale optimistic revisions.
 `/notepad` is a browser-session-only private capture surface. The composer appears above a reverse-chronological feed
 and uses the unified draft service; publishing atomically consumes the exact Notepad draft revision. Notes support
 optional titles, normalized structured tags, owner-scoped text search, clickable frequency-sorted tag filters, one
-pinned note per account, source/preview rendering, copy, explicit revision-checked editing, and permanent deletion.
+pinned note per account, copy, explicit revision-checked editing, and permanent deletion. Note previews and saved bodies
+use the same sanitized Markdown/BBCode presentation and sandboxed Mermaid enhancement as ordinary forum content; note
+titles remain plain text.
 Pinned notes are shown once above the ordinary feed and retain their chosen expiration.
 
 New notes default to 30-day expiration and may instead use 1 day, 1 week, 2 weeks, 6 months, 1 year, or never. Editing

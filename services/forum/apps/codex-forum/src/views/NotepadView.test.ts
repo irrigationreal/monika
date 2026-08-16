@@ -23,4 +23,11 @@ describe('Notepad draft safety', () => {
     expect(source).toContain('class="vb-btn vb-note-post"');
     expect(source).not.toMatch(/class="vb-(?:textarea|select|button)(?:\s|\")/);
   });
+
+  it('uses the shared rendered-content host without borrowing the post layout container', () => {
+    expect(source.match(/<RenderedContent/g)).toHaveLength(3);
+    expect(source).toContain('class="vb-note-preview vb-post-text"');
+    expect(source.match(/class="vb-note-body vb-post-text"/g)).toHaveLength(2);
+    expect(source).not.toContain('class="vb-post-body"');
+  });
 });

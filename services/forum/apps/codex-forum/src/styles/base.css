@@ -400,7 +400,7 @@ pre.vb-code .hljs {
   padding: 4px 0;
 }
 
-.vb-rendered-content hr.vb-hr {
+.vb-rendered-content hr {
   border: none;
   border-top: 1px solid var(--border-default);
   margin: 12px 0;

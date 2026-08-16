@@ -6,6 +6,7 @@ import AutoCompactOption from '../components/AutoCompactOption.vue';
 import ConfirmationDialog from '../components/ConfirmationDialog.vue';
 import DraftStatus from '../components/DraftStatus.vue';
 import MessageTemplatePicker from '../components/MessageTemplatePicker.vue';
+import RenderedContent from '../components/RenderedContent.vue';
 import { useAutosavedDraft } from '../composables/useAutosavedDraft';
 import { useForumState } from '../composables/useForumState';
 import { useMarkdown } from '../composables/useMarkdown';
@@ -793,7 +794,7 @@ onMounted(async () => {
 
             <div v-if="showPreview" class="vb-preview-panel">
               <div class="vb-preview-header">Preview</div>
-              <div v-enhance-mermaid class="vb-preview-body vb-rendered-content" v-html="previewHtml"></div>
+              <RenderedContent class="vb-preview-body" :html="previewHtml" />
             </div>
           </div>
         </div>
