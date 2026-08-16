@@ -1,8 +1,10 @@
-import { createApp, type Component } from 'vue';
+import { createApp } from 'vue';
 
 import App from './App.vue';
 import { enhanceMermaidDirective } from './lib/mermaidEnhancement';
 import { router } from './router';
+
+import type { Component } from 'vue';
 
 // Import CSS in correct order: theme variables, base styles, components, posts, responsive
 import './styles/theme.css';
@@ -10,7 +12,6 @@ import 'highlight.js/styles/github-dark-dimmed.css';
 import './styles/base.css';
 import './styles/components.css';
 import './styles/posts.css';
-import './styles/timeline.css';
 import './styles/chat.css';
 import './styles/analytics.css';
 import './styles/responsive.css';

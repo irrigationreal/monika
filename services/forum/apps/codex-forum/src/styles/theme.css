@@ -105,8 +105,6 @@
   --grad-page-end: #e1e4f2;
   --grad-section-start: #e8eef5;
   --grad-section-end: #d4dde8;
-  --grad-trace-collapsed-start: #a0aec0;
-  --grad-trace-collapsed-end: #8899aa;
   --grad-secondary-start: #d1d1e1;
   --grad-secondary-end: #a0a0a0;
   --grad-danger-start: #ef4444;
@@ -117,24 +115,6 @@
   --grad-success-end: #3d7a3d;
 
   /* Trace cards */
-  --trace-reasoning-start: #869bbe;
-  --trace-reasoning-end: #5c7099;
-  --trace-reasoning-border: #0b198c;
-  --trace-tool-start: #99705c;
-  --trace-tool-end: #6f4f40;
-  --trace-tool-border: #8c4b0b;
-  --trace-search-start: #5c8a99;
-  --trace-search-end: #3c5c66;
-  --trace-search-border: #0b4b8c;
-  --trace-image-start: #7a5c99;
-  --trace-image-end: #5b3f73;
-  --trace-image-border: #5b2b8c;
-  --trace-read-start: #5c9970;
-  --trace-read-end: #3f6b50;
-  --trace-read-border: #0b8c4b;
-  --trace-exec-start: #8c5c5c;
-  --trace-exec-end: #6b3f3f;
-  --trace-exec-border: #8c0b0b;
 
   /* Shadows */
   --shadow-color: rgba(0, 0, 0, 0.15);
@@ -258,8 +238,6 @@
   --grad-page-end: #0a0a0a;
   --grad-section-start: #252520;
   --grad-section-end: #1a1815;
-  --grad-trace-collapsed-start: #3d3530;
-  --grad-trace-collapsed-end: #2a2520;
   --grad-secondary-start: #3d3530;
   --grad-secondary-end: #2a2520;
   --grad-danger-start: #a03030;
@@ -270,24 +248,6 @@
   --grad-success-end: #206040;
 
   /* Trace cards */
-  --trace-reasoning-start: #4d5c7a;
-  --trace-reasoning-end: #2e3d59;
-  --trace-reasoning-border: #607099;
-  --trace-tool-start: #6d4d40;
-  --trace-tool-end: #3f2f28;
-  --trace-tool-border: #8c5a3d;
-  --trace-search-start: #3f5f69;
-  --trace-search-end: #243b42;
-  --trace-search-border: #4b7c8c;
-  --trace-image-start: #5f4b73;
-  --trace-image-end: #3d314d;
-  --trace-image-border: #6b4b8c;
-  --trace-read-start: #3f6b50;
-  --trace-read-end: #2b4b3a;
-  --trace-read-border: #4b8c69;
-  --trace-exec-start: #6b3f3f;
-  --trace-exec-end: #452626;
-  --trace-exec-border: #8c4b4b;
 
   /* Shadows */
   --shadow-color: rgba(0, 0, 0, 0.5);
@@ -410,8 +370,6 @@
   --grad-page-end: #0a0a0a;
   --grad-section-start: #202523;
   --grad-section-end: #151a16;
-  --grad-trace-collapsed-start: #313d30;
-  --grad-trace-collapsed-end: #202a21;
   --grad-secondary-start: #313d30;
   --grad-secondary-end: #202a21;
   --grad-danger-start: #b81445;
@@ -422,24 +380,6 @@
   --grad-success-end: #447020;
 
   /* Trace cards */
-  --trace-reasoning-start: #7a4d70;
-  --trace-reasoning-end: #592e50;
-  --trace-reasoning-border: #99608a;
-  --trace-tool-start: #476d40;
-  --trace-tool-end: #2b3f28;
-  --trace-tool-border: #448c3d;
-  --trace-search-start: #603f69;
-  --trace-search-end: #3c2442;
-  --trace-search-border: #7f4b8c;
-  --trace-image-start: #734d4b;
-  --trace-image-end: #4d3132;
-  --trace-image-border: #8c4e4b;
-  --trace-read-start: #3f426b;
-  --trace-read-end: #2c2b4b;
-  --trace-read-border: #4c4b8c;
-  --trace-exec-start: #536b3f;
-  --trace-exec-end: #344526;
-  --trace-exec-border: #688c4b;
 
   /* Shadows */
   --shadow-color: rgba(0, 0, 0, 0.5);
@@ -524,8 +464,6 @@
   --grad-page-end: #ffe9cc;
   --grad-section-start: #fff2da;
   --grad-section-end: #ffe3c2;
-  --grad-trace-collapsed-start: #d4af37;
-  --grad-trace-collapsed-end: #b8870f;
   --grad-secondary-start: #fff2da;
   --grad-secondary-end: #ffe3c2;
   --grad-danger-start: #dc2626;
@@ -533,24 +471,6 @@
   --grad-success-start: #14b8a6;
   --grad-success-end: #0f766e;
 
-  --trace-reasoning-start: #b3001b;
-  --trace-reasoning-end: #7a0012;
-  --trace-reasoning-border: #d4af37;
-  --trace-tool-start: #d1a21a;
-  --trace-tool-end: #b8870f;
-  --trace-tool-border: #b3001b;
-  --trace-search-start: #b3001b;
-  --trace-search-end: #7a0012;
-  --trace-search-border: #d1a21a;
-  --trace-image-start: #a21caf;
-  --trace-image-end: #6b21a8;
-  --trace-image-border: #d4af37;
-  --trace-read-start: #0f766e;
-  --trace-read-end: #115e59;
-  --trace-read-border: #d4af37;
-  --trace-exec-start: #991b1b;
-  --trace-exec-end: #7f1d1d;
-  --trace-exec-border: #d4af37;
 
   --shadow-color: rgba(120, 0, 18, 0.18);
   --shadow-strong: rgba(120, 0, 18, 0.35);
@@ -632,8 +552,6 @@
   --grad-page-end: #eaf2ff;
   --grad-section-start: #f6faff;
   --grad-section-end: #dde9ff;
-  --grad-trace-collapsed-start: #ffd666;
-  --grad-trace-collapsed-end: #ffb000;
   --grad-secondary-start: #d2e1ff;
   --grad-secondary-end: #7aa1d8;
   --grad-danger-start: #ef4444;
@@ -641,24 +559,6 @@
   --grad-success-start: #34d399;
   --grad-success-end: #059669;
 
-  --trace-reasoning-start: #79a5e6;
-  --trace-reasoning-end: #004a99;
-  --trace-reasoning-border: #ffcc00;
-  --trace-tool-start: #ffd666;
-  --trace-tool-end: #ffb000;
-  --trace-tool-border: #d40000;
-  --trace-search-start: #2f5b8a;
-  --trace-search-end: #003d7a;
-  --trace-search-border: #1a75e8;
-  --trace-image-start: #7a5c99;
-  --trace-image-end: #5b3f73;
-  --trace-image-border: #7a5c99;
-  --trace-read-start: #0f766e;
-  --trace-read-end: #115e59;
-  --trace-read-border: #34d399;
-  --trace-exec-start: #b91c1c;
-  --trace-exec-end: #7f1d1d;
-  --trace-exec-border: #ef4444;
 
   --shadow-color: rgba(0, 87, 184, 0.18);
   --shadow-strong: rgba(0, 87, 184, 0.34);
@@ -740,8 +640,6 @@
   --grad-page-end: #dff6ff;
   --grad-section-start: #eefbff;
   --grad-section-end: #d3f3ff;
-  --grad-trace-collapsed-start: #00d1b2;
-  --grad-trace-collapsed-end: #00a3ff;
   --grad-secondary-start: #eefbff;
   --grad-secondary-end: #bfe8ff;
   --grad-danger-start: #ef4444;
@@ -749,24 +647,6 @@
   --grad-success-start: #22c55e;
   --grad-success-end: #16a34a;
 
-  --trace-reasoning-start: #8ae9ff;
-  --trace-reasoning-end: #00a3ff;
-  --trace-reasoning-border: #0077cc;
-  --trace-tool-start: #00d1b2;
-  --trace-tool-end: #00a3ff;
-  --trace-tool-border: #ff5fa2;
-  --trace-search-start: #00a3ff;
-  --trace-search-end: #0077cc;
-  --trace-search-border: #38bdf8;
-  --trace-image-start: #ff5fa2;
-  --trace-image-end: #d4006a;
-  --trace-image-border: #ff5fa2;
-  --trace-read-start: #22c55e;
-  --trace-read-end: #16a34a;
-  --trace-read-border: #00d1b2;
-  --trace-exec-start: #ef4444;
-  --trace-exec-end: #b91c1c;
-  --trace-exec-border: #ff5fa2;
 
   --shadow-color: rgba(0, 163, 255, 0.18);
   --shadow-strong: rgba(0, 163, 255, 0.34);
@@ -848,8 +728,6 @@
   --grad-page-end: #fff1e6;
   --grad-section-start: #fff7f0;
   --grad-section-end: #ffe7d1;
-  --grad-trace-collapsed-start: #ff8a3d;
-  --grad-trace-collapsed-end: #ff6600;
   --grad-secondary-start: #fff7f0;
   --grad-secondary-end: #ffe7d1;
   --grad-danger-start: #ef4444;
@@ -857,24 +735,6 @@
   --grad-success-start: #34d399;
   --grad-success-end: #059669;
 
-  --trace-reasoning-start: #ff9c5c;
-  --trace-reasoning-end: #ff6600;
-  --trace-reasoning-border: #cc0000;
-  --trace-tool-start: #ff8a3d;
-  --trace-tool-end: #ff6600;
-  --trace-tool-border: #b23b00;
-  --trace-search-start: #ff6600;
-  --trace-search-end: #b23b00;
-  --trace-search-border: #ff8a3d;
-  --trace-image-start: #cc0000;
-  --trace-image-end: #7f1d1d;
-  --trace-image-border: #ff6600;
-  --trace-read-start: #059669;
-  --trace-read-end: #047857;
-  --trace-read-border: #34d399;
-  --trace-exec-start: #b91c1c;
-  --trace-exec-end: #7f1d1d;
-  --trace-exec-border: #ff6600;
 
   --shadow-color: rgba(255, 102, 0, 0.18);
   --shadow-strong: rgba(255, 102, 0, 0.34);
@@ -955,8 +815,6 @@
   --grad-page-end: #c3c3c3;
   --grad-section-start: #e8e8e8;
   --grad-section-end: #d0d0d0;
-  --grad-trace-collapsed-start: #b5b5b5;
-  --grad-trace-collapsed-end: #9f9f9f;
   --grad-secondary-start: #d9d9d9;
   --grad-secondary-end: #b2b2b2;
   --grad-danger-start: #d04848;
@@ -964,24 +822,6 @@
   --grad-success-start: #4d9c6b;
   --grad-success-end: #2f6d4a;
 
-  --trace-reasoning-start: #b3c5d9;
-  --trace-reasoning-end: #8899aa;
-  --trace-reasoning-border: #000080;
-  --trace-tool-start: #d9c3b3;
-  --trace-tool-end: #b99a88;
-  --trace-tool-border: #8c4b0b;
-  --trace-search-start: #b3cdd9;
-  --trace-search-end: #89a8b5;
-  --trace-search-border: #0b4b8c;
-  --trace-image-start: #c3b3d9;
-  --trace-image-end: #a088b9;
-  --trace-image-border: #5b2b8c;
-  --trace-read-start: #b3d9c3;
-  --trace-read-end: #88b999;
-  --trace-read-border: #0b8c4b;
-  --trace-exec-start: #d9b3b3;
-  --trace-exec-end: #b98888;
-  --trace-exec-border: #8c0b0b;
 
   --shadow-color: rgba(0, 0, 0, 0.2);
   --shadow-strong: rgba(0, 0, 0, 0.35);
@@ -1062,8 +902,6 @@
   --grad-page-end: #dcdcdc;
   --grad-section-start: #f0f0f0;
   --grad-section-end: #d7d7d7;
-  --grad-trace-collapsed-start: #c0c0c0;
-  --grad-trace-collapsed-end: #a0a0a0;
   --grad-secondary-start: #d8d8d8;
   --grad-secondary-end: #b2b2b2;
   --grad-danger-start: #d45a5a;
@@ -1071,24 +909,6 @@
   --grad-success-start: #4d9e7a;
   --grad-success-end: #2f6d52;
 
-  --trace-reasoning-start: #b3c3d9;
-  --trace-reasoning-end: #8aa0b5;
-  --trace-reasoning-border: #3a6ea5;
-  --trace-tool-start: #d9c3b3;
-  --trace-tool-end: #b99a88;
-  --trace-tool-border: #8c4b0b;
-  --trace-search-start: #b3cad9;
-  --trace-search-end: #8aa5b5;
-  --trace-search-border: #0b4b8c;
-  --trace-image-start: #c3b3d9;
-  --trace-image-end: #a08bb9;
-  --trace-image-border: #5b2b8c;
-  --trace-read-start: #b3d9c3;
-  --trace-read-end: #8ab99b;
-  --trace-read-border: #0b8c4b;
-  --trace-exec-start: #d9b3b3;
-  --trace-exec-end: #b98b8b;
-  --trace-exec-border: #8c0b0b;
 
   --shadow-color: rgba(0, 0, 0, 0.18);
   --shadow-strong: rgba(0, 0, 0, 0.35);
@@ -1169,8 +989,6 @@
   --grad-page-end: #050c07;
   --grad-section-start: #0f2416;
   --grad-section-end: #0b1b10;
-  --grad-trace-collapsed-start: #183d27;
-  --grad-trace-collapsed-end: #0f2b1a;
   --grad-secondary-start: #163628;
   --grad-secondary-end: #0f251a;
   --grad-danger-start: #a03030;
@@ -1178,24 +996,6 @@
   --grad-success-start: #2f9f6a;
   --grad-success-end: #1e6b46;
 
-  --trace-reasoning-start: #1c5a3d;
-  --trace-reasoning-end: #133f2a;
-  --trace-reasoning-border: #3dff8a;
-  --trace-tool-start: #4d5a3d;
-  --trace-tool-end: #333f2a;
-  --trace-tool-border: #7cff7c;
-  --trace-search-start: #1c4f5a;
-  --trace-search-end: #12323a;
-  --trace-search-border: #3db2ff;
-  --trace-image-start: #3a2a5a;
-  --trace-image-end: #261c3a;
-  --trace-image-border: #6b4b8c;
-  --trace-read-start: #1c5a3d;
-  --trace-read-end: #133f2a;
-  --trace-read-border: #3dff8a;
-  --trace-exec-start: #5a2a2a;
-  --trace-exec-end: #3a1c1c;
-  --trace-exec-border: #ff5f5f;
 
   --shadow-color: rgba(0, 0, 0, 0.6);
   --shadow-strong: rgba(0, 0, 0, 0.8);
@@ -1276,8 +1076,6 @@
   --grad-page-end: #d9e4f4;
   --grad-section-start: #eef4ff;
   --grad-section-end: #d0def0;
-  --grad-trace-collapsed-start: #7aa1d8;
-  --grad-trace-collapsed-end: #5a7bb0;
   --grad-secondary-start: #cfdcf0;
   --grad-secondary-end: #a9b9d4;
   --grad-danger-start: #e05b5b;
@@ -1285,24 +1083,6 @@
   --grad-success-start: #4da57a;
   --grad-success-end: #2f7a57;
 
-  --trace-reasoning-start: #9bc0ef;
-  --trace-reasoning-end: #6e8fc0;
-  --trace-reasoning-border: #0a246a;
-  --trace-tool-start: #d9bfa3;
-  --trace-tool-end: #b7937a;
-  --trace-tool-border: #8c4b0b;
-  --trace-search-start: #9bcbe0;
-  --trace-search-end: #6fa0b5;
-  --trace-search-border: #0b4b8c;
-  --trace-image-start: #c3a9d9;
-  --trace-image-end: #9b7ab9;
-  --trace-image-border: #5b2b8c;
-  --trace-read-start: #9bd9b5;
-  --trace-read-end: #6fb58b;
-  --trace-read-border: #0b8c4b;
-  --trace-exec-start: #d9a3a3;
-  --trace-exec-end: #b57a7a;
-  --trace-exec-border: #8c0b0b;
 
   --shadow-color: rgba(0, 0, 0, 0.18);
   --shadow-strong: rgba(0, 0, 0, 0.35);
@@ -1383,8 +1163,6 @@
   --grad-page-end: #dff1ff;
   --grad-section-start: #eff7ff;
   --grad-section-end: #cfe3f7;
-  --grad-trace-collapsed-start: #8fb6d9;
-  --grad-trace-collapsed-end: #6d8db0;
   --grad-secondary-start: #d6e9fb;
   --grad-secondary-end: #b3c9e6;
   --grad-danger-start: #e06b6b;
@@ -1392,24 +1170,6 @@
   --grad-success-start: #57b08a;
   --grad-success-end: #2f7a5c;
 
-  --trace-reasoning-start: #a6c9f0;
-  --trace-reasoning-end: #6e95c4;
-  --trace-reasoning-border: #0a5fa8;
-  --trace-tool-start: #d9c2a6;
-  --trace-tool-end: #b5937a;
-  --trace-tool-border: #8c4b0b;
-  --trace-search-start: #9fd5e8;
-  --trace-search-end: #6ea4ba;
-  --trace-search-border: #0b4b8c;
-  --trace-image-start: #c7b2e0;
-  --trace-image-end: #9a7cc0;
-  --trace-image-border: #5b2b8c;
-  --trace-read-start: #9fe0c0;
-  --trace-read-end: #6eb594;
-  --trace-read-border: #0b8c4b;
-  --trace-exec-start: #e0a6a6;
-  --trace-exec-end: #b57b7b;
-  --trace-exec-border: #8c0b0b;
 
   --shadow-color: rgba(0, 0, 0, 0.16);
   --shadow-strong: rgba(0, 0, 0, 0.35);
@@ -1490,8 +1250,6 @@
   --grad-page-end: #d7dbe8;
   --grad-section-start: #eef1f7;
   --grad-section-end: #d0d7e6;
-  --grad-trace-collapsed-start: #8a9bc4;
-  --grad-trace-collapsed-end: #6b7fb2;
   --grad-secondary-start: #d7dbe8;
   --grad-secondary-end: #b0b8cc;
   --grad-danger-start: #df5f5f;
@@ -1499,24 +1257,6 @@
   --grad-success-start: #4d9a7a;
   --grad-success-end: #2f6f57;
 
-  --trace-reasoning-start: #a6b4d4;
-  --trace-reasoning-end: #7c8fb8;
-  --trace-reasoning-border: #5a3f8a;
-  --trace-tool-start: #d9c2a6;
-  --trace-tool-end: #b5937a;
-  --trace-tool-border: #8c4b0b;
-  --trace-search-start: #a2bfd9;
-  --trace-search-end: #7d9cb8;
-  --trace-search-border: #0b4b8c;
-  --trace-image-start: #c2b0d9;
-  --trace-image-end: #9d7db8;
-  --trace-image-border: #5b2b8c;
-  --trace-read-start: #a6d9c2;
-  --trace-read-end: #7cb89d;
-  --trace-read-border: #0b8c4b;
-  --trace-exec-start: #d9a6a6;
-  --trace-exec-end: #b87c7c;
-  --trace-exec-border: #8c0b0b;
 
   --shadow-color: rgba(0, 0, 0, 0.18);
   --shadow-strong: rgba(0, 0, 0, 0.35);
@@ -1597,8 +1337,6 @@
   --grad-page-end: #f3f2ff;
   --grad-section-start: #f7f5ff;
   --grad-section-end: #e2dcff;
-  --grad-trace-collapsed-start: #b8a8e6;
-  --grad-trace-collapsed-end: #8f7ac2;
   --grad-secondary-start: #e1d8ff;
   --grad-secondary-end: #b9a8e6;
   --grad-danger-start: #e06b8d;
@@ -1606,24 +1344,6 @@
   --grad-success-start: #57b58a;
   --grad-success-end: #2f7a5c;
 
-  --trace-reasoning-start: #c8b8f0;
-  --trace-reasoning-end: #9b85d9;
-  --trace-reasoning-border: #7f5bff;
-  --trace-tool-start: #f0c2d9;
-  --trace-tool-end: #d98bb8;
-  --trace-tool-border: #ff4fa3;
-  --trace-search-start: #b8e0f0;
-  --trace-search-end: #8bb8d9;
-  --trace-search-border: #5cc4ff;
-  --trace-image-start: #d9b8f0;
-  --trace-image-end: #b08bd9;
-  --trace-image-border: #7f5bff;
-  --trace-read-start: #b8f0d0;
-  --trace-read-end: #8bd9b0;
-  --trace-read-border: #2f9b6a;
-  --trace-exec-start: #f0b8c2;
-  --trace-exec-end: #d98b9a;
-  --trace-exec-border: #b02f5a;
 
   --shadow-color: rgba(118, 83, 170, 0.25);
   --shadow-strong: rgba(118, 83, 170, 0.45);
@@ -1704,8 +1424,6 @@
   --grad-page-end: #d7e7f6;
   --grad-section-start: #eef6ff;
   --grad-section-end: #cfe2f5;
-  --grad-trace-collapsed-start: #8fb3d8;
-  --grad-trace-collapsed-end: #6b8fb8;
   --grad-secondary-start: #d5e2f5;
   --grad-secondary-end: #b0c4dd;
   --grad-danger-start: #e06b6b;
@@ -1713,24 +1431,6 @@
   --grad-success-start: #57b08a;
   --grad-success-end: #2f7a5c;
 
-  --trace-reasoning-start: #a6c9f0;
-  --trace-reasoning-end: #6e95c4;
-  --trace-reasoning-border: #0b4f8a;
-  --trace-tool-start: #d9c2a6;
-  --trace-tool-end: #b5937a;
-  --trace-tool-border: #8c4b0b;
-  --trace-search-start: #9fd5e8;
-  --trace-search-end: #6ea4ba;
-  --trace-search-border: #0b4b8c;
-  --trace-image-start: #c7b2e0;
-  --trace-image-end: #9a7cc0;
-  --trace-image-border: #5b2b8c;
-  --trace-read-start: #9fe0c0;
-  --trace-read-end: #6eb594;
-  --trace-read-border: #0b8c4b;
-  --trace-exec-start: #e0a6a6;
-  --trace-exec-end: #b57b7b;
-  --trace-exec-border: #8c0b0b;
 
   --shadow-color: rgba(70, 110, 150, 0.25);
   --shadow-strong: rgba(70, 110, 150, 0.45);
@@ -1811,8 +1511,6 @@
   --grad-page-end: #2c001e;
   --grad-section-start: #451032;
   --grad-section-end: #320623;
-  --grad-trace-collapsed-start: #5a143c;
-  --grad-trace-collapsed-end: #3b0a2a;
   --grad-secondary-start: #4a1234;
   --grad-secondary-end: #2c001e;
   --grad-danger-start: #c04040;
@@ -1820,24 +1518,6 @@
   --grad-success-start: #3aa57a;
   --grad-success-end: #2a7a58;
 
-  --trace-reasoning-start: #5a3b7a;
-  --trace-reasoning-end: #3a264f;
-  --trace-reasoning-border: #e95420;
-  --trace-tool-start: #7a4b3a;
-  --trace-tool-end: #4f3026;
-  --trace-tool-border: #ffb347;
-  --trace-search-start: #3a5a7a;
-  --trace-search-end: #263b4f;
-  --trace-search-border: #69b7ff;
-  --trace-image-start: #5f3a7a;
-  --trace-image-end: #3a264f;
-  --trace-image-border: #8c5aff;
-  --trace-read-start: #3a7a5a;
-  --trace-read-end: #264f3a;
-  --trace-read-border: #3aa57a;
-  --trace-exec-start: #7a3a3a;
-  --trace-exec-end: #4f2626;
-  --trace-exec-border: #ff6b6b;
 
   --shadow-color: rgba(0, 0, 0, 0.5);
   --shadow-strong: rgba(0, 0, 0, 0.7);
@@ -1918,8 +1598,6 @@
   --grad-page-end: #f0f5fb;
   --grad-section-start: #f6f9fd;
   --grad-section-end: #dde8f5;
-  --grad-trace-collapsed-start: #7aa5d8;
-  --grad-trace-collapsed-end: #5a7fb0;
   --grad-secondary-start: #d7e2f1;
   --grad-secondary-end: #b0c0d8;
   --grad-danger-start: #e06b6b;
@@ -1927,24 +1605,6 @@
   --grad-success-start: #57b08a;
   --grad-success-end: #2f7a5c;
 
-  --trace-reasoning-start: #a6c3f0;
-  --trace-reasoning-end: #6e8fc4;
-  --trace-reasoning-border: #1e5aa7;
-  --trace-tool-start: #d9c2a6;
-  --trace-tool-end: #b5937a;
-  --trace-tool-border: #ff7a00;
-  --trace-search-start: #9fd5e8;
-  --trace-search-end: #6ea4ba;
-  --trace-search-border: #2f6fb0;
-  --trace-image-start: #c7b2e0;
-  --trace-image-end: #9a7cc0;
-  --trace-image-border: #5b2b8c;
-  --trace-read-start: #9fe0c0;
-  --trace-read-end: #6eb594;
-  --trace-read-border: #0b8c4b;
-  --trace-exec-start: #e0a6a6;
-  --trace-exec-end: #b57b7b;
-  --trace-exec-border: #8c0b0b;
 
   --shadow-color: rgba(0, 0, 0, 0.16);
   --shadow-strong: rgba(0, 0, 0, 0.35);
@@ -2025,8 +1685,6 @@
   --grad-page-end: #f1f1f1;
   --grad-section-start: #f7f7f7;
   --grad-section-end: #e6e6e6;
-  --grad-trace-collapsed-start: #d0d7de;
-  --grad-trace-collapsed-end: #b9c0c8;
   --grad-secondary-start: #e6e6e6;
   --grad-secondary-end: #c0c4c9;
   --grad-danger-start: #e5534b;
@@ -2034,24 +1692,6 @@
   --grad-success-start: #57ab5a;
   --grad-success-end: #2c974b;
 
-  --trace-reasoning-start: #c8d4e0;
-  --trace-reasoning-end: #a2b5c8;
-  --trace-reasoning-border: #4183c4;
-  --trace-tool-start: #d9c8b3;
-  --trace-tool-end: #b5a28c;
-  --trace-tool-border: #6b5e4a;
-  --trace-search-start: #b8cfe0;
-  --trace-search-end: #8fafc4;
-  --trace-search-border: #0366d6;
-  --trace-image-start: #c9b8e0;
-  --trace-image-end: #a28fc4;
-  --trace-image-border: #5b2b8c;
-  --trace-read-start: #b8e0c6;
-  --trace-read-end: #8fc4a2;
-  --trace-read-border: #2c974b;
-  --trace-exec-start: #e0b8b8;
-  --trace-exec-end: #c48f8f;
-  --trace-exec-border: #d73a49;
 
   --shadow-color: rgba(0, 0, 0, 0.15);
   --shadow-strong: rgba(0, 0, 0, 0.3);
@@ -2132,8 +1772,6 @@
   --grad-page-end: #101010;
   --grad-section-start: #202020;
   --grad-section-end: #161616;
-  --grad-trace-collapsed-start: #2b2b2b;
-  --grad-trace-collapsed-end: #1a1a1a;
   --grad-secondary-start: #2a2a2a;
   --grad-secondary-end: #1a1a1a;
   --grad-danger-start: #c04030;
@@ -2141,24 +1779,6 @@
   --grad-success-start: #7fba00;
   --grad-success-end: #4f7a00;
 
-  --trace-reasoning-start: #005f7a;
-  --trace-reasoning-end: #003a4a;
-  --trace-reasoning-border: #00bcf2;
-  --trace-tool-start: #7a4a2f;
-  --trace-tool-end: #4a2f1f;
-  --trace-tool-border: #f25022;
-  --trace-search-start: #2f5f7a;
-  --trace-search-end: #1f3a4a;
-  --trace-search-border: #00bcf2;
-  --trace-image-start: #4a2f7a;
-  --trace-image-end: #2f1f4a;
-  --trace-image-border: #8c5aff;
-  --trace-read-start: #2f7a5a;
-  --trace-read-end: #1f4a3a;
-  --trace-read-border: #7fba00;
-  --trace-exec-start: #7a2f2f;
-  --trace-exec-end: #4a1f1f;
-  --trace-exec-border: #f25022;
 
   --shadow-color: rgba(0, 0, 0, 0.6);
   --shadow-strong: rgba(0, 0, 0, 0.8);
@@ -2239,8 +1859,6 @@
   --grad-page-end: #002b36;
   --grad-section-start: #0b3f4d;
   --grad-section-end: #062f3a;
-  --grad-trace-collapsed-start: #114252;
-  --grad-trace-collapsed-end: #073642;
   --grad-secondary-start: #0f3a44;
   --grad-secondary-end: #062f3a;
   --grad-danger-start: #b03030;
@@ -2248,24 +1866,6 @@
   --grad-success-start: #2aa198;
   --grad-success-end: #1a6b65;
 
-  --trace-reasoning-start: #1f4f66;
-  --trace-reasoning-end: #123a4d;
-  --trace-reasoning-border: #268bd2;
-  --trace-tool-start: #5f4b2a;
-  --trace-tool-end: #3a2f1a;
-  --trace-tool-border: #b58900;
-  --trace-search-start: #1f5a66;
-  --trace-search-end: #123a44;
-  --trace-search-border: #268bd2;
-  --trace-image-start: #4a3a66;
-  --trace-image-end: #2f2644;
-  --trace-image-border: #6c71c4;
-  --trace-read-start: #1f5a4a;
-  --trace-read-end: #123a32;
-  --trace-read-border: #2aa198;
-  --trace-exec-start: #663a3a;
-  --trace-exec-end: #3a2424;
-  --trace-exec-border: #dc322f;
 
   --shadow-color: rgba(0, 0, 0, 0.5);
   --shadow-strong: rgba(0, 0, 0, 0.7);
@@ -2348,8 +1948,6 @@
   --grad-page-end: #f7f6f3;
   --grad-section-start: #ffffff;
   --grad-section-end: #fbfbfa;
-  --grad-trace-collapsed-start: #fbfbfa;
-  --grad-trace-collapsed-end: #f1f1ef;
   --grad-secondary-start: #fbfbfa;
   --grad-secondary-end: #f1f1ef;
   --grad-danger-start: #f8d6d6;
@@ -2357,24 +1955,6 @@
   --grad-success-start: #d7ece7;
   --grad-success-end: #e7f3f0;
 
-  --trace-reasoning-start: #e8f2ff;
-  --trace-reasoning-end: #dcecff;
-  --trace-reasoning-border: #2383e2;
-  --trace-tool-start: #fff4e5;
-  --trace-tool-end: #fce7c2;
-  --trace-tool-border: #b7791f;
-  --trace-search-start: #eef6ff;
-  --trace-search-end: #e0efff;
-  --trace-search-border: #2383e2;
-  --trace-image-start: #f3e8ff;
-  --trace-image-end: #eadbff;
-  --trace-image-border: #8b5cf6;
-  --trace-read-start: #e7f3f0;
-  --trace-read-end: #d7ece7;
-  --trace-read-border: #0f7b6c;
-  --trace-exec-start: #fdecec;
-  --trace-exec-end: #f8d6d6;
-  --trace-exec-border: #d14343;
 
   --shadow-color: rgba(0, 0, 0, 0.08);
   --shadow-strong: rgba(0, 0, 0, 0.16);
@@ -2455,8 +2035,6 @@
   --grad-page-end: #2e3440;
   --grad-section-start: #434c5e;
   --grad-section-end: #2e3440;
-  --grad-trace-collapsed-start: #4c566a;
-  --grad-trace-collapsed-end: #3b4252;
   --grad-secondary-start: #4c566a;
   --grad-secondary-end: #3b4252;
   --grad-danger-start: #bf616a;
@@ -2464,24 +2042,6 @@
   --grad-success-start: #a3be8c;
   --grad-success-end: #6f8f5a;
 
-  --trace-reasoning-start: #4c566a;
-  --trace-reasoning-end: #3b4252;
-  --trace-reasoning-border: #88c0d0;
-  --trace-tool-start: #5e5a4a;
-  --trace-tool-end: #3a352a;
-  --trace-tool-border: #d08770;
-  --trace-search-start: #4c5f6a;
-  --trace-search-end: #3b4252;
-  --trace-search-border: #81a1c1;
-  --trace-image-start: #5a4c6a;
-  --trace-image-end: #3a324a;
-  --trace-image-border: #b48ead;
-  --trace-read-start: #4c6a5a;
-  --trace-read-end: #3b4a3a;
-  --trace-read-border: #a3be8c;
-  --trace-exec-start: #6a4c4c;
-  --trace-exec-end: #4a3232;
-  --trace-exec-border: #bf616a;
 
   --shadow-color: rgba(0, 0, 0, 0.5);
   --shadow-strong: rgba(0, 0, 0, 0.7);
@@ -2562,8 +2122,6 @@
   --grad-page-end: #121212;
   --grad-section-start: #242424;
   --grad-section-end: #181818;
-  --grad-trace-collapsed-start: #2b2b2b;
-  --grad-trace-collapsed-end: #1e1e1e;
   --grad-secondary-start: #2a2a2a;
   --grad-secondary-end: #1e1e1e;
   --grad-danger-start: #e05b5b;
@@ -2571,24 +2129,6 @@
   --grad-success-start: #66bb6a;
   --grad-success-end: #3b7a3f;
 
-  --trace-reasoning-start: #2f5f6a;
-  --trace-reasoning-end: #1f3a44;
-  --trace-reasoning-border: #00bcd4;
-  --trace-tool-start: #6a4f2f;
-  --trace-tool-end: #3f2f1f;
-  --trace-tool-border: #ffb347;
-  --trace-search-start: #2f5a6a;
-  --trace-search-end: #1f3a44;
-  --trace-search-border: #29b6f6;
-  --trace-image-start: #4a2f6a;
-  --trace-image-end: #2f1f44;
-  --trace-image-border: #b388ff;
-  --trace-read-start: #2f6a4a;
-  --trace-read-end: #1f4432;
-  --trace-read-border: #66bb6a;
-  --trace-exec-start: #6a2f2f;
-  --trace-exec-end: #442020;
-  --trace-exec-border: #ef5350;
 
   --shadow-color: rgba(0, 0, 0, 0.6);
   --shadow-strong: rgba(0, 0, 0, 0.8);

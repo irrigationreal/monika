@@ -10923,6 +10923,163 @@
         }
       }
     },
+    "/topics/{topicId}/trace": {
+      "get": {
+        "tags": [
+          "robot"
+        ],
+        "summary": "Get admin topic trace",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "topicId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "topicId": {
+                      "type": "string"
+                    },
+                    "sessionId": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "toolRuns": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "tool": {
+                            "type": "string"
+                          },
+                          "parentPostId": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "startedAt": {
+                            "type": "string"
+                          },
+                          "finishedAt": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "exitCode": {
+                            "type": "number",
+                            "nullable": true
+                          },
+                          "command": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "filesTouched": {
+                            "type": "array",
+                            "nullable": true,
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "outputSummary": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "redactionsApplied": {
+                            "type": "boolean"
+                          },
+                          "visibility": {
+                            "type": "string",
+                            "enum": [
+                              "public",
+                              "internal",
+                              "private"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "tool",
+                          "startedAt",
+                          "redactionsApplied",
+                          "visibility"
+                        ]
+                      }
+                    },
+                    "plans": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "content": {
+                            "type": "string"
+                          },
+                          "summary": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "parentPostId": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "reasoningCheckpoints": {
+                            "type": "array",
+                            "nullable": true,
+                            "items": {
+                              "type": "number"
+                            }
+                          },
+                          "visibility": {
+                            "type": "string",
+                            "enum": [
+                              "public",
+                              "internal",
+                              "private"
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          },
+                          "updatedAt": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "content",
+                          "visibility",
+                          "createdAt",
+                          "updatedAt"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "topicId",
+                    "sessionId",
+                    "toolRuns",
+                    "plans"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/sessions/{sessionId}/inspector": {
       "get": {
         "tags": [

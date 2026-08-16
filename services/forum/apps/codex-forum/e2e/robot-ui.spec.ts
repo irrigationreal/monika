@@ -1,4 +1,7 @@
-import { test, expect, type Page, type Route } from '@playwright/test';
+import { expect, test } from '@playwright/test';
+
+import { createSessionLogSimulator } from '../../../packages/server/src/simulator/sessionLog';
+
 import type {
   AdminForumDto,
   AdminSkillListResponseDto,
@@ -14,12 +17,14 @@ import type {
   RobotAutomationRunDto,
   RobotJobDto,
   RobotQueueItemDto,
-  RobotStateDto,
   RobotSettingsDto,
+  RobotStateDto,
+  ToolRunDto,
   TopicDto,
-  ToolRunDto
 } from '@irrigationreal/codex-forum-contracts';
-import { createSessionLogSimulator, type SessionLog } from '../../../packages/server/src/simulator/sessionLog';
+import type { Page, Route } from '@playwright/test';
+
+import type { SessionLog } from '../../../packages/server/src/simulator/sessionLog';
 
 type UserKind = 'human' | 'admin';
 
@@ -57,7 +62,7 @@ function buildMockContext(kind: UserKind): MockContext {
     postCount: 2,
     lastPost: null,
     createdAt: now,
-    updatedAt: now
+    updatedAt: now,
   };
   const userId = kind === 'admin' ? 'identity-admin' : 'identity-user';
   const user: IdentityDto = {
@@ -74,10 +79,10 @@ function buildMockContext(kind: UserKind): MockContext {
     rank: kind === 'admin' ? 'Admin' : 'Member',
     joinDate: now,
     createdAt: now,
-    updatedAt: now
+    updatedAt: now,
   };
   const identities: MockContext['identities'] = {
-    [userId]: user
+    [userId]: user,
   };
 
   const topics = new Map<string, TopicDto>();
@@ -98,7 +103,7 @@ function buildMockContext(kind: UserKind): MockContext {
     postCount: 1,
     lastPostAuthorId: userId,
     lastPostAuthorName: user.displayName,
-    lastPostAt: now
+    lastPostAt: now,
   };
 
   const offTopic: TopicDto = {
@@ -115,7 +120,7 @@ function buildMockContext(kind: UserKind): MockContext {
     postCount: 1,
     lastPostAuthorId: userId,
     lastPostAuthorName: user.displayName,
-    lastPostAt: now
+    lastPostAt: now,
   };
 
   topics.set(mentionTopic.id, mentionTopic);
@@ -134,8 +139,8 @@ function buildMockContext(kind: UserKind): MockContext {
       createdAt: now,
       editedAt: null,
       deletedAt: null,
-      reactionCounts: []
-    }
+      reactionCounts: [],
+    },
   ]);
 
   postsByTopic.set(offTopic.id, [
@@ -151,8 +156,8 @@ function buildMockContext(kind: UserKind): MockContext {
       createdAt: now,
       editedAt: null,
       deletedAt: null,
-      reactionCounts: []
-    }
+      reactionCounts: [],
+    },
   ]);
 
   const idleState = (topicId: string): RobotStateDto => ({
@@ -163,7 +168,7 @@ function buildMockContext(kind: UserKind): MockContext {
     reasoningEffort: null,
     lastUpdatedAt: now,
     currentPlan: null,
-    recentToolRuns: []
+    recentToolRuns: [],
   });
 
   robotStates.set(mentionTopic.id, idleState(mentionTopic.id));
@@ -182,7 +187,7 @@ function buildMockContext(kind: UserKind): MockContext {
     automations: [],
     automationRuns: [],
     automationRunsQueryCount: 0,
-    interruptCount: 0
+    interruptCount: 0,
   };
 }
 
@@ -190,7 +195,7 @@ async function fulfillJson(route: Route, body: unknown, status = 200, headers?: 
   await route.fulfill({
     status,
     headers: { 'content-type': 'application/json', ...(headers ?? {}) },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
   });
 }
 
@@ -213,7 +218,7 @@ function toAuthIdentity(identity: IdentityDto, includePrivateEmail = false): Aut
     location: identity.location ?? null,
     signature: identity.signature ?? null,
     theme: identity.theme ?? null,
-    hasPrivateEmail: includePrivateEmail ? false : undefined
+    hasPrivateEmail: includePrivateEmail ? false : undefined,
   };
 }
 
@@ -225,16 +230,16 @@ function createBaseSessionLog(context: MockContext): SessionLog {
         path: '/api/auth/login',
         repeat: true,
         body: {
-          identity: toAuthIdentity(context.user)
-        }
+          identity: toAuthIdentity(context.user),
+        },
       },
       {
         method: 'GET',
         path: '/api/auth/me',
         repeat: true,
         body: {
-          identity: toAuthIdentity(context.user, true)
-        }
+          identity: toAuthIdentity(context.user, true),
+        },
       },
       {
         method: 'GET',
@@ -245,22 +250,22 @@ function createBaseSessionLog(context: MockContext): SessionLog {
           registrationEnabled: false,
           inviteRegistrationEnabled: false,
           publicRegistrationEnabled: false,
-          passwordLoginEnabled: true
-        }
+          passwordLoginEnabled: true,
+        },
       },
       {
         method: 'GET',
         path: `/api/identities/${context.user.id}/permissions`,
         repeat: true,
         body: {
-          permissions: context.user.kind === 'admin' ? ['admin.all'] : ['read', 'write']
-        }
+          permissions: context.user.kind === 'admin' ? ['admin.all'] : ['read', 'write'],
+        },
       },
       {
         method: 'GET',
         path: '/api/posts/recent?limit=3',
         repeat: true,
-        body: []
+        body: [],
       },
       {
         method: 'GET',
@@ -270,14 +275,14 @@ function createBaseSessionLog(context: MockContext): SessionLog {
           enabled: true,
           running: false,
           lastStartedAt: null,
-          commitSha: 'deadbeefcafebabe'
-        }
-      }
+          commitSha: 'deadbeefcafebabe',
+        },
+      },
     ],
     defaultResponse: {
       status: 500,
-      body: { message: 'Unmocked request' }
-    }
+      body: { message: 'Unmocked request' },
+    },
   };
 }
 
@@ -315,15 +320,15 @@ async function attachMockApi(page: Page, context: MockContext) {
         topicTitle: Array.from(context.topics.values())[0]?.title ?? 'Thread',
         authorId: context.user.id,
         authorName: context.user.displayName,
-        createdAt: context.now
+        createdAt: context.now,
       };
       await fulfillJson(route, [
         {
           ...context.forum,
           threadCount: context.topics.size,
           postCount: Array.from(context.postsByTopic.values()).reduce((acc, posts) => acc + posts.length, 0),
-          lastPost
-        }
+          lastPost,
+        },
       ]);
       return;
     }
@@ -334,7 +339,7 @@ async function attachMockApi(page: Page, context: MockContext) {
         page: 1,
         pageSize: 50,
         total: items.length,
-        items
+        items,
       });
       return;
     }
@@ -357,7 +362,7 @@ async function attachMockApi(page: Page, context: MockContext) {
         postCount: 1,
         lastPostAuthorId: context.user.id,
         lastPostAuthorName: context.user.displayName,
-        lastPostAt: createdAt
+        lastPostAt: createdAt,
       };
       context.topics.set(topicId, topic);
       const post: PostDto = {
@@ -372,7 +377,7 @@ async function attachMockApi(page: Page, context: MockContext) {
         createdAt,
         editedAt: null,
         deletedAt: null,
-        reactionCounts: []
+        reactionCounts: [],
       };
       context.postsByTopic.set(topicId, [post]);
 
@@ -389,7 +394,7 @@ async function attachMockApi(page: Page, context: MockContext) {
           filesTouched: [],
           outputSummary: 'Searching for updates',
           redactionsApplied: false,
-          visibility: 'public' as const
+          visibility: 'public' as const,
         },
         {
           id: `tool-${topicId}-1`,
@@ -402,8 +407,8 @@ async function attachMockApi(page: Page, context: MockContext) {
           filesTouched: [],
           outputSummary: 'Listed 12 files',
           redactionsApplied: false,
-          visibility: 'public' as const
-        }
+          visibility: 'public' as const,
+        },
       ];
       context.robotStates.set(topicId, {
         topicId,
@@ -419,9 +424,9 @@ async function attachMockApi(page: Page, context: MockContext) {
           parentPostId: post.id,
           visibility: 'public',
           createdAt: createdAt,
-          updatedAt: createdAt
+          updatedAt: createdAt,
         },
-        recentToolRuns: toolRuns
+        recentToolRuns: toolRuns,
       });
 
       await fulfillJson(route, topic);
@@ -448,7 +453,7 @@ async function attachMockApi(page: Page, context: MockContext) {
         createdAt,
         editedAt: null,
         deletedAt: null,
-        reactionCounts: []
+        reactionCounts: [],
       };
       const posts = context.postsByTopic.get(topicId) ?? [];
       posts.push(post);
@@ -478,9 +483,9 @@ async function attachMockApi(page: Page, context: MockContext) {
             parentPostId: post.id,
             visibility: 'public',
             createdAt,
-            updatedAt: createdAt
+            updatedAt: createdAt,
           },
-          recentToolRuns: []
+          recentToolRuns: [],
         });
       }
 
@@ -503,7 +508,7 @@ async function attachMockApi(page: Page, context: MockContext) {
           reasoningEffort: current?.reasoningEffort ?? null,
           lastUpdatedAt: new Date().toISOString(),
           currentPlan: null,
-          recentToolRuns: current?.recentToolRuns ?? []
+          recentToolRuns: current?.recentToolRuns ?? [],
         });
       }
       await fulfillJson(route, {
@@ -515,7 +520,7 @@ async function attachMockApi(page: Page, context: MockContext) {
         unresolvedCount: 0,
         effectsUnknownCount: 0,
         errorCount: 0,
-        message: 'Stopped.'
+        message: 'Stopped.',
       });
       return;
     }
@@ -531,7 +536,7 @@ async function attachMockApi(page: Page, context: MockContext) {
         reasoningEffort: null,
         lastUpdatedAt: context.now,
         currentPlan: null,
-        recentToolRuns: []
+        recentToolRuns: [],
       };
       await fulfillJson(route, state ?? fallbackState);
       return;
@@ -541,7 +546,7 @@ async function attachMockApi(page: Page, context: MockContext) {
       await route.fulfill({
         status: 200,
         headers: { 'content-type': 'text/event-stream' },
-        body: ': ping\n\n'
+        body: ': ping\n\n',
       });
       return;
     }
@@ -553,7 +558,7 @@ async function attachMockApi(page: Page, context: MockContext) {
         page: 1,
         pageSize: 50,
         total: items.length,
-        items
+        items,
       });
       return;
     }
@@ -563,7 +568,7 @@ async function attachMockApi(page: Page, context: MockContext) {
         page: 1,
         pageSize: 100,
         total: Object.keys(context.identities).length,
-        items: Object.values(context.identities)
+        items: Object.values(context.identities),
       });
       return;
     }
@@ -593,6 +598,12 @@ async function attachMockApi(page: Page, context: MockContext) {
       return;
     }
 
+    if (pathname.startsWith('/api/topics/') && pathname.endsWith('/trace') && method === 'GET') {
+      const topicId = pathname.split('/')[3] ?? '';
+      await fulfillJson(route, { topicId, sessionId: null, toolRuns: [], plans: [] });
+      return;
+    }
+
     if (pathname.startsWith('/api/topics/') && method === 'GET') {
       const topicId = extractTopicId(pathname);
       if (topicId && context.topics.has(topicId)) {
@@ -616,15 +627,15 @@ async function attachMockApi(page: Page, context: MockContext) {
         forumId: context.forum.id,
         forumName: context.forum.name,
         parentPostId: null,
-        sessionId: `session-queue-${idx}`
+        sessionId: `session-queue-${idx}`,
       }));
       await fulfillJson(route, {
         jobs,
         queue,
         settings: {
           maxConcurrentTurns: 2,
-          activeTurnsCount: jobs.filter((job) => job.activity !== 'idle' && job.activity !== 'waiting').length
-        }
+          activeTurnsCount: jobs.filter((job) => job.activity !== 'idle' && job.activity !== 'waiting').length,
+        },
       });
       return;
     }
@@ -652,13 +663,11 @@ async function attachMockApi(page: Page, context: MockContext) {
         finishedAt: null,
         exitCode: null,
         outputSummary: 'Starting run',
-        lastMessage: null
+        lastMessage: null,
       };
       context.automationRuns.unshift(run);
       context.automations = context.automations.map((automation) =>
-        automation.id === automationId
-          ? { ...automation, lastRunAt: run.startedAt }
-          : automation
+        automation.id === automationId ? { ...automation, lastRunAt: run.startedAt } : automation
       );
       await fulfillJson(route, { ok: true });
       return;
@@ -672,7 +681,7 @@ async function attachMockApi(page: Page, context: MockContext) {
           status: 'succeeded',
           finishedAt: new Date().toISOString(),
           exitCode: 0,
-          outputSummary: 'Automation completed'
+          outputSummary: 'Automation completed',
         };
       }
       await fulfillJson(route, { items: context.automationRuns });
@@ -693,12 +702,10 @@ async function attachMockApi(page: Page, context: MockContext) {
         archivedAt: context.forum.archivedAt ?? null,
         topicCount: context.topics.size,
         createdAt: context.forum.createdAt,
-        updatedAt: context.forum.updatedAt
+        updatedAt: context.forum.updatedAt,
       };
       await fulfillJson(route, {
-        items: [
-          adminForum
-        ]
+        items: [adminForum],
       });
       return;
     }
@@ -710,13 +717,13 @@ async function attachMockApi(page: Page, context: MockContext) {
         username: context.user.displayName,
         kind: context.user.kind,
         avatarUrl: null,
-        createdAt: context.user.createdAt
+        createdAt: context.user.createdAt,
       };
       await fulfillJson(route, {
         page: 1,
         pageSize: 50,
         total: 1,
-        items: [adminUser]
+        items: [adminUser],
       });
       return;
     }
@@ -726,7 +733,7 @@ async function attachMockApi(page: Page, context: MockContext) {
         page: 1,
         pageSize: 50,
         total: 0,
-        items: []
+        items: [],
       });
       return;
     }
@@ -736,7 +743,7 @@ async function attachMockApi(page: Page, context: MockContext) {
         connected: false,
         guildId: undefined,
         guildName: undefined,
-        channelMappings: []
+        channelMappings: [],
       };
       await fulfillJson(route, status);
       return;
@@ -747,7 +754,7 @@ async function attachMockApi(page: Page, context: MockContext) {
         connected: false,
         homeserverUrl: null,
         userId: null,
-        roomMappings: []
+        roomMappings: [],
       };
       await fulfillJson(route, status);
       return;
@@ -759,7 +766,7 @@ async function attachMockApi(page: Page, context: MockContext) {
         promptEnhancerEnabledByDefault: false,
         defaultSkillsRoot: '/opt/skills',
         roots: [],
-        items: []
+        items: [],
       };
       await fulfillJson(route, response);
       return;
@@ -776,7 +783,7 @@ async function attachMockApi(page: Page, context: MockContext) {
       await route.fulfill({
         status: 500,
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ message: `Unmocked request: ${method} ${pathname}` })
+        body: JSON.stringify({ message: `Unmocked request: ${method} ${pathname}` }),
       });
       return;
     }
@@ -786,7 +793,7 @@ async function attachMockApi(page: Page, context: MockContext) {
     await route.fulfill({
       status: response.status,
       headers: { 'content-type': 'application/json', ...(response.headers ?? {}) },
-      body: JSON.stringify(response.body)
+      body: JSON.stringify(response.body),
     });
   });
 }
@@ -809,7 +816,7 @@ async function login(page: Page, username: string) {
 // state machine stable without flakiness.
 
 test.describe('Robot UI (mocked)', () => {
-  test('auto mode shows live activity panels with reasoning/tool timeline', async ({ page }) => {
+  test('non-admin auto mode shows only the neutral response placeholder', async ({ page }) => {
     const context = buildMockContext('human');
     await attachMockApi(page, context);
 
@@ -835,11 +842,10 @@ test.describe('Robot UI (mocked)', () => {
 
     const draftPanel = page.locator('.vb-post--draft');
     await expect(draftPanel).toBeVisible();
-    // Reasoning steps render as inline trace items in the live turn
-    await expect(draftPanel.locator('.vb-live-turn-item--reasoning .vb-live-turn-title')).toContainText(['Draft response']);
-    // Tool runs render as trace items with human-readable titles
-    await expect(draftPanel.locator('.vb-live-turn-item--tool')).toHaveCount(2);
-    await expect(draftPanel).toContainText('List -la');
+    await expect(draftPanel).toContainText('Response in progress…');
+    await expect(draftPanel).not.toContainText('Draft response');
+    await expect(draftPanel).not.toContainText('List -la');
+    await expect(page.getByRole('button', { name: 'Open Trace' })).toHaveCount(0);
   });
 
   test('keeps long tool details and controls inside the mobile viewport', async ({ page }) => {
@@ -863,7 +869,7 @@ test.describe('Robot UI (mocked)', () => {
         reasoningCheckpoints: [reasoning.length],
         visibility: 'internal',
         createdAt: context.now,
-        updatedAt: context.now
+        updatedAt: context.now,
       },
       recentToolRuns: [
         {
@@ -877,7 +883,7 @@ test.describe('Robot UI (mocked)', () => {
           filesTouched: [],
           outputSummary: 'Read document',
           redactionsApplied: false,
-          visibility: 'public'
+          visibility: 'public',
         },
         {
           id: `tool-${topicId}-older`,
@@ -890,9 +896,9 @@ test.describe('Robot UI (mocked)', () => {
           filesTouched: [],
           outputSummary: 'Listed files',
           redactionsApplied: false,
-          visibility: 'public'
-        }
-      ]
+          visibility: 'public',
+        },
+      ],
     });
 
     await page.setViewportSize({ width: 390, height: 844 });
@@ -901,75 +907,61 @@ test.describe('Robot UI (mocked)', () => {
     await login(page, context.user.displayName);
     await page.goto(`/topics/${topicId}`);
 
-    const reasoningToggle = page.getByRole('button', { name: 'Reasoning: On' });
-    const reasoningItem = page.locator('.vb-tool-item--reasoning');
-    const traceItems = page.locator('.vb-tool-response .vb-tool-item');
+    await page.getByRole('button', { name: 'Admin Tools' }).click();
+    await page.locator('.vb-admin-panel').getByRole('button', { name: 'Open Trace' }).click();
+    const workspace = page.locator('.vb-admin-workspace');
+    await expect(workspace).toBeVisible();
+    const reasoningToggle = workspace.getByRole('button', { name: 'Reasoning: On' });
+    const reasoningItem = workspace.locator('.vb-tool-item--reasoning');
+    const traceItems = workspace.locator('.vb-tool-response .vb-tool-item');
     await expect(reasoningToggle).toBeVisible();
-    await expect(reasoningItem).toHaveCount(0);
-    await expect(traceItems).toHaveCount(1);
-    await expect(traceItems.first()).not.toHaveClass(/vb-tool-item--reasoning/);
-
-    await page.getByRole('button', { name: 'Show All', exact: true }).click();
     await expect(reasoningItem).toContainText('Inspect the path');
-    await expect(page.locator('.vb-tool-response-label')).toHaveCount(2);
+    await expect(workspace.locator('.vb-tool-response-label')).toHaveCount(2);
     await expect(traceItems).toHaveCount(3);
 
     await reasoningToggle.click();
     await expect(reasoningItem).toHaveCount(0);
     await expect(traceItems).toHaveCount(2);
     await page.reload();
-    await expect(page.getByRole('button', { name: 'Reasoning: Off' })).toBeVisible();
-    await expect(traceItems).toHaveCount(1);
+    await page.getByRole('button', { name: 'Admin Tools' }).click();
+    await page.locator('.vb-admin-panel').getByRole('button', { name: 'Open Trace' }).click();
+    await expect(workspace.getByRole('button', { name: 'Reasoning: Off' })).toBeVisible();
 
-    await page.getByRole('button', { name: 'Reasoning: Off' }).click();
-    await expect(reasoningItem).toHaveCount(0);
-    await expect(traceItems).toHaveCount(1);
-    await page.getByRole('button', { name: 'Show All', exact: true }).click();
+    await workspace.getByRole('button', { name: 'Reasoning: Off' }).click();
     await expect(reasoningItem).toContainText('Inspect the path');
     await expect(traceItems).toHaveCount(3);
 
     const reasoningPill = reasoningItem.locator('.vb-tool-pill');
-    const completedToolPill = page
+    const completedToolPill = workspace
       .locator('.vb-tool-response .vb-tool-item:not(.vb-tool-item--reasoning) .vb-tool-pill')
       .first();
     await expect(reasoningPill).toHaveClass(/vb-trace-tool-status--ok/);
     await expect(completedToolPill).toHaveClass(/vb-trace-tool-status--ok/);
     const [reasoningPillBox, completedToolPillBox] = await Promise.all([
       reasoningPill.boundingBox(),
-      completedToolPill.boundingBox()
+      completedToolPill.boundingBox(),
     ]);
-    if (!reasoningPillBox || !completedToolPillBox) throw new Error('tool usage status pills have no layout box');
-    const reasoningPillRight = reasoningPillBox.x + reasoningPillBox.width;
-    const completedToolPillRight = completedToolPillBox.x + completedToolPillBox.width;
-    expect(Math.abs(reasoningPillRight - completedToolPillRight)).toBeLessThanOrEqual(1);
+    if (!reasoningPillBox || !completedToolPillBox) throw new Error('trace status pills have no layout box');
+    expect(
+      Math.abs(reasoningPillBox.x + reasoningPillBox.width - (completedToolPillBox.x + completedToolPillBox.width))
+    ).toBeLessThanOrEqual(1);
 
     await reasoningItem.locator('.vb-tool-toggle').click();
     await expect(reasoningItem.locator('.vb-tool-reasoning-detail')).toContainText(
       'Confirm the long path before reading it.'
     );
 
-    await page.getByRole('button', { name: 'Show Latest', exact: true }).click();
-    await expect(traceItems).toHaveCount(1);
-    await expect(reasoningItem).toHaveCount(0);
-
-    const toolToggle = page.locator('.vb-tool-item:not(.vb-tool-item--reasoning) .vb-tool-toggle').first();
+    const toolToggle = workspace.locator('.vb-tool-item:not(.vb-tool-item--reasoning) .vb-tool-toggle').first();
     const toolControls = toolToggle.locator('.vb-tool-toggle-right');
     const tableDetail = toolToggle.locator('.vb-tool-mini-detail--table');
     await expect(toolToggle).toBeVisible();
     await expect(toolControls).toBeVisible();
     await expect(tableDetail).toBeVisible();
 
-    const [toggleBox, controlsBox] = await Promise.all([
-      toolToggle.boundingBox(),
-      toolControls.boundingBox()
-    ]);
+    const [toggleBox, controlsBox] = await Promise.all([toolToggle.boundingBox(), toolControls.boundingBox()]);
     if (!toggleBox || !controlsBox) throw new Error('tool usage controls have no layout box');
-    expect(controlsBox.x + controlsBox.width).toBeLessThanOrEqual(
-      toggleBox.x + toggleBox.width + 1
-    );
-    expect(
-      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)
-    ).toBe(true);
+    expect(controlsBox.x + controlsBox.width).toBeLessThanOrEqual(toggleBox.x + toggleBox.width + 1);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
 
     const surfaceColors = await toolToggle.evaluate((toggle) => {
       const detail = toggle.querySelector<HTMLElement>('.vb-tool-mini-detail--table');
@@ -978,7 +970,7 @@ test.describe('Robot UI (mocked)', () => {
         toggle: getComputedStyle(toggle).backgroundColor,
         detail: getComputedStyle(detail).backgroundColor,
         detailBorderStyle: getComputedStyle(detail).borderStyle,
-        detailBorderWidth: getComputedStyle(detail).borderWidth
+        detailBorderWidth: getComputedStyle(detail).borderWidth,
       };
     });
     expect(surfaceColors.detail).toBe(surfaceColors.toggle);
@@ -1004,7 +996,7 @@ test.describe('Robot UI (mocked)', () => {
     await page.waitForURL(`/topics/${topicId}`);
     await page.locator('.vb-quick-reply textarea').fill('(@robot) keep working');
 
-    const quickStop = page.getByRole('button', { name: 'Stop Robot' });
+    const quickStop = page.locator('.vb-quick-reply').getByRole('button', { name: 'Stop Robot' });
     await expect(quickStop).toBeVisible();
     await quickStop.click();
     expect(context.interruptCount).toBe(0);
@@ -1028,11 +1020,13 @@ test.describe('Robot UI (mocked)', () => {
     await expect(dialog).toHaveCount(0);
     expect(context.interruptCount).toBe(0);
 
-    const robotStatePanel = page.locator('.vb-robot-state');
-    const panelStop = robotStatePanel.getByRole('button', { name: 'Stop', exact: true });
-    await panelStop.click();
+    const previewStop = page.locator('.vb-topic-trace--preview').getByRole('button', { name: 'Stop Robot' });
+    await previewStop.click();
     expect(context.interruptCount).toBe(0);
-    await page.getByRole('dialog', { name: 'Stop robot?' }).getByRole('button', { name: 'Stop robot', exact: true }).click();
+    await page
+      .getByRole('dialog', { name: 'Stop robot?' })
+      .getByRole('button', { name: 'Stop robot', exact: true })
+      .click();
     await expect.poll(() => context.interruptCount).toBe(1);
   });
 
@@ -1118,7 +1112,7 @@ test.describe('Robot UI (mocked)', () => {
       postCount: 1,
       lastPostAuthorId: context.user.id,
       lastPostAuthorName: context.user.displayName,
-      lastPostAt: createdAt
+      lastPostAt: createdAt,
     };
     context.topics.set(queueTopicId, queueTopic);
     context.postsByTopic.set(queueTopicId, [
@@ -1134,8 +1128,8 @@ test.describe('Robot UI (mocked)', () => {
         createdAt,
         editedAt: null,
         deletedAt: null,
-        reactionCounts: []
-      }
+        reactionCounts: [],
+      },
     ]);
     context.robotStates.set(queueTopicId, {
       topicId: queueTopicId,
@@ -1151,7 +1145,7 @@ test.describe('Robot UI (mocked)', () => {
         parentPostId: `post-${queueTopicId}-1`,
         visibility: 'public',
         createdAt,
-        updatedAt: createdAt
+        updatedAt: createdAt,
       },
       recentToolRuns: [
         {
@@ -1165,9 +1159,9 @@ test.describe('Robot UI (mocked)', () => {
           filesTouched: [],
           outputSummary: 'Inspecting queue',
           redactionsApplied: false,
-          visibility: 'public'
-        }
-      ]
+          visibility: 'public',
+        },
+      ],
     });
     context.jobs = [
       {
@@ -1182,8 +1176,8 @@ test.describe('Robot UI (mocked)', () => {
         reasoningEffort: 'medium',
         lastUpdatedAt: createdAt,
         activeTurnId: 'turn-1',
-        threadLoaded: true
-      }
+        threadLoaded: true,
+      },
     ];
     context.automations = [
       {
@@ -1199,8 +1193,8 @@ test.describe('Robot UI (mocked)', () => {
         intervalMinutes: null,
         lastRunAt: null,
         createdAt: createdAt,
-        updatedAt: createdAt
-      }
+        updatedAt: createdAt,
+      },
     ];
 
     await attachMockApi(page, context);
@@ -1214,7 +1208,7 @@ test.describe('Robot UI (mocked)', () => {
         await fetch(`/api/topics/${topicId}/posts`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ body })
+          body: JSON.stringify({ body }),
         });
       }
     }, queueTopicId);
@@ -1271,13 +1265,13 @@ test.describe('Robot UI (mocked)', () => {
       reasoningEffort: null,
       lastUpdatedAt: new Date().toISOString(),
       currentPlan: null,
-      recentToolRuns: []
+      recentToolRuns: [],
     });
     context.queueCount = 0;
     context.jobs = context.jobs.map((job) => ({
       ...job,
       activity: 'idle',
-      lastUpdatedAt: new Date().toISOString()
+      lastUpdatedAt: new Date().toISOString(),
     }));
 
     await page.goto('/admin');

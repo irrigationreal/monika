@@ -24,9 +24,9 @@ Key capabilities:
 - **Unified User Files and attachments**: owner-scoped content blobs are SHA-256 deduplicated across an account's
   standalone uploads and human-authored post attachments. Logical post associations retain opaque compatible URLs and
   deletion tombstones; arbitrary robot-output filesystem paths are never a public attachment surface.
-- **Live robot state + tool trace**: authenticated users can see reasoning steps, tool runs, and outputs inline in a
-  topic view; public readers see only final posts, public-safe topic lineage, and a neutral in-progress placeholder.
-  Canonical Pi identifiers, JSONL paths, working directories, and import diagnostics remain admin-only.
+- **Canonical admin Trace**: admins get a three-card live preview and a complete reasoning/tool workspace; every
+  non-admin sees only final posts, public-safe topic lineage, and a neutral in-progress placeholder. Robot diagnostics,
+  canonical Pi identifiers, JSONL paths, working directories, and import details remain in the Admin Workspace.
 - **Forums as folders**: organize workspaces with category + pre-prompt defaults per forum.
 - **Adapters as first-class citizens**: Discord/Matrix/Slack/web surfaces share the same contracts.
 - **API-first + CLI ready**: OpenAPI spec, Postman collection, and CLI command shapes are included.
@@ -196,8 +196,8 @@ The private account preference **Quick Reply Style** is managed in User CP with 
 persisted by `PATCH /me/preferences/quick-reply`. It defaults to Inline; Docked opens each eligible topic with the dock
 collapsed on both desktop and mobile. Authentication and matching base-topic metadata resolve before the composer is
 revealed, so its initial layout never changes underneath an active draft. The composer does not wait for posts,
-attachments, robot/session enrichment, or the admin-only Tool Usage inspector; those continue loading independently,
-while race-safe draft hydration permits immediate typing. The preference is returned only from authenticated self
+attachments, robot/session enrichment, or the admin-only Trace projection; those continue loading independently, while
+race-safe draft hydration permits immediate typing. The preference is returned only from authenticated self
 APIs—not public profiles. Temporary expand, collapse, and undock actions never rewrite it. Expanded docks reserve enough
 topic space to keep the final content and scroll-to-top control unobscured.
 

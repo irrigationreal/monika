@@ -14,7 +14,7 @@ interface PersistedTraceInput {
 }
 
 interface LiveTraceSegment {
-  kind: 'reasoning' | 'assistant_text' | 'tool';
+  kind: 'reasoning' | 'tool';
   text?: string;
   toolRunId?: string;
 }

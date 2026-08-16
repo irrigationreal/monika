@@ -925,6 +925,14 @@ export interface DeploymentAdmissionCancelResponseDto {
   operationId: string;
 }
 
+/** Admin-only persisted reasoning/tool projection for one topic session. */
+export interface TopicTraceDto {
+  topicId: string;
+  sessionId: string | null;
+  toolRuns: ToolRunDto[];
+  plans: PlanDto[];
+}
+
 export interface AdminDeployStatusDto {
   enabled: boolean;
   scriptPath?: string | null;

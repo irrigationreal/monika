@@ -72,8 +72,6 @@ describe('ECHS subagent completion projection', () => {
       activeSubagents: new Map(),
       lastStreamEventAt: null,
       reasoningCheckpoints: [],
-      assistantText: '',
-      assistantCheckpoints: [],
     };
     (bridge as any).threadMap.set('conversation-1', context);
 

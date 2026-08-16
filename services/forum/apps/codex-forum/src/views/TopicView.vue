@@ -4,13 +4,10 @@ import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vu
 
 import AutoCompactOption from '../components/AutoCompactOption.vue';
 import ConfirmationDialog from '../components/ConfirmationDialog.vue';
-import DecryptText from '../components/DecryptText.vue';
 import DraftStatus from '../components/DraftStatus.vue';
-import LiveAssistantTurn from '../components/LiveAssistantTurn.vue';
 import MessageTemplatePicker from '../components/MessageTemplatePicker.vue';
 import OperationalEventBar from '../components/OperationalEventBar.vue';
-import PostTracePanel from '../components/PostTracePanel.vue';
-import ToolMiniView from '../components/ToolMiniView.vue';
+import TopicTraceViewer from '../components/TopicTraceViewer.vue';
 import { useAutosavedDraft } from '../composables/useAutosavedDraft';
 import { useForumState } from '../composables/useForumState';
 import { useMarkdown } from '../composables/useMarkdown';
@@ -18,12 +15,7 @@ import { applyTemplateToTextarea } from '../composables/useMessageTemplateInsert
 import { api } from '../lib/apiClient';
 import { createClientOperationId } from '../lib/clientOperationId';
 import { copyTextToClipboard } from '../lib/clipboard';
-import { parseReasoningSteps } from '../lib/reasoning';
-import { getToolMiniModel, toolKindIcon, traceToneForKind } from '../lib/toolMiniView';
-import { toolHumanTitle } from '../lib/toolTimeline';
-import { buildLiveTraceItems, buildPersistedTraceItems } from '../lib/unifiedTrace';
 
-import type { RobotActivityEvent } from '../composables/useForumState';
 import type {
   AttachmentDto,
   CompactionOperationDto,
@@ -33,28 +25,10 @@ import type {
   MessageTemplateDto,
   PostDto,
   RobotPersonaDto,
-  SessionInspectorDto,
-  ToolRunDto,
   TopicCompactionStateDto,
   TopicForkStateDto,
   TopicOperationalEventDto,
 } from '../lib/apiClient';
-import type { ReasoningStep } from '../lib/reasoning';
-import type { UnifiedTraceItem } from '../lib/unifiedTrace';
-
-type LiveTurnItem = {
-  id: string;
-  type: 'status' | 'reasoning' | 'tool' | 'assistant_text' | 'error';
-  title: string;
-  status: 'running' | 'success' | 'error' | 'done';
-  meta?: string | null;
-  detail?: string | null;
-  markdown?: string | null;
-  text?: string | null;
-  startedAt?: string | null;
-  timeoutMs?: number | null;
-  finished?: boolean;
-};
 
 const { renderContent, renderBBCode } = useMarkdown();
 const apiAny = api as any;
@@ -73,18 +47,18 @@ const quickReplyKeepVisibleButtonRef = ref<HTMLButtonElement | null>(null);
 const quickReplyPresentation = ref<'inline' | 'docked-expanded' | 'docked-collapsed'>('inline');
 const quickReplyPresentationReady = ref(false);
 const quickReplyOptionsOpen = ref(false);
-let quickReplyPresentationTouched = false;
+let quickReplyPresentationTouched = Boolean(false);
 const quickReplyDocked = computed(() => quickReplyPresentation.value !== 'inline');
 const quickReplyExpanded = computed(() => quickReplyPresentation.value === 'docked-expanded');
 const editingPost = ref<PostDto | null>(null);
 const editBody = ref('');
 const showDeleteConfirm = ref<string | null>(null);
-const showAllTools = ref(false);
-const toolUsageReasoningStorageKey = 'codex-forum:tool-usage:show-reasoning';
-const toolUsageResponseLimit = 20;
-const showToolReasoning = ref(readToolUsageReasoningPreference());
-const expandedReasoning = ref(new Set<string>());
 const showAdminPanel = ref(false);
+type AdminWorkspaceTab = 'trace' | 'robot' | 'session' | 'auto';
+const adminWorkspaceTab = ref<AdminWorkspaceTab | null>(null);
+const adminWorkspaceRef = ref<HTMLElement | null>(null);
+let adminWorkspaceOpener: HTMLElement | null = null;
+let adminWorkspacePreviousBodyOverflow: string | null = null;
 const editingTitle = ref(false);
 const newTitle = ref('');
 const showDeleteTopicConfirm = ref(false);
@@ -95,10 +69,6 @@ const moveConfirmChecked = ref(false);
 const moveSilentChecked = ref(false);
 const moveError = ref('');
 const moveLoading = ref(false);
-const expandedTools = ref(new Set<string>());
-const showInspectorTools = ref(false);
-const expandedInspectorTools = ref(new Set<string>());
-const showInspectorMessages = ref(false);
 const showScrollTop = ref(false);
 const isReplying = ref(false);
 const isPublishingReply = ref(false);
@@ -256,11 +226,7 @@ const canCompact = computed(
 );
 
 const autoRun = computed(() => state.topicAutoRun.value);
-const showAutoRunPanel = computed(() => isAdmin.value && showAdminPanel.value && Boolean(routeTopicId.value));
-const showRobotStatePanel = computed(() => isAdmin.value && topicRobotMode.value && topicRobotMode.value !== 'off');
-const showSessionInspectorPanel = computed(
-  () => isAdmin.value && topicRobotMode.value && topicRobotMode.value !== 'off'
-);
+const showAutoRunPanel = computed(() => isAdmin.value && Boolean(routeTopicId.value));
 const autoRunEnabled = ref(false);
 const autoRunContext = ref('');
 const autoRunWorker = ref<'echs'>('echs');
@@ -273,23 +239,6 @@ const autoRunModelOptions = computed(() => {
 });
 const showAutoRunReasoning = computed(() => state.modelSupportsReasoning(autoRunModel.value));
 const autoRunReasoningOptions = computed(() => state.modelReasoningOptions(autoRunModel.value));
-
-function readToolUsageReasoningPreference(): boolean {
-  if (typeof window === 'undefined') return true;
-  try {
-    return window.localStorage.getItem(toolUsageReasoningStorageKey) !== 'false';
-  } catch {
-    return true;
-  }
-}
-
-watch(showToolReasoning, (showReasoning) => {
-  try {
-    window.localStorage.setItem(toolUsageReasoningStorageKey, String(showReasoning));
-  } catch {
-    // The in-memory preference still applies when browser storage is unavailable.
-  }
-});
 
 function operationalEventsAfter(postId: string): TopicOperationalEventDto[] {
   return state.operationalEvents.value
@@ -363,7 +312,7 @@ async function refreshCompactionDependentState(topicId: string): Promise<void> {
   ]);
   await Promise.all([
     state.loadAttachmentsForPosts(state.posts.value.map((post) => post.id)),
-    state.loadSessionInspector(),
+    state.loadAdminEnrichment(),
   ]);
 }
 
@@ -859,41 +808,19 @@ const canEditAutoRun = computed(() => isAdmin.value);
 const autoRunBusy = computed(() => state.autoRunLoading.value);
 
 const showRobotDraft = computed(() => state.hasPendingAssistantTurn.value);
-const canViewLiveTrace = computed(() => state.isLoggedIn.value);
-
 const liveTurnPostNumber = computed(() => state.sortedPosts.value.length + 1);
 const liveTurnPage = computed(() => pageForPostNumber(liveTurnPostNumber.value));
 const showRobotDraftOnCurrentPage = computed(
   () => showRobotDraft.value && state.currentPage.value === liveTurnPage.value
 );
-const showDetailedLiveTraceOnCurrentPage = computed(() => showRobotDraftOnCurrentPage.value && canViewLiveTrace.value);
-const showPublicRobotPlaceholderOnCurrentPage = computed(
-  () => showRobotDraftOnCurrentPage.value && !canViewLiveTrace.value
-);
-
-const liveActivityEvents = computed<RobotActivityEvent[]>(() => state.activityLog.value);
-
-const isRobotThinking = computed(() => {
-  if (!topicRobotMode.value) return false;
-  if (topicRobotMode.value === 'off') return false;
-  const activity = state.robotState.value?.activity ?? 'idle';
-  return activity !== 'idle';
-});
-
-const showRobotBusyNotice = computed(() => {
-  if (!topicRobotMode.value) return false;
-  return isRobotBusy.value && topicRobotMode.value !== 'off';
-});
+const showRobotPlaceholderOnCurrentPage = computed(() => showRobotDraftOnCurrentPage.value);
 
 const quickReplyWillDispatchRobot = computed(() => {
-  if (!topicRobotMode.value) return false;
-  const mode = topicRobotMode.value;
-  if (mode === 'off') return false;
-  if (mode === 'auto') return true;
+  if (!topicRobotMode.value || topicRobotMode.value === 'off') return false;
+  if (topicRobotMode.value === 'auto') return true;
   return /@robot\b/i.test(replyBody.value);
 });
-
-const quickReplyWillSteerRobot = computed(() => showRobotBusyNotice.value && quickReplyWillDispatchRobot.value);
+const quickReplyWillSteerRobot = computed(() => isRobotBusy.value && quickReplyWillDispatchRobot.value);
 const sessionContext = computed(() => state.sessionContext.value);
 const topicLineage = computed(() => state.selectedTopic.value?.lineage ?? null);
 const piSessionDiagnostics = computed(() => state.sessionInfo.value?.piSession ?? null);
@@ -924,240 +851,11 @@ const handoffDraftSupportsReasoning = computed(() => state.modelSupportsReasonin
 const handoffLaunchSupportsReasoning = computed(() => state.modelSupportsReasoning(handoffLaunchModelEffective.value));
 const handoffDraftReasoningOptions = computed(() => state.modelReasoningOptions(handoffDraftModelEffective.value));
 const handoffLaunchReasoningOptions = computed(() => state.modelReasoningOptions(handoffLaunchModelEffective.value));
-
 const robotModeNotice = computed(() => {
   if (topicRobotMode.value === 'off') return 'Robot replies are disabled for this thread.';
   if (topicRobotMode.value === 'mention') return 'Robot replies only when @robot is mentioned.';
   return null;
 });
-
-const liveReasoningSteps = computed(() => {
-  return liveActivityEvents.value.filter(
-    (e): e is Extract<RobotActivityEvent, { type: 'reasoning_step' }> => e.type === 'reasoning_step'
-  );
-});
-
-const latestReasoningStep = computed(() => {
-  const steps = liveReasoningSteps.value;
-  return steps.length > 0 ? steps[steps.length - 1] : null;
-});
-
-const previousReasoningSteps = computed(() => {
-  const steps = liveReasoningSteps.value;
-  return steps.length > 1 ? steps.slice(0, -1).reverse() : [];
-});
-
-const liveToolRuns = computed(() => {
-  return liveActivityEvents.value.filter(
-    (e): e is Extract<RobotActivityEvent, { type: 'tool_run' }> => e.type === 'tool_run'
-  );
-});
-
-const liveToolRunDtos = computed(() => liveToolRuns.value.map((e) => e.toolRun));
-
-function compact(value: string | null | undefined, max = 400): string | null {
-  const text = String(value ?? '').trim();
-  if (!text) return null;
-  if (text.length <= max) return text;
-  return `${text.slice(0, max)}…`;
-}
-
-function liveToolTitle(tool: ToolRunDto): string {
-  const mini = toolMini(tool);
-  return toolHumanTitle(tool, mini) || mini.name || tool.tool || 'tool';
-}
-
-function liveToolDetail(tool: ToolRunDto): string | null {
-  const mini = toolMini(tool);
-  const detail = mini.detail?.lines?.length ? mini.detail.lines.join('\n') : null;
-  const output = compact(mini.output, 900);
-  const parts = [detail, output ? `Output:\n${output}` : null].filter(Boolean);
-  return parts.length > 0 ? parts.join('\n\n') : null;
-}
-
-function liveToolDurationLabel(tool: ToolRunDto): string | null {
-  if (!tool.startedAt || !tool.finishedAt) return null;
-  const start = new Date(tool.startedAt).getTime();
-  const end = new Date(tool.finishedAt).getTime();
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
-  const ms = Math.max(0, end - start);
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
-
-const liveTurnItems = computed<LiveTurnItem[]>(() => {
-  const items: LiveTurnItem[] = [];
-  const activity = state.robotState.value?.activity ?? 'idle';
-  const isIdle = activity === 'idle';
-
-  // 1. Status item
-  if (!isIdle) {
-    const statusTitle =
-      activity === 'running_tools'
-        ? 'Running tools'
-        : activity === 'waiting'
-          ? 'Waiting'
-          : activity === 'error'
-            ? 'Error'
-            : 'Thinking';
-    items.push({
-      id: 'status:activity',
-      type: 'status',
-      title: statusTitle,
-      status: activity === 'error' ? 'error' : 'running',
-    });
-  }
-
-  // Helper to push parsed reasoning steps from a text segment
-  function pushReasoningSegment(text: string, segId: string, isLive: boolean): void {
-    const steps = parseReasoningSteps(text);
-    for (let i = 0; i < steps.length; i++) {
-      const step = steps[i];
-      if (!step) continue;
-      items.push({
-        id: `${segId}:${i}`,
-        type: 'reasoning',
-        title: step.title || 'Thinking',
-        status: i === steps.length - 1 && isLive && !isIdle ? 'running' : 'done',
-        markdown: step.detail ?? null,
-      });
-    }
-  }
-
-  // Helper to look up a tool run from activityLog by toolRunId
-  const toolRunIndex = new Map<string, Extract<RobotActivityEvent, { type: 'tool_run' }>>();
-  for (const event of state.activityLog.value) {
-    if (event.type === 'tool_run') {
-      // The activityLog id is `tool:${run.id}`, but we match on the toolRun.id
-      toolRunIndex.set(event.toolRun.id, event);
-    }
-  }
-
-  // 2. Iterate committed segments (frozen, append-only)
-  const segments = state.committedSegments.value;
-  for (let s = 0; s < segments.length; s++) {
-    const seg = segments[s]!;
-    if (seg.kind === 'reasoning') {
-      pushReasoningSegment(seg.text, `seg:r:${s}`, false);
-    } else if (seg.kind === 'assistant_text') {
-      const text = seg.text.trim();
-      if (text) {
-        items.push({ id: `seg:a:${s}`, type: 'assistant_text', title: '', status: 'done', text });
-      }
-    } else if (seg.kind === 'tool') {
-      const toolEvent = toolRunIndex.get(seg.toolRunId);
-      if (toolEvent) {
-        const tool = toolEvent.toolRun;
-        const status = !tool.finishedAt ? 'running' : (toolExitCodeValue(tool) ?? 0) === 0 ? 'success' : 'error';
-        const mini = toolMini(tool);
-        const toolTimeoutMs =
-          typeof mini.meta.timeoutMs === 'number' && Number.isFinite(mini.meta.timeoutMs)
-            ? (mini.meta.timeoutMs as number)
-            : null;
-        const finishedTimeoutLabel =
-          tool.finishedAt && toolTimeoutMs ? `timeout ${formatDuration(toolTimeoutMs)}` : null;
-        items.push({
-          id: toolEvent.id,
-          type: 'tool',
-          title: liveToolTitle(tool),
-          status,
-          meta: [tool.tool, toolStatusLabel(tool), liveToolDurationLabel(tool), finishedTimeoutLabel]
-            .filter(Boolean)
-            .join(' \u00b7 '),
-          detail: liveToolDetail(tool),
-          startedAt: tool.startedAt ?? null,
-          timeoutMs: !tool.finishedAt ? toolTimeoutMs : null,
-          finished: Boolean(tool.finishedAt),
-        });
-      } else {
-        // Tool segment committed but state event hasn't arrived yet.
-        // Show a placeholder so the trace doesn't appear to hang.
-        // Use tool:${id} format so Vue transitions smoothly when real data arrives.
-        items.push({
-          id: `tool:${seg.toolRunId}`,
-          type: 'tool',
-          title: 'Running tool\u2026',
-          status: 'running',
-          meta: 'starting',
-          detail: null,
-          startedAt: null,
-          timeoutMs: null,
-          finished: false,
-        });
-      }
-    }
-  }
-
-  // 3. Pending reasoning tail (live, growing)
-  const pendingReasoning = state.reasoningDraft.value.trim();
-  if (pendingReasoning) {
-    pushReasoningSegment(pendingReasoning, 'reasoning:tail', true);
-  }
-
-  // 4. Error
-  const lastError = state.robotState.value?.lastTurnError?.message ?? null;
-  if (lastError && activity === 'error') {
-    items.push({ id: 'error:last-turn', type: 'error', title: 'Turn error', status: 'error', detail: lastError });
-  }
-
-  // 5. Pending assistant text tail (live, growing)
-  const pendingAssistant = state.assistantDraft.value.trim();
-  if (pendingAssistant) {
-    items.push({ id: 'assistant:live', type: 'assistant_text', title: '', status: 'running', text: pendingAssistant });
-  }
-
-  if (typeof window !== 'undefined' && items.length > 0) {
-  }
-  return items;
-});
-
-function toolExitCodeValue(tool: { exitCode?: number | null; outputSummary?: string | null }): number | null {
-  if (tool.exitCode !== null && tool.exitCode !== undefined) return tool.exitCode;
-  const summary = tool.outputSummary ?? '';
-  if (!summary) return null;
-  const match = summary.match(/Process exited with code\s+(-?\d+)/i) || summary.match(/Exit:\s*(-?\d+)/i);
-  if (!match) return null;
-  const value = Number.parseInt(match[1], 10);
-  return Number.isNaN(value) ? null : value;
-}
-
-function toolStatusLabel(tool: {
-  finishedAt?: string | null;
-  exitCode?: number | null;
-  outputSummary?: string | null;
-}): string {
-  if (!tool.finishedAt) return 'running';
-  const exitCode = toolExitCodeValue(tool);
-  if (exitCode === null || exitCode === undefined) return 'done';
-  return `exit ${exitCode}`;
-}
-
-function toolStatusClass(tool: {
-  finishedAt?: string | null;
-  exitCode?: number | null;
-  outputSummary?: string | null;
-}): string {
-  if (!tool.finishedAt) return 'vb-trace-tool-status--running';
-  const exitCode = toolExitCodeValue(tool);
-  if (exitCode === null || exitCode === undefined || exitCode === 0) return 'vb-trace-tool-status--ok';
-  return 'vb-trace-tool-status--error';
-}
-
-function toolMini(tool: ToolRunDto) {
-  return getToolMiniModel(tool);
-}
-
-function toolMiniName(tool: ToolRunDto): string {
-  return toolMini(tool).name;
-}
-
-function toolMiniSummary(tool: ToolRunDto): string | null {
-  return toolMini(tool).summary;
-}
-
-function toolMiniKind(tool: ToolRunDto) {
-  return toolMini(tool).kind;
-}
 
 function formatTokenCount(value: number | null | undefined): string {
   if (typeof value !== 'number' || !Number.isFinite(value)) return 'n/a';
@@ -1165,27 +863,44 @@ function formatTokenCount(value: number | null | undefined): string {
   if (value >= 1_000) return (value / 1_000).toFixed(1) + 'k';
   return String(value);
 }
-function toolDurationLabel(tool: { startedAt?: string | null; finishedAt?: string | null }): string | null {
-  if (!tool.startedAt || !tool.finishedAt) return null;
-  const start = new Date(tool.startedAt).getTime();
-  const end = new Date(tool.finishedAt).getTime();
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
-  const durationMs = Math.max(0, end - start);
-  return formatDuration(durationMs);
-}
-
-function formatDuration(durationMs: number): string {
-  if (durationMs < 1000) return `${durationMs}ms`;
-  const seconds = durationMs / 1000;
-  if (seconds < 60) return `${seconds.toFixed(1)}s`;
-  const minutes = Math.floor(seconds / 60);
-  const remainder = Math.round(seconds % 60);
-  return `${minutes}m ${remainder}s`;
-}
-
 function handleScroll(): void {
   showScrollTop.value = window.scrollY > 300;
 }
+
+async function openAdminWorkspace(tab: AdminWorkspaceTab, event?: Event): Promise<void> {
+  if (!isAdmin.value) return;
+  adminWorkspaceOpener =
+    event?.currentTarget instanceof HTMLElement ? event.currentTarget : (document.activeElement as HTMLElement | null);
+  adminWorkspaceTab.value = tab;
+  if (tab === 'trace' || tab === 'session') void state.loadAdminEnrichment();
+  await nextTick();
+  adminWorkspaceRef.value?.focus();
+}
+
+function closeAdminWorkspace(): void {
+  adminWorkspaceTab.value = null;
+  const opener = adminWorkspaceOpener;
+  adminWorkspaceOpener = null;
+  void nextTick(() => opener?.focus());
+}
+
+function handleAdminWorkspaceKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape' && adminWorkspaceTab.value) {
+    event.preventDefault();
+    closeAdminWorkspace();
+  }
+}
+
+watch(adminWorkspaceTab, (tab) => {
+  if (typeof document === 'undefined') return;
+  if (tab && adminWorkspacePreviousBodyOverflow === null) {
+    adminWorkspacePreviousBodyOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+  } else if (!tab && adminWorkspacePreviousBodyOverflow !== null) {
+    document.body.style.overflow = adminWorkspacePreviousBodyOverflow;
+    adminWorkspacePreviousBodyOverflow = null;
+  }
+});
 
 function openThreadSearch(): void {
   threadSearchOpen.value = true;
@@ -1695,251 +1410,6 @@ const routePostId = computed(() => {
   return String(raw);
 });
 
-type ToolUsagePlan = SessionInspectorDto['plans'][number];
-
-interface ToolUsageTraceGroup {
-  id: string;
-  parentPostId: string | null;
-  latestAt: string;
-  live: boolean;
-  items: UnifiedTraceItem[];
-}
-
-interface MutableToolUsageGroup {
-  id: string;
-  parentPostId: string | null;
-  latestAt: string;
-  plan: ToolUsagePlan | null;
-  tools: ToolRunDto[];
-}
-
-function laterTimestamp(current: string, candidate: string | null | undefined): string {
-  return candidate && candidate > current ? candidate : current;
-}
-
-const toolUsageTraceGroups = computed<ToolUsageTraceGroup[]>(() => {
-  const planById = new Map<string, ToolUsagePlan>();
-  for (const plan of state.sessionInspector.value?.plans ?? []) planById.set(plan.id, plan);
-  const currentPlan = state.robotState.value?.currentPlan ?? null;
-  if (currentPlan) {
-    const persistedPlan = planById.get(currentPlan.id);
-    planById.set(currentPlan.id, {
-      ...persistedPlan,
-      ...currentPlan,
-      parentPostId: currentPlan.parentPostId ?? persistedPlan?.parentPostId ?? null
-    });
-  }
-
-  const toolById = new Map<string, ToolRunDto>();
-  for (const tool of state.sessionInspector.value?.toolRuns ?? []) toolById.set(tool.id, tool);
-  for (const tool of state.robotState.value?.recentToolRuns ?? []) toolById.set(tool.id, tool);
-
-  const groups = new Map<string, MutableToolUsageGroup>();
-  for (const plan of planById.values()) {
-    const parentPostId = plan.parentPostId ?? null;
-    const id = parentPostId ? `response:${parentPostId}` : `plan:${plan.id}`;
-    const existing = groups.get(id);
-    if (!existing) {
-      groups.set(id, {
-        id,
-        parentPostId,
-        latestAt: plan.updatedAt,
-        plan,
-        tools: []
-      });
-    } else {
-      existing.latestAt = laterTimestamp(existing.latestAt, plan.updatedAt);
-      if (!existing.plan || plan.updatedAt > existing.plan.updatedAt) existing.plan = plan;
-    }
-  }
-
-  for (const tool of toolById.values()) {
-    const parentPostId = tool.parentPostId ?? null;
-    const id = parentPostId ? `response:${parentPostId}` : `tool:${tool.id}`;
-    let group = groups.get(id);
-    if (!group) {
-      group = {
-        id,
-        parentPostId,
-        latestAt: tool.finishedAt ?? tool.startedAt,
-        plan: null,
-        tools: []
-      };
-      groups.set(id, group);
-    }
-    group.tools.push(tool);
-    group.latestAt = laterTimestamp(group.latestAt, tool.finishedAt ?? tool.startedAt);
-  }
-
-  const active = Boolean(state.robotState.value && state.robotState.value.activity !== 'idle');
-  const activeParentPostId = currentPlan?.parentPostId ?? null;
-  return [...groups.values()]
-    .map((group): ToolUsageTraceGroup => {
-      const isLive = Boolean(
-        active &&
-          currentPlan &&
-          (activeParentPostId
-            ? group.parentPostId === activeParentPostId
-            : group.plan?.id === currentPlan.id)
-      );
-      let items = isLive
-        ? buildLiveTraceItems({
-            segments: state.committedSegments.value,
-            reasoningDraft: state.reasoningDraft.value,
-            tools: group.tools
-          })
-        : [];
-      if (items.length === 0) {
-        items = buildPersistedTraceItems({
-          reasoningText: group.plan?.summary ?? group.plan?.content ?? null,
-          reasoningCheckpoints: group.plan?.reasoningCheckpoints ?? null,
-          tools: group.tools
-        });
-      }
-      return {
-        id: group.id,
-        parentPostId: group.parentPostId,
-        latestAt: group.latestAt,
-        live: isLive,
-        items
-      };
-    })
-    .filter((group) => group.items.length > 0)
-    .sort((a, b) => b.latestAt.localeCompare(a.latestAt))
-    .slice(0, toolUsageResponseLimit);
-});
-
-function filteredToolUsageItems(group: ToolUsageTraceGroup): UnifiedTraceItem[] {
-  return showToolReasoning.value ? group.items : group.items.filter((item) => item.type === 'tool');
-}
-
-const expandedToolUsageGroups = computed(() =>
-  toolUsageTraceGroups.value
-    .map((group) => ({
-      ...group,
-      items: filteredToolUsageItems(group)
-    }))
-    .filter((group) => group.items.length > 0)
-);
-
-const expandedToolUsageEntryCount = computed(() =>
-  expandedToolUsageGroups.value.reduce(
-    (count, group) =>
-      count +
-      group.items.reduce(
-        (groupCount, item) => groupCount + (item.type === 'reasoning' ? item.steps.length : 1),
-        0
-      ),
-    0
-  )
-);
-
-const latestToolUsageSelection = computed(() => {
-  const newestToolId =
-    state.robotState.value?.recentToolRuns[0]?.id ?? state.sessionInspector.value?.toolRuns[0]?.id ?? null;
-  if (newestToolId) {
-    for (const group of toolUsageTraceGroups.value) {
-      const item = group.items.find((candidate) => candidate.type === 'tool' && candidate.tool.id === newestToolId);
-      if (item?.type === 'tool') return { group, item };
-    }
-  }
-
-  const tools = toolUsageTraceGroups.value.flatMap((group) =>
-    group.items
-      .filter((item): item is Extract<UnifiedTraceItem, { type: 'tool' }> => item.type === 'tool')
-      .map((item) => ({ group, item }))
-  );
-  return tools.sort((a, b) => b.item.tool.startedAt.localeCompare(a.item.tool.startedAt))[0] ?? null;
-});
-
-const canExpandToolUsage = computed(
-  () => expandedToolUsageEntryCount.value > (latestToolUsageSelection.value ? 1 : 0)
-);
-const showingAllToolUsageGroups = computed(() => showAllTools.value && canExpandToolUsage.value);
-
-watch(canExpandToolUsage, (canExpand) => {
-  if (!canExpand) showAllTools.value = false;
-});
-
-const visibleToolUsageGroups = computed(() => {
-  if (showingAllToolUsageGroups.value) return expandedToolUsageGroups.value;
-  const selection = latestToolUsageSelection.value;
-  if (!selection) return [];
-  return [{ ...selection.group, items: [selection.item] }];
-});
-
-const visibleToolUsageEntryCount = computed(() =>
-  visibleToolUsageGroups.value.reduce(
-    (count, group) =>
-      count +
-      group.items.reduce(
-        (groupCount, item) => groupCount + (item.type === 'reasoning' ? item.steps.length : 1),
-        0
-      ),
-    0
-  )
-);
-
-function toolUsageReasoningKey(
-  group: ToolUsageTraceGroup,
-  item: Extract<UnifiedTraceItem, { type: 'reasoning' }>,
-  stepIndex: number
-): string {
-  return `${group.id}:reasoning:${item.segmentIndex}:${stepIndex}`;
-}
-
-function toggleToolUsageReasoning(key: string): void {
-  const next = new Set(expandedReasoning.value);
-  if (next.has(key)) next.delete(key);
-  else next.add(key);
-  expandedReasoning.value = next;
-}
-
-function toolUsageReasoningExpanded(key: string): boolean {
-  return expandedReasoning.value.has(key);
-}
-
-function toolUsageReasoningPreview(detail: string | null): string | null {
-  return compact(detail, 140);
-}
-
-function toolUsageReasoningStatus(
-  group: ToolUsageTraceGroup,
-  item: Extract<UnifiedTraceItem, { type: 'reasoning' }>,
-  stepIndex: number
-): 'thinking' | 'done' {
-  const isLiveTail = group.items.at(-1) === item && stepIndex === item.steps.length - 1;
-  return group.live && isLiveTail ? 'thinking' : 'done';
-}
-
-function toolUsageReasoningStatusClass(
-  group: ToolUsageTraceGroup,
-  item: Extract<UnifiedTraceItem, { type: 'reasoning' }>,
-  stepIndex: number
-): string {
-  return toolUsageReasoningStatus(group, item, stepIndex) === 'thinking'
-    ? 'vb-trace-tool-status--running'
-    : 'vb-trace-tool-status--ok';
-}
-
-function renderToolUsageReasoning(detail: string): string {
-  return renderContent(detail, { topicId: routeTopicId.value });
-}
-
-function toggleTool(tool: ToolRunDto): void {
-  const next = new Set(expandedTools.value);
-  if (next.has(tool.id)) {
-    next.delete(tool.id);
-  } else {
-    next.add(tool.id);
-  }
-  expandedTools.value = next;
-}
-
-function toolExpanded(tool: ToolRunDto): boolean {
-  return expandedTools.value.has(tool.id);
-}
-
 function postNumberForIndex(idx: number): number {
   return (state.currentPage.value - 1) * state.POSTS_PER_PAGE + idx + 1;
 }
@@ -2032,34 +1502,6 @@ async function copyPostLink(post: PostDto): Promise<void> {
   }
 }
 
-function toolRunsForPost(post: PostDto): ToolRunDto[] {
-  if (!state.sessionInspector.value) return [];
-  const parentId = post.parentPostId ?? post.id;
-  return state.sessionInspector.value.toolRuns.filter((run) => run.parentPostId === parentId);
-}
-
-function latestToolRunForPost(post: PostDto): ToolRunDto | null {
-  const runs = toolRunsForPost(post);
-  return runs.at(-1) ?? null;
-}
-
-function planForPost(post: PostDto): SessionInspectorDto['plans'][number] | null {
-  if (!state.sessionInspector.value) return null;
-  const parentId = post.parentPostId ?? post.id;
-  const matches = state.sessionInspector.value.plans.filter((plan) => plan.parentPostId === parentId);
-  return matches[0] ?? null;
-}
-
-function planStepsForPost(post: PostDto): ReasoningStep[] {
-  const plan = planForPost(post);
-  return parseReasoningSteps(plan?.summary ?? plan?.content ?? '');
-}
-
-function hasTraceForPost(post: PostDto): boolean {
-  if (!state.sessionInspector.value) return false;
-  return Boolean(planForPost(post)) || toolRunsForPost(post).length > 0;
-}
-
 function getIdentity(authorId: string) {
   return state.identities.value[authorId];
 }
@@ -2090,20 +1532,6 @@ function getUserJoinDate(authorId: string): string {
 function getUserSignature(authorId: string): string | null {
   const identity = getIdentity(authorId);
   return identity?.signature || null;
-}
-
-function toggleInspectorTool(id: string): void {
-  const next = new Set(expandedInspectorTools.value);
-  if (next.has(id)) {
-    next.delete(id);
-  } else {
-    next.add(id);
-  }
-  expandedInspectorTools.value = next;
-}
-
-function inspectorToolExpanded(id: string): boolean {
-  return expandedInspectorTools.value.has(id);
 }
 
 function openEditModal(post: PostDto): void {
@@ -2181,9 +1609,7 @@ function resetQuickReplyPresentation(): void {
 
 function applyQuickReplyDefault(): void {
   if (quickReplyPresentationTouched || !canDockQuickReply.value) return;
-  quickReplyPresentation.value = state.currentUser.value?.quickReplyDockedByDefault
-    ? 'docked-collapsed'
-    : 'inline';
+  quickReplyPresentation.value = state.currentUser.value?.quickReplyDockedByDefault ? 'docked-collapsed' : 'inline';
 }
 
 async function quotePost(post: PostDto): Promise<void> {
@@ -2689,6 +2115,7 @@ watch(
   async (topicId) => {
     quickReplyPresentationReady.value = false;
     resetQuickReplyPresentation();
+    adminWorkspaceTab.value = null;
     showStopRobotConfirm.value = false;
     showDiscardDraftConfirm.value = false;
     discardDraftError.value = '';
@@ -2742,9 +2169,16 @@ watch(
 
 onMounted(() => {
   window.addEventListener('scroll', handleScroll);
+  window.addEventListener('keydown', handleAdminWorkspaceKeydown);
 });
 
 onUnmounted(() => {
+  window.removeEventListener('scroll', handleScroll);
+  window.removeEventListener('keydown', handleAdminWorkspaceKeydown);
+  if (adminWorkspacePreviousBodyOverflow !== null) {
+    document.body.style.overflow = adminWorkspacePreviousBodyOverflow;
+    adminWorkspacePreviousBodyOverflow = null;
+  }
   state.closeStream();
   stopCompactionPolling();
   if (forkPollTimer !== null) window.clearTimeout(forkPollTimer);
@@ -3163,6 +2597,14 @@ onUnmounted(() => {
 
     <div v-if="showAdminPanel && canModerate" class="vb-admin-panel">
       <div class="vb-admin-actions">
+        <button class="vb-small-btn" type="button" @click="openAdminWorkspace('trace', $event)">Open Trace</button>
+        <button class="vb-small-btn" type="button" @click="openAdminWorkspace('robot', $event)">
+          Robot Diagnostics
+        </button>
+        <button class="vb-small-btn" type="button" @click="openAdminWorkspace('session', $event)">
+          Session Details
+        </button>
+        <button class="vb-small-btn" type="button" @click="openAdminWorkspace('auto', $event)">Auto-Director</button>
         <button class="vb-small-btn" :disabled="state.loading.value" @click="openEditTitle">Edit Title</button>
         <button
           v-if="isAdmin"
@@ -3215,131 +2657,6 @@ onUnmounted(() => {
           Delete Topic
         </button>
       </div>
-
-      <div v-if="showAutoRunPanel" class="vb-robot-state" style="margin-top: 12px">
-        <div class="vb-table-header">
-          <span>Auto-Director (Thread Tool)</span>
-          <div class="vb-robot-actions">
-            <span class="vb-status-pill">{{ autoRunStatusLabel }}</span>
-            <label class="vb-inline-check">
-              <input type="checkbox" v-model="autoRunEnabled" :disabled="!canEditAutoRun || autoRunBusy" />
-              <span>Enabled</span>
-            </label>
-            <button
-              class="vb-small-btn"
-              type="button"
-              :disabled="!canEditAutoRun || autoRunBusy || compactionFence"
-              @click="saveAutoRun"
-            >
-              Save
-            </button>
-            <button
-              class="vb-small-btn"
-              type="button"
-              :disabled="!canEditAutoRun || autoRunBusy || compactionFence || !autoRunEnabled"
-              @click="runAutoRunDirector"
-            >
-              Run
-            </button>
-          </div>
-        </div>
-        <div class="vb-robot-body">
-          <div class="vb-state-row">
-            <div>
-              <strong>Replies:</strong> {{ autoRun?.replyCount ?? 0 }} / {{ autoRun?.maxReplies ?? autoRunMaxReplies }}
-            </div>
-            <div><strong>Last Run:</strong> {{ autoRun?.lastRunAt ? state.formatDate(autoRun.lastRunAt) : 'n/a' }}</div>
-            <div>
-              <strong>Last Reply:</strong> {{ autoRun?.lastReplyAt ? state.formatDate(autoRun.lastReplyAt) : 'n/a' }}
-            </div>
-          </div>
-          <div v-if="state.autoRunError.value" class="vb-error">{{ state.autoRunError.value }}</div>
-          <div v-if="autoRun?.lastError" class="vb-error">
-            <strong>Last error:</strong> {{ formatAutoRunError(autoRun.lastError) }}
-          </div>
-          <div v-if="autoRun?.lastNotes" class="vb-note">
-            <strong>Director notes:</strong>
-            <div>{{ autoRun.lastNotes }}</div>
-          </div>
-          <div v-if="autoRun?.lastSummary" class="vb-note">
-            <strong>Last summary:</strong>
-            <div>{{ autoRun.lastSummary }}</div>
-          </div>
-          <label>Goal (optional):</label>
-          <textarea
-            v-model="autoRunContext"
-            class="vb-option-textarea"
-            rows="5"
-            :readonly="!canEditAutoRun"
-            placeholder="Describe the outcome to drive toward. Leave blank to auto-derive the next major goal from the thread."
-          ></textarea>
-          <div class="vb-reply-options">
-            <div class="vb-option-group">
-              <label>Worker:</label>
-              <select v-model="autoRunWorker" class="vb-option-select" :disabled="!canEditAutoRun || autoRunBusy">
-                <option value="echs">echs</option>
-              </select>
-            </div>
-            <div class="vb-option-group">
-              <label>Model:</label>
-              <select v-model="autoRunModel" class="vb-option-select" :disabled="!canEditAutoRun || autoRunBusy">
-                <option v-for="option in autoRunModelOptions" :key="option.value || 'default'" :value="option.value">
-                  {{ option.label }}
-                </option>
-              </select>
-            </div>
-            <div v-if="showAutoRunReasoning" class="vb-option-group">
-              <label>Reasoning:</label>
-              <select v-model="autoRunReasoning" class="vb-option-select" :disabled="!canEditAutoRun || autoRunBusy">
-                <option value="">Default</option>
-                <option v-for="option in autoRunReasoningOptions" :key="option" :value="option">
-                  {{ formatReasoningLabel(option) }}
-                </option>
-              </select>
-            </div>
-            <div v-else class="vb-option-group">
-              <label>Reasoning:</label>
-              <select class="vb-option-select" disabled>
-                <option value="">n/a</option>
-              </select>
-            </div>
-            <div class="vb-option-group">
-              <label>Max Replies:</label>
-              <input
-                v-model.number="autoRunMaxReplies"
-                type="number"
-                min="1"
-                class="vb-option-input"
-                :disabled="!canEditAutoRun || autoRunBusy"
-              />
-            </div>
-            <button
-              class="vb-small-btn"
-              type="button"
-              :disabled="!canEditAutoRun || autoRunBusy"
-              @click="resetAutoRunCount"
-            >
-              Reset Count
-            </button>
-          </div>
-          <label>Steer auto-director (optional):</label>
-          <textarea
-            v-model="autoRunSteerMessage"
-            class="vb-option-textarea"
-            rows="3"
-            :disabled="!canEditAutoRun || autoRunBusy"
-            placeholder="Add a one-off steering note."
-          ></textarea>
-          <button
-            class="vb-btn"
-            type="button"
-            :disabled="!canEditAutoRun || autoRunBusy || compactionFence || !autoRunEnabled"
-            @click="runAutoRunDirector"
-          >
-            {{ autoRunBusy ? 'Running...' : 'Run Auto-Director' }}
-          </button>
-        </div>
-      </div>
     </div>
 
     <div ref="postsContainerRef" class="vb-posts">
@@ -3353,7 +2670,7 @@ onUnmounted(() => {
       <div v-if="showRobotDraft && !showRobotDraftOnCurrentPage && !threadSearchQuery" class="vb-live-turn-page-hint">
         Monika is responding on page {{ liveTurnPage }}.
         <button type="button" class="vb-inline-link" @click="goToPage(liveTurnPage)">
-          {{ canViewLiveTrace ? 'Jump to live trace' : 'Jump to response in progress' }}
+          Jump to response in progress
         </button>
       </div>
 
@@ -3402,21 +2719,6 @@ onUnmounted(() => {
           >
             <template v-if="isRobotOrSystemPost(post) && hasMultipostSegments(post.body)">
               <div class="vb-post-content vb-post-content--multipost">
-                <PostTracePanel
-                  v-if="state.isRobotPost(post) && hasTraceForPost(post)"
-                  :reasoningSteps="planStepsForPost(post)"
-                  :reasoningFallbackHtml="
-                    planForPost(post)
-                      ? renderPost(planForPost(post)?.summary || planForPost(post)?.content || '')
-                      : null
-                  "
-                  :toolRuns="toolRunsForPost(post)"
-                  :traceId="post.id"
-                  :topicId="routeTopicId"
-                  :reasoningCheckpoints="planForPost(post)?.reasoningCheckpoints ?? null"
-                  :rawPlanText="planForPost(post)?.summary ?? planForPost(post)?.content ?? null"
-                />
-
                 <div class="vb-post-heading">
                   <span>{{ state.selectedTopic.value?.title }}</span>
                   <span v-if="isRecoveryCheckpoint(post.id)" class="vb-recovery-checkpoint-badge"
@@ -3548,20 +2850,6 @@ onUnmounted(() => {
                 </div>
               </aside>
               <div class="vb-post-content">
-                <PostTracePanel
-                  v-if="state.isRobotPost(post) && hasTraceForPost(post)"
-                  :reasoningSteps="planStepsForPost(post)"
-                  :reasoningFallbackHtml="
-                    planForPost(post)
-                      ? renderPost(planForPost(post)?.summary || planForPost(post)?.content || '')
-                      : null
-                  "
-                  :toolRuns="toolRunsForPost(post)"
-                  :traceId="post.id"
-                  :topicId="routeTopicId"
-                  :reasoningCheckpoints="planForPost(post)?.reasoningCheckpoints ?? null"
-                  :rawPlanText="planForPost(post)?.summary ?? planForPost(post)?.content ?? null"
-                />
                 <div class="vb-post-heading">
                   <span>{{ state.selectedTopic.value?.title }}</span>
                   <span v-if="isRecoveryCheckpoint(post.id)" class="vb-recovery-checkpoint-badge"
@@ -3717,20 +3005,8 @@ onUnmounted(() => {
         </div>
       </template>
 
-      <LiveAssistantTurn
-        v-if="showDetailedLiveTraceOnCurrentPage"
-        :items="liveTurnItems"
-        :activity="state.robotState.value?.activity ?? null"
-        :model="state.robotState.value?.model ?? null"
-        :reasoning="state.robotState.value?.reasoningEffort ?? null"
-        :active="isRobotThinking"
-        :interrupted="state.interruptedTrace.value"
-        :topicId="routeTopicId"
-        :id="String(liveTurnPostNumber)"
-      />
-
       <div
-        v-else-if="showPublicRobotPlaceholderOnCurrentPage"
+        v-if="showRobotPlaceholderOnCurrentPage"
         :id="String(liveTurnPostNumber)"
         class="vb-live-turn vb-post vb-post--draft vb-public-live-placeholder"
       >
@@ -3738,8 +3014,16 @@ onUnmounted(() => {
           <div>● Monika is responding</div>
           <div class="vb-post-draft-pill">LIVE</div>
         </div>
-        <div class="vb-public-live-placeholder-body" aria-live="polite">
-          <span class="vb-spinner vb-spinner-dark"></span>
+        <TopicTraceViewer
+          v-if="isAdmin"
+          preview
+          :topic-id="routeTopicId"
+          :stop-disabled="state.robotControlPending.value"
+          @open="openAdminWorkspace('trace')"
+          @stop="requestStopRobot"
+        />
+        <div v-else class="vb-public-live-placeholder-body" aria-live="polite">
+          <span class="vb-spinner vb-spinner-dark" aria-hidden="true"></span>
           <span>Response in progress…</span>
         </div>
       </div>
@@ -4046,7 +3330,7 @@ onUnmounted(() => {
             <template v-else> <router-link to="/login">Log in</router-link> to post a reply. </template>
           </div>
           <div v-else class="vb-new-body">
-            <div v-if="quickReplyWillSteerRobot" class="vb-steer-notice">
+            <div v-if="isRobotBusy" class="vb-steer-notice">
               Robot is responding right now.
               <button
                 class="vb-btn vb-small-btn vb-btn-danger"
@@ -4158,17 +3442,17 @@ onUnmounted(() => {
               </div>
             </div>
             <div id="quick-reply-model-options" class="vb-reply-options">
-          <div class="vb-option-group">
-            <label for="model-select">Model:</label>
-            <select
-              id="model-select"
-              v-model="selectedModel"
-              class="vb-option-select"
-              :disabled="topicRobotMode === 'off'"
-            >
-              <option v-for="model in replyModels" :key="model" :value="model">{{ model }}</option>
-            </select>
-          </div>
+              <div class="vb-option-group">
+                <label for="model-select">Model:</label>
+                <select
+                  id="model-select"
+                  v-model="selectedModel"
+                  class="vb-option-select"
+                  :disabled="topicRobotMode === 'off'"
+                >
+                  <option v-for="model in replyModels" :key="model" :value="model">{{ model }}</option>
+                </select>
+              </div>
               <div v-if="supportsReasoning" class="vb-option-group">
                 <label for="reasoning-select">Reasoning:</label>
                 <select
@@ -4192,13 +3476,13 @@ onUnmounted(() => {
               />
             </div>
             <div v-if="sessionContext" id="quick-reply-context" class="vb-reply-context-meter">
-          <strong>Context:</strong>
-          <span
-            v-if="sessionContext.usedTokens !== null && sessionContext.contextWindowTokens"
-            class="vb-context-value"
-          >
-            {{ formatTokenCount(sessionContext.usedTokens) }} /
-            {{ formatTokenCount(sessionContext.contextWindowTokens) }}
+              <strong>Context:</strong>
+              <span
+                v-if="sessionContext.usedTokens !== null && sessionContext.contextWindowTokens"
+                class="vb-context-value"
+              >
+                {{ formatTokenCount(sessionContext.usedTokens) }} /
+                {{ formatTokenCount(sessionContext.contextWindowTokens) }}
                 <span v-if="typeof sessionContext.percent === 'number'"
                   >({{ sessionContext.percent.toFixed(1) }}%)</span
                 >
@@ -4246,405 +3530,297 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <div v-if="showRobotStatePanel" class="vb-robot-state">
-      <div class="vb-table-header">
-        <span>Robot State</span>
-        <div class="vb-robot-actions">
-          <span class="vb-status-pill">{{ state.robotState.value?.activity ?? 'idle' }}</span>
+    <section
+      v-if="adminWorkspaceTab && isAdmin"
+      ref="adminWorkspaceRef"
+      class="vb-admin-workspace"
+      :class="{
+        'vb-admin-workspace--reply-expanded': quickReplyDocked && quickReplyExpanded,
+        'vb-admin-workspace--reply-collapsed': quickReplyDocked && !quickReplyExpanded,
+      }"
+      aria-label="Admin workspace"
+      tabindex="-1"
+    >
+      <div class="vb-admin-workspace-header">
+        <div class="vb-admin-workspace-tabs" role="tablist" aria-label="Admin workspace sections">
           <button
-            class="vb-small-btn vb-btn-danger"
-            type="button"
-            :disabled="!isRobotBusy || robotControlPending"
-            @click="requestStopRobot"
+            class="vb-small-btn"
+            :class="{ active: adminWorkspaceTab === 'trace' }"
+            role="tab"
+            :aria-selected="adminWorkspaceTab === 'trace'"
+            @click="adminWorkspaceTab = 'trace'"
           >
-            Stop
+            Trace
+          </button>
+          <button
+            class="vb-small-btn"
+            :class="{ active: adminWorkspaceTab === 'robot' }"
+            role="tab"
+            :aria-selected="adminWorkspaceTab === 'robot'"
+            @click="adminWorkspaceTab = 'robot'"
+          >
+            Robot
+          </button>
+          <button
+            class="vb-small-btn"
+            :class="{ active: adminWorkspaceTab === 'session' }"
+            role="tab"
+            :aria-selected="adminWorkspaceTab === 'session'"
+            @click="adminWorkspaceTab = 'session'"
+          >
+            Session
+          </button>
+          <button
+            class="vb-small-btn"
+            :class="{ active: adminWorkspaceTab === 'auto' }"
+            role="tab"
+            :aria-selected="adminWorkspaceTab === 'auto'"
+            @click="adminWorkspaceTab = 'auto'"
+          >
+            Auto-Director
           </button>
         </div>
+        <button class="vb-modal-close" type="button" aria-label="Close admin workspace" @click="closeAdminWorkspace">
+          &times;
+        </button>
       </div>
-      <div class="vb-robot-body">
-        <div v-if="state.robotStopResult.value" class="vb-state-row">
-          <strong>Stop {{ state.robotStopResult.value.state }}:</strong>
-          {{ state.robotStopResult.value.message }}
-          <span v-if="state.robotStopResult.value.effectsUnknownCount">
-            Remote effects remain unknown for {{ state.robotStopResult.value.effectsUnknownCount }} run(s).
-          </span>
+      <div class="vb-admin-workspace-body">
+        <div v-if="adminWorkspaceTab === 'trace'" class="vb-admin-workspace-panel" role="tabpanel">
+          <TopicTraceViewer :topic-id="routeTopicId" />
         </div>
-        <div class="vb-state-row">
-          <div><strong>Status:</strong> {{ state.robotState.value?.activity ?? 'idle' }}</div>
-          <div v-if="state.robotState.value?.lastTurnError" class="vb-state-error">
-            <strong>Last turn failed:</strong> {{ state.robotState.value.lastTurnError.message }}
+        <div v-else-if="adminWorkspaceTab === 'robot'" class="vb-admin-workspace-panel vb-robot-body" role="tabpanel">
+          <div class="vb-admin-workspace-title">
+            <h2>Robot Diagnostics</h2>
+            <button
+              class="vb-small-btn vb-btn-danger"
+              type="button"
+              :disabled="!isRobotBusy || robotControlPending"
+              @click="requestStopRobot"
+            >
+              Stop Robot
+            </button>
+          </div>
+          <div v-if="state.robotStopResult.value" class="vb-state-row">
+            <strong>Stop {{ state.robotStopResult.value.state }}:</strong> {{ state.robotStopResult.value.message }}
+            <span v-if="state.robotStopResult.value.effectsUnknownCount"
+              >Remote effects remain unknown for {{ state.robotStopResult.value.effectsUnknownCount }} run(s).</span
+            >
+          </div>
+          <div class="vb-state-row">
+            <div><strong>Status:</strong> {{ state.robotState.value?.activity ?? 'idle' }}</div>
+            <div v-if="state.robotState.value?.lastTurnError" class="vb-state-error">
+              <strong>Last turn failed:</strong> {{ state.robotState.value.lastTurnError.message }}
+            </div>
+            <div>
+              <strong>Last Update:</strong>
+              {{
+                state.robotState.value?.lastUpdatedAt ? state.formatDate(state.robotState.value.lastUpdatedAt) : 'n/a'
+              }}
+            </div>
           </div>
           <div>
-            <strong>Last Update:</strong>
-            {{ state.robotState.value?.lastUpdatedAt ? state.formatDate(state.robotState.value.lastUpdatedAt) : 'n/a' }}
+            <strong>Model:</strong>
+            {{ (state.robotState.value as any)?.context?.model ?? state.robotState.value?.model ?? 'unknown' }}
+          </div>
+          <div v-if="sessionContext" class="vb-context-meter">
+            <strong>Context:</strong>
+            <span
+              v-if="sessionContext.usedTokens !== null && sessionContext.contextWindowTokens"
+              class="vb-context-value"
+            >
+              {{ formatTokenCount(sessionContext.usedTokens) }} /
+              {{ formatTokenCount(sessionContext.contextWindowTokens) }}
+              <span v-if="typeof sessionContext.percent === 'number'">({{ sessionContext.percent.toFixed(1) }}%)</span>
+            </span>
+            <span v-else>usage unavailable</span>
           </div>
         </div>
-        <div>
-          <strong>Model:</strong>
-          {{ (state.robotState.value as any)?.context?.model ?? state.robotState.value?.model ?? 'unknown' }}
-        </div>
-        <div v-if="(state.robotState.value as any)?.context" class="vb-context-meter">
-          <strong>Context:</strong>
-          <span
-            v-if="
-              (state.robotState.value as any).context.usedTokens !== null &&
-              (state.robotState.value as any).context.contextWindowTokens
-            "
-            class="vb-context-value"
-          >
-            {{ formatTokenCount((state.robotState.value as any).context.usedTokens) }} /
-            {{ formatTokenCount((state.robotState.value as any).context.contextWindowTokens) }}
-            <span v-if="typeof (state.robotState.value as any).context.percent === 'number'"
-              >({{ (state.robotState.value as any).context.percent.toFixed(1) }}%)</span
+        <div v-else-if="adminWorkspaceTab === 'session'" class="vb-admin-workspace-panel" role="tabpanel">
+          <div class="vb-admin-workspace-title">
+            <h2>Session Details</h2>
+            <button
+              class="vb-small-btn"
+              type="button"
+              :disabled="state.adminEnrichmentLoading.value"
+              @click="state.loadAdminEnrichment()"
             >
-            <span v-if="!(state.robotState.value as any).context.exact" class="vb-context-warning"
-              >best Pi usage; not exact current context</span
-            >
-          </span>
-          <span v-else>usage unavailable</span>
-        </div>
-        <div class="vb-activity">
-          <strong>Activity:</strong>
-          <div v-if="liveActivityEvents.length === 0" class="vb-empty">Waiting for input.</div>
-          <ol v-else class="vb-activity-feed">
-            <li
-              v-for="event in liveActivityEvents"
-              :key="event.id"
-              class="vb-activity-item"
-              :class="{ 'vb-activity-item--tool': event.type === 'tool_run' }"
-            >
-              <template v-if="event.type === 'reasoning_step'">
-                <div class="vb-activity-icon">●</div>
-                <div class="vb-activity-content">
-                  <div class="vb-activity-head">
-                    <span class="vb-activity-title">{{ event.title }}</span>
-                    <span
-                      class="vb-activity-pill"
-                      :class="event.status === 'running' ? 'vb-activity-pill--running' : 'vb-activity-pill--done'"
-                    >
-                      {{ event.status }}
-                    </span>
-                  </div>
-                  <div v-if="event.detail" class="vb-activity-detail">{{ event.detail }}</div>
-                </div>
-              </template>
-              <template v-else>
-                <div class="vb-activity-icon">{{ toolKindIcon(toolMiniKind(event.toolRun)) }}</div>
-                <div class="vb-activity-content">
-                  <div class="vb-activity-head">
-                    <span class="vb-activity-title">Tool: {{ toolMiniName(event.toolRun) }}</span>
-                    <span class="vb-activity-time">{{ state.formatToolTime(event.toolRun.startedAt) }}</span>
-                  </div>
-                  <div v-if="toolMiniSummary(event.toolRun)" class="vb-activity-detail">
-                    {{ toolMiniSummary(event.toolRun) }}
-                  </div>
-                  <div class="vb-activity-meta">
-                    <span
-                      class="vb-activity-pill"
-                      :class="
-                        !event.toolRun.finishedAt
-                          ? 'vb-activity-pill--running'
-                          : toolExitCodeValue(event.toolRun) === 0 ||
-                              toolExitCodeValue(event.toolRun) === null ||
-                              toolExitCodeValue(event.toolRun) === undefined
-                            ? 'vb-activity-pill--done'
-                            : 'vb-activity-pill--error'
-                      "
-                    >
-                      {{ toolStatusLabel(event.toolRun) }}
-                    </span>
-                  </div>
-                </div>
-              </template>
-            </li>
-          </ol>
-        </div>
-        <div class="vb-tool-list">
-          <div class="vb-tool-title">
-            <span>Tool Usage</span>
-            <div class="vb-tool-title-actions">
-              <button
-                class="vb-small-btn"
-                type="button"
-                :aria-pressed="showToolReasoning"
-                @click="showToolReasoning = !showToolReasoning"
-              >
-                Reasoning: {{ showToolReasoning ? 'On' : 'Off' }}
-              </button>
-              <button
-                class="vb-small-btn"
-                type="button"
-                :disabled="!canExpandToolUsage"
-                @click="showAllTools = !showAllTools"
-              >
-                {{ showingAllToolUsageGroups ? 'Show Latest' : 'Show All' }}
-              </button>
-            </div>
+              Refresh
+            </button>
           </div>
-          <div
-            v-if="state.sessionInspectorLoading.value && toolUsageTraceGroups.length === 0"
-            class="vb-empty"
-            role="status"
-          >
-            Loading Tool Usage…
+          <div v-if="state.adminEnrichmentLoading.value && !state.sessionInfo.value" class="vb-empty" role="status">
+            Loading session metadata…
           </div>
-          <div
-            v-else-if="state.sessionInspectorError.value && toolUsageTraceGroups.length === 0"
-            class="vb-empty"
-            role="alert"
-          >
-            Tool Usage unavailable: {{ state.sessionInspectorError.value }}
+          <div v-else-if="state.adminEnrichmentError.value && !state.sessionInfo.value" class="vb-empty" role="alert">
+            Session metadata unavailable: {{ state.adminEnrichmentError.value }}
           </div>
-          <div v-else-if="toolUsageTraceGroups.length === 0" class="vb-empty">No trace activity yet.</div>
-          <div v-else-if="visibleToolUsageEntryCount === 0" class="vb-empty">No tool runs yet.</div>
-          <div
-            v-for="group in visibleToolUsageGroups"
-            :key="group.id"
-            class="vb-tool-response"
-          >
-            <div
-              v-if="showingAllToolUsageGroups && visibleToolUsageGroups.length > 1"
-              class="vb-tool-response-label"
-            >
-              Response · {{ state.formatDate(group.latestAt) }}
-            </div>
-            <div v-if="group.items.length === 0" class="vb-empty">No tool runs in this response.</div>
-            <template
-              v-for="item in group.items"
-              :key="item.type === 'tool' ? `tool:${item.tool.id}` : `reasoning:${item.segmentIndex}`"
-            >
-              <template v-if="item.type === 'reasoning'">
-                <div
-                  v-for="(step, stepIndex) in item.steps"
-                  :key="toolUsageReasoningKey(group, item, stepIndex)"
-                  class="vb-tool-item vb-tool-item--reasoning"
-                >
-                  <button
-                    class="vb-tool-toggle vb-tool-toggle--compact"
-                    type="button"
-                    :aria-expanded="toolUsageReasoningExpanded(toolUsageReasoningKey(group, item, stepIndex))"
-                    @click="toggleToolUsageReasoning(toolUsageReasoningKey(group, item, stepIndex))"
-                  >
-                    <span class="vb-tool-toggle-left">
-                      <span class="vb-tool-reasoning-mini">
-                        <span class="vb-tool-reasoning-icon" aria-hidden="true">●</span>
-                        <span class="vb-tool-mini-name">{{ step.title || 'Thinking' }}</span>
-                        <span v-if="toolUsageReasoningPreview(step.detail)" class="vb-tool-mini-summary">
-                          {{ toolUsageReasoningPreview(step.detail) }}
-                        </span>
-                      </span>
-                    </span>
-                    <span class="vb-tool-toggle-right">
-                      <span
-                        class="vb-tool-pill"
-                        :class="toolUsageReasoningStatusClass(group, item, stepIndex)"
-                      >
-                        {{ toolUsageReasoningStatus(group, item, stepIndex) }}
-                      </span>
-                      <span class="vb-tool-toggle-icon">
-                        {{ toolUsageReasoningExpanded(toolUsageReasoningKey(group, item, stepIndex)) ? '−' : '+' }}
-                      </span>
-                    </span>
-                  </button>
-                  <div
-                    v-if="step.detail && toolUsageReasoningExpanded(toolUsageReasoningKey(group, item, stepIndex))"
-                    class="vb-tool-details"
-                  >
-                    <div
-                      class="vb-tool-block vb-tool-reasoning-detail vb-rendered-content"
-                      v-html="renderToolUsageReasoning(step.detail)"
-                    ></div>
-                  </div>
-                </div>
-              </template>
-              <div v-else class="vb-tool-item">
-                <button
-                  class="vb-tool-toggle vb-tool-toggle--compact"
-                  type="button"
-                  :aria-expanded="toolExpanded(item.tool)"
-                  @click="toggleTool(item.tool)"
-                >
-                  <span class="vb-tool-toggle-left">
-                    <ToolMiniView :tool="item.tool" :showDetail="true" />
-                  </span>
-                  <span class="vb-tool-toggle-right">
-                    <span class="vb-tool-meta">{{ state.formatToolTime(item.tool.startedAt) }}</span>
-                    <span v-if="toolDurationLabel(item.tool)" class="vb-tool-duration">
-                      {{ toolDurationLabel(item.tool) }}
-                    </span>
-                    <span class="vb-tool-pill" :class="toolStatusClass(item.tool)">
-                      {{ toolStatusLabel(item.tool) }}
-                    </span>
-                    <span class="vb-tool-toggle-icon">{{ toolExpanded(item.tool) ? '−' : '+' }}</span>
-                  </span>
-                </button>
-                <div v-if="toolExpanded(item.tool)" class="vb-tool-details">
-                  <div v-if="toolMini(item.tool).input" class="vb-tool-block">
-                    <div class="vb-tool-block-title">Input</div>
-                    <pre class="vb-tool-pre">{{ toolMini(item.tool).input }}</pre>
-                  </div>
-                  <div v-if="toolMini(item.tool).output" class="vb-tool-block">
-                    <div class="vb-tool-block-title">Output</div>
-                    <pre class="vb-tool-pre">{{ toolMini(item.tool).output }}</pre>
-                  </div>
-                </div>
+          <div v-else-if="!state.sessionInfo.value" class="vb-empty">No session yet.</div>
+          <div v-else class="vb-session-meta">
+            <div><strong>Session:</strong> {{ state.sessionInfo.value.id }}</div>
+            <div><strong>Status:</strong> {{ state.sessionInfo.value.status }}</div>
+            <div><strong>Started:</strong> {{ state.formatDate(state.sessionInfo.value.createdAt) }}</div>
+            <template v-if="piSessionDiagnostics">
+              <div><strong>Canonical Pi session:</strong> {{ piSessionDiagnostics.id }}</div>
+              <div><strong>Session path:</strong> {{ piSessionDiagnostics.path }}</div>
+              <div v-if="piSessionDiagnostics.cwd"><strong>CWD:</strong> {{ piSessionDiagnostics.cwd }}</div>
+              <div v-if="piSessionDiagnostics.parentId">
+                <strong>Parent session:</strong> {{ piSessionDiagnostics.parentId }}
+              </div>
+              <div v-if="piSessionDiagnostics.parentPath">
+                <strong>Parent path:</strong> {{ piSessionDiagnostics.parentPath }}
+              </div>
+              <div v-if="piSessionDiagnostics.lineageKind">
+                <strong>Lineage:</strong> {{ piSessionDiagnostics.lineageKind }}
+              </div>
+              <div v-if="piSessionDiagnostics.lineageSource">
+                <strong>Lineage source:</strong> {{ piSessionDiagnostics.lineageSource }}
+              </div>
+              <div><strong>Imported:</strong> {{ state.formatDate(piSessionDiagnostics.importedAt) }}</div>
+              <div v-if="piSessionDiagnostics.lastImportRunId">
+                <strong>Import run:</strong> {{ piSessionDiagnostics.lastImportRunId }}
               </div>
             </template>
           </div>
-          <div v-if="state.sessionInspectorLoading.value && toolUsageTraceGroups.length > 0" class="vb-tool-hint" role="status">
-            Refreshing Tool Usage…
-          </div>
-          <div v-if="state.sessionInspectorError.value && toolUsageTraceGroups.length > 0" class="vb-tool-hint" role="alert">
-            Tool Usage refresh failed; showing the most recent available trace.
-          </div>
-          <div v-if="!showingAllToolUsageGroups && canExpandToolUsage" class="vb-tool-hint">
-            Latest tool shown. Choose Show All for the complete trace.
-          </div>
         </div>
-      </div>
-    </div>
-
-    <div v-if="showSessionInspectorPanel" class="vb-robot-state">
-      <div class="vb-table-header">
-        <span>Session Inspector</span>
-        <div class="vb-inspector-actions">
-          <button
-            class="vb-small-btn"
-            type="button"
-            :disabled="state.sessionInspectorLoading.value"
-            @click="state.loadSessionInspector()"
-          >
-            Refresh
-          </button>
-          <button
-            class="vb-small-btn"
-            type="button"
-            :disabled="!state.sessionInspector.value || state.sessionInspector.value.toolRuns.length === 0"
-            @click="showInspectorTools = !showInspectorTools"
-          >
-            {{ showInspectorTools ? 'Show Latest Tool' : 'Show All Tools' }}
-          </button>
-          <button
-            class="vb-small-btn"
-            type="button"
-            :disabled="!state.sessionInspector.value || state.sessionInspector.value.messages.length === 0"
-            @click="showInspectorMessages = !showInspectorMessages"
-          >
-            {{ showInspectorMessages ? 'Hide Messages' : 'Show Messages' }}
-          </button>
-        </div>
-      </div>
-      <div class="vb-robot-body">
-        <div v-if="state.sessionInspectorLoading.value && !state.sessionInfo.value" class="vb-empty" role="status">
-          Loading session metadata…
-        </div>
-        <div
-          v-else-if="state.sessionInspectorError.value && !state.sessionInfo.value"
-          class="vb-empty"
-          role="alert"
-        >
-          Session metadata unavailable: {{ state.sessionInspectorError.value }}
-        </div>
-        <div v-else-if="!state.sessionInfo.value" class="vb-empty">No session yet.</div>
-        <div v-else class="vb-session-meta">
-          <div><strong>Session:</strong> {{ state.sessionInfo.value.id }}</div>
-          <div><strong>Status:</strong> {{ state.sessionInfo.value.status }}</div>
-          <div><strong>Started:</strong> {{ state.formatDate(state.sessionInfo.value.createdAt) }}</div>
-          <template v-if="piSessionDiagnostics">
-            <div><strong>Canonical Pi session:</strong> {{ piSessionDiagnostics.id }}</div>
-            <div><strong>Session path:</strong> {{ piSessionDiagnostics.path }}</div>
-            <div v-if="piSessionDiagnostics.cwd"><strong>CWD:</strong> {{ piSessionDiagnostics.cwd }}</div>
-            <div v-if="piSessionDiagnostics.parentId">
-              <strong>Parent session:</strong> {{ piSessionDiagnostics.parentId }}
-            </div>
-            <div v-if="piSessionDiagnostics.parentPath">
-              <strong>Parent path:</strong> {{ piSessionDiagnostics.parentPath }}
-            </div>
-            <div v-if="piSessionDiagnostics.lineageKind">
-              <strong>Lineage:</strong> {{ piSessionDiagnostics.lineageKind }}
-            </div>
-            <div v-if="piSessionDiagnostics.lineageSource">
-              <strong>Lineage source:</strong> {{ piSessionDiagnostics.lineageSource }}
-            </div>
-            <div><strong>Imported:</strong> {{ state.formatDate(piSessionDiagnostics.importedAt) }}</div>
-            <div v-if="piSessionDiagnostics.lastImportRunId">
-              <strong>Import run:</strong> {{ piSessionDiagnostics.lastImportRunId }}
-            </div>
-          </template>
-        </div>
-
-        <div class="vb-tool-list">
-          <div class="vb-tool-title">
-            <span>Tool Calls (session)</span>
-          </div>
-          <div
-            v-if="!state.sessionInspector.value || state.sessionInspector.value.toolRuns.length === 0"
-            class="vb-empty"
-          >
-            No tool runs captured yet.
-          </div>
-          <div v-else>
-            <div
-              v-for="tool in showInspectorTools
-                ? state.sessionInspector.value.toolRuns
-                : state.sessionInspector.value.toolRuns.slice(0, 1)"
-              :key="tool.id"
-              class="vb-tool-item"
-            >
-              <button
-                class="vb-tool-toggle vb-tool-toggle--compact"
-                type="button"
-                @click="toggleInspectorTool(tool.id)"
-              >
-                <span class="vb-tool-toggle-left">
-                  <ToolMiniView :tool="tool" :showDetail="true" />
-                </span>
-                <span class="vb-tool-toggle-right">
-                  <span class="vb-tool-meta">{{ state.formatToolTime(tool.startedAt) }}</span>
-                  <span class="vb-tool-pill" :class="toolStatusClass(tool)">{{ toolStatusLabel(tool) }}</span>
-                  <span v-if="toolDurationLabel(tool)" class="vb-tool-duration">{{ toolDurationLabel(tool) }}</span>
-                  <span class="vb-tool-toggle-icon">{{ toolExpanded(tool) ? '−' : '+' }}</span>
-                </span>
-                <span>{{ inspectorToolExpanded(tool.id) ? '−' : '+' }}</span>
-              </button>
-              <div v-if="inspectorToolExpanded(tool.id)" class="vb-tool-details">
-                <div v-if="toolMini(tool).input" class="vb-tool-block">
-                  <div class="vb-tool-block-title">Input</div>
-                  <pre class="vb-tool-pre">{{ toolMini(tool).input }}</pre>
-                </div>
-                <div v-if="toolMini(tool).output" class="vb-tool-block">
-                  <div class="vb-tool-block-title">Output</div>
-                  <pre class="vb-tool-pre">{{ toolMini(tool).output }}</pre>
-                </div>
+        <div v-else class="vb-admin-workspace-panel" role="tabpanel">
+          <div v-if="showAutoRunPanel" class="vb-robot-state" style="margin-top: 12px">
+            <div class="vb-table-header">
+              <span>Auto-Director (Thread Tool)</span>
+              <div class="vb-robot-actions">
+                <span class="vb-status-pill">{{ autoRunStatusLabel }}</span>
+                <label class="vb-inline-check">
+                  <input type="checkbox" v-model="autoRunEnabled" :disabled="!canEditAutoRun || autoRunBusy" />
+                  <span>Enabled</span>
+                </label>
+                <button
+                  class="vb-small-btn"
+                  type="button"
+                  :disabled="!canEditAutoRun || autoRunBusy || compactionFence"
+                  @click="saveAutoRun"
+                >
+                  Save
+                </button>
+                <button
+                  class="vb-small-btn"
+                  type="button"
+                  :disabled="!canEditAutoRun || autoRunBusy || compactionFence || !autoRunEnabled"
+                  @click="runAutoRunDirector"
+                >
+                  Run
+                </button>
               </div>
             </div>
-          </div>
-        </div>
-
-        <div class="vb-tool-list">
-          <div class="vb-tool-title">
-            <span>Messages (session)</span>
-          </div>
-          <div v-if="!showInspectorMessages" class="vb-empty">Messages hidden.</div>
-          <div
-            v-else-if="!state.sessionInspector.value || state.sessionInspector.value.messages.length === 0"
-            class="vb-empty"
-          >
-            No messages yet.
-          </div>
-          <div v-else class="vb-session-messages">
-            <div
-              v-for="msg in state.sessionInspector.value.messages.slice(-10)"
-              :key="msg.id"
-              class="vb-session-message"
-            >
-              <div class="vb-session-role">{{ msg.role }}</div>
-              <div class="vb-session-content">{{ msg.content }}</div>
+            <div class="vb-robot-body">
+              <div class="vb-state-row">
+                <div>
+                  <strong>Replies:</strong> {{ autoRun?.replyCount ?? 0 }} /
+                  {{ autoRun?.maxReplies ?? autoRunMaxReplies }}
+                </div>
+                <div>
+                  <strong>Last Run:</strong> {{ autoRun?.lastRunAt ? state.formatDate(autoRun.lastRunAt) : 'n/a' }}
+                </div>
+                <div>
+                  <strong>Last Reply:</strong>
+                  {{ autoRun?.lastReplyAt ? state.formatDate(autoRun.lastReplyAt) : 'n/a' }}
+                </div>
+              </div>
+              <div v-if="state.autoRunError.value" class="vb-error">{{ state.autoRunError.value }}</div>
+              <div v-if="autoRun?.lastError" class="vb-error">
+                <strong>Last error:</strong> {{ formatAutoRunError(autoRun.lastError) }}
+              </div>
+              <div v-if="autoRun?.lastNotes" class="vb-note">
+                <strong>Director notes:</strong>
+                <div>{{ autoRun.lastNotes }}</div>
+              </div>
+              <div v-if="autoRun?.lastSummary" class="vb-note">
+                <strong>Last summary:</strong>
+                <div>{{ autoRun.lastSummary }}</div>
+              </div>
+              <label>Goal (optional):</label>
+              <textarea
+                v-model="autoRunContext"
+                class="vb-option-textarea"
+                rows="5"
+                :readonly="!canEditAutoRun"
+                placeholder="Describe the outcome to drive toward. Leave blank to auto-derive the next major goal from the thread."
+              ></textarea>
+              <div class="vb-reply-options">
+                <div class="vb-option-group">
+                  <label>Worker:</label>
+                  <select v-model="autoRunWorker" class="vb-option-select" :disabled="!canEditAutoRun || autoRunBusy">
+                    <option value="echs">echs</option>
+                  </select>
+                </div>
+                <div class="vb-option-group">
+                  <label>Model:</label>
+                  <select v-model="autoRunModel" class="vb-option-select" :disabled="!canEditAutoRun || autoRunBusy">
+                    <option
+                      v-for="option in autoRunModelOptions"
+                      :key="option.value || 'default'"
+                      :value="option.value"
+                    >
+                      {{ option.label }}
+                    </option>
+                  </select>
+                </div>
+                <div v-if="showAutoRunReasoning" class="vb-option-group">
+                  <label>Reasoning:</label>
+                  <select
+                    v-model="autoRunReasoning"
+                    class="vb-option-select"
+                    :disabled="!canEditAutoRun || autoRunBusy"
+                  >
+                    <option value="">Default</option>
+                    <option v-for="option in autoRunReasoningOptions" :key="option" :value="option">
+                      {{ formatReasoningLabel(option) }}
+                    </option>
+                  </select>
+                </div>
+                <div v-else class="vb-option-group">
+                  <label>Reasoning:</label>
+                  <select class="vb-option-select" disabled>
+                    <option value="">n/a</option>
+                  </select>
+                </div>
+                <div class="vb-option-group">
+                  <label>Max Replies:</label>
+                  <input
+                    v-model.number="autoRunMaxReplies"
+                    type="number"
+                    min="1"
+                    class="vb-option-input"
+                    :disabled="!canEditAutoRun || autoRunBusy"
+                  />
+                </div>
+                <button
+                  class="vb-small-btn"
+                  type="button"
+                  :disabled="!canEditAutoRun || autoRunBusy"
+                  @click="resetAutoRunCount"
+                >
+                  Reset Count
+                </button>
+              </div>
+              <label>Steer auto-director (optional):</label>
+              <textarea
+                v-model="autoRunSteerMessage"
+                class="vb-option-textarea"
+                rows="3"
+                :disabled="!canEditAutoRun || autoRunBusy"
+                placeholder="Add a one-off steering note."
+              ></textarea>
+              <button
+                class="vb-btn"
+                type="button"
+                :disabled="!canEditAutoRun || autoRunBusy || compactionFence || !autoRunEnabled"
+                @click="runAutoRunDirector"
+              >
+                {{ autoRunBusy ? 'Running...' : 'Run Auto-Director' }}
+              </button>
             </div>
           </div>
         </div>
       </div>
-    </div>
+    </section>
 
     <!-- Scroll to Top Button -->
     <button

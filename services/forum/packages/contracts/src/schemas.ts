@@ -122,6 +122,7 @@ import type {
   TopicMoveDto,
   TopicOperationalEventDto,
   TopicSubscriptionDto,
+  TopicTraceDto,
   TopicUnreadDto,
   UpdatePrivateEmailResponseDto,
   UpdateQuickReplyPreferenceResponseDto,
@@ -1193,6 +1194,13 @@ export const DeploymentAdmissionCancelResponseDtoSchema: z.ZodType<DeploymentAdm
   ok: z.literal(true),
   released: z.boolean(),
   operationId: z.string(),
+});
+
+export const TopicTraceDtoSchema: z.ZodType<TopicTraceDto> = z.object({
+  topicId: z.string(),
+  sessionId: z.string().nullable(),
+  toolRuns: z.array(ToolRunDtoSchema),
+  plans: z.array(PlanDtoSchema),
 });
 
 export const AdminDeployStatusDtoSchema: z.ZodType<AdminDeployStatusDto> = z.object({

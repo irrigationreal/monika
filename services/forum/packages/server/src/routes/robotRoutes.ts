@@ -130,7 +130,7 @@ export function registerRobotRoutes({
     access;
 
   function canViewTraceDetails(request: Parameters<typeof getCurrentUser>[0]): boolean {
-    return Boolean(getIdentityFromRequest(request));
+    return getIdentityFromRequest(request)?.kind === 'admin';
   }
 
   function canManageAutoRun(request: Parameters<typeof getCurrentUser>[0]): boolean {
@@ -209,14 +209,15 @@ export function registerRobotRoutes({
       model: state.model,
       reasoningEffort: state.reasoning_effort,
       lastUpdatedAt: state.last_updated_at,
-      lastTurnError: state.last_error_message && state.last_error_at
-        ? {
-            message: state.last_error_message,
-            at: state.last_error_at,
-            postId: state.last_error_post_id ?? null,
-            turnId: state.last_error_turn_id ?? null,
-          }
-        : null,
+      lastTurnError:
+        state.last_error_message && state.last_error_at
+          ? {
+              message: state.last_error_message,
+              at: state.last_error_at,
+              postId: state.last_error_post_id ?? null,
+              turnId: state.last_error_turn_id ?? null,
+            }
+          : null,
       stream: codex.getStreamLiveness(topicId),
       currentPlan: plan
         ? {
@@ -589,6 +590,47 @@ export function registerRobotRoutes({
       return null;
     }
     return serializeAdminSession(session);
+  });
+
+  app.get('/topics/:topicId/trace', async (request) => {
+    requireAdmin(request);
+    const { topicId } = request.params as { topicId: string };
+    requireTopicVisible(topicId, request);
+    const session = store.getSessionByTopic(topicId);
+    if (!session) {
+      return { topicId, sessionId: null, toolRuns: [], plans: [] };
+    }
+    const toolRuns = store.listAllToolRunsBySession(session.id);
+    const plans = store.listAllPlansBySession(session.id);
+    return {
+      topicId,
+      sessionId: session.id,
+      toolRuns: toolRuns.map((run) => ({
+        id: run.id,
+        tool: run.tool,
+        parentPostId: run.parent_post_id,
+        startedAt: run.started_at,
+        finishedAt: run.finished_at,
+        exitCode: run.exit_code,
+        command: run.command,
+        filesTouched: run.files_touched_json ? JSON.parse(run.files_touched_json) : null,
+        outputSummary: run.output_summary,
+        redactionsApplied: Boolean(run.redactions_applied),
+        visibility: run.visibility,
+      })),
+      plans: plans.map((plan) => ({
+        id: plan.id,
+        content: plan.content,
+        summary: plan.summary,
+        parentPostId: plan.parent_post_id,
+        reasoningCheckpoints: plan.reasoning_checkpoints_json
+          ? (JSON.parse(plan.reasoning_checkpoints_json) as number[])
+          : null,
+        visibility: plan.visibility,
+        createdAt: plan.created_at,
+        updatedAt: plan.updated_at,
+      })),
+    };
   });
 
   app.get('/sessions/:sessionId', async (request) => {
