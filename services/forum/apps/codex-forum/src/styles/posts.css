@@ -1259,8 +1259,8 @@
 
 .vb-tool-mini-detail--diff {
   font-family: 'Menlo', 'Monaco', 'Consolas', monospace;
-  background: var(--bg-surface-alt);
-  border: 1px dashed var(--border-secondary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
   padding: 4px 6px;
   border-radius: 3px;
 }
