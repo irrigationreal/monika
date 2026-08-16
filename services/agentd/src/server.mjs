@@ -55,6 +55,7 @@ import { SessionOperationCoordinator, withForumMutableSessionOperation } from '.
 import { endResponse, isClientDisconnect, responseWritable, runAfterRequestBody, writeJson, writeSse } from './http-safety.mjs';
 import { DurableDrainState } from './drain-state.mjs';
 import { runBoundedShutdown, runCanonicalShutdownCleanup } from './shutdown.mjs';
+import { createActiveThreadHealthCache, createSubagentHealthCache } from './health-state.mjs';
 import {
   ensureDurableForumSession,
   initialCanonicalSessionFilePending,
@@ -205,24 +206,25 @@ const analyticsCache = new AnalyticsTtlCache({ ttlMs: ANALYTICS_CACHE_TTL_MS });
 
 const retentionCoordinator = new SubagentRetentionCoordinator();
 let retentionCache = { inventory: null, result: null, error: null, lastRunAt: null };
+const subagentHealthCache = createSubagentHealthCache();
+const activeThreadHealthCache = createActiveThreadHealthCache();
 
-let cachedBuildInfo;
-function buildInfo() {
-  if (cachedBuildInfo !== undefined) return cachedBuildInfo;
+function loadBuildInfo() {
   try {
-    cachedBuildInfo = existsSync(BUILD_INFO_PATH)
-      ? JSON.parse(readFileSync(BUILD_INFO_PATH, "utf8"))
-      : { commit: null, source: null, date: null, label: "local build" };
+    return JSON.parse(readFileSync(BUILD_INFO_PATH, "utf8"));
   } catch {
-    cachedBuildInfo = {
+    return {
       commit: null,
       source: null,
       date: null,
       label: "local build",
     };
   }
-  return cachedBuildInfo;
 }
+
+// Build identity is immutable for the process lifetime. Load it during module
+// initialization so the listener never serves a request that performs this I/O.
+const BUILD_INFO = Object.freeze(loadBuildInfo());
 
 const DEFAULT_HANDOFF_SYSTEM_PROMPT = `You are a context transfer assistant. Given a conversation history and the user's goal for a new thread, generate a focused prompt that:
 
@@ -434,6 +436,18 @@ function conversationIsActive(conv) {
   );
 }
 
+function incrementPendingMutations(conv) {
+  conv.pendingMutations += 1;
+  activeThreadHealthCache.record(conv);
+}
+
+function decrementPendingMutations(conv) {
+  conv.pendingMutations -= 1;
+  activeThreadHealthCache.record(conv);
+}
+
+// Raw scans serve several administrative paths without loaded-conversation
+// reconciliation. They intentionally leave the last reconciled health value stale.
 async function subagentSnapshot() {
   return scanLifecycleSnapshot({
     lifecycleRoot: SUBAGENT_LIFECYCLE_ROOT,
@@ -568,6 +582,9 @@ async function reconcileLoadedSubagents(snapshot) {
       conv.subagentLifecycle.reconcileArtifacts(snapshot),
     ),
   );
+  // Reconciliation can add fail-closed mapped-run blockers to the snapshot.
+  // Publish only after every loaded lifecycle has consumed that corrected view.
+  subagentHealthCache.record(snapshot);
 }
 
 async function deployState() {
@@ -1166,7 +1183,11 @@ async function bindConversation(conv) {
       conv.current.userMappings = reconciliation.userMappings;
       if (reconciliation.assistantUtterances.length) void settleCanonicallyAppliedSubagentResults(conv);
     }
-    handlePiEvent(conv, event, emit);
+    try {
+      handlePiEvent(conv, event, emit);
+    } finally {
+      activeThreadHealthCache.record(conv);
+    }
   });
 }
 
@@ -1201,6 +1222,7 @@ async function conversationFromRuntime(runtime, cwd) {
   await settleCanonicallyAppliedSubagentResults(conv);
   await bindConversation(conv);
   conversations.set(conv.id, conv);
+  activeThreadHealthCache.record(conv);
   return conv;
 }
 
@@ -1937,7 +1959,8 @@ async function closeConversation(conv, reason = 'api', { emitCompletion = true }
   conv.unsubscribe?.();
   conv.subagentLifecycle?.dispose();
   await conv.runtime.dispose();
-  conversations.delete(conv.id);
+  activeThreadHealthCache.close(conv);
+  if (conversations.get(conv.id) === conv) conversations.delete(conv.id);
   if (emitCompletion) emit(conv, 'turn_completed', { thread_id: conv.id, closed: true, reason });
   for (const subscriber of [...conv.subscribers]) {
     conv.subscribers.delete(subscriber);
@@ -2027,7 +2050,10 @@ async function claimExternalSession(sessionRef, body) {
 
       let evictedIdle = false;
       if (conv) {
-        if (forcedBeforeSettlement) conv.current = null;
+        if (forcedBeforeSettlement) {
+          conv.current = null;
+          activeThreadHealthCache.record(conv);
+        }
         await closeConversation(
           conv,
           takingOver
@@ -2118,22 +2144,20 @@ const server = http.createServer(async (req, res) => {
     const method = req.method ?? "GET";
 
     if (method === "GET" && url.pathname === "/healthz") {
-      const convs = [...conversations.values()];
-      const snapshot = await subagentSnapshot().catch(() => null);
-      if (snapshot) await reconcileLoadedSubagents(snapshot);
+      const subagents = subagentHealthCache.read();
       return json(res, 200, {
         ok: true,
         status: draining ? "draining" : "healthy",
-        active_threads: convs.filter(
-          (conv) => conv.current || conv.pendingMutations > 0,
-        ).length,
-        active_subagent_runs: snapshot?.active_count ?? 1,
-        uncertain_subagent_runs: snapshot?.uncertain_count ?? 1,
+        active_threads: activeThreadHealthCache.count(),
+        active_subagent_runs: subagents.active_count,
+        uncertain_subagent_runs: subagents.uncertain_count,
+        effects_unknown_subagent_runs: subagents.effects_unknown_count,
+        subagent_lifecycle_freshness: subagents.freshness,
         loaded_conversations: conversations.size,
-        interactive_pi_sessions: sessionOwnership.list().length,
+        interactive_pi_sessions: sessionOwnership.approximateLeaseCount(),
         idle_reap_enabled: IDLE_REAP_ENABLED,
         queue_depth: 0,
-        build: buildInfo(),
+        build: BUILD_INFO,
       });
     }
     if (method === "GET" && url.pathname === "/v1/admin/quiescence")
@@ -2489,7 +2513,7 @@ const server = http.createServer(async (req, res) => {
               return json(res, 409, { error: "session_takeover_pending" });
             const lease = sessionOwnership.get(conv.piSessionId);
             if (lease) throw new SessionOwnershipConflict(conv.piSessionId, lease);
-            conv.pendingMutations += 1;
+            incrementPendingMutations(conv);
             try {
               const branch = await inspectLoadedConversationBranch(conv);
               if (branch?.branch_conflict)
@@ -2499,7 +2523,7 @@ const server = http.createServer(async (req, res) => {
               await applySessionConfig(conv, body.config ?? body);
               return json(res, 200, { conversation: conversationRecord(conv) });
             } finally {
-              conv.pendingMutations -= 1;
+              decrementPendingMutations(conv);
             }
           });
         } catch (error) {
@@ -2572,7 +2596,7 @@ const server = http.createServer(async (req, res) => {
         if (conv.takeoverPending) return json(res, 409, { error: 'session_takeover_pending' });
         const initialLease = sessionOwnership.get(conv.piSessionId);
         if (initialLease) throw new SessionOwnershipConflict(conv.piSessionId, initialLease);
-        conv.pendingMutations += 1;
+        incrementPendingMutations(conv);
         let mutationTransferredToPrompt = false;
         try {
           const branch = await inspectLoadedConversationBranch(conv);
@@ -2652,12 +2676,12 @@ const server = http.createServer(async (req, res) => {
               emit(conv, 'turn_error', { message: err instanceof Error ? err.message : String(err), turn_id: messageId });
               emit(conv, 'turn_completed', { message_id: messageId, turn_id: messageId, thread_id: conv.id });
             } finally {
-              conv.pendingMutations -= 1;
+              decrementPendingMutations(conv);
             }
           })();
           return json(res, 200, { message_id: messageId, turn_id: messageId, thread_id: conv.id, compacted: false });
         } finally {
-          if (!mutationTransferredToPrompt) conv.pendingMutations -= 1;
+          if (!mutationTransferredToPrompt) decrementPendingMutations(conv);
         }
           })
         );

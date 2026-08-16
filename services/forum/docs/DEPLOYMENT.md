@@ -79,7 +79,9 @@ curl -fsS http://127.0.0.1:4310/api/readyz
 
 Health is intentionally minimal liveness and can succeed without agentd. Readiness is also public and minimal, but
 returns HTTP 503 with `{ "ok": false }` when the selected Monika Pi backend is unreachable, draining, or unhealthy; the
-integrated Compose health check uses this surface. Operational deployment state requires `CODEX_FORUM_DEPLOY_TOKEN`;
+integrated Compose health check uses this surface. Its two-second backend probe calls agentd's lightweight health route,
+which does not traverse lifecycle/session archives or wait for canonical-session work. Operational deployment safety
+still requires the authenticated quiescence routes; forum deployment state requires `CODEX_FORUM_DEPLOY_TOKEN`, while
 model catalog and administrative routes require an authenticated forum identity.
 
 ## Persistent data

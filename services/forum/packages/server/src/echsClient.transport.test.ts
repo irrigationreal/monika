@@ -31,4 +31,34 @@ describe('EchsClient transport errors', () => {
     expect(error).toMatchObject({ status: 409 });
     expect(error).not.toBeInstanceOf(EchsTransportError);
   });
+
+  it('accepts lightweight health with cached lifecycle diagnostics', async () => {
+    const client = new EchsClient({ baseUrl: 'http://agentd.invalid' });
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        ok: true,
+        status: 'healthy',
+        queue_depth: 0,
+        active_threads: 1,
+        active_subagent_runs: 2,
+        subagent_lifecycle_freshness: {
+          source: 'last_successful_scan',
+          scanned_at_ms: 1_000,
+          age_ms: 16_500,
+        },
+      })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(client.checkHealth()).resolves.toEqual({
+      ok: true,
+      status: 'healthy',
+      queue_depth: 0,
+      active_threads: 1,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://agentd.invalid/healthz',
+      expect.objectContaining({ method: 'GET', signal: expect.any(AbortSignal) })
+    );
+  });
 });

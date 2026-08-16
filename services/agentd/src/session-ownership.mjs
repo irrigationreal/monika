@@ -87,6 +87,15 @@ export class SessionOwnershipRegistry {
     };
   }
 
+  /**
+   * Return the cached lease-map size without checking expiry or persisting.
+   * This O(1) value is intentionally approximate: an expired lease remains
+   * counted until a normal ownership operation prunes it.
+   */
+  approximateLeaseCount() {
+    return this.leases.size;
+  }
+
   list() {
     this.pruneExpired();
     return [...this.leases.values()].map((lease) => ({

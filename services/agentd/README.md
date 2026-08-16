@@ -76,6 +76,20 @@ exposes these conceptual groups:
 - **administration** — quiescence, drain, subagent workload/repair/retention, and
   privacy-safe aggregate analytics.
 
+`GET /healthz` is a lightweight liveness/readiness dependency: request handling
+uses only O(1) in-memory state and never scans lifecycle or Pi session archives,
+reads build files, prunes leases, or waits for canonical-session work. Build
+metadata is loaded once before the HTTP listener starts. Existing lifecycle count
+fields remain present but are informational snapshots from the last successful
+lifecycle scan. Their `subagent_lifecycle_freshness` object reports
+`last_successful_scan` with `scanned_at_ms`/`age_ms`, or `not_yet_scanned` with
+null timestamps and conservative counts before the first successful scan.
+`interactive_pi_sessions` is also explicitly approximate: it is the cached lease
+map size and can temporarily include expired leases until a normal ownership
+operation prunes them. Use `GET /v1/admin/quiescence`, not health, for a fresh
+fail-closed deployment scan; quiescence prunes and reports the accurate lease
+set.
+
 Conversation records expose canonical `session_id` and `session_path`. When both
 are supplied on reopen, agentd opens and validates exactly that canonical path:
 it must remain under the session root, be a non-symlink regular file, match the

@@ -35,6 +35,30 @@ test('expires abandoned leases and permits a new owner', () => {
   assert.equal(claimed.lease.token, 'token-2');
 });
 
+test('approximate lease count is an O(1) cache read that intentionally includes expired leases', () => {
+  let now = 1_000;
+  const registry = new SessionOwnershipRegistry({ leaseMs: 100, now: () => now });
+  registry.claim('session-1', 'client-1');
+  now = 1_101;
+
+  registry.pruneExpired = () => assert.fail('approximate count must not prune');
+  registry.persist = () => assert.fail('approximate count must not persist');
+  registry.now = () => assert.fail('approximate count must not check the clock');
+
+  assert.equal(registry.approximateLeaseCount(), 1);
+});
+
+test('accurate ownership reads still prune an expired approximate count', () => {
+  let now = 1_000;
+  const registry = new SessionOwnershipRegistry({ leaseMs: 100, now: () => now });
+  registry.claim('session-1', 'client-1');
+  now = 1_101;
+
+  assert.equal(registry.approximateLeaseCount(), 1);
+  assert.deepEqual(registry.list(), []);
+  assert.equal(registry.approximateLeaseCount(), 0);
+});
+
 test('restores an unexpired lease after agentd restarts', () => {
   const directory = mkdtempSync(path.join(tmpdir(), 'agentd-ownership-'));
   const storagePath = path.join(directory, 'leases.json');
