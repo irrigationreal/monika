@@ -15,6 +15,7 @@ run_case() {
   local forum_acquire_response="${8:-1}"
   local forum_wait_timeout_ms="${9:-30000}"
   local forum_renew_response="${10:-1}"
+  local legacy_forum="${11:-0}"
   local tmp log bin deploy_root status
 
   tmp="$(mktemp -d)"
@@ -52,7 +53,7 @@ if [ "${1:-}" = "compose" ]; then
       ;;
     up)
       echo up >> "$CALL_LOG"
-      if printf '%s\n' "$*" | grep -Eqw 'monika|forum'; then
+      if [ "${LEGACY_FORUM:-0}" != "1" ] && printf '%s\n' "$*" | grep -Eqw 'monika|forum'; then
         # Admission is process-local: it must exist at the instant Compose
         # begins, and a forum replacement then clears the old process marker.
         test -f "$FORUM_ADMISSION_MARKER"
@@ -97,10 +98,16 @@ set -euo pipefail
 printf 'curl %q\n' "$*" >> "$CALL_LOG"
 method="GET"
 url=""
+output_file=""
+write_out=""
+request_data=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -X) method="$2"; shift 2 ;;
-    -H|--data|--max-time) shift 2 ;;
+    -o) output_file="$2"; shift 2 ;;
+    -w) write_out="$2"; shift 2 ;;
+    --data) request_data="$2"; shift 2 ;;
+    -H|--max-time) shift 2 ;;
     -*) shift ;;
     *) url="$1"; shift ;;
   esac
@@ -109,6 +116,11 @@ case "$url" in
   */api/deploy/admission/acquire)
     [ "$method" = "POST" ] || exit 1
     echo forum-acquire >> "$CALL_LOG"
+    if [ "${LEGACY_FORUM:-0}" = "1" ]; then
+      printf '%s\n' '{"code":"not_found"}' > "$output_file"
+      printf '404'
+      exit 0
+    fi
     if [ -f "$FORUM_ADMISSION_MARKER" ]; then
       echo forum-renew >> "$CALL_LOG"
       if [ "${FORUM_RENEW_RESPONSE:-1}" != "1" ]; then
@@ -118,7 +130,13 @@ case "$url" in
     fi
     echo acquired > "$FORUM_ADMISSION_MARKER"
     [ "${FORUM_ACQUIRE_RESPONSE:-1}" = "1" ] || exit 22
-    echo '{"acquired":true,"operationId":"test-operation","state":"acquired","blockers":[],"expiresAt":"2099-01-01T00:00:00.000Z"}'
+    operation_id="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["operationId"])' "$request_data")"
+    printf '{"acquired":true,"operationId":"%s","state":"acquired","blockers":[],"expiresAt":"2099-01-01T00:00:00.000Z"}\n' "$operation_id" > "$output_file"
+    printf '200'
+    ;;
+  */api/deploy/quiescence)
+    echo legacy-quiescence >> "$CALL_LOG"
+    echo '{"safeToStop":true,"blockers":[]}'
     ;;
   */api/deploy/admission/cancel)
     [ "$method" = "POST" ] || exit 1
@@ -178,6 +196,7 @@ SH
   FORUM_READY="$forum_ready" \
   FORUM_ACQUIRE_RESPONSE="$forum_acquire_response" \
   FORUM_RENEW_RESPONSE="$forum_renew_response" \
+  LEGACY_FORUM="$legacy_forum" \
   MONIKA_FORUM_ADMISSION_WAIT_TIMEOUT_MS="$forum_wait_timeout_ms" \
   MONIKA_FORUM_POST_DEPLOY_TIMEOUT_MS=1000 \
   CODEX_FORUM_DEPLOY_TOKEN=test-token \
@@ -232,6 +251,18 @@ SH
   if [ "$status" -ne 0 ]; then
     cat "/tmp/deploy-if-safe-$name.err" >&2
     return "$status"
+  fi
+
+  if [ "$legacy_forum" = "1" ]; then
+    if [ "$(grep -c '^forum-acquire$' "$log" || true)" -ne 2 ] ||
+      [ "$(grep -c '^legacy-quiescence$' "$log" || true)" -ne 2 ] ||
+      ! grep -q '^up$' "$log" || [ -e "$tmp/forum-admission" ]; then
+      echo "legacy forum rollout must boundedly re-check quiescence before Compose without claiming an admission lease" >&2
+      cat "$log" >&2
+      return 1
+    fi
+    rm -rf "$tmp"
+    return 0
   fi
 
   if [ "$name" != "no-update" ]; then
@@ -345,5 +376,6 @@ run_case forum-readiness-failure same same old-forum new-forum 0 0
 run_case forum-acquire-response-lost same same old-forum new-forum 0 1 0
 run_case forum-zero-wait same same old-forum new-forum 0 1 1 0
 run_case forum-renewal-lost same same old-forum new-forum 0 1 1 30000 0
+run_case legacy-forum-bootstrap same same old-forum new-forum 0 1 1 30000 1 1
 
 echo "deploy-if-safe drain lifecycle smoke passed"

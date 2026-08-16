@@ -199,7 +199,8 @@ The script verifies:
 6. a Monika replacement is applied only while both the forum-admission and durable-drain markers exist;
 7. after Compose applies the update, agentd drain cancel and healthy/undrained proof precede bounded forum `/readyz`,
    bounded forum admission cancel, `compose ps`, and pruning in that order;
-8. a readiness failure still attempts bounded best-effort forum cancellation through the exit trap.
+8. a readiness failure still attempts bounded best-effort forum cancellation through the exit trap;
+9. an exact admission `404` uses bounded legacy quiescence twice for the pre-admission rollout, while never claiming a lease.
 
 This protects both the old stuck-drain failure and the forum quiescence-to-restart
 race, including release on success and failure.
