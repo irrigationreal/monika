@@ -13,8 +13,9 @@ The forum exposes one trace visualization: the admin-only topic **Trace**.
 - Guests and authenticated non-admins see only a neutral “Response in progress…” placeholder.
 - Completed posts contain conversation content only. There is no per-post Trace History.
 - Trace remains available while idle from Admin Tools.
-- Trace, Robot Diagnostics, Session Details, and Auto-Director share one fixed, non-modal Admin Workspace. It stays
-  beneath a docked Quick Reply so steering remains usable.
+- Trace, Session Diagnostics, and Auto-Director share one fixed, non-modal Admin Workspace. Session Diagnostics combines
+  robot activity/context controls with canonical session metadata, and the solid themed workspace stays beneath a docked
+  Quick Reply so steering remains usable.
 
 `TopicTraceViewer.vue` is the canonical renderer for both preview and workspace modes. Preview mode only selects the
 active response's three-card tail; it does not maintain a second ordering or card implementation.

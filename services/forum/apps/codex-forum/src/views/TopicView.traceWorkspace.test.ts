@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 const topicSource = readFileSync(resolve(process.cwd(), 'src/views/TopicView.vue'), 'utf8');
 const traceSource = readFileSync(resolve(process.cwd(), 'src/components/TopicTraceViewer.vue'), 'utf8');
+const postsCss = readFileSync(resolve(process.cwd(), 'src/styles/posts.css'), 'utf8');
 
 describe('canonical topic Trace workspace', () => {
   it('uses one shared trace viewer for the live preview and full admin workspace', () => {
@@ -33,10 +34,18 @@ describe('canonical topic Trace workspace', () => {
   });
 
   it('places secondary operations in the shared admin workspace', () => {
-    expect(topicSource).toContain("type AdminWorkspaceTab = 'trace' | 'robot' | 'session' | 'auto';");
+    expect(topicSource).toContain("type AdminWorkspaceTab = 'trace' | 'diagnostics' | 'auto';");
     expect(topicSource).toContain('aria-label="Admin workspace"');
-    expect(topicSource).toContain('Robot Diagnostics');
-    expect(topicSource).toContain('Session Details');
+    expect(topicSource).toContain('Session Diagnostics');
+    expect(topicSource).toContain('Robot State');
+    expect(topicSource).toContain('Session Metadata');
+    expect(topicSource).not.toContain('Robot Diagnostics');
+    expect(topicSource).not.toContain('Session Details');
     expect(topicSource).toContain('Auto-Director');
+  });
+
+  it('uses a defined solid theme surface behind workspace content', () => {
+    expect(postsCss).toMatch(/\.vb-admin-workspace \{[\s\S]*background: var\(--bg-surface\);/);
+    expect(postsCss).not.toContain('background: var(--bg-primary);');
   });
 });

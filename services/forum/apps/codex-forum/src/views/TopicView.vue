@@ -54,7 +54,7 @@ const editingPost = ref<PostDto | null>(null);
 const editBody = ref('');
 const showDeleteConfirm = ref<string | null>(null);
 const showAdminPanel = ref(false);
-type AdminWorkspaceTab = 'trace' | 'robot' | 'session' | 'auto';
+type AdminWorkspaceTab = 'trace' | 'diagnostics' | 'auto';
 const adminWorkspaceTab = ref<AdminWorkspaceTab | null>(null);
 const adminWorkspaceRef = ref<HTMLElement | null>(null);
 let adminWorkspaceOpener: HTMLElement | null = null;
@@ -2598,11 +2598,8 @@ onUnmounted(() => {
     <div v-if="showAdminPanel && canModerate" class="vb-admin-panel">
       <div class="vb-admin-actions">
         <button class="vb-small-btn" type="button" @click="openAdminWorkspace('trace', $event)">Open Trace</button>
-        <button class="vb-small-btn" type="button" @click="openAdminWorkspace('robot', $event)">
-          Robot Diagnostics
-        </button>
-        <button class="vb-small-btn" type="button" @click="openAdminWorkspace('session', $event)">
-          Session Details
+        <button class="vb-small-btn" type="button" @click="openAdminWorkspace('diagnostics', $event)">
+          Session Diagnostics
         </button>
         <button class="vb-small-btn" type="button" @click="openAdminWorkspace('auto', $event)">Auto-Director</button>
         <button class="vb-small-btn" :disabled="state.loading.value" @click="openEditTitle">Edit Title</button>
@@ -3554,21 +3551,12 @@ onUnmounted(() => {
           </button>
           <button
             class="vb-small-btn"
-            :class="{ active: adminWorkspaceTab === 'robot' }"
+            :class="{ active: adminWorkspaceTab === 'diagnostics' }"
             role="tab"
-            :aria-selected="adminWorkspaceTab === 'robot'"
-            @click="adminWorkspaceTab = 'robot'"
+            :aria-selected="adminWorkspaceTab === 'diagnostics'"
+            @click="adminWorkspaceTab = 'diagnostics'"
           >
-            Robot
-          </button>
-          <button
-            class="vb-small-btn"
-            :class="{ active: adminWorkspaceTab === 'session' }"
-            role="tab"
-            :aria-selected="adminWorkspaceTab === 'session'"
-            @click="adminWorkspaceTab = 'session'"
-          >
-            Session
+            Session Diagnostics
           </button>
           <button
             class="vb-small-btn"
@@ -3588,98 +3576,107 @@ onUnmounted(() => {
         <div v-if="adminWorkspaceTab === 'trace'" class="vb-admin-workspace-panel" role="tabpanel">
           <TopicTraceViewer :topic-id="routeTopicId" />
         </div>
-        <div v-else-if="adminWorkspaceTab === 'robot'" class="vb-admin-workspace-panel vb-robot-body" role="tabpanel">
+        <div
+          v-else-if="adminWorkspaceTab === 'diagnostics'"
+          class="vb-admin-workspace-panel vb-robot-body"
+          role="tabpanel"
+        >
           <div class="vb-admin-workspace-title">
-            <h2>Robot Diagnostics</h2>
-            <button
-              class="vb-small-btn vb-btn-danger"
-              type="button"
-              :disabled="!isRobotBusy || robotControlPending"
-              @click="requestStopRobot"
-            >
-              Stop Robot
-            </button>
+            <h2>Session Diagnostics</h2>
+            <div class="vb-admin-workspace-title-actions">
+              <button
+                class="vb-small-btn"
+                type="button"
+                :disabled="state.adminEnrichmentLoading.value"
+                @click="state.loadAdminEnrichment()"
+              >
+                Refresh
+              </button>
+              <button
+                class="vb-small-btn vb-btn-danger"
+                type="button"
+                :disabled="!isRobotBusy || robotControlPending"
+                @click="requestStopRobot"
+              >
+                Stop Robot
+              </button>
+            </div>
           </div>
-          <div v-if="state.robotStopResult.value" class="vb-state-row">
-            <strong>Stop {{ state.robotStopResult.value.state }}:</strong> {{ state.robotStopResult.value.message }}
-            <span v-if="state.robotStopResult.value.effectsUnknownCount"
-              >Remote effects remain unknown for {{ state.robotStopResult.value.effectsUnknownCount }} run(s).</span
-            >
-          </div>
-          <div class="vb-state-row">
-            <div><strong>Status:</strong> {{ state.robotState.value?.activity ?? 'idle' }}</div>
-            <div v-if="state.robotState.value?.lastTurnError" class="vb-state-error">
-              <strong>Last turn failed:</strong> {{ state.robotState.value.lastTurnError.message }}
+          <section class="vb-diagnostics-section" aria-labelledby="robot-diagnostics-heading">
+            <h3 id="robot-diagnostics-heading">Robot State</h3>
+            <div v-if="state.robotStopResult.value" class="vb-state-row">
+              <strong>Stop {{ state.robotStopResult.value.state }}:</strong> {{ state.robotStopResult.value.message }}
+              <span v-if="state.robotStopResult.value.effectsUnknownCount"
+                >Remote effects remain unknown for {{ state.robotStopResult.value.effectsUnknownCount }} run(s).</span
+              >
+            </div>
+            <div class="vb-state-row">
+              <div><strong>Status:</strong> {{ state.robotState.value?.activity ?? 'idle' }}</div>
+              <div v-if="state.robotState.value?.lastTurnError" class="vb-state-error">
+                <strong>Last turn failed:</strong> {{ state.robotState.value.lastTurnError.message }}
+              </div>
+              <div>
+                <strong>Last Update:</strong>
+                {{
+                  state.robotState.value?.lastUpdatedAt ? state.formatDate(state.robotState.value.lastUpdatedAt) : 'n/a'
+                }}
+              </div>
             </div>
             <div>
-              <strong>Last Update:</strong>
-              {{
-                state.robotState.value?.lastUpdatedAt ? state.formatDate(state.robotState.value.lastUpdatedAt) : 'n/a'
-              }}
+              <strong>Model:</strong>
+              {{ (state.robotState.value as any)?.context?.model ?? state.robotState.value?.model ?? 'unknown' }}
             </div>
-          </div>
-          <div>
-            <strong>Model:</strong>
-            {{ (state.robotState.value as any)?.context?.model ?? state.robotState.value?.model ?? 'unknown' }}
-          </div>
-          <div v-if="sessionContext" class="vb-context-meter">
-            <strong>Context:</strong>
-            <span
-              v-if="sessionContext.usedTokens !== null && sessionContext.contextWindowTokens"
-              class="vb-context-value"
-            >
-              {{ formatTokenCount(sessionContext.usedTokens) }} /
-              {{ formatTokenCount(sessionContext.contextWindowTokens) }}
-              <span v-if="typeof sessionContext.percent === 'number'">({{ sessionContext.percent.toFixed(1) }}%)</span>
-            </span>
-            <span v-else>usage unavailable</span>
-          </div>
-        </div>
-        <div v-else-if="adminWorkspaceTab === 'session'" class="vb-admin-workspace-panel" role="tabpanel">
-          <div class="vb-admin-workspace-title">
-            <h2>Session Details</h2>
-            <button
-              class="vb-small-btn"
-              type="button"
-              :disabled="state.adminEnrichmentLoading.value"
-              @click="state.loadAdminEnrichment()"
-            >
-              Refresh
-            </button>
-          </div>
-          <div v-if="state.adminEnrichmentLoading.value && !state.sessionInfo.value" class="vb-empty" role="status">
-            Loading session metadata…
-          </div>
-          <div v-else-if="state.adminEnrichmentError.value && !state.sessionInfo.value" class="vb-empty" role="alert">
-            Session metadata unavailable: {{ state.adminEnrichmentError.value }}
-          </div>
-          <div v-else-if="!state.sessionInfo.value" class="vb-empty">No session yet.</div>
-          <div v-else class="vb-session-meta">
-            <div><strong>Session:</strong> {{ state.sessionInfo.value.id }}</div>
-            <div><strong>Status:</strong> {{ state.sessionInfo.value.status }}</div>
-            <div><strong>Started:</strong> {{ state.formatDate(state.sessionInfo.value.createdAt) }}</div>
-            <template v-if="piSessionDiagnostics">
-              <div><strong>Canonical Pi session:</strong> {{ piSessionDiagnostics.id }}</div>
-              <div><strong>Session path:</strong> {{ piSessionDiagnostics.path }}</div>
-              <div v-if="piSessionDiagnostics.cwd"><strong>CWD:</strong> {{ piSessionDiagnostics.cwd }}</div>
-              <div v-if="piSessionDiagnostics.parentId">
-                <strong>Parent session:</strong> {{ piSessionDiagnostics.parentId }}
-              </div>
-              <div v-if="piSessionDiagnostics.parentPath">
-                <strong>Parent path:</strong> {{ piSessionDiagnostics.parentPath }}
-              </div>
-              <div v-if="piSessionDiagnostics.lineageKind">
-                <strong>Lineage:</strong> {{ piSessionDiagnostics.lineageKind }}
-              </div>
-              <div v-if="piSessionDiagnostics.lineageSource">
-                <strong>Lineage source:</strong> {{ piSessionDiagnostics.lineageSource }}
-              </div>
-              <div><strong>Imported:</strong> {{ state.formatDate(piSessionDiagnostics.importedAt) }}</div>
-              <div v-if="piSessionDiagnostics.lastImportRunId">
-                <strong>Import run:</strong> {{ piSessionDiagnostics.lastImportRunId }}
-              </div>
-            </template>
-          </div>
+            <div v-if="sessionContext" class="vb-context-meter">
+              <strong>Context:</strong>
+              <span
+                v-if="sessionContext.usedTokens !== null && sessionContext.contextWindowTokens"
+                class="vb-context-value"
+              >
+                {{ formatTokenCount(sessionContext.usedTokens) }} /
+                {{ formatTokenCount(sessionContext.contextWindowTokens) }}
+                <span v-if="typeof sessionContext.percent === 'number'"
+                  >({{ sessionContext.percent.toFixed(1) }}%)</span
+                >
+              </span>
+              <span v-else>usage unavailable</span>
+            </div>
+          </section>
+          <section class="vb-diagnostics-section" aria-labelledby="session-metadata-heading">
+            <h3 id="session-metadata-heading">Session Metadata</h3>
+            <div v-if="state.adminEnrichmentLoading.value && !state.sessionInfo.value" class="vb-empty" role="status">
+              Loading session metadata…
+            </div>
+            <div v-else-if="state.adminEnrichmentError.value && !state.sessionInfo.value" class="vb-empty" role="alert">
+              Session metadata unavailable: {{ state.adminEnrichmentError.value }}
+            </div>
+            <div v-else-if="!state.sessionInfo.value" class="vb-empty">No session yet.</div>
+            <div v-else class="vb-session-meta">
+              <div><strong>Session:</strong> {{ state.sessionInfo.value.id }}</div>
+              <div><strong>Status:</strong> {{ state.sessionInfo.value.status }}</div>
+              <div><strong>Started:</strong> {{ state.formatDate(state.sessionInfo.value.createdAt) }}</div>
+              <template v-if="piSessionDiagnostics">
+                <div><strong>Canonical Pi session:</strong> {{ piSessionDiagnostics.id }}</div>
+                <div><strong>Session path:</strong> {{ piSessionDiagnostics.path }}</div>
+                <div v-if="piSessionDiagnostics.cwd"><strong>CWD:</strong> {{ piSessionDiagnostics.cwd }}</div>
+                <div v-if="piSessionDiagnostics.parentId">
+                  <strong>Parent session:</strong> {{ piSessionDiagnostics.parentId }}
+                </div>
+                <div v-if="piSessionDiagnostics.parentPath">
+                  <strong>Parent path:</strong> {{ piSessionDiagnostics.parentPath }}
+                </div>
+                <div v-if="piSessionDiagnostics.lineageKind">
+                  <strong>Lineage:</strong> {{ piSessionDiagnostics.lineageKind }}
+                </div>
+                <div v-if="piSessionDiagnostics.lineageSource">
+                  <strong>Lineage source:</strong> {{ piSessionDiagnostics.lineageSource }}
+                </div>
+                <div><strong>Imported:</strong> {{ state.formatDate(piSessionDiagnostics.importedAt) }}</div>
+                <div v-if="piSessionDiagnostics.lastImportRunId">
+                  <strong>Import run:</strong> {{ piSessionDiagnostics.lastImportRunId }}
+                </div>
+              </template>
+            </div>
+          </section>
         </div>
         <div v-else class="vb-admin-workspace-panel" role="tabpanel">
           <div v-if="showAutoRunPanel" class="vb-robot-state" style="margin-top: 12px">
