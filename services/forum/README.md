@@ -74,6 +74,10 @@ packages/
   persona, parent/follow-up metadata, attachment dedupe, crash recovery, and exactly-once Pi-message claiming.
 - Discord/Matrix adapters are best effort beyond the local transaction boundary. Forum SQLite cannot turn a remote send
   or acknowledgement into canonical Pi settlement.
+- Deployment admission is an authenticated, operation-scoped expiring fence. It pauses/waits Pi sync, checks global
+  current-generation durable dispatch work, lets a new eligible dispatch revoke preparation, and returns retryable 503
+  after acquisition before any eligible post transaction can become visible. Explicit dispatch clears `silent` and
+  creates its outbox row atomically.
 - Feature flags (auth, rate limiting, search, Redis stream bus) are toggled via env vars.
 
 ### Web UI
@@ -309,7 +313,7 @@ Key env vars (see `packages/server/src/runtimeConfig.ts` for the full list):
 | `CODEX_FORUM_BOOTSTRAP_ADMIN_DISPLAY_NAME` | Bootstrap admin display name                                                                                                    | `Admin`                          |
 | `CODEX_FORUM_UPLOADS_DIR`                  | Unified file blob, attachment, staging, and avatar storage root                                                                 | `/mnt/storage/forum-attachments` |
 | `CODEX_FORUM_INTERNAL_API_TOKEN`           | Shared secret required for internal agent pending-attachment uploads; send as `x-internal-token` or `Authorization: Bearer ...` | unset                            |
-| `CODEX_FORUM_DEPLOY_TOKEN`                 | Shared secret required for `/deploy/quiescence`; send as `x-deploy-token` or `Authorization: Bearer ...`                        | unset                            |
+| `CODEX_FORUM_DEPLOY_TOKEN`                 | Shared secret required for `/deploy/quiescence` and `/deploy/admission/*`; send as `x-deploy-token` or `Authorization: Bearer ...` | unset                            |
 | `CODEX_FORUM_REDIS_STREAM_BUS`             | Redis stream bus toggle                                                                                                         | `0`                              |
 | `CODEX_FORUM_ENABLE_AUTH`                  | Auth toggle                                                                                                                     | `0`                              |
 | `CODEX_FORUM_REGISTRATION_MODE`            | Self-registration policy: `disabled`, `invite-only`, or `public`                                                                | `disabled`                       |
@@ -348,8 +352,9 @@ direct public traffic.
 
 Public `/healthz` and `/api/healthz` responses are intentionally minimal liveness checks. Minimal `/readyz` and
 `/api/readyz` return only `{ok}` and HTTP 503 unless the selected Monika Pi backend is reachable, healthy, and undrained;
-the standalone Compose deployment uses readiness for container health. Operational deploy state is available through
-`/api/deploy/quiescence` only with `CODEX_FORUM_DEPLOY_TOKEN`, while `/api/models` requires an authenticated forum user.
+the standalone Compose deployment uses readiness for container health. Operational deploy diagnostics are available through `/api/deploy/quiescence`; race-safe host deployment uses
+`POST /api/deploy/admission/acquire` and `/cancel`. All require `CODEX_FORUM_DEPLOY_TOKEN`, while `/api/models` requires
+an authenticated forum user.
 
 For full deployment guidance, see `docs/DEPLOYMENT.md`.
 

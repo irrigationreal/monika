@@ -1,11 +1,16 @@
 import { EchsBridge } from './echsBridge';
 
-import type { MessageTamperContext, MessageTamperLayer, MessageTamperPlugin, UtteranceOrigin } from '@irrigationreal/codex-forum-core';
 import type { RobotStopResultDto } from '@irrigationreal/codex-forum-contracts';
+import type {
+  MessageTamperContext,
+  MessageTamperLayer,
+  MessageTamperPlugin,
+  UtteranceOrigin,
+} from '@irrigationreal/codex-forum-core';
 
-import type { ForumStore } from './store';
 import type { EchsSubagentRetention, EchsSubagentWorkload } from './echsClient';
 import type { AssistantProjectionInput, AssistantProjectionService } from './services/assistantProjectionService';
+import type { ForumStore } from './store';
 import type { StreamBusInterface } from './streamBus';
 
 export type AgentBackend = 'echs';
@@ -118,8 +123,10 @@ export class AgentBridge {
     parentPostId: string | null,
     options?: { model?: string | null; reasoningEffort?: string | null }
   ): Promise<void> {
-    this.store.setSessionAgentBackend(this.store.ensureSession({ topicId }).id, 'echs');
-    return this.echs.sendUserMessage(topicId, body, parentPostId, options);
+    return this.runRobotWork(async () => {
+      this.store.setSessionAgentBackend(this.store.ensureSession({ topicId }).id, 'echs');
+      await this.echs.sendUserMessage(topicId, body, parentPostId, options);
+    });
   }
 
   async steerUserMessage(
@@ -128,20 +135,29 @@ export class AgentBridge {
     parentPostId: string | null,
     options?: { model?: string | null; reasoningEffort?: string | null }
   ): Promise<void> {
-    this.store.setSessionAgentBackend(this.store.ensureSession({ topicId }).id, 'echs');
-    return this.echs.steerUserMessage(topicId, body, parentPostId, options);
+    return this.runRobotWork(async () => {
+      this.store.setSessionAgentBackend(this.store.ensureSession({ topicId }).id, 'echs');
+      await this.echs.steerUserMessage(topicId, body, parentPostId, options);
+    });
   }
 
   async dispatchPostToAgent(
     topicId: string,
     postId: string,
     options?: {
-      mode?: 'queue' | 'steer'; model?: string | null; reasoningEffort?: string | null;
-      dispatchId?: string; generation?: number; contributorPostIds?: string[]; origin?: UtteranceOrigin;
+      mode?: 'queue' | 'steer';
+      model?: string | null;
+      reasoningEffort?: string | null;
+      dispatchId?: string;
+      generation?: number;
+      contributorPostIds?: string[];
+      origin?: UtteranceOrigin;
     }
   ): Promise<void> {
-    this.store.setSessionAgentBackend(this.store.ensureSession({ topicId }).id, 'echs');
-    return this.echs.dispatchPostToAgent(topicId, postId, options);
+    return this.runRobotWork(async () => {
+      this.store.setSessionAgentBackend(this.store.ensureSession({ topicId }).id, 'echs');
+      await this.echs.dispatchPostToAgent(topicId, postId, options);
+    });
   }
 
   get assistantProjectionService(): AssistantProjectionService {
@@ -202,7 +218,7 @@ export class AgentBridge {
     topicId: string,
     opts: { goal: string; model?: string | null; reasoningEffort?: string | null; systemPrompt?: string | null }
   ): Promise<{ source?: unknown; goal: string; draft: string; model?: string | null; reasoning?: string | null }> {
-    return this.echs.generateHandoffDraft(topicId, opts);
+    return this.runRobotWork(() => this.echs.generateHandoffDraft(topicId, opts));
   }
 
   async getTopicCompactionLeaf(topicId: string): Promise<string | null> {
@@ -218,18 +234,18 @@ export class AgentBridge {
     inherited_generation: number;
     active_entry_ids: string[];
   }> {
-    return this.echs.forkTopicConversation(topicId, opts);
+    return this.runRobotWork(() => this.echs.forkTopicConversation(topicId, opts));
   }
 
   async acknowledgeFork(operationId: string, childSessionId: string): Promise<void> {
-    return this.echs.acknowledgeFork(operationId, childSessionId);
+    return this.runRobotWork(() => this.echs.acknowledgeFork(operationId, childSessionId));
   }
 
   async compactTopicConversation(
     topicId: string,
     opts: { operationId: string; expectedLeafId: string; customInstructions?: string | null }
   ): Promise<Record<string, unknown>> {
-    return this.echs.compactTopicConversation(topicId, opts);
+    return this.runRobotWork(() => this.echs.compactTopicConversation(topicId, opts));
   }
 
   async createLinkedHandoffConversation(
@@ -242,6 +258,15 @@ export class AgentBridge {
       reasoningEffort?: string | null;
     }
   ): Promise<unknown> {
-    return this.echs.createLinkedHandoffConversation(topicId, opts);
+    return this.runRobotWork(() => this.echs.createLinkedHandoffConversation(topicId, opts));
+  }
+
+  private async runRobotWork<T>(operation: () => Promise<T>): Promise<T> {
+    const release = this.store.beginRobotWork();
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
   }
 }

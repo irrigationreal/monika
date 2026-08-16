@@ -203,8 +203,18 @@ describe('Admin deploy endpoints', () => {
     await vi.advanceTimersByTimeAsync(4_000);
     expect(spawn).toHaveBeenCalledTimes(0);
 
-    // Drain work and advance: should deploy.
+    // Durable current-generation dispatch intent also blocks Deploy on Finish.
     activeTurnsCount = 0;
+    const forum = store.createForum('Deploy blocker forum');
+    const author = store.createIdentity('Deploy blocker author', 'deploy-blocker', 'human');
+    const created = store.createTopic({ forumId: forum.id, title: 'Blocked', body: 'work', authorId: author.id });
+    const session = store.ensureSession({ topicId: created.topic.id });
+    const dispatch = store.createPostDispatch({ topicId: created.topic.id, postId: created.post.id, sessionId: session.id });
+    await vi.advanceTimersByTimeAsync(2_500);
+    expect(spawn).toHaveBeenCalledTimes(0);
+
+    // Drain work and advance: should deploy.
+    db.prepare("update post_dispatches set status = 'dispatched' where id = ?").run(dispatch.id);
     await vi.advanceTimersByTimeAsync(2_500);
     await vi.runOnlyPendingTimersAsync();
     await vi.runAllTicks();

@@ -32,6 +32,7 @@ export function registerApiErrorHandler(app: FastifyInstance): void {
     if (statusCode >= 500) {
       app.log.error(error);
     }
+    if (typeof errObj['retryAfter'] === 'number') reply.header('Retry-After', String(errObj['retryAfter']));
     reply.status(statusCode).send({
       code,
       message: error instanceof Error ? error.message : String(error),

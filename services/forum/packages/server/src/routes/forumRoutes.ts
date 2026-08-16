@@ -89,9 +89,7 @@ export function registerForumRoutes({
 
     const rawKind = link.lineage_kind?.trim().toLowerCase();
     const kind =
-      rawKind === 'handoff' || rawKind === 'fork' || rawKind === 'delegate' || rawKind === 'sleep'
-        ? rawKind
-        : 'parent';
+      rawKind === 'handoff' || rawKind === 'fork' || rawKind === 'delegate' || rawKind === 'sleep' ? rawKind : 'parent';
     const parentLink = link.parent_pi_session_id
       ? store.getPiSessionLinkByPiSessionId(link.parent_pi_session_id)
       : link.parent_pi_session_path
@@ -221,10 +219,10 @@ export function registerForumRoutes({
     const includeMembersForums = Boolean(identity);
     const includeAdminForums = Boolean(
       identity &&
-        (identity.kind === 'admin' ||
-          store.hasPermission(identity.id, 'admin.all', identity.tenant_id) ||
-          store.hasPermission(identity.id, 'admin.read', identity.tenant_id) ||
-          store.hasPermission(identity.id, '*', identity.tenant_id))
+      (identity.kind === 'admin' ||
+        store.hasPermission(identity.id, 'admin.all', identity.tenant_id) ||
+        store.hasPermission(identity.id, 'admin.read', identity.tenant_id) ||
+        store.hasPermission(identity.id, '*', identity.tenant_id))
     );
 
     const leaders = store.listForumLeaders({
@@ -366,35 +364,35 @@ export function registerForumRoutes({
       try {
         creation = store.runInTransaction(() => {
           const created = store.createTopic({
-        forumId,
-        title: body.title,
-        body: body.body,
-        authorId: user.identityId,
-        silent: Boolean(body.silent) || deferRobot,
-        robotMode,
-        autoCompactEnabled: body.autoCompactEnabled ?? false,
+            forumId,
+            title: body.title,
+            body: body.body,
+            authorId: user.identityId,
+            silent: Boolean(body.silent) || deferRobot,
+            robotMode,
+            autoCompactEnabled: body.autoCompactEnabled ?? false,
             draft: body.draft,
-      });
+          });
           const { topic, post } = created;
-      store.upsertTopicSubscription({ identityId: user.identityId, topicId: topic.id, mode: 'watching' });
-      store.upsertTopicRead({
-        identityId: user.identityId,
-        topicId: topic.id,
-        lastReadPostId: post.id,
-        lastReadAt: post.created_at,
-      });
-      const session = store.ensureSession({ topicId: topic.id });
-      store.createSessionMessage(session.id, 'user', body.body, 'public');
-      if (shouldDispatchRobot) {
-        store.createPostDispatch({
-          topicId: topic.id,
-          postId: post.id,
-          sessionId: session.id,
-          mode: 'auto',
-          model: body.model?.trim() || null,
-          reasoningEffort: body.reasoningEffort?.trim() || null,
-        });
-      }
+          store.upsertTopicSubscription({ identityId: user.identityId, topicId: topic.id, mode: 'watching' });
+          store.upsertTopicRead({
+            identityId: user.identityId,
+            topicId: topic.id,
+            lastReadPostId: post.id,
+            lastReadAt: post.created_at,
+          });
+          const session = store.ensureSession({ topicId: topic.id });
+          store.createSessionMessage(session.id, 'user', body.body, 'public');
+          if (shouldDispatchRobot) {
+            store.createPostDispatch({
+              topicId: topic.id,
+              postId: post.id,
+              sessionId: session.id,
+              mode: 'auto',
+              model: body.model?.trim() || null,
+              reasoningEffort: body.reasoningEffort?.trim() || null,
+            });
+          }
           return created;
         });
       } catch (error) {
@@ -412,23 +410,23 @@ export function registerForumRoutes({
         }
       }
       try {
-      webhookService.dispatch('topic.created', {
-        topic: {
-          id: topic.id,
-          forumId: topic.forum_id,
-          title: topic.title,
-          status: topic.status,
-          createdBy: topic.created_by,
-          createdAt: topic.created_at,
-        },
-        post: {
-          id: post.id,
-          topicId: post.topic_id,
-          authorId: post.author_id,
-          body: post.body,
-          createdAt: post.created_at,
-        },
-      });
+        webhookService.dispatch('topic.created', {
+          topic: {
+            id: topic.id,
+            forumId: topic.forum_id,
+            title: topic.title,
+            status: topic.status,
+            createdBy: topic.created_by,
+            createdAt: topic.created_at,
+          },
+          post: {
+            id: post.id,
+            topicId: post.topic_id,
+            authorId: post.author_id,
+            body: post.body,
+            createdAt: post.created_at,
+          },
+        });
       } catch (error) {
         request.log.error({ err: error, topicId: topic.id }, 'Failed to enqueue topic webhook after commit');
       }
@@ -660,6 +658,10 @@ export function registerForumRoutes({
         'Source topic is not linked to a canonical Pi session yet. Generate a draft first, then retry.'
       );
 
+    // Close the deployment race before publication. Everything through the
+    // initial durable handoff state below is synchronous, so ACQUIRED cannot
+    // leave a newly visible topic behind.
+    store.assertRobotWorkAdmission();
     const { topic, post } = store.createTopic({
       forumId: destinationForumId,
       title,
@@ -684,6 +686,9 @@ export function registerForumRoutes({
     let launchError: { message: string } | null = null;
 
     try {
+      // Defense in depth for a lease acquired after publication but before the
+      // direct agent boundary.
+      store.assertRobotWorkAdmission();
       await codex.createLinkedHandoffConversation(topic.id, {
         parentPiSessionId: sourceLink.pi_session_id,
         parentPiSessionPath: sourceLink.pi_session_path,
@@ -719,13 +724,13 @@ export function registerForumRoutes({
           lastUpdatedAt: robotState?.last_updated_at ?? null,
           lastTurnError:
             robotState?.last_error_message && robotState.last_error_at
-            ? {
-                message: robotState.last_error_message,
-                at: robotState.last_error_at,
-                postId: robotState.last_error_post_id ?? null,
-                turnId: robotState.last_error_turn_id ?? null,
-              }
-            : { message, at: new Date().toISOString(), postId: post.id, turnId: null },
+              ? {
+                  message: robotState.last_error_message,
+                  at: robotState.last_error_at,
+                  postId: robotState.last_error_post_id ?? null,
+                  turnId: robotState.last_error_turn_id ?? null,
+                }
+              : { message, at: new Date().toISOString(), postId: post.id, turnId: null },
           currentPlan: null,
           recentToolRuns: [],
         },
@@ -1012,35 +1017,35 @@ export function registerForumRoutes({
       try {
         post = store.runInTransaction(() => {
           const created = store.createPost({
-        topicId,
-        body: body.body,
-        parentPostId: body.parentPostId ?? null,
-        authorId: user.identityId,
-        autoCompactEnabled: changingAutoCompact ? body.autoCompactEnabled : undefined,
-        autoCompactRevision: changingAutoCompact ? body.autoCompactRevision : undefined,
-        silent: Boolean(body.silent) || deferRobot,
+            topicId,
+            body: body.body,
+            parentPostId: body.parentPostId ?? null,
+            authorId: user.identityId,
+            autoCompactEnabled: changingAutoCompact ? body.autoCompactEnabled : undefined,
+            autoCompactRevision: changingAutoCompact ? body.autoCompactRevision : undefined,
+            silent: Boolean(body.silent) || deferRobot,
             draft: body.draft,
-      });
-      if (!store.getTopicSubscription(user.identityId, topicId)) {
-        store.upsertTopicSubscription({ identityId: user.identityId, topicId, mode: 'watching' });
-      }
-      store.upsertTopicRead({
-        identityId: user.identityId,
-        topicId,
+          });
+          if (!store.getTopicSubscription(user.identityId, topicId)) {
+            store.upsertTopicSubscription({ identityId: user.identityId, topicId, mode: 'watching' });
+          }
+          store.upsertTopicRead({
+            identityId: user.identityId,
+            topicId,
             lastReadPostId: created.id,
             lastReadAt: created.created_at,
-      });
-      const session = store.ensureSession({ topicId });
-      store.createSessionMessage(session.id, 'user', body.body, 'public');
-      if (shouldDispatchRobot) {
-        store.createPostDispatch({
-          topicId,
+          });
+          const session = store.ensureSession({ topicId });
+          store.createSessionMessage(session.id, 'user', body.body, 'public');
+          if (shouldDispatchRobot) {
+            store.createPostDispatch({
+              topicId,
               postId: created.id,
-          sessionId: session.id,
-          mode: 'auto',
-          model: body.model?.trim() || null,
-          reasoningEffort: body.reasoningEffort?.trim() || null,
-        });
+              sessionId: session.id,
+              mode: 'auto',
+              model: body.model?.trim() || null,
+              reasoningEffort: body.reasoningEffort?.trim() || null,
+            });
           }
           const subscriptions = store.listTopicSubscriptions(topicId, 'watching');
           for (const subscription of subscriptions) {
@@ -1074,16 +1079,16 @@ export function registerForumRoutes({
         }
       }
       try {
-      webhookService.dispatch('post.created', {
-        post: {
-          id: post.id,
-          topicId: post.topic_id,
-          parentPostId: post.parent_post_id,
-          authorId: post.author_id,
-          body: post.body,
-          createdAt: post.created_at,
-        },
-      });
+        webhookService.dispatch('post.created', {
+          post: {
+            id: post.id,
+            topicId: post.topic_id,
+            parentPostId: post.parent_post_id,
+            authorId: post.author_id,
+            body: post.body,
+            createdAt: post.created_at,
+          },
+        });
       } catch (error) {
         request.log.error({ err: error, topicId, postId: post.id }, 'Failed to enqueue post webhook after commit');
       }
@@ -1149,18 +1154,17 @@ export function registerForumRoutes({
       return { ok: true, dispatched: false, post: serializePost(store.getPost(postId)!) };
     }
 
-    if (post.silent) {
-      store.setPostSilent(postId, false);
-    }
-
-    const session = store.ensureSession({ topicId: topic.id });
-    store.createPostDispatch({
-      topicId: topic.id,
-      postId,
-      sessionId: session.id,
-      mode: 'auto',
-      model: body.model?.trim() || null,
-      reasoningEffort: body.reasoningEffort?.trim() || null,
+    store.runInTransaction(() => {
+      if (post.silent) store.setPostSilent(postId, false);
+      const session = store.ensureSession({ topicId: topic.id });
+      store.createPostDispatch({
+        topicId: topic.id,
+        postId,
+        sessionId: session.id,
+        mode: 'auto',
+        model: body.model?.trim() || null,
+        reasoningEffort: body.reasoningEffort?.trim() || null,
+      });
     });
     postDispatchService?.wake();
 

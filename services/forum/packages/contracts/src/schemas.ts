@@ -54,6 +54,11 @@ import type {
   CompactionOperationDto,
   CreateCompactionRequestDto,
   CreateForkRequestDto,
+  DeploymentAdmissionAcquireRequestDto,
+  DeploymentAdmissionCancelRequestDto,
+  DeploymentAdmissionCancelResponseDto,
+  DeploymentAdmissionResultDto,
+  DeploymentAdmissionStatusDto,
   DiscordBridgeStatusDto,
   DiscordChannelMappingDto,
   ExternalRefDto,
@@ -1143,6 +1148,51 @@ export const SessionInspectorDtoSchema: z.ZodType<SessionInspectorDto> = z.objec
       visibility: PlanVisibilitySchema,
     })
   ),
+});
+
+const DeploymentAdmissionStateSchema = z.enum(['idle', 'preparing', 'acquired']);
+const DeploymentBlockerSchema = z.object({ code: z.string() }).catchall(z.unknown());
+
+export const DeploymentAdmissionAcquireRequestSchema: z.ZodType<DeploymentAdmissionAcquireRequestDto> = z
+  .object({
+    operationId: z.string().trim().min(1).max(200),
+    waitTimeoutMs: z
+      .number()
+      .finite()
+      .int()
+      .positive()
+      .max(5 * 60_000),
+    leaseMs: z
+      .number()
+      .finite()
+      .int()
+      .positive()
+      .max(24 * 60 * 60_000),
+  })
+  .strict();
+
+export const DeploymentAdmissionCancelRequestSchema: z.ZodType<DeploymentAdmissionCancelRequestDto> = z
+  .object({ operationId: z.string().trim().min(1).max(200) })
+  .strict();
+
+export const DeploymentAdmissionResultDtoSchema: z.ZodType<DeploymentAdmissionResultDto> = z.object({
+  acquired: z.boolean(),
+  operationId: z.string(),
+  state: z.enum(['idle', 'preparing', 'acquired', 'blocked', 'revoked', 'expired', 'cancelled']),
+  blockers: z.array(DeploymentBlockerSchema),
+  expiresAt: z.string().nullable(),
+});
+
+export const DeploymentAdmissionStatusDtoSchema: z.ZodType<DeploymentAdmissionStatusDto> = z.object({
+  state: DeploymentAdmissionStateSchema,
+  operationId: z.string().nullable(),
+  expiresAt: z.string().nullable(),
+});
+
+export const DeploymentAdmissionCancelResponseDtoSchema: z.ZodType<DeploymentAdmissionCancelResponseDto> = z.object({
+  ok: z.literal(true),
+  released: z.boolean(),
+  operationId: z.string(),
 });
 
 export const AdminDeployStatusDtoSchema: z.ZodType<AdminDeployStatusDto> = z.object({

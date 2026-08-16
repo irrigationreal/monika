@@ -265,7 +265,9 @@ Use `MONIKA_IMPORT_TAGS` to override the default `historical-import` tag.
 ## Updating a deployment
 
 Manual Compose recreation can terminate active Pi work. Production updates should
-use the quiescence-aware contract:
+use the admission-aware contract: the host acquires the forum's expiring robot-work fence (which pauses/waits Pi sync
+and checks durable dispatch intent), then retains agentd drain through replacement. The forum admission and agentd drain
+are cancelled on completion or abort:
 
 - [`redeployment.md`](redeployment.md) defines what must be idle and how agentd
   drain works;

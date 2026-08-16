@@ -144,7 +144,9 @@ Implemented in `services/forum`:
 - Sync polls agentd list/export endpoints, indexes canonical entry topology,
   imports active-branch messages idempotently, and reconciles forum-origin
   messages by canonical provenance before using `[FORUM TURN]` or text matching
-  as legacy fallbacks.
+  as legacy fallbacks. Deployment admission pauses new cycles and boundedly waits
+  for an already-running cycle, so the five-second poll is telemetry rather than
+  a source of autodeploy starvation.
 - Forum-created, Pi-imported, and hybrid topics share one reconciliation path.
   Forum-origin messages wait for bridge persistence, while external Pi CLI
   continuations project after the settlement/idle gate. Ambiguous bridge-owned
@@ -224,6 +226,37 @@ Discord and Matrix adapters can only offer best-effort behavior at their externa
 API boundary; their forum post, external dedupe reference, and local dispatch are
 transactional, but remote acknowledgement or outbound publication is not
 canonical settlement.
+
+### Deployment admission and durable dispatch
+
+The authenticated host contract is `POST /api/deploy/admission/acquire` with a
+caller-supplied `operationId`, bounded `waitTimeoutMs`, and expiring `leaseMs`,
+followed by operation-scoped `POST /api/deploy/admission/cancel`. Acquire enters
+`PREPARING` synchronously, closing robot-work admission before it pauses new Pi
+sync cycles and waits for an in-flight cycle. It then checks active/queued turns,
+non-idle robot state, pending/running forks, compactions, tracked direct agent/model
+work, and the global count of current-generation `pending`, `dispatching`, and
+retryable `failed` dispatch rows with a non-null `next_attempt_at`. Terminal `failed`
+rows without a next attempt, stale-generation, `dispatched`, `superseded`, and
+`abandoned` rows are nonblocking. Diagnostic
+`GET /api/deploy/quiescence` may still show sync running, but the host script uses
+admission rather than treating that one-shot observation as a lock.
+
+A robot-eligible durable-dispatch creation during `PREPARING` wins: it revokes the
+operation, resumes sync, and proceeds inside its existing SQLite publication
+transaction. Once `ACQUIRED`, the same shared store boundary throws retryable HTTP
+503 before a topic/reply/external-adapter transaction can commit. Explicit
+`POST /api/posts/:postId/dispatch` clears `silent` and creates or obtains its
+outbox row in one transaction, so failure leaves the post silent. Silent posts,
+robot-off topics, and non-mention posts in mention mode remain intentional
+non-dispatch cases; admission never converts an eligible accepted post into a
+silent or missing-dispatch post. HTTP success still means durable dispatch intent,
+not synchronous agentd acknowledgement. AgentBridge holds tracked admission around
+handoff drafting/linking, send/steer/direct dispatch, canonical fork, and compaction
+awaits; Auto Run holds it before Director/model launch through cleanup. Work beginning
+in `PREPARING` revokes deployment and proceeds, while work already in flight blocks
+acquisition until its idempotent release. Existing fork-operation reads/retries remain
+idempotent, but a new fork cannot be initiated while `ACQUIRED`.
 
 Pi's internal `agent_settled` event means the runtime reached the idle boundary;
 it is not a request to aggregate text or publish an unpersisted raw completion.

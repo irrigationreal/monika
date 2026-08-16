@@ -166,9 +166,11 @@ export function registerAdminRoutes({
     if (activeTurns.length > 0) blockers.push({ code: 'active_robot_turns', count: activeTurns.length });
     if (queuedTurns.length > 0) blockers.push({ code: 'queued_robot_turns', count: queuedTurns.length });
 
-    const syncStatus = piSessionSync?.getStatus() ?? null;
-    if (syncStatus?.running) blockers.push({ code: 'pi_session_sync_running' });
+    const actionableDispatches = store.countGlobalActionablePostDispatches();
+    if (actionableDispatches > 0) blockers.push({ code: 'actionable_post_dispatches', count: actionableDispatches });
 
+    // Pi sync is telemetry here, not a blocker: deploy-if-safe acquires forum
+    // admission, pauses new cycles, and boundedly waits for an in-flight cycle.
     // DB-persisted robot state (ex: waiting). We deliberately ignore "error"
     // states since they are "concluded" from a deploy-safety standpoint.
     const blockingRobotStates = store

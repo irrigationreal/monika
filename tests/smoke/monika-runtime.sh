@@ -676,6 +676,7 @@ endsection
 section "Redeploy backup smoke"
 SMOKE_DEPLOY_ROOT="$SMOKE_TMP_DIR/deploy-root"
 MOCK_FORUM_PORT_FILE="$SMOKE_TMP_DIR/mock-forum-port"
+MOCK_FORUM_CALLS_FILE="$SMOKE_TMP_DIR/mock-forum-calls"
 mkdir -p \
   "$SMOKE_DEPLOY_ROOT/runtime/data" \
   "$SMOKE_DEPLOY_ROOT/runtime/secrets" \
@@ -692,20 +693,33 @@ printf 'secret-for-backup-smoke\n' >"$SMOKE_DEPLOY_ROOT/runtime/secrets/example.
 printf 'excluded-backup-seed\n' >"$SMOKE_DEPLOY_ROOT/runtime/backups/redeploy/seed.txt"
 printf 'excluded-output\n' >"$SMOKE_DEPLOY_ROOT/out/generated.txt"
 
-MOCK_FORUM_PORT_FILE="$MOCK_FORUM_PORT_FILE" node <<'NODE_FORUM' &
+MOCK_FORUM_PORT_FILE="$MOCK_FORUM_PORT_FILE" MOCK_FORUM_CALLS_FILE="$MOCK_FORUM_CALLS_FILE" node <<'NODE_FORUM' &
 const fs = require('node:fs');
 const http = require('node:http');
 
 const portFile = process.env.MOCK_FORUM_PORT_FILE;
 const server = http.createServer((req, res) => {
-  if (req.method === 'GET' && req.url === '/api/deploy/quiescence') {
-    if (req.headers.authorization !== 'Bearer smoke-deploy-token') {
-      res.writeHead(401, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ code: 'unauthorized' }));
-      return;
-    }
+  if (req.headers.authorization !== 'Bearer smoke-deploy-token') {
+    res.writeHead(401, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ code: 'unauthorized' }));
+    return;
+  }
+  if (req.method === 'POST' && req.url === '/api/deploy/admission/acquire') {
+    fs.appendFileSync(process.env.MOCK_FORUM_CALLS_FILE, 'acquire\n');
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ safeToStop: true, blockers: [] }));
+    res.end(JSON.stringify({
+      acquired: true,
+      operationId: 'smoke-deploy-operation',
+      state: 'acquired',
+      blockers: [],
+      expiresAt: '2099-01-01T00:00:00.000Z',
+    }));
+    return;
+  }
+  if (req.method === 'POST' && req.url === '/api/deploy/admission/cancel') {
+    fs.appendFileSync(process.env.MOCK_FORUM_CALLS_FILE, 'cancel\n');
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, released: true, operationId: 'smoke-deploy-operation' }));
     return;
   }
   res.writeHead(404, { 'content-type': 'application/json' });
@@ -737,6 +751,12 @@ MONIKA_AGENTD_BASE_URL="http://127.0.0.1:${AGENTD_PORT}" \
 MONIKA_FORUM_BASE_URL="http://127.0.0.1:${MOCK_FORUM_PORT}/api" \
 MONIKA_FORUM_DEPLOY_TOKEN="smoke-deploy-token" \
 ./scripts/deploy-if-safe --backup-only
+if [ "$(grep -c '^acquire$' "$MOCK_FORUM_CALLS_FILE" || true)" -ne 1 ] ||
+  [ "$(grep -c '^cancel$' "$MOCK_FORUM_CALLS_FILE" || true)" -ne 1 ]; then
+  echo "backup-only deploy did not explicitly acquire and cancel the surviving forum lease"
+  cat "$MOCK_FORUM_CALLS_FILE"
+  exit 1
+fi
 
 mapfile -t archives < <(find "$SMOKE_DEPLOY_ROOT/runtime/backups/redeploy" -maxdepth 1 -type f -name 'monika-redeploy-*.tar.gz' | sort)
 if [ "${#archives[@]}" -ne 1 ]; then

@@ -149,9 +149,7 @@ export class CompactionService {
   getState(topicId: string): TopicCompactionState {
     const active = this.store.getActiveCompactionOperation(topicId);
     const latest = this.store.getLatestCompactionOperation(topicId);
-    const checkpointDispatch = latest?.recoveryPostId
-      ? this.store.getPostDispatchByPost(latest.recoveryPostId)
-      : null;
+    const checkpointDispatch = latest?.recoveryPostId ? this.store.getPostDispatchByPost(latest.recoveryPostId) : null;
     return { active, latest, checkpointDispatch };
   }
 
@@ -171,6 +169,9 @@ export class CompactionService {
     if (dispatch.status !== 'failed') {
       throw new CompactionConflictError('Recovery checkpoint dispatch is terminal and must not be retried');
     }
+    // Retrying makes terminal history actionable again, so it must cross the
+    // same deployment-admission fence as creating a fresh dispatch.
+    this.store.assertRobotWorkAdmission();
     if (!this.store.retryTerminalPostDispatch(dispatch.id)) {
       const current = this.store.getPostDispatch(dispatch.id);
       if (current?.status === 'pending' || current?.status === 'dispatching' || current?.status === 'dispatched') {

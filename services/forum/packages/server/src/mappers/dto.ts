@@ -6,6 +6,9 @@ import type {
   ChatRoomDto,
   CompactionCheckpointDispatchDto,
   CompactionOperationDto,
+  DeploymentAdmissionCancelResponseDto,
+  DeploymentAdmissionResultDto,
+  DeploymentAdmissionStatusDto,
   ExternalRefDto,
   ForkOperationDto,
   ForumDto,
@@ -51,6 +54,10 @@ import type {
 import type { ChatCategoryRow, ChatMessageRow, ChatRoomRow } from '../db';
 import type { TopicCompactionState } from '../services/compactionService';
 import type {
+  DeploymentAdmissionCoordinator,
+  DeploymentAdmissionResult,
+} from '../services/deploymentAdmissionCoordinator';
+import type {
   Attachment,
   ForumReadModel,
   IdentityReadModel,
@@ -68,6 +75,22 @@ import type {
 } from './domain';
 
 type ChatCategorySummaryRow = ChatCategoryRow & { room_count: number };
+
+export function mapDeploymentAdmissionResultToDto(result: DeploymentAdmissionResult): DeploymentAdmissionResultDto {
+  return { ...result, blockers: result.blockers.map((blocker) => ({ ...blocker })) };
+}
+
+export function mapDeploymentAdmissionStatusToDto(
+  status: ReturnType<DeploymentAdmissionCoordinator['getStatus']>
+): DeploymentAdmissionStatusDto {
+  return { ...status };
+}
+
+export function mapDeploymentAdmissionCancelResponseToDto(
+  result: ReturnType<DeploymentAdmissionCoordinator['cancel']>
+): DeploymentAdmissionCancelResponseDto {
+  return { ...result };
+}
 
 export function mapForkOperationToDto(operation: ForkOperation): ForkOperationDto {
   return {

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { migrate } from '../db';
 import { ForumStore } from '../store';
+import { DeploymentAdmissionCoordinator, DispatchAdmissionFencedError } from './deploymentAdmissionCoordinator';
 import { ForkService } from './forkService';
 
 describe('ForkService', () => {
@@ -95,6 +96,38 @@ describe('ForkService', () => {
     });
     return { forum, admin, topic: created.topic, first: created.post, answer, boundary, ids, source, openingSource };
   }
+
+  it('rejects a new fork before async leaf/prestage work while deployment admission is acquired', async () => {
+    const seeded = await seed();
+    const getTopicCompactionLeaf = vi.fn().mockResolvedValue('custom-leaf');
+    const service = new ForkService(
+      store,
+      {
+        getTopicCompactionLeaf,
+        forkTopicConversation: vi.fn(),
+        acknowledgeFork: vi.fn(),
+      },
+      { wake: vi.fn() },
+      { intervalMs: 60_000, uploadsDir: uploads }
+    );
+    services.push(service);
+    const coordinator = new DeploymentAdmissionCoordinator(store, null, () => []);
+    await coordinator.acquire({ operationId: 'deploy-fork', waitTimeoutMs: 100, leaseMs: 60_000 });
+
+    await expect(
+      service.enqueue({
+        operationId: 'fork-fenced',
+        topicId: seeded.topic.id,
+        boundaryPostId: seeded.boundary.id,
+        initiatedBy: seeded.admin.id,
+        title: 'Forked topic',
+        openingBody: 'edited opening',
+      })
+    ).rejects.toBeInstanceOf(DispatchAdmissionFencedError);
+    expect(getTopicCompactionLeaf).not.toHaveBeenCalled();
+    expect(store.getForkOperation('fork-fenced')).toBeNull();
+    coordinator.close();
+  });
 
   it('durably forks, materializes inherited posts and independent attachments, then dispatches edited opening once', async () => {
     const seeded = await seed();

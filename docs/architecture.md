@@ -229,8 +229,11 @@ The runtime records these distinctions instead of converting uncertainty into a
 clean but false story.
 
 Safe redeployment therefore considers active turns, interactive ownership,
-memstore saves, forum projection work, subagent execution, and unresolved remote
-effects. See [`docs/redeployment.md`](redeployment.md).
+memstore saves, forum projection work, durable current-generation dispatch intent,
+subagent execution, and unresolved remote effects. Forum deployment admission
+pauses/waits background sync and fences new eligible posts across the final
+quiescence-to-restart window; agentd drain independently fences canonical runtime
+work. See [`docs/redeployment.md`](redeployment.md).
 
 ## Non-goals
 

@@ -26,6 +26,10 @@ FORUM_URL="${MONIKA_FORUM_BASE_URL:-http://127.0.0.1:4310/api}"
 FORUM_READY_URL="${MONIKA_FORUM_READY_URL:-http://127.0.0.1:4310/readyz}"
 FORUM_POST_DEPLOY_TIMEOUT_MS="${MONIKA_FORUM_POST_DEPLOY_TIMEOUT_MS:-120000}"
 FORUM_DEPLOY_TOKEN="${MONIKA_FORUM_DEPLOY_TOKEN:-${CODEX_FORUM_DEPLOY_TOKEN:-}}"
+FORUM_ADMISSION_WAIT_TIMEOUT_MS="${MONIKA_FORUM_ADMISSION_WAIT_TIMEOUT_MS:-30000}"
+FORUM_ADMISSION_LEASE_MS="${MONIKA_FORUM_ADMISSION_LEASE_MS:-1800000}"
+FORUM_CURL_MAX_TIME_SECONDS="${MONIKA_FORUM_CURL_MAX_TIME_SECONDS:-5}"
+FORUM_ADMISSION_OPERATION_ID="forum-deploy-$(date -u +%Y%m%dT%H%M%SZ)-$$-$(python3 -c 'import uuid; print(uuid.uuid4())')"
 AGENTD_DRAIN_TIMEOUT_MS="${MONIKA_AGENTD_DRAIN_TIMEOUT_MS:-0}"
 AGENTD_DRAIN_AUTO_CANCEL_MS="${MONIKA_AGENTD_DRAIN_AUTO_CANCEL_MS:-900000}"
 AGENTD_POST_DEPLOY_TIMEOUT_MS="${MONIKA_AGENTD_POST_DEPLOY_TIMEOUT_MS:-120000}"
@@ -47,6 +51,7 @@ export MONIKA_FORUM_IMAGE="${MONIKA_FORUM_IMAGE:-ghcr.io/irrigationreal/monika-f
 
 DRAIN_STARTED=0
 CANCEL_DRAIN_ON_EXIT=0
+FORUM_ADMISSION_ACQUIRED=0
 MONIKA_UPDATE_NEEDED=0
 FORUM_UPDATE_NEEDED=0
 COMPOSE_ARGS=(-f "$COMPOSE_FILE")
@@ -67,17 +72,41 @@ for part in expr:
 print("true" if v is True else "false" if v is False else "" if v is None else v)' "$1"
 }
 
+epoch_ms() {
+  python3 -c 'import time; print(int(time.time() * 1000))'
+}
+
+remaining_timeout_seconds() {
+  python3 - "$1" "$2" <<'PY'
+import sys
+import time
+
+deadline_ms = int(sys.argv[1])
+maximum_seconds = float(sys.argv[2])
+remaining_ms = deadline_ms - int(time.time() * 1000)
+if remaining_ms <= 0 or maximum_seconds <= 0:
+    raise SystemExit(1)
+print(f"{min(maximum_seconds, remaining_ms / 1000):.3f}")
+PY
+}
+
 tempfail() {
   echo "deploy deferred: $*" >&2
   exit 75
 }
 
-cancel_agentd_drain() {
+release_deploy_guards() {
   if [ "$DRAIN_STARTED" = "1" ] && [ "$CANCEL_DRAIN_ON_EXIT" = "1" ]; then
-    curl -fsS -X POST "$AGENTD_URL/v1/admin/drain/cancel" >/dev/null 2>&1 || true
+    curl -fsS --max-time "$FORUM_CURL_MAX_TIME_SECONDS" -X POST "$AGENTD_URL/v1/admin/drain/cancel" >/dev/null 2>&1 || true
+  fi
+  if [ "$FORUM_ADMISSION_ACQUIRED" = "1" ] && [ -n "$FORUM_DEPLOY_TOKEN" ]; then
+    curl -fsS --max-time "$FORUM_CURL_MAX_TIME_SECONDS" -X POST "$FORUM_URL/deploy/admission/cancel" \
+      -H "authorization: Bearer $FORUM_DEPLOY_TOKEN" \
+      -H 'content-type: application/json' \
+      --data "{\"operationId\":\"${FORUM_ADMISSION_OPERATION_ID}\"}" >/dev/null 2>&1 || true
   fi
 }
-trap cancel_agentd_drain EXIT
+trap release_deploy_guards EXIT
 
 forum_curl() {
   if [ -z "$FORUM_DEPLOY_TOKEN" ]; then
@@ -87,11 +116,42 @@ forum_curl() {
   curl -fsS -H "authorization: Bearer $FORUM_DEPLOY_TOKEN" "$@"
 }
 
-require_safe_forum() {
-  local state safe
-  state="$(forum_curl "$FORUM_URL/deploy/quiescence")" || tempfail "forum quiescence endpoint unavailable"
-  safe="$(printf '%s' "$state" | json_field safeToStop)"
-  [ "$safe" = "true" ] || tempfail "forum is not safe to stop: $state"
+acquire_forum_admission() {
+  local state acquired curl_timeout_seconds
+  curl_timeout_seconds="$(python3 - "$FORUM_ADMISSION_WAIT_TIMEOUT_MS" <<'PY'
+import sys
+
+try:
+    wait_ms = int(sys.argv[1])
+except ValueError:
+    raise SystemExit("MONIKA_FORUM_ADMISSION_WAIT_TIMEOUT_MS must be a positive integer")
+if wait_ms <= 0:
+    raise SystemExit("MONIKA_FORUM_ADMISSION_WAIT_TIMEOUT_MS must be greater than 0")
+print(f"{(wait_ms + 5000) / 1000:.3f}")
+PY
+)"
+  # The server may acquire the lease even if curl loses the response. Mark it
+  # before the request so the exit trap best-effort cancels that uncertainty.
+  FORUM_ADMISSION_ACQUIRED=1
+  state="$(forum_curl --max-time "$curl_timeout_seconds" -X POST "$FORUM_URL/deploy/admission/acquire" \
+    -H 'content-type: application/json' \
+    --data "{\"operationId\":\"${FORUM_ADMISSION_OPERATION_ID}\",\"waitTimeoutMs\":${FORUM_ADMISSION_WAIT_TIMEOUT_MS},\"leaseMs\":${FORUM_ADMISSION_LEASE_MS}}")" \
+    || tempfail "forum deployment admission was blocked or unavailable"
+  acquired="$(printf '%s' "$state" | json_field acquired)"
+  [ "$acquired" = "true" ] || tempfail "forum deployment admission was not acquired: $state"
+  FORUM_ADMISSION_ACQUIRED=1
+  echo "forum deployment admission acquired: $FORUM_ADMISSION_OPERATION_ID"
+}
+
+cancel_forum_admission() {
+  if [ "$FORUM_ADMISSION_ACQUIRED" != "1" ]; then
+    return 0
+  fi
+  forum_curl --max-time "$FORUM_CURL_MAX_TIME_SECONDS" -X POST "$FORUM_URL/deploy/admission/cancel" \
+    -H 'content-type: application/json' \
+    --data "{\"operationId\":\"${FORUM_ADMISSION_OPERATION_ID}\"}" >/dev/null
+  FORUM_ADMISSION_ACQUIRED=0
+  echo "forum deployment admission cancelled"
 }
 
 drain_agentd() {
@@ -120,12 +180,17 @@ wait_for_agentd_drain_cancel_after_deploy() {
     return 0
   fi
 
-  local deadline now state draining_state health_status
-  deadline=$(( $(date +%s) + (AGENTD_POST_DEPLOY_TIMEOUT_MS / 1000) ))
+  local deadline probe_timeout state draining_state health_status
+  deadline=$(( $(epoch_ms) + AGENTD_POST_DEPLOY_TIMEOUT_MS ))
   while true; do
-    if state="$(curl -fsS -X POST "$AGENTD_URL/v1/admin/drain/cancel" 2>/dev/null)"; then
+    probe_timeout="$(remaining_timeout_seconds "$deadline" "$FORUM_CURL_MAX_TIME_SECONDS")" || {
+      echo "agentd did not become healthy/undrained after deploy within ${AGENTD_POST_DEPLOY_TIMEOUT_MS}ms" >&2
+      return 1
+    }
+    if state="$(curl -fsS --max-time "$probe_timeout" -X POST "$AGENTD_URL/v1/admin/drain/cancel" 2>/dev/null)"; then
       draining_state="$(printf '%s' "$state" | json_field draining)"
-      if health_status="$(curl -fsS "$AGENTD_URL/healthz" 2>/dev/null | json_field status)"; then
+      if probe_timeout="$(remaining_timeout_seconds "$deadline" "$FORUM_CURL_MAX_TIME_SECONDS")" &&
+        health_status="$(curl -fsS --max-time "$probe_timeout" "$AGENTD_URL/healthz" 2>/dev/null | json_field status)"; then
         if [ "$draining_state" = "false" ] && [ "$health_status" = "healthy" ]; then
           CANCEL_DRAIN_ON_EXIT=0
           echo "agentd drain cancelled after deploy"
@@ -133,29 +198,25 @@ wait_for_agentd_drain_cancel_after_deploy() {
         fi
       fi
     fi
-    now=$(date +%s)
-    if [ "$now" -ge "$deadline" ]; then
-      echo "agentd did not become healthy/undrained after deploy within ${AGENTD_POST_DEPLOY_TIMEOUT_MS}ms" >&2
-      return 1
-    fi
-    sleep 2
+    probe_timeout="$(remaining_timeout_seconds "$deadline" 2)" || continue
+    sleep "$probe_timeout"
   done
 }
 
 wait_for_forum_ready_after_deploy() {
-  local deadline now
-  deadline=$(( $(date +%s) + (FORUM_POST_DEPLOY_TIMEOUT_MS / 1000) ))
+  local deadline probe_timeout
+  deadline=$(( $(epoch_ms) + FORUM_POST_DEPLOY_TIMEOUT_MS ))
   while true; do
-    if curl -fsS "$FORUM_READY_URL" >/dev/null 2>&1; then
+    probe_timeout="$(remaining_timeout_seconds "$deadline" "$FORUM_CURL_MAX_TIME_SECONDS")" || {
+      echo "forum did not become ready after deploy within ${FORUM_POST_DEPLOY_TIMEOUT_MS}ms" >&2
+      return 1
+    }
+    if curl -fsS --max-time "$probe_timeout" "$FORUM_READY_URL" >/dev/null 2>&1; then
       echo "forum ready after deploy"
       return 0
     fi
-    now=$(date +%s)
-    if [ "$now" -ge "$deadline" ]; then
-      echo "forum did not become ready after deploy within ${FORUM_POST_DEPLOY_TIMEOUT_MS}ms" >&2
-      return 1
-    fi
-    sleep 2
+    probe_timeout="$(remaining_timeout_seconds "$deadline" 2)" || continue
+    sleep "$probe_timeout"
   done
 }
 
@@ -492,7 +553,7 @@ if [ "$MODE" = "deploy" ]; then
   fi
 fi
 
-require_safe_forum
+acquire_forum_admission
 if [ "$MODE" = "backup-only" ] || [ "$MONIKA_UPDATE_NEEDED" = "1" ]; then
   drain_agentd
 fi
@@ -500,6 +561,7 @@ create_backup
 
 if [ "$MODE" = "backup-only" ]; then
   prune_backups
+  cancel_forum_admission
   echo "backup-only mode complete"
   exit 0
 fi
@@ -519,6 +581,11 @@ if [ "$FORUM_UPDATE_NEEDED" = "1" ]; then
   APPLY_SERVICES+=(forum)
 fi
 
+# Revalidate ownership and renew the process-local lease after backup/drain,
+# immediately before Compose receives control. Failure is closed: an expired or
+# replaced lease owner cannot proceed to container replacement.
+acquire_forum_admission
+
 # --no-deps is the safety boundary: a forum-only update cannot recreate Monika
 # because of unrelated Compose configuration drift.
 compose up -d --no-deps "${APPLY_SERVICES[@]}"
@@ -527,6 +594,7 @@ compose up -d --no-deps "${APPLY_SERVICES[@]}"
 # backend. Forum-only replacements skip this step but still prove /readyz.
 wait_for_agentd_drain_cancel_after_deploy
 wait_for_forum_ready_after_deploy
+cancel_forum_admission
 compose ps "${STATUS_SERVICES[@]}"
 prune_backups
 prune_docker_images

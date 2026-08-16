@@ -614,3 +614,23 @@ describe('detectHistoricalTerminalErrors', async () => {
     expect(detectHistoricalTerminalErrors(value)).toEqual([]);
   });
 });
+
+describe('PiSessionSyncService deployment pause', () => {
+  it('prevents new cycles while paused and resumes them without hiding telemetry', async () => {
+    const db = new Database(':memory:');
+    runMigrations(db);
+    const service = new PiSessionSyncService(db, { agentdBaseUrl: 'http://agentd.test', intervalMs: 60_000 });
+    const listPiSessions = vi.spyOn((service as any).client, 'listPiSessions').mockResolvedValue({ sessions: [] });
+
+    service.pause();
+    expect(service.getStatus()).toMatchObject({ paused: true, running: false });
+    await expect(service.runManualSync()).resolves.toMatchObject({ ok: false, message: expect.stringContaining('paused') });
+    expect(listPiSessions).not.toHaveBeenCalled();
+
+    service.resume();
+    await expect(service.runManualSync()).resolves.toMatchObject({ ok: true });
+    expect(listPiSessions).toHaveBeenCalledOnce();
+    expect(service.getStatus()).toMatchObject({ paused: false, running: false });
+    db.close();
+  });
+});

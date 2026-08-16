@@ -128,6 +128,10 @@ export class AutoRunDirector {
     if (opts.steerMessage !== undefined) {
       this.store.upsertTopicAutoRun({ topicId: opts.topicId, steerMessage: opts.steerMessage ?? null });
     }
+    // Manual callers must receive a retryable admission error rather than a
+    // false success from runDirector's background-error projection. There is
+    // no await between this probe and runDirector acquiring its tracked lease.
+    this.store.assertRobotWorkAdmission();
     await this.runDirector({ topicId: opts.topicId, triggerPostId: null, force: true });
     return { ok: true, message: 'Director run started.' };
   }
@@ -152,16 +156,20 @@ export class AutoRunDirector {
     if (opts.triggerPostId && autoRun.last_trigger_post_id === opts.triggerPostId) return;
     if (this.runningTopics.has(opts.topicId)) return;
 
-    this.runningTopics.add(opts.topicId);
-    this.store.upsertTopicAutoRun({
-      topicId: opts.topicId,
-      status: 'running',
-      lastRunAt: nowIso(),
-      lastError: null,
-      lastTriggerPostId: opts.triggerPostId ?? autoRun.last_trigger_post_id,
-    });
-
+    let releaseAdmission: (() => void) | null = null;
     try {
+      // Admission must be held before the Director launches any model work.
+      // The release remains live through publication and optional robot dispatch.
+      releaseAdmission = this.store.beginRobotWork();
+      this.runningTopics.add(opts.topicId);
+      this.store.upsertTopicAutoRun({
+        topicId: opts.topicId,
+        status: 'running',
+        lastRunAt: nowIso(),
+        lastError: null,
+        lastTriggerPostId: opts.triggerPostId ?? autoRun.last_trigger_post_id,
+      });
+
       const topic = this.store.getTopic(opts.topicId);
       if (!topic) {
         throw new Error('Topic not found');
@@ -304,6 +312,7 @@ export class AutoRunDirector {
       });
     } finally {
       this.runningTopics.delete(opts.topicId);
+      releaseAdmission?.();
     }
   }
 

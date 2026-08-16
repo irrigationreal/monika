@@ -181,89 +181,26 @@ export class ForkService {
       if (existing.status === 'pending' || existing.status === 'running') this.wake();
       return existing;
     }
-    const boundary = this.boundaries(input.topicId).find((candidate) => candidate.postId === input.boundaryPostId);
-    if (!boundary) throw new ForkConflictError('Selected post is not an eligible canonical fork boundary');
-    const session = this.store.getSessionByTopic(input.topicId);
-    const link = this.store.getPiSessionLinkByTopic(input.topicId);
-    if (!session || !link) throw new ForkConflictError('Linked canonical Pi session is unavailable');
-    // The canonical leaf may be a non-post custom/tool/model entry newer than
-    // the forum projection head. Ask agentd at durable acceptance time rather
-    // than pretending the selected post is the source leaf.
-    const expectedLeafId = await this.agent.getTopicCompactionLeaf(input.topicId);
-    if (!expectedLeafId) throw new ForkConflictError('Linked canonical Pi session leaf is unavailable');
 
-    const stageRoot = join(this.prestageRoot(), input.operationId);
-    const sourcePosts = this.store.listPosts(input.topicId, 1, 100_000);
-    const boundaryIndex = sourcePosts.findIndex((post) => post.id === input.boundaryPostId);
-    const inheritedSourcePosts = sourcePosts.slice(0, boundaryIndex + 1);
-    const sourceSnapshot = JSON.stringify(
-      inheritedSourcePosts.map((post) => ({
-        id: post.id,
-        parentPostId: post.parent_post_id,
-        body: post.body,
-        editedAt: post.edited_at,
-        deletedAt: post.deleted_at,
-        attachments: this.store
-          .listAttachmentsByPost(post.id)
-          .filter((attachment) => !attachment.deleted_at)
-          .map((attachment) => ({
-            id: attachment.id,
-            sizeBytes: attachment.size_bytes,
-            storagePath: attachment.storage_path,
-            sha256: attachment.sha256,
-          })),
-      }))
-    );
-    const prestaged: Array<{
-      sourcePostId: string;
-      filename: string;
-      mimeType: string;
-      sizeBytes: number;
-      storagePath: string;
-      sha256: string | null;
-    }> = [];
+    const releaseAdmission = this.store.beginRobotWork();
     try {
-      await mkdir(stageRoot, { recursive: true });
-      const stageInfo = await lstat(stageRoot);
-      if (!stageInfo.isDirectory() || stageInfo.isSymbolicLink())
-        throw new ForkConflictError('Fork attachment prestage path is unsafe');
-      for (const post of inheritedSourcePosts) {
-        for (const attachment of this.store.listAttachmentsByPost(post.id)) {
-          if (attachment.deleted_at) continue;
-          const destination = join(
-            stageRoot,
-            `${attachment.id}-${attachment.filename.replace(/[^a-zA-Z0-9._-]/g, '_')}`
-          );
-          const sourceStat = await stat(attachment.storage_path);
-          if (!sourceStat.isFile()) throw new ForkConflictError('Fork attachments must be regular files');
-          if (
-            sourceStat.size !== attachment.size_bytes ||
-            sourceStat.size < 0 ||
-            sourceStat.size > MAX_ATTACHMENT_BYTES
-          )
-            throw new ForkConflictError('Fork attachment size validation failed');
-          const sourceSha256 = await sha256File(attachment.storage_path);
-          if (attachment.sha256 && attachment.sha256 !== sourceSha256)
-            throw new ForkConflictError('Fork attachment source hash validation failed');
-          await copyFile(attachment.storage_path, destination);
-          const copiedStat = await stat(destination);
-          const sha256 = await sha256File(destination);
-          if (copiedStat.size !== attachment.size_bytes || sha256 !== sourceSha256)
-            throw new ForkConflictError('Fork attachment integrity validation failed');
-          prestaged.push({
-            sourcePostId: post.id,
-            filename: attachment.filename,
-            mimeType: attachment.mime_type,
-            sizeBytes: copiedStat.size,
-            storagePath: destination,
-            sha256,
-          });
-        }
-      }
-      const currentPosts = this.store.listPosts(input.topicId, 1, 100_000);
-      const currentBoundaryIndex = currentPosts.findIndex((post) => post.id === input.boundaryPostId);
-      const currentSnapshot = JSON.stringify(
-        currentPosts.slice(0, currentBoundaryIndex + 1).map((post) => ({
+      const boundary = this.boundaries(input.topicId).find((candidate) => candidate.postId === input.boundaryPostId);
+      if (!boundary) throw new ForkConflictError('Selected post is not an eligible canonical fork boundary');
+      const session = this.store.getSessionByTopic(input.topicId);
+      const link = this.store.getPiSessionLinkByTopic(input.topicId);
+      if (!session || !link) throw new ForkConflictError('Linked canonical Pi session is unavailable');
+      // The canonical leaf may be a non-post custom/tool/model entry newer than
+      // the forum projection head. Ask agentd at durable acceptance time rather
+      // than pretending the selected post is the source leaf.
+      const expectedLeafId = await this.agent.getTopicCompactionLeaf(input.topicId);
+      if (!expectedLeafId) throw new ForkConflictError('Linked canonical Pi session leaf is unavailable');
+
+      const stageRoot = join(this.prestageRoot(), input.operationId);
+      const sourcePosts = this.store.listPosts(input.topicId, 1, 100_000);
+      const boundaryIndex = sourcePosts.findIndex((post) => post.id === input.boundaryPostId);
+      const inheritedSourcePosts = sourcePosts.slice(0, boundaryIndex + 1);
+      const sourceSnapshot = JSON.stringify(
+        inheritedSourcePosts.map((post) => ({
           id: post.id,
           parentPostId: post.parent_post_id,
           body: post.body,
@@ -280,30 +217,99 @@ export class ForkService {
             })),
         }))
       );
-      if (currentBoundaryIndex !== boundaryIndex || currentSnapshot !== sourceSnapshot)
-        throw new ForkConflictError('Source topic changed while fork attachments were being prestaged');
-      const operation = this.store.enqueueForkOperation({
-        id: input.operationId,
-        sourceTopicId: input.topicId,
-        sourceSessionId: session.id,
-        sourcePiSessionId: link.pi_session_id,
-        sourcePiSessionPath: link.pi_session_path,
-        boundaryPostId: boundary.postId,
-        boundaryPiMessageId: boundary.piMessageId,
-        boundaryEntryId: boundary.entryId,
-        expectedLeafId,
-        initiatedBy: input.initiatedBy,
-        title: input.title.trim(),
-        openingBody: input.openingBody.trim(),
-        prestagedAttachments: prestaged,
-      });
-      this.wake();
-      return operation;
-    } catch (error) {
-      await rm(stageRoot, { recursive: true, force: true });
-      if (error instanceof Error && error.message === 'fork_conflict')
-        throw new ForkConflictError('Topic must be idle with no unresolved operation or dispatch');
-      throw error;
+      const prestaged: Array<{
+        sourcePostId: string;
+        filename: string;
+        mimeType: string;
+        sizeBytes: number;
+        storagePath: string;
+        sha256: string | null;
+      }> = [];
+      try {
+        await mkdir(stageRoot, { recursive: true });
+        const stageInfo = await lstat(stageRoot);
+        if (!stageInfo.isDirectory() || stageInfo.isSymbolicLink())
+          throw new ForkConflictError('Fork attachment prestage path is unsafe');
+        for (const post of inheritedSourcePosts) {
+          for (const attachment of this.store.listAttachmentsByPost(post.id)) {
+            if (attachment.deleted_at) continue;
+            const destination = join(
+              stageRoot,
+              `${attachment.id}-${attachment.filename.replace(/[^a-zA-Z0-9._-]/g, '_')}`
+            );
+            const sourceStat = await stat(attachment.storage_path);
+            if (!sourceStat.isFile()) throw new ForkConflictError('Fork attachments must be regular files');
+            if (
+              sourceStat.size !== attachment.size_bytes ||
+              sourceStat.size < 0 ||
+              sourceStat.size > MAX_ATTACHMENT_BYTES
+            )
+              throw new ForkConflictError('Fork attachment size validation failed');
+            const sourceSha256 = await sha256File(attachment.storage_path);
+            if (attachment.sha256 && attachment.sha256 !== sourceSha256)
+              throw new ForkConflictError('Fork attachment source hash validation failed');
+            await copyFile(attachment.storage_path, destination);
+            const copiedStat = await stat(destination);
+            const sha256 = await sha256File(destination);
+            if (copiedStat.size !== attachment.size_bytes || sha256 !== sourceSha256)
+              throw new ForkConflictError('Fork attachment integrity validation failed');
+            prestaged.push({
+              sourcePostId: post.id,
+              filename: attachment.filename,
+              mimeType: attachment.mime_type,
+              sizeBytes: copiedStat.size,
+              storagePath: destination,
+              sha256,
+            });
+          }
+        }
+        const currentPosts = this.store.listPosts(input.topicId, 1, 100_000);
+        const currentBoundaryIndex = currentPosts.findIndex((post) => post.id === input.boundaryPostId);
+        const currentSnapshot = JSON.stringify(
+          currentPosts.slice(0, currentBoundaryIndex + 1).map((post) => ({
+            id: post.id,
+            parentPostId: post.parent_post_id,
+            body: post.body,
+            editedAt: post.edited_at,
+            deletedAt: post.deleted_at,
+            attachments: this.store
+              .listAttachmentsByPost(post.id)
+              .filter((attachment) => !attachment.deleted_at)
+              .map((attachment) => ({
+                id: attachment.id,
+                sizeBytes: attachment.size_bytes,
+                storagePath: attachment.storage_path,
+                sha256: attachment.sha256,
+              })),
+          }))
+        );
+        if (currentBoundaryIndex !== boundaryIndex || currentSnapshot !== sourceSnapshot)
+          throw new ForkConflictError('Source topic changed while fork attachments were being prestaged');
+        const operation = this.store.enqueueForkOperation({
+          id: input.operationId,
+          sourceTopicId: input.topicId,
+          sourceSessionId: session.id,
+          sourcePiSessionId: link.pi_session_id,
+          sourcePiSessionPath: link.pi_session_path,
+          boundaryPostId: boundary.postId,
+          boundaryPiMessageId: boundary.piMessageId,
+          boundaryEntryId: boundary.entryId,
+          expectedLeafId,
+          initiatedBy: input.initiatedBy,
+          title: input.title.trim(),
+          openingBody: input.openingBody.trim(),
+          prestagedAttachments: prestaged,
+        });
+        this.wake();
+        return operation;
+      } catch (error) {
+        await rm(stageRoot, { recursive: true, force: true });
+        if (error instanceof Error && error.message === 'fork_conflict')
+          throw new ForkConflictError('Topic must be idle with no unresolved operation or dispatch');
+        throw error;
+      }
+    } finally {
+      releaseAdmission();
     }
   }
 
