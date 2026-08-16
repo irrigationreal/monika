@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue';
 
 import ConfirmationDialog from '../components/ConfirmationDialog.vue';
 import DraftStatus from '../components/DraftStatus.vue';
+import RenderedContent from '../components/RenderedContent.vue';
 import { useAutosavedDraft } from '../composables/useAutosavedDraft';
 import { useMarkdown } from '../composables/useMarkdown';
 import { api } from '../lib/apiClient';
@@ -309,7 +310,7 @@ onMounted(async () => {
           </select>
         </label>
       </div>
-      <div v-if="showPreview" class="vb-note-preview" v-html="renderContent(body, null)"></div>
+      <RenderedContent v-if="showPreview" class="vb-note-preview vb-post-text" :html="renderContent(body, null)" />
       <button class="vb-btn vb-note-post" type="submit" :disabled="!canPost">
         {{ publishing ? 'Posting…' : 'Post Note' }}
       </button>
@@ -345,7 +346,7 @@ onMounted(async () => {
     <article v-if="pinned" class="vb-note-card vb-note-pinned">
       <div class="vb-note-label">Pinned Note</div>
       <h2 v-if="pinned.title">{{ pinned.title }}</h2>
-      <div class="vb-post-body" v-html="renderContent(pinned.body, null)"></div>
+      <RenderedContent class="vb-note-body vb-post-text" :html="renderContent(pinned.body, null)" />
       <div class="vb-note-tag-row">
         <button v-for="tag in pinned.tags" :key="tag" class="vb-tag-chip" @click="toggleTag(tag)">#{{ tag }}</button>
       </div>
@@ -361,7 +362,7 @@ onMounted(async () => {
     <div class="vb-note-feed">
       <article v-for="entry in feed" :id="`note-${entry.id}`" :key="entry.id" class="vb-note-card">
         <h2 v-if="entry.title">{{ entry.title }}</h2>
-        <div class="vb-post-body" v-html="renderContent(entry.body, null)"></div>
+        <RenderedContent class="vb-note-body vb-post-text" :html="renderContent(entry.body, null)" />
         <div class="vb-note-tag-row">
           <button v-for="tag in entry.tags" :key="tag" class="vb-tag-chip" @click="toggleTag(tag)">#{{ tag }}</button>
         </div>

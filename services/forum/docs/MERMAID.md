@@ -67,8 +67,9 @@ Do not allow author-provided SVG through the general Markdown sanitizer, weaken 
 loose security mode, or insert Mermaid output directly into the host page. Mermaid security advisories must be reviewed
 when upgrading the pinned dependency.
 
-The forum currently enhances persisted post bodies, reply/new-thread previews, and completed fences in live assistant
-text. Signatures, profile fields, template previews, and reasoning/trace details remain ordinary escaped code blocks.
+The forum currently enhances persisted post bodies, reply/new-thread previews, private Notepad previews and saved note
+bodies, and completed fences in live assistant text. Signatures, profile fields, template previews, and reasoning/trace
+details remain ordinary escaped code blocks.
 
 ## Validation
 

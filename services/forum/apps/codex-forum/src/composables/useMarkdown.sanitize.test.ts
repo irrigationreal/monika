@@ -85,6 +85,11 @@ describe('useMarkdown sanitizer', () => {
     expect(html).toContain('<td>1</td>');
   });
 
+  it('renders Markdown and BBCode horizontal rules through the shared content contract', () => {
+    expect(renderContent('before\n\n---\n\nafter')).toContain('<hr>');
+    expect(renderContent('before\n\n[hr]\n\nafter')).toContain('<hr class="vb-hr">');
+  });
+
   it('does not expand retired filesystem-path attachment markup', () => {
     const markdown = renderContent('[[attach:/workspace/private/output.txt|name=output.txt]]', { topicId: 'public-topic' });
     const bbcode = renderBBCode('[[attach:/workspace/private/output.txt|name=output.txt]]', { topicId: 'public-topic' });

@@ -7,6 +7,7 @@ import ConfirmationDialog from '../components/ConfirmationDialog.vue';
 import DraftStatus from '../components/DraftStatus.vue';
 import MessageTemplatePicker from '../components/MessageTemplatePicker.vue';
 import OperationalEventBar from '../components/OperationalEventBar.vue';
+import RenderedContent from '../components/RenderedContent.vue';
 import TopicTraceViewer from '../components/TopicTraceViewer.vue';
 import { useAutosavedDraft } from '../composables/useAutosavedDraft';
 import { useForumState } from '../composables/useForumState';
@@ -2778,11 +2779,7 @@ onUnmounted(() => {
                       <div class="vb-multipost-segment-header">
                         <a class="vb-segment-link" :href="`#${segmentAnchorId(post.id, segIdx)}`">#</a>
                       </div>
-                      <div
-                        v-enhance-mermaid
-                        class="vb-post-text vb-rendered-content"
-                        v-html="renderPost(segment.body)"
-                      ></div>
+                      <RenderedContent class="vb-post-text" :html="renderPost(segment.body)" />
                       <div v-if="personaSignature(segment.personaKey)" class="vb-post-signature">
                         <div class="vb-signature-line"></div>
                         <div
@@ -2887,7 +2884,7 @@ onUnmounted(() => {
                   :src="ttsUrlForPost(post.id) ?? undefined"
                   preload="none"
                 ></audio>
-                <div v-enhance-mermaid class="vb-post-text vb-rendered-content" v-html="renderPost(post.body)"></div>
+                <RenderedContent class="vb-post-text" :html="renderPost(post.body)" />
                 <div v-if="visibleAttachmentsForPost(post.id).length > 0" class="vb-post-attachments">
                   <div class="vb-attachments-header">Attachments</div>
                   <ul class="vb-attachments-list">
