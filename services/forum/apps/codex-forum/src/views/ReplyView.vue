@@ -197,6 +197,10 @@ function handlePreviewButton(): void {
   showPreview.value = false;
 }
 
+function openReplyFilePicker(): void {
+  replyFileInputRef.value?.click();
+}
+
 function handleReplyFiles(event: Event): void {
   const input = event.target as HTMLInputElement | null;
   replyFiles.value = input?.files ? Array.from(input.files) : [];
@@ -728,14 +732,34 @@ onMounted(async () => {
             <div class="vb-reply-attachments">
               <label class="vb-attachment-label">Attachments:</label>
               <span class="vb-form-hint">Selected files are not included in autosaved drafts.</span>
-              <input
-                ref="replyFileInputRef"
-                class="vb-attachment-input"
-                type="file"
-                multiple
-                @change="handleReplyFiles"
-                :disabled="state.isTopicLocked()"
-              />
+              <div class="vb-attachment-picker">
+                <input
+                  ref="replyFileInputRef"
+                  class="vb-attachment-input vb-attachment-input-hidden"
+                  type="file"
+                  multiple
+                  tabindex="-1"
+                  aria-label="Choose files to attach"
+                  aria-describedby="reply-file-selection-status"
+                  :disabled="state.isTopicLocked() || isPublishing || isUploading"
+                  @change="handleReplyFiles"
+                />
+                <button
+                  type="button"
+                  class="vb-btn vb-btn-secondary"
+                  :disabled="state.isTopicLocked() || isPublishing || isUploading"
+                  @click="openReplyFilePicker"
+                >
+                  Browse files
+                </button>
+                <span id="reply-file-selection-status" class="vb-attachment-picker-status" role="status">
+                  {{
+                    replyFiles.length
+                      ? `${String(replyFiles.length)} file${replyFiles.length === 1 ? '' : 's'} selected`
+                      : 'No files selected'
+                  }}
+                </span>
+              </div>
               <div v-if="publishedPostId" class="vb-template-conflict" role="alert">
                 Reply posted; attachment upload is incomplete. Retrying cannot duplicate the reply.
                 <button type="button" class="vb-small-btn" :disabled="isUploading" @click="retryPublishedAttachments">

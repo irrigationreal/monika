@@ -608,6 +608,30 @@
   font-size: 11px;
 }
 
+.vb-attachment-picker {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.vb-attachment-input-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.vb-attachment-picker-status {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 .vb-attachment-status {
   font-size: 10px;
   color: var(--text-muted);
