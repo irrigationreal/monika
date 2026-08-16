@@ -2541,6 +2541,15 @@ onUnmounted(() => {
         <button class="vb-btn" @click="goHome">Back to Forum</button>
       </div>
       <div class="vb-pagination-controls">
+        <button
+          class="vb-page-btn"
+          type="button"
+          title="Scroll to bottom of current page"
+          aria-label="Scroll to bottom of current page"
+          @click="scrollToPageBottom"
+        >
+          Bottom
+        </button>
         <button class="vb-page-btn" :disabled="state.currentPage.value <= 1" @click="prevPage">« Prev</button>
         <template v-for="(page, idx) in pageNumbers" :key="idx">
           <span v-if="page === '...'" class="vb-page-ellipsis">...</span>
@@ -2563,15 +2572,6 @@ onUnmounted(() => {
           title="Jump to latest post"
         >
           »»
-        </button>
-        <button
-          class="vb-page-btn"
-          type="button"
-          title="Scroll to bottom of current page"
-          aria-label="Scroll to bottom of current page"
-          @click="scrollToPageBottom"
-        >
-          Bottom
         </button>
       </div>
     </div>
@@ -3044,6 +3044,15 @@ onUnmounted(() => {
         <button class="vb-btn" @click="goHome">Back to Forum</button>
       </div>
       <div class="vb-pagination-controls">
+        <button
+          class="vb-page-btn"
+          type="button"
+          title="Scroll to top of page"
+          aria-label="Scroll to top of page"
+          @click="scrollToTop"
+        >
+          Top
+        </button>
         <button class="vb-page-btn" :disabled="state.currentPage.value <= 1" @click="prevPage">« Prev</button>
         <template v-for="(page, idx) in pageNumbers" :key="idx">
           <span v-if="page === '...'" class="vb-page-ellipsis">...</span>
@@ -3066,15 +3075,6 @@ onUnmounted(() => {
           title="Jump to latest post"
         >
           »»
-        </button>
-        <button
-          class="vb-page-btn"
-          type="button"
-          title="Scroll to top of page"
-          aria-label="Scroll to top of page"
-          @click="scrollToTop"
-        >
-          Top
         </button>
       </div>
     </div>
