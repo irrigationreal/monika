@@ -705,15 +705,21 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (req.method === 'POST' && req.url === '/api/deploy/admission/acquire') {
-    fs.appendFileSync(process.env.MOCK_FORUM_CALLS_FILE, 'acquire\n');
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({
-      acquired: true,
-      operationId: 'smoke-deploy-operation',
-      state: 'acquired',
-      blockers: [],
-      expiresAt: '2099-01-01T00:00:00.000Z',
-    }));
+    let body = '';
+    req.setEncoding('utf8');
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', () => {
+      const operationId = JSON.parse(body).operationId;
+      fs.appendFileSync(process.env.MOCK_FORUM_CALLS_FILE, 'acquire\n');
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        acquired: true,
+        operationId,
+        state: 'acquired',
+        blockers: [],
+        expiresAt: '2099-01-01T00:00:00.000Z',
+      }));
+    });
     return;
   }
   if (req.method === 'POST' && req.url === '/api/deploy/admission/cancel') {

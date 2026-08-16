@@ -75,6 +75,8 @@ Deploy on Finish uses the same durable-dispatch blocker, also checks agentd, per
 
 Forum-only image updates do not drain agentd because Docker Compose is not expected to recreate the `monika` container. Backup-only mode still drains and cancels agentd because its purpose is to create a quiescence-gated **local redeploy** runtime capsule. It does not run the tiered B2 writer. Off-host jobs take a read-only Btrfs capture independently and root executes only the immutable Shadowsea Nix-store program, never this writable checkout.
 
+An exact `404` from admission acquire identifies the one-release bootstrap from a pre-admission forum image. Only then, the host boundedly polls the legacy authenticated quiescence snapshot and rechecks it immediately before Compose. Any other failure remains closed; after replacement, admission is mandatory.
+
 The script intentionally orchestrates only Docker and image tags. The knowledge of whether stopping is safe lives in agentd/forum APIs so the same contract can be reused by admin UI, timers, Watchtower hooks, or future tooling.
 
 ### Uncertain-run repair

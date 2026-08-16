@@ -116,8 +116,27 @@ forum_curl() {
   curl -fsS -H "authorization: Bearer $FORUM_DEPLOY_TOKEN" "$@"
 }
 
+legacy_wait_forum_quiescence() {
+  local deadline probe_timeout state safe
+  deadline=$(( $(epoch_ms) + FORUM_ADMISSION_WAIT_TIMEOUT_MS ))
+  echo "forum deployment admission endpoint is unavailable; using bounded legacy quiescence for one-release rollout" >&2
+  while true; do
+    probe_timeout="$(remaining_timeout_seconds "$deadline" "$FORUM_CURL_MAX_TIME_SECONDS")" || \
+      tempfail "legacy forum quiescence did not become safe within ${FORUM_ADMISSION_WAIT_TIMEOUT_MS}ms"
+    state="$(forum_curl --max-time "$probe_timeout" "$FORUM_URL/deploy/quiescence")" || \
+      tempfail "legacy forum quiescence endpoint unavailable"
+    safe="$(printf '%s' "$state" | json_field safeToStop)"
+    if [ "$safe" = "true" ]; then
+      FORUM_ADMISSION_ACQUIRED=0
+      return 0
+    fi
+    probe_timeout="$(remaining_timeout_seconds "$deadline" 1)" || continue
+    sleep "$probe_timeout"
+  done
+}
+
 acquire_forum_admission() {
-  local state acquired curl_timeout_seconds
+  local state acquired operation_id curl_timeout_seconds response_file http_status curl_status
   curl_timeout_seconds="$(python3 - "$FORUM_ADMISSION_WAIT_TIMEOUT_MS" <<'PY'
 import sys
 
@@ -130,15 +149,35 @@ if wait_ms <= 0:
 print(f"{(wait_ms + 5000) / 1000:.3f}")
 PY
 )"
+  [ -n "$FORUM_DEPLOY_TOKEN" ] || {
+    echo "MONIKA_FORUM_DEPLOY_TOKEN or CODEX_FORUM_DEPLOY_TOKEN is required for forum deploy API access" >&2
+    exit 78
+  }
   # The server may acquire the lease even if curl loses the response. Mark it
   # before the request so the exit trap best-effort cancels that uncertainty.
   FORUM_ADMISSION_ACQUIRED=1
-  state="$(forum_curl --max-time "$curl_timeout_seconds" -X POST "$FORUM_URL/deploy/admission/acquire" \
-    -H 'content-type: application/json' \
-    --data "{\"operationId\":\"${FORUM_ADMISSION_OPERATION_ID}\",\"waitTimeoutMs\":${FORUM_ADMISSION_WAIT_TIMEOUT_MS},\"leaseMs\":${FORUM_ADMISSION_LEASE_MS}}")" \
-    || tempfail "forum deployment admission was blocked or unavailable"
+  response_file="$(mktemp)"
+  set +e
+  http_status="$(curl -sS --max-time "$curl_timeout_seconds" -o "$response_file" -w '%{http_code}' \
+    -H "authorization: Bearer $FORUM_DEPLOY_TOKEN" -H 'content-type: application/json' \
+    -X POST "$FORUM_URL/deploy/admission/acquire" \
+    --data "{\"operationId\":\"${FORUM_ADMISSION_OPERATION_ID}\",\"waitTimeoutMs\":${FORUM_ADMISSION_WAIT_TIMEOUT_MS},\"leaseMs\":${FORUM_ADMISSION_LEASE_MS}}")"
+  curl_status=$?
+  set -e
+  state="$(cat "$response_file")"
+  rm -f "$response_file"
+  [ "$curl_status" -eq 0 ] || tempfail "forum deployment admission was blocked or unavailable"
+  if [ "$http_status" = "404" ]; then
+    FORUM_ADMISSION_ACQUIRED=0
+    legacy_wait_forum_quiescence
+    return 0
+  fi
+  [ "$http_status" -ge 200 ] && [ "$http_status" -lt 300 ] || \
+    tempfail "forum deployment admission was not acquired (HTTP $http_status): $state"
   acquired="$(printf '%s' "$state" | json_field acquired)"
-  [ "$acquired" = "true" ] || tempfail "forum deployment admission was not acquired: $state"
+  operation_id="$(printf '%s' "$state" | json_field operationId)"
+  [ "$acquired" = "true" ] && [ "$operation_id" = "$FORUM_ADMISSION_OPERATION_ID" ] || \
+    tempfail "forum deployment admission returned an invalid ownership response: $state"
   FORUM_ADMISSION_ACQUIRED=1
   echo "forum deployment admission acquired: $FORUM_ADMISSION_OPERATION_ID"
 }
