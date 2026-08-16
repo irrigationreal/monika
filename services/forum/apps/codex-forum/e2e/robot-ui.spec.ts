@@ -928,6 +928,21 @@ test.describe('Robot UI (mocked)', () => {
     await expect(reasoningItem).toContainText('Inspect the path');
     await expect(traceItems).toHaveCount(3);
 
+    const reasoningPill = reasoningItem.locator('.vb-tool-pill');
+    const completedToolPill = page
+      .locator('.vb-tool-response .vb-tool-item:not(.vb-tool-item--reasoning) .vb-tool-pill')
+      .first();
+    await expect(reasoningPill).toHaveClass(/vb-trace-tool-status--ok/);
+    await expect(completedToolPill).toHaveClass(/vb-trace-tool-status--ok/);
+    const [reasoningPillBox, completedToolPillBox] = await Promise.all([
+      reasoningPill.boundingBox(),
+      completedToolPill.boundingBox()
+    ]);
+    if (!reasoningPillBox || !completedToolPillBox) throw new Error('tool usage status pills have no layout box');
+    const reasoningPillRight = reasoningPillBox.x + reasoningPillBox.width;
+    const completedToolPillRight = completedToolPillBox.x + completedToolPillBox.width;
+    expect(Math.abs(reasoningPillRight - completedToolPillRight)).toBeLessThanOrEqual(1);
+
     await reasoningItem.locator('.vb-tool-toggle').click();
     await expect(reasoningItem.locator('.vb-tool-reasoning-detail')).toContainText(
       'Confirm the long path before reading it.'
