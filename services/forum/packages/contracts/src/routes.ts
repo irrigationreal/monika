@@ -658,7 +658,7 @@ export const apiRoutes: ApiRoute[] = [
   {
     method: 'patch',
     path: '/me/preferences/quick-reply',
-    summary: 'Update the current user quick-reply dock preference',
+    summary: 'Update the current user desktop and mobile quick-reply preferences',
     tags: ['auth'],
     request: { body: { schema: updateQuickReplyPreferenceSchema } },
     response: { schema: schemas.UpdateQuickReplyPreferenceResponseDtoSchema },

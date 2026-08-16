@@ -273,8 +273,8 @@ export function registerAuthRoutes({
   app.patch('/me/preferences/quick-reply', async (request) => {
     const user = requireScope(getCurrentUser(request), 'write');
     const body = parseBody(app, UpdateQuickReplyPreferenceRequestSchema, request.body);
-    store.setIdentityQuickReplyDockDefault(user.identityId, body.quickReplyDockedByDefault);
-    return { ok: true, quickReplyDockedByDefault: body.quickReplyDockedByDefault };
+    store.setIdentityQuickReplyPreferences(user.identityId, body);
+    return { ok: true, desktopMode: body.desktopMode, mobileMode: body.mobileMode };
   });
 
   // Password change (self-service)

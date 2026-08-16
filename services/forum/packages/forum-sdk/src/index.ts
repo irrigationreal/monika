@@ -76,6 +76,7 @@ import type {
   PiSyncHealthDto,
   PiSyncRunResponseDto,
   PostDto,
+  QuickReplyMode,
   RecentPostDto,
   RegisterResponseDto,
   RegistrationModeDto,
@@ -280,10 +281,10 @@ function createApi({
         method: 'PATCH',
         body: JSON.stringify({ emailAddress }),
       }),
-    updateQuickReplyPreference: (quickReplyDockedByDefault: boolean) =>
+    updateQuickReplyPreference: (preferences: { desktopMode: QuickReplyMode; mobileMode: QuickReplyMode }) =>
       json<UpdateQuickReplyPreferenceResponseDto>('/me/preferences/quick-reply', {
         method: 'PATCH',
-        body: JSON.stringify({ quickReplyDockedByDefault }),
+        body: JSON.stringify(preferences),
       }),
     changePassword: (input: { currentPassword: string; newPassword: string }) =>
       json<{ ok: boolean }>('/me/password', { method: 'POST', body: JSON.stringify(input) }),

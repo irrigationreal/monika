@@ -432,7 +432,8 @@ export function useForumState() {
       signature: updated.signature ?? null,
       theme: updated.theme ?? null,
       hasPrivateEmail,
-      quickReplyDockedByDefault: currentUser.value?.quickReplyDockedByDefault ?? false,
+      quickReplyDesktopMode: currentUser.value?.quickReplyDesktopMode ?? null,
+      quickReplyMobileMode: currentUser.value?.quickReplyMobileMode ?? null,
     };
 
     if (currentUser.value.theme) {
@@ -448,12 +449,16 @@ export function useForumState() {
     currentUser.value = { ...currentUser.value, hasPrivateEmail: result.hasPrivateEmail };
   }
 
-  async function updateQuickReplyPreference(enabled: boolean): Promise<void> {
+  async function updateQuickReplyPreference(preferences: {
+    desktopMode: 'inline' | 'docked';
+    mobileMode: 'inline' | 'docked';
+  }): Promise<void> {
     if (!currentUser.value) return;
-    const result = await api.updateQuickReplyPreference(enabled);
+    const result = await api.updateQuickReplyPreference(preferences);
     currentUser.value = {
       ...currentUser.value,
-      quickReplyDockedByDefault: result.quickReplyDockedByDefault,
+      quickReplyDesktopMode: result.desktopMode,
+      quickReplyMobileMode: result.mobileMode,
     };
   }
 

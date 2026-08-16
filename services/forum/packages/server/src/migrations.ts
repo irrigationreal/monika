@@ -1904,6 +1904,22 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 48,
+    name: 'device-specific-quick-reply-preferences',
+    up: (db) => {
+      db.exec(`
+        alter table identities add column quick_reply_desktop_mode text
+          check (quick_reply_desktop_mode in ('inline', 'docked'));
+        alter table identities add column quick_reply_mobile_mode text
+          check (quick_reply_mobile_mode in ('inline', 'docked'));
+        update identities
+          set quick_reply_desktop_mode = 'docked', quick_reply_mobile_mode = 'docked'
+          where quick_reply_docked_by_default = 1;
+        alter table identities drop column quick_reply_docked_by_default;
+      `);
+    },
+  },
 ];
 
 export const SCHEMA_VERSION: number = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;

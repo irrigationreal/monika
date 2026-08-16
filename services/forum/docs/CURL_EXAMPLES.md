@@ -76,22 +76,24 @@ curl -sS -X POST "$CODEX_FORUM_BASE_URL/api/message-templates" \
 
 Update, delete, and reorder requests must send the current integer `revision`.
 
-## Quick Reply account preference
+## Quick Reply account preferences
 
-The dock default is private account state and requires the signed-in browser session:
+The desktop and mobile modes are private account state and require the signed-in browser session. They are updated
+atomically:
 
 ```bash
 curl -sS -X PATCH -b forum.cookies \
   -H 'Content-Type: application/json' \
   -H "Origin: $CODEX_FORUM_BASE_URL" \
-  -d '{"quickReplyDockedByDefault":true}' \
+  -d '{"desktopMode":"inline","mobileMode":"docked"}' \
   "$CODEX_FORUM_BASE_URL/api/me/preferences/quick-reply"
 ```
 
-User CP presents this boolean as **Quick Reply Style** with **Inline** (`false`) and **Docked** (`true`) choices. It
-defaults to `false`, is returned by `/api/auth/me`, and is intentionally omitted from public profile responses. Docked
-eligible topic views start with the collapsed dock on desktop and mobile. Temporary dock expansion, collapse, or undock
-actions do not update it.
+Each mode is `inline` or `docked`. User CP presents separate **Quick Reply on desktop** and **Quick Reply on mobile**
+choices. Unset preferences resolve to Inline on desktop and Docked on mobile; mobile means a viewport 600px wide or
+narrower. Stored values are returned by `/api/auth/me` as `quickReplyDesktopMode` and `quickReplyMobileMode` and are
+intentionally omitted from public profile responses. A Docked topic starts collapsed and retains Collapse/Expand
+controls, but the selected Inline or Docked style remains fixed until the next topic navigation or reload.
 
 ## Private autosaved drafts
 

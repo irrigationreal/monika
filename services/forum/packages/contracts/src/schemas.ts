@@ -14,6 +14,7 @@ import {
   MessageTemplateScopeValues,
   NotepadContentFormatValues,
   NotepadExpirationPresetValues,
+  QuickReplyModeValues,
   RobotModeValues,
 } from '@irrigationreal/codex-forum-core';
 
@@ -1245,7 +1246,8 @@ export const AuthIdentityDtoSchema: z.ZodType<AuthIdentityDto> = z.object({
   theme: ForumThemeKeySchema.nullable().optional(),
   hasPrivateEmail: z.boolean().optional(),
   hasPassword: z.boolean().optional(),
-  quickReplyDockedByDefault: z.boolean().optional(),
+  quickReplyDesktopMode: z.enum(QuickReplyModeValues).nullable().optional(),
+  quickReplyMobileMode: z.enum(QuickReplyModeValues).nullable().optional(),
 });
 
 export const RegistrationModeDtoSchema: z.ZodType<RegistrationModeDto> = z.object({
@@ -1321,7 +1323,8 @@ export const UpdatePrivateEmailResponseDtoSchema: z.ZodType<UpdatePrivateEmailRe
 
 export const UpdateQuickReplyPreferenceResponseDtoSchema: z.ZodType<UpdateQuickReplyPreferenceResponseDto> = z.object({
   ok: z.boolean(),
-  quickReplyDockedByDefault: z.boolean(),
+  desktopMode: z.enum(QuickReplyModeValues),
+  mobileMode: z.enum(QuickReplyModeValues),
 });
 
 export const ChangePasswordRequestSchema = z.object({
@@ -1649,7 +1652,8 @@ export const UpdatePrivateEmailRequestSchema: z.ZodType<UpdatePrivateEmailReques
 });
 
 export const UpdateQuickReplyPreferenceRequestSchema: z.ZodType<UpdateQuickReplyPreferenceRequest> = z.object({
-  quickReplyDockedByDefault: z.boolean(),
+  desktopMode: z.enum(QuickReplyModeValues),
+  mobileMode: z.enum(QuickReplyModeValues),
 });
 
 export const CreateApiKeyRequestSchema: z.ZodType<CreateApiKeyRequest> = z.object({

@@ -240,7 +240,7 @@ export class SqliteIdentityRepository implements IdentityRepository {
   async create(identity: IdentityPrivate): Promise<void> {
     this.db
       .prepare(
-        'insert into identities (id, tenant_id, display_name, kind, parent_identity_id, avatar_url, username, password_hash, location, signature, theme, private_email, quick_reply_docked_by_default, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        'insert into identities (id, tenant_id, display_name, kind, parent_identity_id, avatar_url, username, password_hash, location, signature, theme, private_email, quick_reply_desktop_mode, quick_reply_mobile_mode, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
       .run(
         identity.id,
@@ -255,7 +255,8 @@ export class SqliteIdentityRepository implements IdentityRepository {
         identity.signature ?? null,
         identity.theme ?? null,
         identity.privateEmail ?? null,
-        identity.quickReplyDockedByDefault ? 1 : 0,
+        identity.quickReplyDesktopMode ?? null,
+        identity.quickReplyMobileMode ?? null,
         identity.createdAt,
         identity.updatedAt
       );
@@ -264,7 +265,7 @@ export class SqliteIdentityRepository implements IdentityRepository {
   async update(identity: IdentityPrivate): Promise<void> {
     this.db
       .prepare(
-        'update identities set tenant_id = ?, display_name = ?, kind = ?, parent_identity_id = ?, avatar_url = ?, username = ?, password_hash = ?, location = ?, signature = ?, theme = ?, private_email = ?, quick_reply_docked_by_default = ?, created_at = ?, updated_at = ? where id = ?'
+        'update identities set tenant_id = ?, display_name = ?, kind = ?, parent_identity_id = ?, avatar_url = ?, username = ?, password_hash = ?, location = ?, signature = ?, theme = ?, private_email = ?, quick_reply_desktop_mode = ?, quick_reply_mobile_mode = ?, created_at = ?, updated_at = ? where id = ?'
       )
       .run(
         identity.tenantId ?? null,
@@ -278,7 +279,8 @@ export class SqliteIdentityRepository implements IdentityRepository {
         identity.signature ?? null,
         identity.theme ?? null,
         identity.privateEmail ?? null,
-        identity.quickReplyDockedByDefault ? 1 : 0,
+        identity.quickReplyDesktopMode ?? null,
+        identity.quickReplyMobileMode ?? null,
         identity.createdAt,
         identity.updatedAt,
         identity.id
@@ -359,7 +361,8 @@ function mapIdentityPrivate(row: IdentityRow): IdentityPrivate {
     username: row.username,
     passwordHash: row.password_hash,
     privateEmail: row.private_email,
-    quickReplyDockedByDefault: Boolean(row.quick_reply_docked_by_default),
+    quickReplyDesktopMode: row.quick_reply_desktop_mode ?? null,
+    quickReplyMobileMode: row.quick_reply_mobile_mode ?? null,
   };
 }
 

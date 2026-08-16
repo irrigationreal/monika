@@ -20,7 +20,7 @@ describe('SqliteIdentityRepository private preferences', () => {
     db.close();
   });
 
-  it('round-trips the private Quick Reply dock preference through create and update', async () => {
+  it('round-trips private desktop and mobile Quick Reply preferences through create and update', async () => {
     const identity: IdentityPrivate = {
       id: 'identity-1',
       displayName: 'Reader',
@@ -28,15 +28,22 @@ describe('SqliteIdentityRepository private preferences', () => {
       username: 'reader',
       passwordHash: 'secret',
       privateEmail: 'reader@example.com',
-      quickReplyDockedByDefault: true,
+      quickReplyDesktopMode: 'docked',
+      quickReplyMobileMode: 'inline',
       createdAt: new Date(0).toISOString(),
       updatedAt: new Date(0).toISOString(),
     };
 
     await repository.create(identity);
-    expect((await repository.getById(identity.id))?.quickReplyDockedByDefault).toBe(true);
+    expect(await repository.getById(identity.id)).toMatchObject({
+      quickReplyDesktopMode: 'docked',
+      quickReplyMobileMode: 'inline',
+    });
 
-    await repository.update({ ...identity, quickReplyDockedByDefault: false });
-    expect((await repository.getById(identity.id))?.quickReplyDockedByDefault).toBe(false);
+    await repository.update({ ...identity, quickReplyDesktopMode: 'inline', quickReplyMobileMode: 'docked' });
+    expect(await repository.getById(identity.id)).toMatchObject({
+      quickReplyDesktopMode: 'inline',
+      quickReplyMobileMode: 'docked',
+    });
   });
 });

@@ -21,7 +21,8 @@ function toPublicIdentity(identity: IdentityPrivate): IdentityPublic {
     username: _username,
     passwordHash: _passwordHash,
     privateEmail: _privateEmail,
-    quickReplyDockedByDefault: _quickReplyDockedByDefault,
+    quickReplyDesktopMode: _quickReplyDesktopMode,
+    quickReplyMobileMode: _quickReplyMobileMode,
     ...publicIdentity
   } = identity;
   return publicIdentity;

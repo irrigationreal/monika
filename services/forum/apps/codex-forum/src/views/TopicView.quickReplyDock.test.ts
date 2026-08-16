@@ -19,16 +19,15 @@ describe('TopicView persistent Quick Reply dock', () => {
     expect(source).not.toContain('window.open(');
   });
 
-  it('uses Keep visible as the sole docking entry and exposes collapse, expand, and undock controls', () => {
+  it('keeps the selected inline or docked style fixed while exposing collapse and expand within docked mode', () => {
     expect(source.match(/>\s*Quick Reply\s*</g)).toHaveLength(1);
-    expect(source).toContain('aria-label="Keep Quick Reply visible while reading"');
     expect(source).toContain('@click="collapseQuickReply"');
     expect(source).toContain('quickReplyExpandButtonRef.value?.focus()');
-    expect(source).toContain('@click="undockQuickReply"');
-    expect(source).toContain('@click="undockQuickReply">Undock</button>');
-    expect(source).toContain('ref="quickReplyKeepVisibleButtonRef"');
-    expect(source).toContain('quickReplyKeepVisibleButtonRef.value?.focus({ preventScroll: true })');
-    expect(source).not.toContain('Return inline');
+    expect(source).toContain('@click="activateQuickReply"');
+    expect(source).not.toContain('Keep visible');
+    expect(source).not.toContain('Undock');
+    expect(source).not.toContain('undockQuickReply');
+    expect(source).not.toContain('quickReplyKeepVisibleButtonRef');
     expect(source).toContain('class="vb-quick-reply-compact-status"');
     expect(source).toContain('aria-controls="quick-reply-dock-body"');
     expect(source).toContain('label for="quick-reply-message"');
@@ -124,15 +123,16 @@ describe('TopicView persistent Quick Reply dock', () => {
     expect(routeLoad).not.toContain('quickReplyPresentationReady.value = true;');
     expect(routeLoad).not.toContain('autosavedReply.load');
     expect(source).toContain('},\n  { immediate: true }\n);');
-    expect(source).not.toContain('() => state.currentUser.value?.quickReplyDockedByDefault,');
+    expect(source).not.toContain('() => state.currentUser.value?.quickReplyDesktopMode,');
+    expect(source).not.toContain('() => state.currentUser.value?.quickReplyMobileMode,');
     expect(source).toContain('if (!canDockQuickReply.value) return;');
-    expect(source).toContain('v-if="!quickReplyDocked && canDockQuickReply"');
-    expect(source).toContain('if (!canDockQuickReply.value && quickReplyDocked.value) resetQuickReplyPresentation();');
+    expect(source).toContain('canDockQuickReply.value && quickReplyPreferenceNeedsReapply');
+    expect(source).toContain('resetQuickReplyPresentation({ reapplyPreference: true });');
     expect(source).toContain('topic.id === routeTopicId.value');
     expect(source).toContain("topic.status === 'open'");
     expect(source).toContain('if (routeTopicId.value !== topicId) return;');
-    expect(source).toContain("? 'docked-collapsed'");
-    expect(source).not.toContain("window.matchMedia('(max-width: 600px)').matches");
+    expect(source).toContain('resolveQuickReplyMode(state.currentUser.value, isMobileQuickReplyViewport())');
+    expect(source).toContain("mode === 'docked' ? 'docked-collapsed' : 'inline'");
     expect(source).toContain('onBeforeRouteLeave(async () =>');
     expect(source).toContain('return confirmReplyFileNavigation();');
     expect(source).not.toContain('applyQuickReplyDefault(true)');

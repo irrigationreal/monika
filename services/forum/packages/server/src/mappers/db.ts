@@ -201,7 +201,8 @@ export function mapIdentityRowToDomain(row: IdentityRow): IdentityPrivate {
     username: row.username,
     passwordHash: row.password_hash,
     privateEmail: row.private_email,
-    quickReplyDockedByDefault: Boolean(row.quick_reply_docked_by_default),
+    quickReplyDesktopMode: row.quick_reply_desktop_mode ?? null,
+    quickReplyMobileMode: row.quick_reply_mobile_mode ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

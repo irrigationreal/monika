@@ -181,27 +181,30 @@ surfaces, limits, security boundaries, export behavior, and upgrade validation.
 
 ## Persistent Quick Reply dock
 
-Topic pages keep a single Quick Reply composer that can remain inline or be docked to the bottom of the viewport. **Keep
-visible** is the sole docking entry; the dock can be expanded for writing, collapsed to a compact bar, or undocked without
-remounting the editor, pausing autosave, clearing attachments, or changing publication behavior. Quote preserves the
-current presentation: it scrolls to an inline composer, expands a collapsed dock, or focuses an expanded dock. The
-collapsed bar reports draft save and conflict status. Model, reasoning level, and Pi context remain visible whenever the
-composer is expanded because they describe the operational state of the next robot dispatch. **Options** discloses only
-templates, attachment selection, auto-compact, and the full-editor link in their normal composer order; the editor, draft
-status, selected files, upload recovery, robot-mode notices, fences, and Post/Steer action also remain visible. Successful
-submissions hide Options. A successful ordinary Post collapses a docked composer so the topic and live trace regain the
-viewport; a successful Steer leaves it expanded for iterative guidance. Failed or partially completed submissions retain
-the current presentation and recovery controls. Expanded docks use one scrolling middle between a fixed header and
-full-width action footer. On narrow viewports the dock is a safe-area-aware bottom drawer.
+Topic pages keep a single Quick Reply composer in the account's selected inline or viewport-bottom docked style. The
+style remains fixed for that topic view: there are no temporary Keep visible or Undock controls. A docked composer can
+still be expanded for writing or collapsed to a compact bar without remounting the editor, pausing autosave, clearing
+attachments, or changing publication behavior. Quote scrolls to and focuses an inline composer, expands a collapsed
+dock, or focuses an expanded dock. The collapsed bar reports draft save and conflict status. Model, reasoning level, and
+Pi context remain visible whenever the composer is expanded because they describe the operational state of the next
+robot dispatch. **Options** discloses only templates, attachment selection, auto-compact, and the full-editor link in
+their normal composer order; the editor, draft status, selected files, upload recovery, robot-mode notices, fences, and
+Post/Steer action also remain visible. Successful submissions hide Options. A successful ordinary Post collapses a
+docked composer so the topic and live trace regain the viewport; a successful Steer leaves it expanded for iterative
+guidance. Failed or partially completed submissions retain the current presentation and recovery controls. Expanded
+docks use one scrolling middle between a fixed header and full-width action footer. At 600px wide or narrower the dock
+uses the safe-area-aware mobile drawer geometry.
 
-The private account preference **Quick Reply Style** is managed in User CP with **Inline** and **Docked** choices and is
-persisted by `PATCH /me/preferences/quick-reply`. It defaults to Inline; Docked opens each eligible topic with the dock
-collapsed on both desktop and mobile. Authentication and matching base-topic metadata resolve before the composer is
-revealed, so its initial layout never changes underneath an active draft. The composer does not wait for posts,
-attachments, robot/session enrichment, or the admin-only Trace projection; those continue loading independently, while
-race-safe draft hydration permits immediate typing. The preference is returned only from authenticated self
-APIs—not public profiles. Temporary expand, collapse, and undock actions never rewrite it. Expanded docks reserve enough
-topic space to keep the final content and scroll-to-top control unobscured.
+Private **Quick Reply on desktop** and **Quick Reply on mobile** preferences are managed independently in User CP with
+**Inline** and **Docked** choices and are persisted atomically by `PATCH /me/preferences/quick-reply`. The product
+defaults are Inline on desktop and Docked on mobile; mobile means the compact viewport at 600px wide or narrower. A
+Docked preference opens each eligible topic with the dock collapsed. The applicable preference is resolved once when a
+topic opens and is not reapplied during browser resize, orientation change, authentication refresh, or draft hydration,
+so layout never changes underneath an active draft. Authentication and matching base-topic metadata resolve before the
+composer is revealed, but the composer does not wait for posts, attachments, robot/session enrichment, or the admin-only
+Trace projection; those continue loading independently while race-safe draft hydration permits immediate typing. The
+preferences are returned only from authenticated self APIs—not public profiles. Expanded docks reserve enough topic
+space to keep the final content and scroll-to-top control unobscured.
 
 ## Private autosaved drafts
 
