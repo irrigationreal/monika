@@ -43,6 +43,7 @@ const replyBody = ref('');
 const quickReplyTextareaRef = ref<HTMLTextAreaElement | null>(null);
 const quickReplyContainerRef = ref<HTMLElement | null>(null);
 const postsContainerRef = ref<HTMLElement | null>(null);
+const liveTurnRef = ref<HTMLElement | null>(null);
 const quickReplyExpandButtonRef = ref<HTMLButtonElement | null>(null);
 const quickReplyKeepVisibleButtonRef = ref<HTMLButtonElement | null>(null);
 const quickReplyPresentation = ref<'inline' | 'docked-expanded' | 'docked-collapsed'>('inline');
@@ -811,6 +812,8 @@ const autoRunBusy = computed(() => state.autoRunLoading.value);
 const showRobotDraft = computed(() => state.hasPendingAssistantTurn.value);
 const liveTurnPostNumber = computed(() => state.sortedPosts.value.length + 1);
 const liveTurnPage = computed(() => pageForPostNumber(liveTurnPostNumber.value));
+const canJumpToLatest = computed(() => showRobotDraft.value || state.sortedPosts.value.length > 0);
+const latestJumpLabel = computed(() => (showRobotDraft.value ? 'Jump to response in progress' : 'Jump to latest post'));
 const showRobotDraftOnCurrentPage = computed(
   () => showRobotDraft.value && state.currentPage.value === liveTurnPage.value
 );
@@ -2015,18 +2018,79 @@ function nextPage(): void {
   }
 }
 
-async function goToLatest(): Promise<void> {
+async function goToLatestSettled(replaceHistory = false): Promise<void> {
   const lastPage = state.totalPages.value;
   const lastIndex = state.sortedPosts.value.length;
   if (lastPage < 1) return;
   if (lastIndex <= 0) {
-    goToPage(lastPage);
+    state.setPage(lastPage);
+    const location = { query: buildPageQuery(lastPage), hash: '' };
+    if (replaceHistory) await router.replace(location);
+    else await router.push(location);
+    window.scrollTo(0, 0);
     return;
   }
+
   state.setPage(lastPage);
-  const nextQuery = buildPageQuery(lastPage);
-  await router.push({ query: nextQuery, hash: `#${lastIndex}` });
+  const location = { query: buildPageQuery(lastPage), hash: `#${lastIndex}` };
+  if (replaceHistory) await router.replace(location);
+  else await router.push(location);
   await scrollToAnchorWhenReady('auto');
+}
+
+async function goToLiveResponse(): Promise<void> {
+  if (!showRobotDraft.value) {
+    await goToLatestSettled();
+    return;
+  }
+
+  const settledPostCountAtClick = state.sortedPosts.value.length;
+  const timeoutMs = 5000;
+  const startedAt = performance.now();
+  let firstNavigation = true;
+
+  while (performance.now() - startedAt < timeoutMs) {
+    const targetPage = liveTurnPage.value;
+    state.setPage(targetPage);
+
+    if (routePage.value !== targetPage || routeAnchor.value) {
+      const location = { query: buildPageQuery(targetPage), hash: '' };
+      if (firstNavigation) await router.push(location);
+      else await router.replace(location);
+      firstNavigation = false;
+    }
+
+    await nextTick();
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+
+    if (showRobotDraft.value) {
+      if (targetPage !== liveTurnPage.value) continue;
+      const liveElement = liveTurnRef.value;
+      if (liveElement) {
+        liveElement.scrollIntoView({ behavior: preferredScrollBehavior(), block: 'start' });
+        return;
+      }
+    } else if (state.sortedPosts.value.length > settledPostCountAtClick) {
+      // An idle state can arrive before the assistant-message reload. Wait for that
+      // canonical post, then target the latest settled item without retaining a
+      // temporary identity for the vanished placeholder.
+      await goToLatestSettled(true);
+      return;
+    }
+  }
+
+  // A stopped or failed response can remove the placeholder without creating a post,
+  // which also contracts a tentative last page. Return to the real latest page rather
+  // than leaving the topic on a page that no longer exists.
+  if (!showRobotDraft.value) await goToLatestSettled(true);
+}
+
+async function goToLatest(): Promise<void> {
+  if (showRobotDraft.value) {
+    await goToLiveResponse();
+    return;
+  }
+  await goToLatestSettled();
 }
 
 watch(
@@ -2567,9 +2631,10 @@ onUnmounted(() => {
         </button>
         <button
           class="vb-page-btn"
-          :disabled="state.sortedPosts.value.length === 0"
+          :disabled="!canJumpToLatest"
+          :title="latestJumpLabel"
+          :aria-label="latestJumpLabel"
           @click="goToLatest"
-          title="Jump to latest post"
         >
           »»
         </button>
@@ -2667,9 +2732,7 @@ onUnmounted(() => {
 
       <div v-if="showRobotDraft && !showRobotDraftOnCurrentPage && !threadSearchQuery" class="vb-live-turn-page-hint">
         Monika is responding on page {{ liveTurnPage }}.
-        <button type="button" class="vb-inline-link" @click="goToPage(liveTurnPage)">
-          Jump to response in progress
-        </button>
+        <button type="button" class="vb-inline-link" @click="goToLiveResponse">Jump to response in progress</button>
       </div>
 
       <div v-if="threadSearchQuery && filteredPosts.length === 0" class="vb-empty">No posts match your search.</div>
@@ -3002,6 +3065,7 @@ onUnmounted(() => {
       <div
         v-if="showRobotPlaceholderOnCurrentPage"
         :id="String(liveTurnPostNumber)"
+        ref="liveTurnRef"
         class="vb-live-turn vb-post vb-post--draft vb-public-live-placeholder"
       >
         <div class="vb-post-header vb-live-turn-header">
@@ -3070,9 +3134,10 @@ onUnmounted(() => {
         </button>
         <button
           class="vb-page-btn"
-          :disabled="state.sortedPosts.value.length === 0"
+          :disabled="!canJumpToLatest"
+          :title="latestJumpLabel"
+          :aria-label="latestJumpLabel"
           @click="goToLatest"
-          title="Jump to latest post"
         >
           »»
         </button>
