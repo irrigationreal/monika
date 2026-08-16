@@ -32,6 +32,16 @@ This repo builds Monika's runtime containers and supporting services.
 - One forum topic maps to one canonical Pi session.
 - Agent execution, tools, memory lifecycle, stateful-memory, and memstore stay behind `agentd` in the Monika container.
 
+# Pull request format
+PR descriptions should be narrow and cover the following topics in a way that someone not familiar with the PR can comprehend the full reasoning and scope of the change:
+
+- What the issue or necessary change was that was identified and where it is located
+- The actual problem or reasoning behind what necessitated the change
+- The things that are in scope
+- The things that are not in scope and reasoning why they are not in scope
+- The way we have implemented our change in this specific PR and any architectural decisions that help understand the change and what we've considered to ensure this change is appropriate
+- The description should not waste time saying what validation you ran, but for complex changes where the way to verify it is not obvious, you can consider instead a concise section recommending best way to ensure that the change works. If the best way to check it is just "run the tests", then omit this section.
+
 ## GitHub Actions / branch gates
 
 Container CI follows a three-stage branch-protection pattern copied from Vesper. These CI gates run on `pull_request`, `merge_group`, and manual dispatch, not branch `push`, so open PRs and merge-queue candidates get fresh checks without duplicate push/PR runs:
