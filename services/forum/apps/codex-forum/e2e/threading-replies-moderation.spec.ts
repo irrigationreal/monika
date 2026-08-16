@@ -1430,6 +1430,45 @@ test.describe('Threading and reply flows', () => {
     expect(await lowerPager.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   });
 
+  test('latest-post controls follow an active response onto its tentative page', async ({ page, context }) => {
+    const state = createMockState();
+    state.robotActivity = 'thinking';
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await attachMockApi(page, state);
+    await setAuthTokens(context, REGULAR_TOKEN);
+
+    await page.goto('/');
+    const fixture = await createFixture(page, { postCount: 8 });
+    await page.addInitScript(() => {
+      const originalScrollIntoView = Element.prototype.scrollIntoView;
+      Element.prototype.scrollIntoView = function (options?: ScrollIntoViewOptions) {
+        const calls = ((window as any).__topicScrollIntoViewCalls ??= []);
+        calls.push({ id: (this as HTMLElement).id, options });
+        return originalScrollIntoView.call(this, options);
+      };
+    });
+    await page.goto(`/topics/${fixture.topicId}?page=1#3`);
+
+    const upperLatest = page
+      .locator('.vb-controls:not(.vb-controls-bottom) .vb-pagination-controls')
+      .getByRole('button', { name: 'Jump to response in progress' });
+    const lowerLatest = page
+      .locator('.vb-controls-bottom .vb-pagination-controls')
+      .getByRole('button', { name: 'Jump to response in progress' });
+    await expect(upperLatest).toBeEnabled();
+    await expect(lowerLatest).toBeEnabled();
+
+    await upperLatest.click();
+
+    await expect(page).toHaveURL(new RegExp(`/topics/${fixture.topicId}\\?page=2$`));
+    await expect(page.locator('.vb-live-turn')).toBeVisible();
+    await expect.poll(() => page.evaluate(() => (window as any).__topicScrollIntoViewCalls?.at(-1)?.id)).toBe('9');
+    expect(await page.evaluate(() => (window as any).__topicScrollIntoViewCalls.at(-1).options)).toMatchObject({
+      behavior: 'auto',
+      block: 'start',
+    });
+  });
+
   test('quick reply dock preserves controls, scroll chaining, focus, files, and layout across presentations', async ({
     page,
     context,
