@@ -1894,6 +1894,16 @@ function toolUsageReasoningStatus(
   return group.live && isLiveTail ? 'thinking' : 'done';
 }
 
+function toolUsageReasoningStatusClass(
+  group: ToolUsageTraceGroup,
+  item: Extract<UnifiedTraceItem, { type: 'reasoning' }>,
+  stepIndex: number
+): string {
+  return toolUsageReasoningStatus(group, item, stepIndex) === 'thinking'
+    ? 'vb-trace-tool-status--running'
+    : 'vb-trace-tool-status--ok';
+}
+
 function renderToolUsageReasoning(detail: string): string {
   return renderContent(detail, { topicId: routeTopicId.value });
 }
@@ -4345,11 +4355,8 @@ onUnmounted(() => {
                     </span>
                     <span class="vb-tool-toggle-right">
                       <span
-                        class="vb-tool-pill vb-tool-pill--reasoning"
-                        :class="{
-                          'vb-tool-pill--reasoning-active':
-                            toolUsageReasoningStatus(group, item, stepIndex) === 'thinking'
-                        }"
+                        class="vb-tool-pill"
+                        :class="toolUsageReasoningStatusClass(group, item, stepIndex)"
                       >
                         {{ toolUsageReasoningStatus(group, item, stepIndex) }}
                       </span>
@@ -4381,11 +4388,11 @@ onUnmounted(() => {
                   </span>
                   <span class="vb-tool-toggle-right">
                     <span class="vb-tool-meta">{{ state.formatToolTime(item.tool.startedAt) }}</span>
-                    <span class="vb-tool-pill" :class="toolStatusClass(item.tool)">
-                      {{ toolStatusLabel(item.tool) }}
-                    </span>
                     <span v-if="toolDurationLabel(item.tool)" class="vb-tool-duration">
                       {{ toolDurationLabel(item.tool) }}
+                    </span>
+                    <span class="vb-tool-pill" :class="toolStatusClass(item.tool)">
+                      {{ toolStatusLabel(item.tool) }}
                     </span>
                     <span class="vb-tool-toggle-icon">{{ toolExpanded(item.tool) ? '−' : '+' }}</span>
                   </span>

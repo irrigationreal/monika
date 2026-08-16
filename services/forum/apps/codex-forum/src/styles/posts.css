@@ -1229,14 +1229,6 @@
   font-size: 8px;
 }
 
-.vb-tool-pill--reasoning {
-  background: var(--brand-secondary);
-}
-
-.vb-tool-pill--reasoning-active {
-  background: var(--brand-primary);
-}
-
 .vb-tool-reasoning-detail {
   margin-top: 0;
 }
