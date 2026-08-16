@@ -67,6 +67,7 @@ const state = useForumState();
 const replyBody = ref('');
 const quickReplyTextareaRef = ref<HTMLTextAreaElement | null>(null);
 const quickReplyContainerRef = ref<HTMLElement | null>(null);
+const postsContainerRef = ref<HTMLElement | null>(null);
 const quickReplyExpandButtonRef = ref<HTMLButtonElement | null>(null);
 const quickReplyKeepVisibleButtonRef = ref<HTMLButtonElement | null>(null);
 const quickReplyPresentation = ref<'inline' | 'docked-expanded' | 'docked-collapsed'>('inline');
@@ -1621,8 +1622,25 @@ function buildPageQuery(page: number): Record<string, string | string[] | null |
   return nextQuery;
 }
 
+function preferredScrollBehavior(): ScrollBehavior {
+  return prefersReducedMotion() ? 'auto' : 'smooth';
+}
+
 function scrollToTop(): void {
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+  window.scrollTo({ top: 0, behavior: preferredScrollBehavior() });
+}
+
+function scrollToPageBottom(): void {
+  const children = postsContainerRef.value?.children;
+  if (!children) return;
+
+  for (let index = children.length - 1; index >= 0; index -= 1) {
+    const child = children.item(index);
+    if (child instanceof HTMLElement && child.classList.contains('vb-post')) {
+      child.scrollIntoView({ behavior: preferredScrollBehavior(), block: 'start' });
+      return;
+    }
+  }
 }
 
 const routeTopicId = computed(() => (route.params['topicId'] as string | undefined) ?? null);
@@ -3111,6 +3129,15 @@ onUnmounted(() => {
         >
           »»
         </button>
+        <button
+          class="vb-page-btn"
+          type="button"
+          title="Scroll to bottom of current page"
+          aria-label="Scroll to bottom of current page"
+          @click="scrollToPageBottom"
+        >
+          Bottom
+        </button>
       </div>
     </div>
 
@@ -3315,7 +3342,7 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <div class="vb-posts">
+    <div ref="postsContainerRef" class="vb-posts">
       <div class="vb-table-header">
         {{ new Date().toLocaleDateString() }}
         <span v-if="state.totalPages.value > 1"
@@ -3761,6 +3788,15 @@ onUnmounted(() => {
           title="Jump to latest post"
         >
           »»
+        </button>
+        <button
+          class="vb-page-btn"
+          type="button"
+          title="Scroll to top of page"
+          aria-label="Scroll to top of page"
+          @click="scrollToTop"
+        >
+          Top
         </button>
       </div>
     </div>

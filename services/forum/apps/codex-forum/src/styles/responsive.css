@@ -162,6 +162,7 @@
   }
 
   .vb-pagination-controls {
+    flex-wrap: wrap;
     justify-content: center;
   }
 
