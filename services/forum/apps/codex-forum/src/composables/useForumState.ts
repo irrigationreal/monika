@@ -1,7 +1,6 @@
 import { computed, ref } from 'vue';
 
 import { api, createStateStream } from '../lib/apiClient';
-import { parseReasoningSteps } from '../lib/reasoning';
 import { retainSessionContext } from '../lib/sessionContext';
 import { useTheme } from './useTheme';
 
@@ -24,24 +23,17 @@ import type {
   RobotStopResultDto,
   SessionContextDto,
   SessionDto,
-  SessionInspectorDto,
   TopicAutoRunDto,
   TopicDto,
   TopicOperationalEventDto,
+  TopicTraceDto,
 } from '../lib/apiClient';
-import type { ReasoningStep } from '../lib/reasoning';
 
-export type TraceSegment =
-  { kind: 'reasoning'; text: string } | { kind: 'assistant_text'; text: string } | { kind: 'tool'; toolRunId: string };
+export type TraceSegment = { kind: 'reasoning'; text: string } | { kind: 'tool'; toolRunId: string };
 
-export function freezeInterruptedTextSegments(
-  segments: TraceSegment[],
-  reasoning: string,
-  assistant: string
-): TraceSegment[] {
+export function freezeInterruptedTextSegments(segments: TraceSegment[], reasoning: string): TraceSegment[] {
   const frozen = [...segments];
   if (reasoning) frozen.push({ kind: 'reasoning', text: reasoning });
-  if (assistant) frozen.push({ kind: 'assistant_text', text: assistant });
   return frozen;
 }
 
@@ -74,33 +66,14 @@ const autoRunError = ref<string | null>(null);
 const robotControlPending = ref(false);
 const robotStopResult = ref<RobotStopResultDto | null>(null);
 const reasoningDraft = ref('');
-const assistantDraft = ref('');
-const reasoningSteps = ref<ReasoningStep[]>([]);
 const committedSegments = ref<TraceSegment[]>([]);
 /** True when the response was interrupted — keeps the trace visible as frozen. */
 const interruptedTrace = ref(false);
 
-export type RobotActivityEvent =
-  | {
-      type: 'reasoning_step';
-      id: string;
-      seq: number;
-      title: string;
-      detail: string | null;
-      status: 'running' | 'done';
-    }
-  | {
-      type: 'tool_run';
-      id: string;
-      seq: number;
-      toolRun: RobotStateDto['recentToolRuns'][number];
-    };
-
-const activityLog = ref<RobotActivityEvent[]>([]);
 const sessionInfo = ref<SessionDto | null>(null);
-const sessionInspector = ref<SessionInspectorDto | null>(null);
-const sessionInspectorLoading = ref(false);
-const sessionInspectorError = ref<string | null>(null);
+const topicTrace = ref<TopicTraceDto | null>(null);
+const adminEnrichmentLoading = ref(false);
+const adminEnrichmentError = ref<string | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
 const currentPage = ref(1);
@@ -156,12 +129,10 @@ const operationalEventApi = api as unknown as {
 
 let stream: EventSource | null = null;
 let activePlanId: string | null = null;
-let reasoningStepCount = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectDelayMs = 2000;
 let streamManuallyClosed = false;
 let pendingReasoningDelta = '';
-let pendingAssistantDelta = '';
 let flushHandle: number | null = null;
 let assistantMessagePending = false;
 let assistantMessageReloadQueued = false;
@@ -171,49 +142,29 @@ let forumsLoadCounter = 0;
 let archivedForumsLoadCounter = 0;
 let recentPostsLoadCounter = 0;
 let topicHydrationEnabled = true;
-let sessionInspectorLoadCounter = 0;
-let liveTurnStartedAt: number | null = null;
+let adminEnrichmentLoadCounter = 0;
 // --- Committed segments (append-only trace model) ---
 // No longer using client-side checkpoints for trace interleaving.
 // Instead, tool_started events flush pending drafts into committedSegments.
 
 function resetRobotActivity(): void {
-  reasoningSteps.value = [];
-  activityLog.value = [];
-  reasoningStepCount = 0;
   committedSegments.value = [];
 }
 
 function clearCompletedAssistantTurnTrace(): void {
-  assistantDraft.value = '';
   reasoningDraft.value = '';
-  pendingAssistantDelta = '';
   pendingReasoningDelta = '';
   interruptedTrace.value = false;
   robotStopResult.value = null;
   activePlanId = null;
-  liveTurnStartedAt = null;
   resetRobotActivity();
 }
 
-function syncReasoningActivity(statusOverride?: { status: 'running' | 'done' }): void {
-  const parsed = parseReasoningSteps(reasoningDraft.value);
-  reasoningSteps.value = parsed;
-  reasoningStepCount = parsed.length;
-}
-
-/** Flush any buffered reasoning deltas into reasoningDraft and re-parse steps.
- *  Must be called before recording reasoning checkpoints so the step count
- *  reflects all reasoning that arrived before the tool event. */
+/** Flush buffered reasoning before a synchronous tool boundary commit. */
 function flushPendingDeltas(): void {
   if (pendingReasoningDelta) {
     reasoningDraft.value += pendingReasoningDelta;
     pendingReasoningDelta = '';
-    syncReasoningActivity();
-  }
-  if (pendingAssistantDelta) {
-    assistantDraft.value += pendingAssistantDelta;
-    pendingAssistantDelta = '';
   }
   if (flushHandle !== null) {
     window.cancelAnimationFrame(flushHandle);
@@ -223,14 +174,8 @@ function flushPendingDeltas(): void {
 
 function freezeCurrentInterruptedTrace(): void {
   flushPendingDeltas();
-  committedSegments.value = freezeInterruptedTextSegments(
-    committedSegments.value,
-    reasoningDraft.value,
-    assistantDraft.value
-  );
-  assistantDraft.value = '';
+  committedSegments.value = freezeInterruptedTextSegments(committedSegments.value, reasoningDraft.value);
   reasoningDraft.value = '';
-  pendingAssistantDelta = '';
   pendingReasoningDelta = '';
   activePlanId = null;
   interruptedTrace.value = true;
@@ -240,28 +185,10 @@ function hasCurrentTrace(): boolean {
   return (
     interruptedTrace.value ||
     committedSegments.value.length > 0 ||
-    Boolean(reasoningDraft.value || assistantDraft.value || pendingReasoningDelta || pendingAssistantDelta)
+    Boolean(reasoningDraft.value || pendingReasoningDelta)
   );
 }
 
-function syncToolActivity(toolRuns: RobotStateDto['recentToolRuns']): void {
-  const runsOldestFirst = toolRuns.slice().reverse();
-
-  for (const run of runsOldestFirst) {
-    const id = `tool:${run.id}`;
-    const existing = activityLog.value.find((event) => event.type === 'tool_run' && event.id === id) as
-      Extract<RobotActivityEvent, { type: 'tool_run' }> | undefined;
-    if (existing) {
-      // Immutable update so Vue re-triggers computed dependencies
-      activityLog.value = activityLog.value.map((e) =>
-        e.type === 'tool_run' && e.id === id ? { ...e, toolRun: run } : e
-      );
-      continue;
-    }
-    // Immutable append so Vue re-triggers computed dependencies
-    activityLog.value = [...activityLog.value, { type: 'tool_run', id, seq: 0, toolRun: run }];
-  }
-}
 function getTopicActivityTime(topic: TopicDto): number {
   const iso = topic.lastPostAt ?? topic.updatedAt;
   return new Date(iso).getTime();
@@ -298,11 +225,8 @@ export function useForumState() {
 
   const hasPendingAssistantTurn = computed(() => {
     if (!selectedTopic.value?.robotMode || selectedTopic.value.robotMode === 'off') return false;
-    if (interruptedTrace.value) return true;
-    if (assistantDraft.value.trim()) return true;
-    if (committedSegments.value.length > 0) return true;
     const activity = robotState.value?.activity ?? 'idle';
-    return activity !== 'idle';
+    return activity !== 'idle' && activity !== 'stopped' && activity !== 'error';
   });
 
   const totalPages = computed(() => {
@@ -661,64 +585,41 @@ export function useForumState() {
   }
 
   function shouldReconstructTraceFromState(state: RobotStateDto | null): boolean {
-    if (!state || state.activity === 'idle') return false;
-    const assistantText = (state as any).assistantText ?? '';
-    return Boolean(state.currentPlan || String(assistantText).trim());
+    return Boolean(state && state.activity !== 'idle' && state.currentPlan);
   }
 
-  /** Reconstruct committed segments from server state (for refresh/reconnect resilience). */
+  /** Reconstruct reasoning/tool segments from server state after refresh or reconnect. */
   function reconstructSegmentsFromState(state: RobotStateDto | null): void {
     if (!state) {
       reasoningDraft.value = '';
-      assistantDraft.value = '';
       return;
     }
     const planSummary = state.currentPlan?.summary ?? '';
-    const rCheckpoints = state.currentPlan?.reasoningCheckpoints ?? [];
-    // assistantCheckpoints and assistantText come from live state emission
-    const aCheckpoints = (state as any).assistantCheckpoints ?? [];
-    const aFullText = (state as any).assistantText ?? '';
-    const toolRuns = state.recentToolRuns.slice().reverse(); // oldest first
-
-    // If no tools, just set the reasoning draft and assistant draft as tails
+    const checkpoints = state.currentPlan?.reasoningCheckpoints ?? [];
+    const toolRuns = state.recentToolRuns.slice().reverse();
     if (toolRuns.length === 0) {
       reasoningDraft.value = planSummary;
-      assistantDraft.value = aFullText;
       return;
     }
-
     const segments: TraceSegment[] = [];
-    let rCursor = 0;
-    let aCursor = 0;
-
-    for (let t = 0; t < toolRuns.length; t++) {
-      const rCp = rCheckpoints[t] ?? planSummary.length;
-      const rSegment = planSummary.slice(rCursor, rCp).trim();
-      if (rSegment) segments.push({ kind: 'reasoning', text: rSegment });
-      rCursor = rCp;
-
-      const aCp = aCheckpoints[t] ?? aFullText.length;
-      const aSegment = aFullText.slice(aCursor, aCp).trim();
-      if (aSegment) segments.push({ kind: 'assistant_text', text: aSegment });
-      aCursor = aCp;
-
-      const toolRun = toolRuns[t];
-      if (toolRun) {
-        segments.push({ kind: 'tool', toolRunId: toolRun.id });
-      }
+    let cursor = 0;
+    for (let index = 0; index < toolRuns.length; index += 1) {
+      const checkpoint = checkpoints[index] ?? planSummary.length;
+      const reasoning = planSummary.slice(cursor, checkpoint).trim();
+      if (reasoning) segments.push({ kind: 'reasoning', text: reasoning });
+      cursor = checkpoint;
+      const tool = toolRuns[index];
+      if (tool) segments.push({ kind: 'tool', toolRunId: tool.id });
     }
-
     committedSegments.value = segments;
-    // Set remaining text as the live tail
-    reasoningDraft.value = planSummary.slice(rCursor);
-    assistantDraft.value = aFullText.slice(aCursor);
+    reasoningDraft.value = planSummary.slice(cursor);
   }
 
   function resetSessionInspectorState(): void {
-    sessionInspectorLoadCounter += 1;
-    sessionInspector.value = null;
-    sessionInspectorLoading.value = false;
-    sessionInspectorError.value = null;
+    adminEnrichmentLoadCounter += 1;
+    topicTrace.value = null;
+    adminEnrichmentLoading.value = false;
+    adminEnrichmentError.value = null;
   }
 
   function resetTopicState(): void {
@@ -729,7 +630,6 @@ export function useForumState() {
     autoRunLoading.value = false;
     sessionInfo.value = null;
     resetSessionInspectorState();
-    assistantDraft.value = '';
     reasoningDraft.value = '';
     activePlanId = null;
     resetRobotActivity();
@@ -798,9 +698,6 @@ export function useForumState() {
     sessionContext.value = retainSessionContext(sessionContext.value, nextState?.context);
     activePlanId = nextState?.currentPlan?.id ?? null;
     if (!preserveInterruptedTrace) resetRobotActivity();
-    if (nextState) {
-      syncToolActivity(nextState.recentToolRuns);
-    }
     // Reconstruct committed segments from server-provided plan/checkpoints
     // so a page refresh shows the trace built so far. Completion reloads opt
     // out because assistant_message is authoritative and stale idle state may
@@ -809,10 +706,8 @@ export function useForumState() {
       reconstructSegmentsFromState(nextState);
     } else if (!preserveInterruptedTrace) {
       reasoningDraft.value = '';
-      assistantDraft.value = '';
     }
     if (durableStop) freezeCurrentInterruptedTrace();
-    syncReasoningActivity();
   }
 
   async function loadAutoRun(topicId: string): Promise<void> {
@@ -892,36 +787,28 @@ export function useForumState() {
     }
   }
 
-  async function loadSessionInspector(topicId = selectedTopicId.value): Promise<void> {
-    const loadId = ++sessionInspectorLoadCounter;
+  async function loadAdminEnrichment(topicId = selectedTopicId.value): Promise<void> {
+    const loadId = ++adminEnrichmentLoadCounter;
     if (!isAdmin.value || !topicId) {
       sessionInfo.value = null;
-      sessionInspector.value = null;
-      sessionInspectorLoading.value = false;
-      sessionInspectorError.value = null;
+      topicTrace.value = null;
+      adminEnrichmentLoading.value = false;
+      adminEnrichmentError.value = null;
       return;
     }
-    sessionInspectorLoading.value = true;
-    sessionInspectorError.value = null;
+    adminEnrichmentLoading.value = true;
+    adminEnrichmentError.value = null;
     try {
-      const previousSessionId = sessionInfo.value?.id ?? null;
-      const session = await api.getSessionByTopic(topicId);
-      if (loadId !== sessionInspectorLoadCounter || selectedTopicId.value !== topicId) return;
+      const [session, trace] = await Promise.all([api.getSessionByTopic(topicId), api.getTopicTrace(topicId)]);
+      if (loadId !== adminEnrichmentLoadCounter || selectedTopicId.value !== topicId) return;
       sessionInfo.value = session;
-      if (!session) {
-        sessionInspector.value = null;
-        return;
-      }
-      if (previousSessionId !== session.id) sessionInspector.value = null;
-      const result = await api.inspectSession(session.id);
-      if (loadId !== sessionInspectorLoadCounter || selectedTopicId.value !== topicId) return;
-      sessionInspector.value = result;
+      topicTrace.value = trace;
     } catch (err) {
-      if (loadId !== sessionInspectorLoadCounter || selectedTopicId.value !== topicId) return;
-      sessionInspectorError.value = err instanceof Error ? err.message : 'Failed to load Tool Usage.';
+      if (loadId !== adminEnrichmentLoadCounter || selectedTopicId.value !== topicId) return;
+      adminEnrichmentError.value = err instanceof Error ? err.message : 'Failed to load admin diagnostics.';
     } finally {
-      if (loadId === sessionInspectorLoadCounter && selectedTopicId.value === topicId) {
-        sessionInspectorLoading.value = false;
+      if (loadId === adminEnrichmentLoadCounter && selectedTopicId.value === topicId) {
+        adminEnrichmentLoading.value = false;
       }
     }
   }
@@ -938,6 +825,7 @@ export function useForumState() {
       if (!isInitiatingTopicCurrent(topicId, selectedTopicId.value)) return;
       robotStopResult.value = result;
       await loadState(topicId);
+      void loadAdminEnrichment(topicId);
     } catch (err) {
       if (isInitiatingTopicCurrent(topicId, selectedTopicId.value)) {
         error.value = err instanceof Error ? err.message : 'Failed to interrupt robot.';
@@ -954,11 +842,6 @@ export function useForumState() {
       if (pendingReasoningDelta) {
         reasoningDraft.value += pendingReasoningDelta;
         pendingReasoningDelta = '';
-        syncReasoningActivity();
-      }
-      if (pendingAssistantDelta) {
-        assistantDraft.value += pendingAssistantDelta;
-        pendingAssistantDelta = '';
       }
     });
   }
@@ -983,6 +866,7 @@ export function useForumState() {
     stream.addEventListener('state', (event: MessageEvent<string>) => {
       const payload = JSON.parse(event.data) as RobotStateDto;
       const durableStop = isDurableStopBoundary(payload.activity);
+      const newlyStopped = durableStop && !interruptedTrace.value;
       const preserveInterruptedTrace = durableStop && hasCurrentTrace();
       if (preserveInterruptedTrace) freezeCurrentInterruptedTrace();
       robotState.value = payload;
@@ -992,13 +876,11 @@ export function useForumState() {
       // stopped boundary is different: its absent plan must not clear the trace being frozen.
       if (!preserveInterruptedTrace && activePlanId !== null && nextPlanId === null) {
         reasoningDraft.value = '';
-        assistantDraft.value = '';
         resetRobotActivity();
       }
       activePlanId = nextPlanId;
       // Flush buffered reasoning before processing tools so checkpoints are accurate.
       flushPendingDeltas();
-      syncToolActivity(payload.recentToolRuns);
       // If we have tool runs from the server but no committed segments yet
       // (reconnect/refresh mid-turn), reconstruct from server state.
       if (
@@ -1010,35 +892,23 @@ export function useForumState() {
         reconstructSegmentsFromState(payload);
       }
       if (durableStop) freezeCurrentInterruptedTrace();
-      syncReasoningActivity();
+      if (newlyStopped) void loadAdminEnrichment(topicId);
     });
     stream.addEventListener('tool_started', (event: MessageEvent<string>) => {
-      // A new tool just started. Flush buffered deltas, then commit any
-      // accumulated reasoning/assistant text as frozen segments. This is
-      // the append-only model: committed segments never change once pushed.
+      // A new tool just started. Flush buffered reasoning, then commit it
+      // before the tool boundary. Committed segments never move.
       flushPendingDeltas();
       const payload = JSON.parse(event.data) as { toolRunId: string; tool?: string; callId?: string | null };
       const rText = reasoningDraft.value;
       if (rText) {
         committedSegments.value = [...committedSegments.value, { kind: 'reasoning', text: rText }];
         reasoningDraft.value = '';
-        syncReasoningActivity();
-      }
-      const aText = assistantDraft.value;
-      if (aText) {
-        committedSegments.value = [...committedSegments.value, { kind: 'assistant_text', text: aText }];
-        assistantDraft.value = '';
       }
       committedSegments.value = [...committedSegments.value, { kind: 'tool', toolRunId: payload.toolRunId }];
     });
     stream.addEventListener('reasoning_delta', (event: MessageEvent<string>) => {
       const payload = JSON.parse(event.data) as { delta: string };
       pendingReasoningDelta += payload.delta;
-      scheduleStreamFlush();
-    });
-    stream.addEventListener('assistant_delta', (event: MessageEvent<string>) => {
-      const payload = JSON.parse(event.data) as { delta: string };
-      pendingAssistantDelta += payload.delta;
       scheduleStreamFlush();
     });
     stream.addEventListener('assistant_reset', (event: MessageEvent<string>) => {
@@ -1050,12 +920,9 @@ export function useForumState() {
         freezeCurrentInterruptedTrace();
       } else {
         // New turn: clear everything for a fresh start.
-        assistantDraft.value = '';
         reasoningDraft.value = '';
-        pendingAssistantDelta = '';
         pendingReasoningDelta = '';
         activePlanId = null;
-        liveTurnStartedAt = Date.now();
         interruptedTrace.value = false;
         robotStopResult.value = null;
         resetRobotActivity();
@@ -1122,7 +989,7 @@ export function useForumState() {
       ]);
       if (!isActiveTopic(topicId)) return;
       clearCompletedAssistantTurnTrace();
-      void loadSessionInspector();
+      void loadAdminEnrichment();
     }
   }
 
@@ -1140,7 +1007,6 @@ export function useForumState() {
       window.cancelAnimationFrame(flushHandle);
       flushHandle = null;
     }
-    pendingAssistantDelta = '';
     pendingReasoningDelta = '';
     assistantMessagePending = false;
     assistantMessageReloadQueued = false;
@@ -1161,11 +1027,9 @@ export function useForumState() {
     sessionInfo.value = null;
     resetSessionInspectorState();
     currentPage.value = 1;
-    assistantDraft.value = '';
     reasoningDraft.value = '';
     interruptedTrace.value = false;
     activePlanId = null;
-    liveTurnStartedAt = null;
     resetRobotActivity();
     closeStream();
     if (!hydrateState) {
@@ -1180,16 +1044,16 @@ export function useForumState() {
       return;
     }
     if (hydrateState) {
-      if (isAdmin.value) sessionInspectorLoading.value = true;
+      if (isAdmin.value) adminEnrichmentLoading.value = true;
       try {
         await Promise.all([loadState(topic.id), loadAutoRun(topic.id)]);
       } catch (err) {
-        if (isActiveTopic(topic.id) && loadId === topicLoadCounter) sessionInspectorLoading.value = false;
+        if (isActiveTopic(topic.id) && loadId === topicLoadCounter) adminEnrichmentLoading.value = false;
         throw err;
       }
       if (isActiveTopic(topic.id) && loadId === topicLoadCounter) {
         openStream(topic.id);
-        void loadSessionInspector(topic.id);
+        void loadAdminEnrichment(topic.id);
       }
     }
   }
@@ -1205,18 +1069,18 @@ export function useForumState() {
           return;
         }
         const loadId = ++topicLoadCounter;
-        if (isAdmin.value) sessionInspectorLoading.value = true;
+        if (isAdmin.value) adminEnrichmentLoading.value = true;
         try {
           await Promise.all([loadState(topicId), loadAutoRun(topicId)]);
         } catch (err) {
           if (requestId === topicSelectionRequestCounter && isActiveTopic(topicId) && loadId === topicLoadCounter) {
-            sessionInspectorLoading.value = false;
+            adminEnrichmentLoading.value = false;
           }
           throw err;
         }
         if (requestId === topicSelectionRequestCounter && isActiveTopic(topicId) && loadId === topicLoadCounter) {
           openStream(topicId);
-          void loadSessionInspector(topicId);
+          void loadAdminEnrichment(topicId);
         }
       } else if (topicHydrationEnabled) {
         openStream(topicId);
@@ -1242,11 +1106,9 @@ export function useForumState() {
     autoRunError.value = null;
     autoRunLoading.value = false;
     robotStopResult.value = null;
-    assistantDraft.value = '';
     reasoningDraft.value = '';
     interruptedTrace.value = false;
     activePlanId = null;
-    liveTurnStartedAt = null;
     resetRobotActivity();
     closeStream();
   }
@@ -1486,7 +1348,7 @@ export function useForumState() {
       await loadIdentities(result.topic.id);
       await loadRobotPersonas(result.topic.id);
       await loadState(result.topic.id);
-      void loadSessionInspector(result.topic.id);
+      void loadAdminEnrichment(result.topic.id);
       return result.topic;
     } finally {
       loading.value = false;
@@ -1674,15 +1536,12 @@ export function useForumState() {
     autoRunLoading,
     autoRunError,
     reasoningDraft,
-    assistantDraft,
-    reasoningSteps,
     committedSegments,
     interruptedTrace,
-    activityLog,
     sessionInfo,
-    sessionInspector,
-    sessionInspectorLoading,
-    sessionInspectorError,
+    topicTrace,
+    adminEnrichmentLoading,
+    adminEnrichmentError,
     robotControlPending,
     robotStopResult,
     loading,
@@ -1748,7 +1607,7 @@ export function useForumState() {
     loadRobotPersonas,
     loadState,
     loadAutoRun,
-    loadSessionInspector,
+    loadAdminEnrichment,
     loadRegistrationSettings,
     loadModelCatalog,
     interruptRobot,

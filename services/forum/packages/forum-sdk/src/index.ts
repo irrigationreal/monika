@@ -103,6 +103,7 @@ import type {
   TopicMoveDto,
   TopicOperationalEventDto,
   TopicSubscriptionDto,
+  TopicTraceDto,
   TopicUnreadDto,
   UpdatePrivateEmailResponseDto,
   UpdateQuickReplyPreferenceResponseDto,
@@ -192,6 +193,7 @@ export type {
   TopicDto,
   TopicLineageDto,
   TopicMoveDto,
+  TopicTraceDto,
   UpdatePrivateEmailResponseDto,
   VerifyResponseDto,
   MatrixBridgeStatusDto,
@@ -987,6 +989,7 @@ export function createForumSdk(options?: ForumSdkOptions) {
     interruptRobot: (topicId: string) =>
       json<RobotStopResultDto>(`/topics/${topicId}/robot/interrupt`, { method: 'POST' }),
     getSessionByTopic: (topicId: string) => json<SessionDto | null>(`/topics/${topicId}/session`),
+    getTopicTrace: (topicId: string) => json<TopicTraceDto>(`/topics/${topicId}/trace`),
     inspectSession: (sessionId: string) => json<SessionInspectorDto>(`/sessions/${sessionId}/inspector`),
 
     // Notifications

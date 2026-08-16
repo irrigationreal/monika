@@ -71,7 +71,6 @@ Fields:
 Event types:
 - state
 - reasoning_delta
-- assistant_delta
 - assistant_message
 - tool_started
 - tool_completed

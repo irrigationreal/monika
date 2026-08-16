@@ -21,6 +21,7 @@ import type {
   SessionDto,
   SessionInspectorDto,
   TopicDto,
+  TopicTraceDto,
 } from './dto';
 import type { PageResponse } from './pagination';
 import type { ForumThemeKey } from './themes';
@@ -422,6 +423,7 @@ export interface ForumApi {
   reorderSystemMessageTemplates(req: MessageTemplateReorderRequest): Promise<MessageTemplateListResponseDto>;
   listExternalRefs(topicId: string): Promise<ExternalRefDto[]>;
   getSessionByTopic(topicId: string): Promise<SessionDto | null>;
+  getTopicTrace(topicId: string): Promise<TopicTraceDto>;
   getSession(sessionId: string): Promise<SessionDto | null>;
   getSessionInspector(sessionId: string): Promise<SessionInspectorDto>;
   getAdminAnalytics(

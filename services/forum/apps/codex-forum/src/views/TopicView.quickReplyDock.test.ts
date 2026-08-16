@@ -147,18 +147,14 @@ describe('TopicView persistent Quick Reply dock', () => {
     ).toBeGreaterThan(source.indexOf("scrollToAnchor('smooth');", source.indexOf('async function reply()')));
   });
 
-  it('keeps Tool Usage enrichment off the topic and live-stream critical path', () => {
-    expect(stateSource).toContain('const sessionInspectorLoading = ref(false);');
-    expect(stateSource).toContain('const sessionInspectorError = ref<string | null>(null);');
-    expect(stateSource).not.toContain('await loadSessionInspector');
-    expect(stateSource).not.toContain('function loadSession(');
-    expect(stateSource).toContain('openStream(topic.id);\n        void loadSessionInspector(topic.id);');
-    expect(source).toContain('state.sessionInspectorLoading.value && toolUsageTraceGroups.length === 0');
-    expect(source).toContain('Tool Usage unavailable: {{ state.sessionInspectorError.value }}');
-    expect(source).toContain('@click="state.loadSessionInspector()"');
-    expect(source).toContain('Loading session metadata…');
-    expect(source).toContain('Session metadata unavailable: {{ state.sessionInspectorError.value }}');
-    expect(stateSource).toContain('if (previousSessionId !== session.id) sessionInspector.value = null;');
+  it('keeps admin Trace enrichment off the topic and live-stream critical path', () => {
+    expect(stateSource).toContain('const adminEnrichmentLoading = ref(false);');
+    expect(stateSource).toContain('const adminEnrichmentError = ref<string | null>(null);');
+    expect(stateSource).not.toContain('await loadAdminEnrichment');
+    expect(stateSource).toContain('openStream(topic.id);\n        void loadAdminEnrichment(topic.id);');
+    expect(stateSource).toContain('Promise.all([api.getSessionByTopic(topicId), api.getTopicTrace(topicId)])');
+    expect(source).toContain('state.adminEnrichmentLoading.value && !state.sessionInfo.value');
+    expect(source).toContain('Session metadata unavailable: {{ state.adminEnrichmentError.value }}');
   });
 
   it('stops stale topic-load continuations before topic-specific side effects', () => {

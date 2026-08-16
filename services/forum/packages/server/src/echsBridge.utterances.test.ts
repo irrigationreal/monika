@@ -151,8 +151,6 @@ describe('ECHS canonical utterance projection', () => {
         activeSubagents: new Map(),
         lastStreamEventAt: null,
         reasoningCheckpoints: [],
-        assistantText: '',
-        assistantCheckpoints: [],
       });
 
       (bridge as any).handleEvent('conversation', { event: 'turn_completed', data: {} });
@@ -222,8 +220,6 @@ describe('ECHS canonical utterance projection', () => {
       activeSubagents: new Map(),
       lastStreamEventAt: null,
       reasoningCheckpoints: [],
-      assistantText: '',
-      assistantCheckpoints: [],
     });
 
     (bridge as any).handleEvent('conversation', {
@@ -462,8 +458,6 @@ describe('ECHS canonical utterance projection', () => {
         activeSubagents: new Map(),
         lastStreamEventAt: null,
         reasoningCheckpoints: [],
-        assistantText: '',
-        assistantCheckpoints: [],
       };
       (bridge as any).threadMap.set('conversation', context);
 
@@ -611,8 +605,6 @@ describe('ECHS canonical utterance projection', () => {
       activeSubagents: new Map(),
       lastStreamEventAt: null,
       reasoningCheckpoints: [],
-      assistantText: '',
-      assistantCheckpoints: [],
     };
 
     await (bridge as any).ensureAssistantBackfill('conversation', context, context.turnStartedAt, post.id);

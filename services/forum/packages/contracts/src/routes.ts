@@ -1331,6 +1331,14 @@ export const apiRoutes: ApiRoute[] = [
   },
   {
     method: 'get',
+    path: '/topics/{topicId}/trace',
+    summary: 'Get admin topic trace',
+    tags: ['robot'],
+    request: { params: stringParam('topicId') },
+    response: { schema: schemas.TopicTraceDtoSchema },
+  },
+  {
+    method: 'get',
     path: '/sessions/{sessionId}/inspector',
     summary: 'Inspect session',
     tags: ['robot'],

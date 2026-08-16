@@ -69,12 +69,11 @@ describe('unified trace items', () => {
     expect(items.map((item) => item.type)).toEqual(['reasoning', 'tool']);
   });
 
-  it('uses append-only live segments and ignores assistant text', () => {
+  it('uses append-only live reasoning and tool segments', () => {
     const first = tool('first', '2026-01-01T00:00:01.000Z');
     const items = buildLiveTraceItems({
       segments: [
         { kind: 'reasoning', text: '**Inspect**\nRead the source.' },
-        { kind: 'assistant_text', text: 'Intermediate visible text' },
         { kind: 'tool', toolRunId: first.id },
       ],
       reasoningDraft: '**Verify**\nCheck the output.',

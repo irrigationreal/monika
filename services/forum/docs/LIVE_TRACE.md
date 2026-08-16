@@ -1,271 +1,129 @@
-# Live trace and saved trace architecture
+# Canonical topic Trace architecture
 
-This document owns the forum component's live and persisted trace pipeline.
-The cross-service Pi/session projection contract lives in
-[`../../../docs/forum.md`](../../../docs/forum.md).
+This document owns the forum's live and persisted reasoning/tool projection. The cross-service Pi/session contract lives
+in [`../../../docs/forum.md`](../../../docs/forum.md).
 
-### Trace visibility boundary
+## Product surface
 
-Topic visibility controls access to final conversation content. Trace visibility is a separate server-side policy because plans, reasoning, tool calls, commands, paths, usage metadata, and live assistant drafts are operational details, not public post content.
+The forum exposes one trace visualization: the admin-only topic **Trace**.
 
-Current policy:
+- During an active response, the draft-post position shows admins the latest three chronological reasoning/tool cards
+  from that response. **Open Trace** opens the complete session trace; **Stop Robot** uses the shared destructive-action
+  confirmation.
+- Guests and authenticated non-admins see only a neutral “Response in progress…” placeholder.
+- Completed posts contain conversation content only. There is no per-post Trace History.
+- Trace remains available while idle from Admin Tools.
+- Trace, Robot Diagnostics, Session Details, and Auto-Director share one fixed, non-modal Admin Workspace. It stays
+  beneath a docked Quick Reply so steering remains usable.
 
-- Unauthenticated readers of public topics may see final posts and a neutral live placeholder only: "Response in progress…".
-- Authenticated users may receive detailed live state and stream events for visible topics.
-- Saved trace history remains behind the admin-only session inspector surface.
+`TopicTraceViewer.vue` is the canonical renderer for both preview and workspace modes. Preview mode only selects the
+active response's three-card tail; it does not maintain a second ordering or card implementation.
 
-The `/topics/:topicId/state` route redacts unauthenticated responses to a minimal busy/idle shape and ignores `view=full` / `include=plan,toolRuns` for public readers. The `/topics/:topicId/state/stream` route filters SSE events per subscriber: public readers receive redacted `state` events and stripped `assistant_message` completion signals, while reasoning deltas, assistant deltas, tool events, and error details are suppressed. Do not rely on Vue-only hiding for trace secrecy.
+## Authorization boundary
 
-### Pi agent loop event flow
+Topic visibility and trace visibility are separate policies. `GET /topics/:topicId/state`, its SSE stream, and
+`GET /topics/:topicId/trace` enforce trace authorization server-side.
 
-A forum dispatch triggers a Pi agent loop that may span multiple LLM turns and
-persist multiple channel-neutral outward utterances:
+Only admins receive plans, reasoning, tool calls, commands, paths, live assistant drafts, raw error details,
+usage/context, and stream diagnostics. Every non-admin—including an authenticated member—receives a minimal busy/idle
+state and stripped completion/reset signals sufficient to show and dismiss the neutral placeholder.
 
-```
-Turn 1: thinking → text → tool_call(s)
-  ↓ tools execute
-Turn 2: outward assistant item A → tool_call(s)
-  ↓ tools execute
-Turn N: outward assistant item B → Pi agent_settled → wire turn_completed
-```
+The dedicated admin trace endpoint returns complete persisted plans and tool runs without querying or transporting
+session messages. The legacy session inspector endpoint remains available for API compatibility but no longer drives the
+topic UI.
 
-Each turn is one LLM call. Within a turn, the model produces thinking tokens,
-visible text tokens, and tool-use blocks. An outward item is published only after
-its canonical Pi message exists. It is not an aggregate of the loop's text.
+## Event flow
 
-**Important timing note:** For operations like "write a large file," the model
-generates the file content during the **thinking phase** (which can take 10-30
-seconds), then calls the Write tool which executes in **milliseconds**. The slow
-part is thinking, not tool execution.
-
-### SSE event pipeline
-
-```
-Pi SDK events → agentd (server.mjs) → echsBridge (forum server) → SSE bus → browser
+```text
+Pi SDK events → agentd → echsBridge → forum StreamBus → browser
 ```
 
-Key events emitted to the browser SSE stream:
+Important browser events:
 
-| Event               | Source                                         | Purpose                                                                         |
-| ------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------- |
-| `state`             | echsBridge.emitState()                         | Full robot state snapshot including `recentToolRuns` (last 20)                  |
-| `reasoning_delta`   | Pi thinking_delta → agentd → echsBridge        | Incremental reasoning/thinking text                                             |
-| `assistant_delta`   | Pi text_delta → agentd turn_delta → echsBridge | Incremental visible assistant text                                              |
-| `tool_started`      | echsBridge item_started handler                | Per-tool notification when a tool run is created                                |
-| `assistant_reset`   | echsBridge.dispatchUserMessage()               | Start of new response (reason: `new_turn`) or interrupt (reason: `interrupted`) |
-| `assistant_message` | canonical item projection completion           | One persisted outward utterance and its handoffs became a forum post            |
+| Event               | Purpose                                                      |
+| ------------------- | ------------------------------------------------------------ |
+| `state`             | Robot snapshot, current plan, recent tool snapshots, context |
+| `reasoning_delta`   | Buffered live reasoning text                                 |
+| `tool_started`      | Per-tool ordering boundary                                   |
+| `assistant_reset`   | New dispatch or interruption boundary                        |
+| `assistant_message` | One canonical outward item has been projected                |
 
-Agentd does not translate Pi's `agent_end` into a synthetic response. An agent run
-may retry, compact and retry, emit several persisted outward items, or emit none.
-Each canonical item is forwarded separately. Pi's internal `agent_settled` marks
-the idle boundary and agentd maps it to wire `turn_completed`. The forum's shared
-live/sync projection service applies the same outbound tamper, persona, parent/follow-up,
-and attachment-handoff semantics before `assistant_message`, so a sync race cannot
-publish raw content while live publishes transformed content.
+`assistant_message` is not the idle boundary. One settled agent loop may project several outward items. The later
+`state` emitted from wire `turn_completed` determines idle state.
 
-### Live trace: append-only committed segments
+## Append-only live ordering
 
-The live trace uses an **append-only committed-segment model**. Once content is
-rendered, it never moves — new content only appears at the tail.
-
-**Data model (`useForumState.ts`):**
+The browser maintains frozen committed segments plus a live reasoning tail:
 
 ```typescript
-type TraceSegment =
-  | { kind: "reasoning"; text: string }
-  | { kind: "assistant_text"; text: string }
-  | { kind: "tool"; toolRunId: string };
+type TraceSegment = { kind: 'reasoning'; text: string } | { kind: 'tool'; toolRunId: string };
 ```
 
-`committedSegments` is an ordered array of frozen segments. `reasoningDraft` and
-`assistantDraft` are the live tail — text currently being streamed that hasn't
-been committed yet.
+Reasoning deltas are buffered through `requestAnimationFrame`. When `tool_started` arrives synchronously,
+`flushPendingDeltas()` must run before committing the current reasoning and tool boundary. Once committed, a segment
+never moves; new work is appended.
 
-**Commit flow:**
+`recentToolRuns` is a batched state snapshot, not an incremental event stream. Never infer tool ordering by diffing it.
+Tool segment order comes from `tool_started`; snapshot tools supply the card data.
 
-1. Reasoning/assistant deltas arrive → buffered via `requestAnimationFrame` →
-   flushed into `reasoningDraft`/`assistantDraft`.
-2. `tool_started` SSE event fires → `flushPendingDeltas()` synchronously drains
-   buffers → current `reasoningDraft` committed as a reasoning segment → current
-   `assistantDraft` committed as a text segment → tool segment pushed → both
-   drafts cleared (fresh start for next inter-tool gap).
-3. Each `assistant_message` fires only after its canonical post/handoffs finalize.
-   Any remaining tail text is flushed and the projected post takes over. The idle
-   boundary separately clears activity; multiple canonical items can arrive before
-   that boundary. Explicit subagent `follow_up` items carry their own parent and
-   badge without relabelling an earlier ordinary item.
+Refresh during an active response reconstructs committed segments from the current plan, checkpoints, accumulated text,
+and tools. A durable stopped state freezes the reconstructed trace even if the browser missed the interruption event.
 
-**Rendering (`liveTurnItems` computed in `TopicView.vue`):**
+## Persisted trace
 
-Iterates committed segments (stable, ordered) plus the pending tail drafts
-(live, growing). For each tool segment, looks up the tool run from
-`activityLog`. If the tool data hasn't arrived yet (race between `tool_started`
-and `state`), renders a "Running tool…" placeholder.
+The bridge stores:
 
-`LiveAssistantTurn.vue` treats the current status item as pinned panel state and
-renders only the latest 15 chronological live trace items beneath it. This is a
-presentation-only cap: `committedSegments`, draft text, server checkpoints, and
-saved Trace History remain complete. When a new chronological item arrives past
-the cap, Vue transition classes fade the oldest visible item out at the top and
-fade the newest item in at the bottom. Page refreshes during an active response
-reconstruct the current state first, then immediately show the latest 15-item
-window without inventing removal animations for cards the browser never saw.
+- complete plan reasoning;
+- character-offset reasoning checkpoints at tool starts;
+- complete session tool rows with bounded/redacted summaries.
 
-### Interrupt handling
+`buildPersistedTraceItems()` splits reasoning at checkpoints and interleaves tools deterministically. Nullable
+checkpoints are expected for old or imported sessions; fallback rendering places parsed reasoning before chronologically
+ordered tools.
 
-When the user clicks Stop:
+The full workspace renders all response groups returned by the topic trace projection, newest response first. Within a
+response, cards remain chronological. The active preview takes only the final three cards from the active response and
+never fills empty slots with stale cards from an earlier response.
 
-1. `assistant_reset` fires with `reason: 'interrupted'`
-2. Client flushes buffered deltas, freezes even a text-only draft tail, sets `interruptedTrace = true`, and stops accumulating new content
-3. Committed and newly frozen text segments are preserved (not cleared)
-4. The trace header changes to "■ Response stopped" / "STOPPED"
-5. The frozen trace remains visible until the next response starts
+## Reasoning and tool presentation
 
-### Saved trace: server-side checkpoints
+Reasoning is visible by default in the full workspace. Its preference is stored under
+`codex-forum:trace:show-reasoning`, with a fallback read of the former Tool Usage preference key. The active preview
+always includes reasoning because it must remain informative before the first tool starts.
 
-The echsBridge stores checkpoint data for post-completion trace reconstruction:
+Reasoning detail is sanitized Markdown. `parseReasoningSteps()` recognizes bold headings only at line starts; inline
+bold text is not a step boundary.
 
-- `ctx.reasoningSummary` accumulates all reasoning text server-side
-- `ctx.assistantText` accumulates all assistant text server-side
-- When each tool starts, both lengths are recorded as checkpoints
-- `reasoning_checkpoints_json` is stored in the `plans` table (migration 29)
-- `assistantCheckpoints` + `assistantText` are included in the SSE state response
+Tool output remains a bounded, redacted summary. The browser cannot expand beyond what the bridge persisted. Formatting
+branches use normalized tool kinds rather than raw, inconsistently cased tool names.
 
-**Saved rendering (`PostTracePanel.vue`):**
+## Admin Workspace behavior
 
-If `reasoningCheckpoints` is available from the session inspector API, the
-component uses the shared `buildPersistedTraceItems` helper in
-`src/lib/unifiedTrace.ts` to split raw plan text at checkpoint boundaries and
-interleave parsed reasoning segments with tools sorted by `startedAt`. It falls
-back to a compact non-interleaved view when checkpoints are absent (pre-existing
-data or imported sessions).
+The workspace is fixed and independently scrollable, but deliberately not a modal: Quick Reply/Steer remains interactive
+above it. Opening moves focus to the workspace; Escape or Close dismisses it and returns focus to the launcher. Its
+bottom inset tracks expanded and collapsed dock heights through `--quick-reply-dock-height`.
 
-### Robot State Tool Usage trace
+Stop Robot remains a two-step destructive operation. Every Stop entry point invokes the existing `requestStopRobot()`
+confirmation and never interrupts directly.
 
-The admin-only Robot State **Tool Usage** section is also a unified reasoning and
-tool trace. It groups plans and tool runs by `parentPostId` while preserving the
-original compact interaction: the collapsed view shows only the newest tool card.
-**Show All** expands the complete available reasoning-and-tool trace, and **Show
-Latest** returns to that one-tool view. Response headings appear only in the
-expanded view when more than one response group is present.
+## Invariants to preserve
 
-Reasoning is enabled by default for the expanded trace. The accessible
-**Reasoning: On/Off** toggle filters reasoning cards without changing which tools
-are available, and its value is remembered in browser-local storage. The compact
-one-tool view remains tool-only regardless of that preference. Reasoning cards
-show a compact preview and expand to sanitized Markdown detail. Assistant response
-text is intentionally excluded because canonical outward text is already rendered
-as forum posts.
+1. Admin enrichment never blocks base topic selection, Quick Reply readiness, or SSE startup.
+2. Non-admin state and SSE payloads contain no trace details.
+3. Preview capping never truncates source state or persisted history.
+4. Interruption preserves buffered reasoning before clearing drafts.
+5. Idle state cannot retain a live current plan.
+6. Completion reloads cannot resurrect stale trace state.
+7. Equal tool timestamps use deterministic storage ordering.
+8. One renderer and one ordering model serve preview and complete Trace.
 
-While a response is active, Tool Usage uses the append-only committed reasoning
-and tool segments plus the current reasoning draft. Completed responses use the
-session inspector's persisted plans, checkpoints, and tool runs through the same
-`src/lib/unifiedTrace.ts` ordering helper used by saved Trace History. The admin
-inspector returns complete plan and tool rows for the session; Tool Usage bounds
-presentation to the latest 20 response groups rather than truncating individual
-responses. Session metadata and inspector hydration are optional background
-enrichment: topic selection, Quick Reply, and SSE startup do not await them. The
-Session Inspector and Tool Usage present explicit loading and failure states while
-those requests settle, with stale-topic responses fenced out.
-Missing checkpoints fall back to reasoning followed by chronologically sorted tools.
-Equal tool timestamps converge through deterministic newest-first storage ordering
-and chronological reversal in the shared helper. This keeps
-ordering stable across live execution, completion, and refresh while remaining
-compatible with old and imported sessions.
+## Tests
 
-Tool **Output** details remain summaries rather than canonical full tool results.
-The bridge redacts and bounds ordinary summaries to 1,000 characters before
-storing them; the browser cannot expand beyond the stored summary.
+Coverage belongs in:
 
-**Refresh resilience:** On page refresh or reconnect mid-response,
-`reconstructSegmentsFromState()` rebuilds committed segments from server state
-using the stored checkpoints and accumulated text. A successful Stop persists
-`activity = 'stopped'`; hydration or SSE state therefore freezes the reconstructed
-trace even if the client missed `assistant_reset`. Fresh accepted dispatch clears
-that boundary with the normal new-turn reset. Reconstruction only runs while
-`activity !== 'idle'` and there is current live content (`currentPlan` or live
-assistant text), including explicit initial state loads. Server state treats
-`activity = 'idle'` or `stopped` as an invariant that clears `current_plan_id`; queued/waiting
-turns also start without inheriting the previous plan. This keeps stale completed
-plans from resurrecting the live panel or appearing at the start of the next live
-turn.
-
-### `parseReasoningSteps` and markdown handling
-
-The reasoning parser splits text on `**bold**` markers to identify step boundaries.
-Only `**...**` at the **start of a line** (after newline + optional whitespace) is
-treated as a step boundary. Inline bold like `- **Gold** as currency` is kept as
-detail text within the current step, not split into a separate card.
-
-Fallback title for untitled reasoning: "Thinking" (not "Activity").
-
-### Critical footguns
-
-**SSE event buffering:** `reasoning_delta` and `assistant_delta` are buffered
-client-side via `requestAnimationFrame`. `tool_started` and `state` events
-process synchronously. Always call `flushPendingDeltas()` before committing
-segments or recording checkpoints.
-
-**`recentToolRuns` batching:** The `state` event's `recentToolRuns` array
-contains all recent tools (up to the last 20 from the DB), not incremental additions. Tool
-segments must be committed from `tool_started` events (which fire per-tool in
-real time), not by diffing `recentToolRuns`.
-
-**`activityLog` mutations:** Use immutable array updates
-(`activityLog.value = [...activityLog.value, item]`) not `.push()`. In-place
-mutations may not trigger Vue computed re-evaluation reliably through
-intermediate computed refs.
-
-**`assistant_reset` scope:** Fires once per user message dispatch (`new_turn`)
-or on interrupt (`interrupted`). Does NOT fire between Pi turns within the same
-agent loop. A single forum reply spans multiple Pi turns.
-
-**Tool name casing:** Pi sends capitalised names (`Bash`, `Read`, `Edit`). The
-DB `tool` column is normalised lowercase (`exec`, `read`, `apply_patch`). The
-`command` column preserves the original. Use `kind` for formatting branches and
-lowercase names for sub-type checks.
-
-**Timeout units:** Pi's Bash tool sends `timeout` in seconds. Other tools may
-use `timeoutMs` (milliseconds). `extractTimeoutMs` handles both conventions.
-
-**Clock skew:** `ToolElapsedTimer` uses client-relative timing (records
-`Date.now()` at mount). No `liveTurnStartedAt` timestamp filter exists — the
-append-only model handles turn boundaries via `assistant_reset`.
-
-**Imported/synced sessions:** Sessions imported from Pi JSONL files won't have
-reasoning checkpoints (nullable column). `PostTracePanel` falls back gracefully.
-
-### Debugging the trace pipeline
-
-When investigating trace rendering issues, the event pipeline has multiple
-stages where data can be lost or misordered. Use these debug techniques:
-
-**Server-side SSE capture:** Capture the raw SSE stream to see what events the
-server actually sends:
-
-```bash
-curl -sS -c /tmp/forum.cookies -H 'content-type: application/json' \
-  -d '{"username":"admin","password":"..."}' .../api/auth/login
-timeout 30 curl -sN -b /tmp/forum.cookies ".../api/topics/$TOPIC/state/stream" | grep '^event:'
-```
-
-Verify `tool_started` events appear between `state` events, and that
-`assistant_delta` bursts arrive between tool events.
-
-**Client-side console logging:** Add temporary `console.warn` in:
-
-- `syncToolActivity` — verify tools are added/updated in `activityLog`
-- `tool_started` handler — verify segments are committed
-- `liveTurnItems` computed — verify items are produced (log count + types)
-- `LiveAssistantTurn` component — verify props are received (use a `watch`)
-- `resetRobotActivity` — add `new Error().stack` to identify the caller
-
-**Common patterns:**
-
-- Items produced but not rendered → Vue reactivity issue (check immutable updates)
-- `tool_started` not firing → SSE stream not connected or wrong topic
-- Tools "updated" but never "added NEW" → tools already in `activityLog` from
-  initial `loadState`, or `recentToolRuns` includes old tools
-- Segments cleared mid-response → unexpected `resetRobotActivity` call (check
-  stack trace to find caller: `assistant_reset`, plan-ID transition, or
-  `handleAssistantMessage`)
+- `packages/server/src/routes/robotRoutes.access.test.ts` for admin/non-admin state and trace projection access;
+- `apps/codex-forum/src/lib/unifiedTrace.test.ts` for live/persisted ordering and checkpoint fallback;
+- `apps/codex-forum/src/views/TopicView.traceWorkspace.test.ts` for canonical surface and dead-implementation removal;
+- `apps/codex-forum/src/views/TopicView.quickReplyDock.test.ts` for non-blocking admin enrichment;
+- Robot UI Playwright coverage for mobile containment, preview controls, workspace tabs, focus, and confirmed Stop
+  behavior.

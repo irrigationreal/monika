@@ -3,7 +3,6 @@ import { EventEmitter } from 'node:events';
 export type StreamEventType =
   | 'state'
   | 'context_updated'
-  | 'assistant_delta'
   | 'reasoning_delta'
   | 'tool_run'
   | 'tool_started'
