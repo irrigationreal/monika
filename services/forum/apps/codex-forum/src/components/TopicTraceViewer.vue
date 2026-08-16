@@ -21,6 +21,9 @@
       <button class="vb-small-btn" type="button" :aria-pressed="showReasoning" @click="showReasoning = !showReasoning">
         Reasoning: {{ showReasoning ? 'On' : 'Off' }}
       </button>
+      <button class="vb-small-btn" type="button" :aria-label="traceDirectionLabel" @click="toggleTraceDirection">
+        Order: {{ traceDirection === 'newest-first' ? 'Newest first' : 'Oldest first' }}
+      </button>
       <button
         class="vb-small-btn"
         type="button"
@@ -172,6 +175,13 @@ const { renderContent } = useMarkdown();
 const reasoningPreferenceKey = 'codex-forum:trace:show-reasoning';
 const legacyReasoningPreferenceKey = 'codex-forum:tool-usage:show-reasoning';
 const showReasoning = ref(readReasoningPreference());
+type TraceDirection = 'newest-first' | 'oldest-first';
+const traceDirection = ref<TraceDirection>('newest-first');
+const traceDirectionLabel = computed(() =>
+  traceDirection.value === 'newest-first'
+    ? 'Trace order: newest first. Activate to show oldest first.'
+    : 'Trace order: oldest first. Activate to show newest first.'
+);
 const expandedReasoning = ref(new Set<string>());
 const expandedTools = ref(new Set<string>());
 
@@ -316,13 +326,19 @@ const renderGroups = computed<TraceGroup[]>(() => {
     if (!group) return [];
     return [{ ...group, cards: group.cards.slice(-props.previewCardLimit) }];
   }
-  return traceGroups.value
+  const groups = traceGroups.value
     .map((group) => ({
       ...group,
-      cards: showReasoning.value ? group.cards : group.cards.filter((card) => card.type === 'tool'),
+      cards: showReasoning.value ? [...group.cards] : group.cards.filter((card) => card.type === 'tool'),
     }))
     .filter((group) => group.cards.length > 0);
+  if (traceDirection.value === 'oldest-first') return [...groups].reverse();
+  return groups.map((group) => ({ ...group, cards: [...group.cards].reverse() }));
 });
+
+function toggleTraceDirection(): void {
+  traceDirection.value = traceDirection.value === 'newest-first' ? 'oldest-first' : 'newest-first';
+}
 
 function compact(value: string | null | undefined, max = 140): string | null {
   const text = String(value ?? '')
