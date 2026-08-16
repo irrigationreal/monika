@@ -1361,6 +1361,73 @@ test.describe('Threading and reply flows', () => {
     await deepLinkPage.close();
   });
 
+  test('topic edge controls scroll within the current page without changing navigation', async ({ page, context }) => {
+    const state = createMockState();
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await attachMockApi(page, state);
+    await setAuthTokens(context, REGULAR_TOKEN);
+
+    await page.goto('/');
+    const fixture = await createFixture(page, { postCount: 12 });
+    await page.addInitScript(() => {
+      const originalScrollIntoView = Element.prototype.scrollIntoView;
+      Element.prototype.scrollIntoView = function (options?: ScrollIntoViewOptions) {
+        const calls = ((window as any).__topicScrollIntoViewCalls ??= []);
+        calls.push({ id: (this as HTMLElement).id, options });
+        return originalScrollIntoView.call(this, options);
+      };
+
+      const originalScrollTo = window.scrollTo;
+      window.scrollTo = function (...args: Parameters<typeof window.scrollTo>) {
+        ((window as any).__topicScrollToCalls ??= []).push(args);
+        return originalScrollTo.apply(window, args);
+      };
+    });
+    await page.goto(`/topics/${fixture.topicId}`);
+
+    const upperPager = page.locator('.vb-controls:not(.vb-controls-bottom) .vb-pagination-controls');
+    const lowerPager = page.locator('.vb-controls-bottom .vb-pagination-controls');
+    await expect(upperPager.locator('.vb-page-btn').last()).toHaveText('Bottom');
+    await expect(lowerPager.locator('.vb-page-btn').last()).toHaveText('Top');
+    await expect(upperPager.locator('.vb-page-btn').nth(-2)).toHaveText('»»');
+    await expect(lowerPager.locator('.vb-page-btn').nth(-2)).toHaveText('»»');
+
+    const initialUrl = page.url();
+    await upperPager.getByRole('button', { name: 'Scroll to bottom of current page' }).click();
+    await expect.poll(() => page.evaluate(() => (window as any).__topicScrollIntoViewCalls?.at(-1)?.id)).toBe('8');
+    expect(await page.evaluate(() => (window as any).__topicScrollIntoViewCalls.at(-1).options)).toMatchObject({
+      behavior: 'auto',
+      block: 'start',
+    });
+    expect(page.url()).toBe(initialUrl);
+
+    await page.getByRole('button', { name: 'Search this Thread' }).click();
+    await page.getByPlaceholder('Search posts...').fill('Follow-up 2');
+    await upperPager.getByRole('button', { name: 'Scroll to bottom of current page' }).click();
+    await expect.poll(() => page.evaluate(() => (window as any).__topicScrollIntoViewCalls?.at(-1)?.id)).toBe('3');
+    expect(page.url()).toBe(initialUrl);
+
+    state.robotActivity = 'thinking';
+    await page.reload();
+    await upperPager.locator('.vb-page-btn', { hasText: '2' }).click();
+    await expect(page).toHaveURL(/\?page=2$/);
+    const pageTwoUrl = page.url();
+    await upperPager.getByRole('button', { name: 'Scroll to bottom of current page' }).click();
+    await expect.poll(() => page.evaluate(() => (window as any).__topicScrollIntoViewCalls?.at(-1)?.id)).toBe('13');
+    expect(page.url()).toBe(pageTwoUrl);
+
+    await lowerPager.getByRole('button', { name: 'Scroll to top of page' }).click();
+    expect(await page.evaluate(() => (window as any).__topicScrollToCalls.at(-1)[0])).toMatchObject({
+      top: 0,
+      behavior: 'auto',
+    });
+    expect(page.url()).toBe(pageTwoUrl);
+
+    await page.setViewportSize({ width: 390, height: 600 });
+    expect(await upperPager.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    expect(await lowerPager.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  });
+
   test('quick reply dock preserves controls, scroll chaining, focus, files, and layout across presentations', async ({
     page,
     context,
