@@ -1387,10 +1387,12 @@ test.describe('Threading and reply flows', () => {
 
     const upperPager = page.locator('.vb-controls:not(.vb-controls-bottom) .vb-pagination-controls');
     const lowerPager = page.locator('.vb-controls-bottom .vb-pagination-controls');
-    await expect(upperPager.locator('.vb-page-btn').last()).toHaveText('Bottom');
-    await expect(lowerPager.locator('.vb-page-btn').last()).toHaveText('Top');
-    await expect(upperPager.locator('.vb-page-btn').nth(-2)).toHaveText('»»');
-    await expect(lowerPager.locator('.vb-page-btn').nth(-2)).toHaveText('»»');
+    await expect(upperPager.locator('.vb-page-btn').first()).toHaveText('Bottom');
+    await expect(lowerPager.locator('.vb-page-btn').first()).toHaveText('Top');
+    await expect(upperPager.locator('.vb-page-btn').nth(1)).toHaveText('« Prev');
+    await expect(lowerPager.locator('.vb-page-btn').nth(1)).toHaveText('« Prev');
+    await expect(upperPager.locator('.vb-page-btn').last()).toHaveText('»»');
+    await expect(lowerPager.locator('.vb-page-btn').last()).toHaveText('»»');
 
     const initialUrl = page.url();
     await upperPager.getByRole('button', { name: 'Scroll to bottom of current page' }).click();
