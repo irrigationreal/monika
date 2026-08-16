@@ -326,6 +326,7 @@ function classifyHistoricalProviderError(error: string): string | null {
 export class PiSessionSyncService {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
+  private paused = false;
   private lastRunStartedAt: string | null = null;
   private lastRunFinishedAt: string | null = null;
   private lastRunError: string | null = null;
@@ -367,8 +368,16 @@ export class PiSessionSyncService {
     this.timer = null;
   }
 
-  getStatus(): { running: boolean; intervalMs: number; enabled: boolean } {
-    return { running: this.running, intervalMs: this.intervalMs, enabled: Boolean(this.timer) };
+  pause(): void {
+    this.paused = true;
+  }
+
+  resume(): void {
+    this.paused = false;
+  }
+
+  getStatus(): { running: boolean; paused: boolean; intervalMs: number; enabled: boolean } {
+    return { running: this.running, paused: this.paused, intervalMs: this.intervalMs, enabled: Boolean(this.timer) };
   }
 
   async waitForIdle(timeoutMs = 0): Promise<boolean> {
@@ -389,6 +398,14 @@ export class PiSessionSyncService {
   }
 
   private async runSync(opts: { changedOnly: boolean; piSessionId?: string | null }): Promise<PiSyncRunResult> {
+    if (this.paused)
+      return {
+        ok: false,
+        message: 'Pi sync is paused for deployment.',
+        sessionsChecked: 0,
+        postsImported: 0,
+        anomaliesProcessed: 0,
+      };
     if (this.running)
       return {
         ok: false,

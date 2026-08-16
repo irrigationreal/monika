@@ -5,6 +5,9 @@ import type {
   AccessRuleScopeKind,
   AnalyticsAudience,
   AnalyticsBucket,
+  DeploymentAdmissionOutcome,
+  DeploymentAdmissionState,
+  DeploymentBlocker,
   ForkOperationStatus,
   ForumVisibility,
   MessageDraftContext,
@@ -888,6 +891,38 @@ export interface SessionInspectorDto {
   toolRuns: ToolRunDto[];
   plans: PlanDto[];
   artifacts: { id: string; kind: string; label: string; visibility: 'public' | 'internal' | 'private' }[];
+}
+
+export type DeploymentAdmissionStateDto = DeploymentAdmissionState;
+
+export interface DeploymentAdmissionAcquireRequestDto {
+  operationId: string;
+  waitTimeoutMs: number;
+  leaseMs: number;
+}
+
+export interface DeploymentAdmissionCancelRequestDto {
+  operationId: string;
+}
+
+export interface DeploymentAdmissionResultDto {
+  acquired: boolean;
+  operationId: string;
+  state: DeploymentAdmissionOutcome;
+  blockers: DeploymentBlocker[];
+  expiresAt: string | null;
+}
+
+export interface DeploymentAdmissionStatusDto {
+  state: DeploymentAdmissionStateDto;
+  operationId: string | null;
+  expiresAt: string | null;
+}
+
+export interface DeploymentAdmissionCancelResponseDto {
+  ok: true;
+  released: boolean;
+  operationId: string;
 }
 
 export interface AdminDeployStatusDto {

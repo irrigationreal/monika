@@ -81,6 +81,7 @@ import type {
 
 const ACCESS_TOKEN_TTL_DAYS = 7;
 const RECENT_DUPLICATE_WINDOW_MS = 5 * 60 * 1000;
+const robotWorkAdmissionGuards = new WeakMap<Database.Database, (() => () => void) | null>();
 
 function normalizePostBodyForDuplicateCheck(text: string): string {
   return text
@@ -539,6 +540,18 @@ export class ForumStore {
   >(STORE_STATS_CACHE_TTL_MS, STORE_CACHE_MAX_ENTRIES);
 
   constructor(private readonly db: Database.Database) {}
+
+  setRobotWorkAdmissionGuard(guard: (() => () => void) | null): void {
+    robotWorkAdmissionGuards.set(this.db, guard);
+  }
+
+  beginRobotWork(): () => void {
+    return robotWorkAdmissionGuards.get(this.db)?.() ?? (() => undefined);
+  }
+
+  assertRobotWorkAdmission(): void {
+    this.beginRobotWork()();
+  }
 
   runInTransaction<T>(operation: () => T): T {
     try {
@@ -1511,7 +1524,9 @@ export class ForumStore {
            ))
            and (? = 0 or not exists (
              select 1 from post_dispatches d
-             where d.post_id = p.id and d.status in ('pending', 'dispatching', 'failed')
+             join post_dispatch_generations g on g.topic_id = d.topic_id and g.generation = d.generation
+             where d.post_id = p.id
+               and (d.status in ('pending', 'dispatching') or (d.status = 'failed' and d.next_attempt_at is not null))
            ))
          order by p.rowid asc`
       )
@@ -2573,6 +2588,13 @@ export class ForumStore {
     );
   }
 
+  countPendingOrRunningForkOperations(): number {
+    const row = this.db
+      .prepare("select count(*) as count from fork_operations where status in ('pending', 'running')")
+      .get() as { count: number } | undefined;
+    return row?.count ?? 0;
+  }
+
   getActiveForkOperation(topicId: string): ForkOperation | null {
     const row = this.db
       .prepare(
@@ -2625,6 +2647,7 @@ export class ForumStore {
     return this.db.transaction(() => {
       const existing = this.getForkOperation(input.id);
       if (existing) return existing;
+      this.assertRobotWorkAdmission();
       const topic = this.getTopic(input.sourceTopicId);
       const robotState = this.getRobotState(input.sourceTopicId);
       const autoRun = this.getTopicAutoRun(input.sourceTopicId);
@@ -2930,8 +2953,9 @@ export class ForumStore {
       .prepare(
         `select 1 from compaction_operations c
          join post_dispatches d on d.post_id = c.recovery_post_id
+         join post_dispatch_generations g on g.topic_id = d.topic_id and g.generation = d.generation
          where c.topic_id = ? and c.status = 'succeeded'
-           and d.status in ('pending', 'dispatching', 'failed')
+           and (d.status in ('pending', 'dispatching') or (d.status = 'failed' and d.next_attempt_at is not null))
          limit 1`
       )
       .get(topicId) as unknown | undefined;
@@ -2998,6 +3022,7 @@ export class ForumStore {
     return this.db.transaction(() => {
       const existing = this.getCompactionOperation(input.id);
       if (existing) return null;
+      this.assertRobotWorkAdmission();
       const topic = this.getTopic(input.topicId);
       const robotState = this.getRobotState(input.topicId);
       const autoRun = this.getTopicAutoRun(input.topicId);
@@ -3105,49 +3130,20 @@ export class ForumStore {
       const operation = this.getCompactionOperation(id);
       if (operation?.status !== 'running') throw new Error('compaction operation is not running');
       const anchorPostId = this.getLatestPostId(operation.topicId);
-      const postId = randomUUID();
       const now = nowIso();
-      this.db
-        .prepare(
-          `insert into posts (id, topic_id, tenant_id, parent_post_id, author_id, body, source_message_id, silent, created_at, edited_at, deleted_at)
-         values (?, ?, null, null, ?, ?, null, 0, ?, null, null)`
-        )
-        .run(postId, operation.topicId, operation.initiatedBy, operation.recoveryPrompt, now);
-      this.ensurePostDispatchGeneration(operation.topicId, now);
-      const origin: UtteranceOrigin = {
-        utteranceId: postId,
-        originKind: 'forum',
-        channelKind: 'web',
+      const recoveryPost = this.createPost({
+        topicId: operation.topicId,
+        authorId: operation.initiatedBy,
+        body: operation.recoveryPrompt,
+        silent: false,
+      });
+      const postId = recoveryPost.id;
+      this.createPostDispatch({
         topicId: operation.topicId,
         postId,
-        surfaceId: null,
-        externalEventId: null,
-        scope: null,
-        scopeKind: null,
-      };
-      this.db
-        .prepare(
-          `insert into post_dispatches
-         (id, topic_id, post_id, session_id, status, mode, generation, model, reasoning_effort, attempt_count,
-          last_attempt_at, next_attempt_at, dispatched_at, error_message, created_at, updated_at,
-          origin_key, origin_json, contributor_post_ids_json)
-         values (?, ?, ?, ?, 'pending', 'auto',
-          (select generation from post_dispatch_generations where topic_id = ?),
-          null, null, 0, null, ?, null, null, ?, ?, ?, ?, ?)`
-        )
-        .run(
-          randomUUID(),
-          operation.topicId,
-          postId,
-          operation.sessionId,
-          operation.topicId,
-          now,
-          now,
-          now,
-          normalizedOriginKey(origin),
-          JSON.stringify(origin),
-          JSON.stringify([postId])
-        );
+        sessionId: operation.sessionId,
+        mode: 'auto',
+      });
       const event = this.createTopicOperationalEvent({
         topicId: operation.topicId,
         anchorPostId,
@@ -3227,6 +3223,7 @@ export class ForumStore {
   createPostDispatch(input: CreatePostDispatchInput): PostDispatchRow {
     const existing = this.getPostDispatchByPost(input.postId);
     if (existing) return existing;
+    this.assertRobotWorkAdmission();
     const id = randomUUID();
     const now = nowIso();
     const origin = this.resolveUtteranceOrigin(input.postId);
@@ -3419,8 +3416,12 @@ export class ForumStore {
                and not exists (
                  select 1 from compaction_operations completed
                  join post_dispatches checkpoint on checkpoint.post_id = completed.recovery_post_id
+                 join post_dispatch_generations checkpoint_generation
+                   on checkpoint_generation.topic_id = checkpoint.topic_id
+                  and checkpoint_generation.generation = checkpoint.generation
                  where completed.topic_id = d.topic_id and completed.status = 'succeeded'
-                   and checkpoint.status in ('pending', 'dispatching', 'failed')
+                   and (checkpoint.status in ('pending', 'dispatching')
+                     or (checkpoint.status = 'failed' and checkpoint.next_attempt_at is not null))
                )
              )
            )
@@ -3443,9 +3444,24 @@ export class ForumStore {
   countActionablePostDispatches(topicId: string): number {
     const row = this.db
       .prepare(
-        `select count(*) as count from post_dispatches where topic_id = ? and status in ('pending', 'dispatching', 'failed')`
+        `select count(*) as count from post_dispatches d
+         join post_dispatch_generations g on g.topic_id = d.topic_id and g.generation = d.generation
+         where d.topic_id = ?
+           and (d.status in ('pending', 'dispatching') or (d.status = 'failed' and d.next_attempt_at is not null))`
       )
       .get(topicId) as { count: number } | undefined;
+    return row?.count ?? 0;
+  }
+
+  countGlobalActionablePostDispatches(): number {
+    const row = this.db
+      .prepare(
+        `select count(*) as count from post_dispatches d
+         join post_dispatch_generations g on g.topic_id = d.topic_id and g.generation = d.generation
+         where (d.status in ('pending', 'dispatching')
+            or (d.status = 'failed' and d.next_attempt_at is not null))`
+      )
+      .get() as { count: number } | undefined;
     return row?.count ?? 0;
   }
 

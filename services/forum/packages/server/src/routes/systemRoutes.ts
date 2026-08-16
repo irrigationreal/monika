@@ -3,11 +3,23 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import {
+  DeploymentAdmissionAcquireRequestSchema,
+  DeploymentAdmissionCancelRequestSchema,
+} from '@irrigationreal/codex-forum-contracts';
+
+import {
+  mapDeploymentAdmissionCancelResponseToDto,
+  mapDeploymentAdmissionResultToDto,
+  mapDeploymentAdmissionStatusToDto,
+} from '../mappers/dto';
 import { DEPLOY_TOKEN } from '../runtimeConfig';
+import { parseBody } from '../utils/validation';
 
 import type { FastifyInstance } from 'fastify';
 
 import type { ModelCatalogSnapshot } from '../modelCatalog';
+import type { DeploymentAdmissionCoordinator } from '../services/deploymentAdmissionCoordinator';
 import type { AccessHelpers } from '../utils/access';
 
 type HeaderRequest = { headers: Record<string, string | string[] | undefined> };
@@ -27,6 +39,7 @@ export function registerSystemRoutes({
   modelCatalog,
   access,
   deploymentStatus,
+  deploymentAdmission,
   readiness,
   deployToken = DEPLOY_TOKEN,
 }: {
@@ -34,6 +47,7 @@ export function registerSystemRoutes({
   modelCatalog?: { listModels: () => Promise<ModelCatalogSnapshot> } | null;
   access?: Pick<AccessHelpers, 'getCurrentUser' | 'requireScope'> | null;
   deploymentStatus?: (() => unknown) | null;
+  deploymentAdmission?: Pick<DeploymentAdmissionCoordinator, 'acquire' | 'cancel' | 'getStatus'> | null;
   readiness?: (() => Promise<boolean>) | null;
   deployToken?: string | null;
 }): void {
@@ -126,6 +140,38 @@ export function registerSystemRoutes({
   app.get('/deploy/quiescence', (request) => {
     requireDeployToken(request);
     return deploymentStatus?.() ?? { safeToStop: true, blockers: [] };
+  });
+
+  app.post('/deploy/admission/acquire', async (request, reply) => {
+    requireDeployToken(request);
+    if (!deploymentAdmission) throw app.httpErrors.serviceUnavailable('Deployment admission is unavailable');
+    const body = parseBody(app, DeploymentAdmissionAcquireRequestSchema, request.body);
+    try {
+      const result = await deploymentAdmission.acquire(body);
+      if (!result.acquired) reply.code(409);
+      return mapDeploymentAdmissionResultToDto(result);
+    } catch (error) {
+      if (error instanceof RangeError) throw app.httpErrors.badRequest(error.message);
+      throw error;
+    }
+  });
+
+  app.post('/deploy/admission/cancel', (request) => {
+    requireDeployToken(request);
+    if (!deploymentAdmission) throw app.httpErrors.serviceUnavailable('Deployment admission is unavailable');
+    const body = parseBody(app, DeploymentAdmissionCancelRequestSchema, request.body);
+    try {
+      return mapDeploymentAdmissionCancelResponseToDto(deploymentAdmission.cancel(body.operationId));
+    } catch (error) {
+      if (error instanceof RangeError) throw app.httpErrors.badRequest(error.message);
+      throw error;
+    }
+  });
+
+  app.get('/deploy/admission', (request) => {
+    requireDeployToken(request);
+    if (!deploymentAdmission) throw app.httpErrors.serviceUnavailable('Deployment admission is unavailable');
+    return mapDeploymentAdmissionStatusToDto(deploymentAdmission.getStatus());
   });
 
   app.get('/models', async (request) => {

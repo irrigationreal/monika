@@ -93,6 +93,7 @@ import {
 import { AnalyticsService } from './services/analyticsService';
 import { AutoRunDirector } from './services/autoRunDirector';
 import { CompactionService } from './services/compactionService';
+import { DeploymentAdmissionCoordinator } from './services/deploymentAdmissionCoordinator';
 import { getEmailService } from './services/emailService';
 import { FileStorageMaintenance } from './services/fileStorageMaintenance';
 import { ForkService } from './services/forkService';
@@ -294,6 +295,32 @@ const piSessionSync = MONIKA_PI_SYNC_ENABLED
     })
   : null;
 
+const getForumDeploymentBlockers = (includePiSync: boolean) => {
+  const activeTurns = codex.listActiveTurns().length;
+  const queuedTurns = codex.listQueuedTurns().length;
+  const blockers = [] as ({ code: string } & Record<string, unknown>)[];
+  if (activeTurns > 0) blockers.push({ code: 'active_robot_turns', count: activeTurns });
+  if (queuedTurns > 0) blockers.push({ code: 'queued_robot_turns', count: queuedTurns });
+  if (includePiSync && piSessionSync?.getStatus().running) blockers.push({ code: 'pi_session_sync_running' });
+  const actionableDispatches = store.countGlobalActionablePostDispatches();
+  if (actionableDispatches > 0) blockers.push({ code: 'actionable_post_dispatches', count: actionableDispatches });
+  const activeCompactions = store.countActiveCompactionOperations();
+  if (activeCompactions > 0) blockers.push({ code: 'active_compactions', count: activeCompactions });
+  const activeForks = store.countPendingOrRunningForkOperations();
+  if (activeForks > 0) blockers.push({ code: 'active_forks', count: activeForks });
+  const blockingRobotStates = store
+    .listRobotStates()
+    .filter((state) => !['idle', 'stopped', 'error'].includes(state.activity));
+  if (blockingRobotStates.length > 0) {
+    blockers.push({ code: 'non_idle_robot_states', count: blockingRobotStates.length });
+  }
+  return blockers;
+};
+
+const deploymentAdmission = new DeploymentAdmissionCoordinator(store, piSessionSync, () =>
+  getForumDeploymentBlockers(false)
+);
+
 // Load persisted maxConcurrentTurns from database
 const savedMaxConcurrentTurns = store.getSystemSetting('maxConcurrentTurns');
 if (savedMaxConcurrentTurns) {
@@ -335,12 +362,15 @@ const app = Fastify({ logger: true, bodyLimit: MAX_REQUEST_BODY_BYTES, trustProx
 const access = createAccessHelpers(app, store);
 registerApiErrorHandler(app);
 app.addHook('onClose', async () => {
+  // Each stop call closes its claim gate synchronously before its first await.
+  // Close every producer first, then gracefully join their in-flight work.
   piSessionSync?.stop();
+  deploymentAdmission.close();
   const postDispatchStop = postDispatchService.stop();
+  const compactionStop = compactionService.stop();
+  const forkStop = forkService.stop();
   await piSessionSync?.waitForIdle();
-  await compactionService.stop();
-  await forkService.stop();
-  await postDispatchStop;
+  await Promise.all([postDispatchStop, compactionStop, forkStop]);
   await autoRunDirector.stop();
   await codex.stop();
   if (bus instanceof RedisStreamBus) {
@@ -443,24 +473,14 @@ const adapterRegistry = createAdapterRegistry({
 const forumDeploymentStatus = () => {
   const activeTurns = codex.listActiveTurns().length;
   const queuedTurns = codex.listQueuedTurns().length;
-  const piSync = piSessionSync?.getStatus() ?? { enabled: false, running: false, intervalMs: null };
-  const blockers = [] as Array<Record<string, unknown>>;
-  if (activeTurns > 0) blockers.push({ code: 'active_robot_turns', count: activeTurns });
-  if (queuedTurns > 0) blockers.push({ code: 'queued_robot_turns', count: queuedTurns });
-  if (piSync.running) blockers.push({ code: 'pi_session_sync_running' });
-  const activeCompactions = store.countActiveCompactionOperations();
-  if (activeCompactions > 0) blockers.push({ code: 'active_compactions', count: activeCompactions });
-  const blockingRobotStates = store
-    .listRobotStates()
-    .filter((state) => !['idle', 'stopped', 'error'].includes(state.activity));
-  if (blockingRobotStates.length > 0) {
-    blockers.push({ code: 'non_idle_robot_states', count: blockingRobotStates.length });
-  }
+  const piSync = piSessionSync?.getStatus() ?? { enabled: false, running: false, paused: false, intervalMs: null };
+  const blockers = getForumDeploymentBlockers(true);
   return {
     safeToStop: blockers.length === 0,
     blockers,
     robot: { activeTurns, queuedTurns },
     piSessionSync: piSync,
+    admission: deploymentAdmission.getStatus(),
   };
 };
 
@@ -470,6 +490,7 @@ const registerApiRoutes: FastifyPluginAsync = async (api) => {
     modelCatalog,
     access,
     deploymentStatus: forumDeploymentStatus,
+    deploymentAdmission,
     readiness: () => codex.checkReadiness(),
   });
   registerAuthRoutes({ app: api, store, featureFlags, linkIssuer, emailService, access });

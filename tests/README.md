@@ -36,7 +36,10 @@ and opt-in live backend canaries. Forum unit coverage verifies that dedicated
 subagent child paths are omitted from both normal sync and direct import paths,
 and that channel-neutral canonical utterances project individually; live-first and
 sync-first races converge on identical transformed body, metadata, parent, follow-up,
-and attachment handoff state without a fake user post.
+and attachment handoff state without a fake user post. Deployment-admission tests
+cover token auth, response DTO shape, idempotent ownership renewal/expiry, Pi-sync pause/wait/resume,
+preparing revocation, acquired publication rollback, tracked in-flight agent/Director work, delayed handoff races,
+explicit-dispatch atomicity, pending/running forks, and global durable blockers.
 
 ## Agentd tests
 
@@ -157,7 +160,7 @@ The script verifies:
 10. an interactive Pi ownership lease evicts an idle agentd runtime, blocks forum reopen and deployment, heartbeats, and releases cleanly;
 11. agentd quiescence reports the reloaded idle conversation and deploy drain closes it;
 12. a replacement container sharing only isolated `/data` restores that drain, rejects new work, and becomes healthy only after cancellation clears the durable state;
-13. `scripts/deploy-if-safe --backup-only` can create and verify an isolated runtime capsule backup through a mock forum quiescence endpoint;
+13. `scripts/deploy-if-safe --backup-only` can acquire/cancel mock forum deployment admission and create and verify an isolated runtime capsule backup;
 14. the container stops cleanly on SIGTERM;
 15. isolated second runtimes exit nonzero and reap their sibling when either agentd or memstore dies unexpectedly.
 
@@ -187,14 +190,19 @@ tests/smoke/deploy-if-safe-drain-lifecycle.sh
 The script verifies:
 
 1. a forum-only image update does not drain agentd;
-2. a monika image update starts drain before backup;
-3. the deploy script renews durable drain immediately before Compose runs;
-4. a Monika replacement is applied only while the durable drain marker exists;
-5. after Compose applies the update, agentd drain cancel and healthy/undrained
-   proof precede forum `/readyz`, `compose ps`, and pruning in that order.
+2. every applied update acquires forum admission, renews the same owned lease immediately before Compose, and fails
+   closed before Compose when that lease is lost or expired;
+3. Compose begins while the process-local forum marker exists; forum replacement clears it, replacement cancel is an
+   idempotent no-op, and Monika-only/backup-only explicitly cancel the surviving lease;
+4. a monika image update starts drain before backup;
+5. the deploy script renews durable drain immediately before Compose runs;
+6. a Monika replacement is applied only while both the forum-admission and durable-drain markers exist;
+7. after Compose applies the update, agentd drain cancel and healthy/undrained proof precede bounded forum `/readyz`,
+   bounded forum admission cancel, `compose ps`, and pruning in that order;
+8. a readiness failure still attempts bounded best-effort forum cancellation through the exit trap.
 
-This protects the failure mode where agentd stays in deploy drain after a
-forum-only update because the monika container was not recreated.
+This protects both the old stuck-drain failure and the forum quiescence-to-restart
+race, including release on success and failure.
 
 ### `smoke/compose-agentd-port.sh`
 

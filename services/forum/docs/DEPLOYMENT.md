@@ -29,7 +29,7 @@ CODEX_FORUM_DEPLOY_TOKEN
 ```
 
 The first authorizes internal pending-attachment uploads from Monika. The second authorizes host-side deployment
-quiescence checks. Neither token belongs in Git.
+quiescence diagnostics and the deployment-admission acquire/cancel boundary. Neither token belongs in Git.
 
 Configure these through root `.env`, the host shell, or ignored Compose as needed:
 
@@ -81,8 +81,10 @@ Health is intentionally minimal liveness and can succeed without agentd. Readine
 returns HTTP 503 with `{ "ok": false }` when the selected Monika Pi backend is unreachable, draining, or unhealthy; the
 integrated Compose health check uses this surface. Its two-second backend probe calls agentd's lightweight health route,
 which does not traverse lifecycle/session archives or wait for canonical-session work. Operational deployment safety
-still requires the authenticated quiescence routes; forum deployment state requires `CODEX_FORUM_DEPLOY_TOKEN`, while
-model catalog and administrative routes require an authenticated forum identity.
+still requires authenticated deployment admission. `GET /api/deploy/quiescence` is diagnostic; the host uses
+operation-scoped `POST /api/deploy/admission/acquire` and `/cancel`, with `CODEX_FORUM_DEPLOY_TOKEN`, to pause/wait Pi
+sync and fence robot-eligible durable dispatch. Model catalog and administrative routes require an authenticated forum
+identity.
 
 ## Persistent data
 
@@ -184,8 +186,13 @@ For another reverse proxy, preserve:
 ## Updates and recovery
 
 Do not recreate the forum or Monika container in the middle of Pi work. The root
-[`deploy-if-safe`](../../../scripts/deploy-if-safe) flow checks forum dispatch, projection, compaction, agentd,
-memstore, interactive ownership, and delegated work before replacing containers.
+[`deploy-if-safe`](../../../scripts/deploy-if-safe) flow acquires the forum's expiring process-local admission lease before backup or drain,
+then revalidates and renews the same owned lease immediately before Compose. Admission pauses/waits Pi sync and checks
+current actionable durable dispatch, pending/running fork, compaction, tracked direct agent/model work, projection,
+agentd, memstore, interactive ownership, and delegated work before replacing containers. A lost/expired renewal fails
+closed. Compose begins while the old forum lease exists; forum replacement clears that process-local fence, so the
+post-readiness cancel is an idempotent no-op. Monika-only and backup-only explicitly cancel the surviving lease, and the
+trap uses bounded best-effort cancellation on abort.
 
 See:
 

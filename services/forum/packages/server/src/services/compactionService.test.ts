@@ -219,20 +219,48 @@ describe('CompactionService', () => {
     store.claimCompactionOperation('op-checkpoint');
     const completed = store.finishCompactionSuccess('op-checkpoint');
     const dispatch = store.getPostDispatchByPost(completed.recoveryPostId!);
-    db.prepare("update post_dispatches set status = 'failed', error_message = 'provider unavailable' where id = ?").run(
-      dispatch!.id
-    );
+    db.prepare(
+      "update post_dispatches set status = 'failed', next_attempt_at = null, error_message = 'provider unavailable' where id = ?"
+    ).run(dispatch!.id);
     const wake = vi.fn();
     const subject = service({ getTopicCompactionLeaf: vi.fn(), compactTopicConversation: vi.fn() }, wake);
 
+    expect(store.hasCompactionFence(topic.id)).toBe(false);
     expect(subject.getState(topic.id)).toMatchObject({
       active: null,
       latest: { id: 'op-checkpoint', status: 'succeeded' },
       checkpointDispatch: { status: 'failed', error_message: 'provider unavailable' },
     });
     expect(subject.retryCheckpoint(topic.id, 'op-checkpoint').checkpointDispatch).toMatchObject({ status: 'pending' });
+    expect(store.hasCompactionFence(topic.id)).toBe(true);
     expect(subject.retryCheckpoint(topic.id, 'op-checkpoint').checkpointDispatch).toMatchObject({ status: 'pending' });
     expect(wake).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not resurrect a failed checkpoint through acquired deployment admission', () => {
+    const { topic, admin, session } = seed(store, db);
+    store.createCompactionOperation({
+      id: 'op-admission-checkpoint',
+      topicId: topic.id,
+      sessionId: session.id,
+      initiatedBy: admin.id,
+      expectedLeafId: 'leaf-1',
+      recoveryPrompt: 'recover',
+    });
+    store.claimCompactionOperation('op-admission-checkpoint');
+    const completed = store.finishCompactionSuccess('op-admission-checkpoint');
+    const dispatch = store.getPostDispatchByPost(completed.recoveryPostId!);
+    db.prepare("update post_dispatches set status = 'failed', next_attempt_at = null where id = ?").run(dispatch!.id);
+    store.setRobotWorkAdmissionGuard(() => {
+      throw Object.assign(new Error('deployment admission acquired'), { statusCode: 503, retryAfter: 1 });
+    });
+    const wake = vi.fn();
+    const subject = service({ getTopicCompactionLeaf: vi.fn(), compactTopicConversation: vi.fn() }, wake);
+
+    expect(() => subject.retryCheckpoint(topic.id, 'op-admission-checkpoint')).toThrow(/deployment admission acquired/);
+    expect(store.getPostDispatch(dispatch!.id)?.status).toBe('failed');
+    expect(wake).not.toHaveBeenCalled();
+    store.setRobotWorkAdmissionGuard(null);
   });
 
   it.each(['superseded', 'abandoned'] as const)(

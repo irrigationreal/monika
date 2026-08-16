@@ -11,7 +11,7 @@ This runbook describes a host-side deployment lifecycle for standalone Monika ru
 | `compose.yaml` | Local deployment file for the live Monika runtime. Copied from `compose.yaml.example` and kept out of git. |
 | `scripts/deploy-if-safe` | Host-side deploy entry point. Pulls images, checks quiescence, creates backups, applies images, and prunes old artifacts. |
 | agentd quiescence API | Reports whether forum turns, interactive Pi sessions, and memstore saves are safe to stop and performs deploy drain. |
-| forum deploy API | Reports whether forum robot dispatch, Pi sync, and robot state are safe to stop. Requires `CODEX_FORUM_DEPLOY_TOKEN`. |
+| forum deploy API | Acquires/cancels an expiring deployment-admission fence after pausing/waiting Pi sync and evaluating durable robot work. Diagnostic quiescence remains available. Requires `CODEX_FORUM_DEPLOY_TOKEN`. |
 | `cloudflared` (optional) | Outbound-only public forum ingress enabled with the `public-ingress` Compose profile. |
 | systemd timer | Periodically invokes `scripts/deploy-if-safe` from the host. |
 
@@ -59,6 +59,8 @@ This lets host automation call:
 ```text
 http://127.0.0.1:7724/v1/admin/quiescence
 http://127.0.0.1:7724/v1/admin/drain
+http://127.0.0.1:4310/api/deploy/admission/acquire
+http://127.0.0.1:4310/api/deploy/admission/cancel
 ```
 
 Do not bind agentd to `0.0.0.0` unless it has gained a proper external security model. For the intended host-side automation model, localhost is the trusted admin boundary; users with Docker access already have effective root-equivalent control over the runtime.
@@ -78,16 +80,18 @@ python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
 3. When `MONIKA_PUBLIC_INGRESS=1`, reconcile only the digest-pinned `cloudflared` service with `--no-deps`.
 4. Pull the configured Monika and forum images and compare them with the running containers.
 5. Exit cleanly if no image change is available.
-6. Ask the forum whether it is safe to stop, authenticating with the deploy token.
+6. Acquire an expiring forum admission lease with a caller-generated operation ID and the deploy token. Acquisition synchronously closes robot admission, pauses new Pi sync cycles, boundedly waits for any in-flight sync, then evaluates current-generation durable dispatches and the other forum blockers. A robot-eligible post arriving during preparation revokes the attempt and commits with its dispatch; after acquisition, such a post receives retryable 503 without a visible/orphan post.
 7. If the `monika` image changed, start agentd deploy drain. Drain is a lock, so the script POSTs `/v1/admin/drain` even when agentd was already `safe_to_stop`; this rejects new work between the safety check and Docker shutdown.
 8. Create and verify a whole-repo backup archive.
 9. If the `monika` image changed, re-check/re-start agentd drain immediately before Compose runs. This closes the race where a long backup or external drain cancel could otherwise reopen agentd to new work.
-10. Recreate exactly the application service whose image changed, using `--no-deps`. A forum-only update therefore cannot recreate Monika because of unrelated Compose configuration drift.
-11. The replacement Monika container restores the original unexpired deploy drain from `/data`; wait for the new agentd to accept `/v1/admin/drain/cancel` and report healthy/undrained.
-12. After every applied Monika or forum image change, wait a bounded interval for the exact unprefixed forum `/readyz`; a failure stops before pruning. Monika updates cancel drain first because forum readiness depends on the undrained backend.
-13. Print `docker compose ps` for the managed services.
-14. Prune old redeploy backups by retention bucket.
-15. Prune old dangling Docker images conservatively.
+10. Revalidate ownership and renew the same forum admission lease immediately before Compose. A lost or expired lease fails closed before container replacement.
+11. Recreate exactly the application service whose image changed, using `--no-deps`. A forum-only update therefore cannot recreate Monika because of unrelated Compose configuration drift.
+12. The replacement Monika container restores the original unexpired deploy drain from `/data`; wait for the new agentd to accept `/v1/admin/drain/cancel` and report healthy/undrained.
+13. After every applied Monika or forum image change, wait a bounded interval for the exact unprefixed forum `/readyz`; a failure stops before pruning. Monika updates cancel drain first because forum readiness depends on the undrained backend.
+14. Cancel/reopen the forum admission lease, including after forum-only, Monika-only, and backup-only success. The exit trap best-effort cancels it on every abort; automatic lease expiry is the final fail-safe.
+15. Print `docker compose ps` for the managed services.
+16. Prune old redeploy backups by retention bucket.
+17. Prune old dangling Docker images conservatively.
 
 Forum-only image updates do not drain agentd because the `monika` container is not expected to restart. The recreated forum passively reattaches only conversations agentd still reports loaded; it does not reopen missing Pi sessions. A coordinated runtime restart leaves historical sessions unloaded and recovered completion/request evidence non-waking until explicit new work. Backup-only mode still drains and cancels agentd so the runtime capsule is quiescence-gated.
 
@@ -126,6 +130,8 @@ MONIKA_FORUM_IMAGE=ghcr.io/irrigationreal/monika-forum:sha-OLD \
 ```
 
 If the command exits `75`, do not force a restart. Inspect both forum deploy status and `curl -fsS http://127.0.0.1:7724/v1/admin/subagents`, wait for active work to finish, and retry. An `uncertain` run requires runtime/PID reconciliation or the audited quarantine procedure in `docs/redeployment.md`; an `effects_state: "unknown"` run requires remote-effect investigation and an audited effects attestation. Never remove lifecycle files merely to make either counter disappear.
+
+Forum admission uses `MONIKA_FORUM_ADMISSION_WAIT_TIMEOUT_MS` (default 30 seconds) for its bounded in-flight-sync wait and `MONIKA_FORUM_ADMISSION_LEASE_MS` (default 30 minutes) for automatic expiry. It also blocks on tracked direct agent/model work plus pending/running fork operations. The host renews the same owned lease immediately before Compose; expiry or ownership loss fails closed. Size the lease above the host's worst-case backup duration. The lease is process-local: Compose must begin while the old marker exists, replacing the forum removes that fence, and the post-readiness operation-scoped cancel against the replacement is an idempotent no-op. Monika-only and backup-only paths explicitly cancel the surviving lease. Forum cancel and readiness probes are curl-bounded so their outer deadlines remain effective.
 
 Agentd drain has a durable lease as defense in depth. `MONIKA_AGENTD_DRAIN_AUTO_CANCEL_MS` controls the lease passed by `deploy-if-safe` and defaults to 15 minutes. Agentd publishes its reason and absolute expiry under `/data` before drain succeeds, restores the remaining lease after container replacement, and clears it only when it expires or `/v1/admin/drain/cancel` succeeds. The deploy script still owns the normal lifecycle: drain, apply, cancel drain on the replacement after Compose.
 

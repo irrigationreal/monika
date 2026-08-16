@@ -41,14 +41,17 @@ memstore reports save queue state through `memstore_status` and `queue_status`, 
 
 ### Forum
 
-The forum reports deploy safety in:
+The forum reports and acquires deploy safety through:
 
-- `GET /api/deploy/quiescence` for host-side deploy automation, authenticated with `CODEX_FORUM_DEPLOY_TOKEN`
-- `GET /api/admin/deploy/status` for authenticated admin views
+- `GET /api/deploy/quiescence` for authenticated diagnostic snapshots;
+- `POST /api/deploy/admission/acquire` and `POST /api/deploy/admission/cancel` for host-side race-safe deployment admission, authenticated with `CODEX_FORUM_DEPLOY_TOKEN`;
+- `GET /api/admin/deploy/status` for authenticated admin views.
 
 `GET /api/healthz` is intentionally minimal public liveness (`{ "ok": true }`). Both `GET /readyz` (the exact Compose/autodeploy target) and `GET /api/readyz` share the same minimal handler and return 503 unless the configured Monika backend reports healthy and undrained. That bounded backend check calls agentd's lightweight `/healthz`; it does not substitute for either service's authenticated deployment-quiescence scan.
 
-Forum deploy blockers include active robot turns, queued turns, non-idle robot states, pending/running manual compactions, and a currently running Pi session sync. Deploy on Finish also checks agentd, persists its intent across forum restart, and retains/retries that intent after the host script returns exit 75. The host script remains the final race-safe authority. On SIGTERM/Fastify close, the server stops new post-dispatch and compaction claims, waits for an in-flight compaction and Pi sync to finish, stops robot/ECHS timers and SSE subscriptions, closes Redis if enabled, and closes the forum SQLite database. If the process instead crashes, startup requeues interrupted compactions and reconciles them through agentd's canonical expected-leaf proof. Ordinary post dispatches retain the same durable identity across ambiguous transport failures and remain pending at bounded backoff; startup/outage handling does not unlink sessions or manufacture replacement canonical work.
+Forum deploy blockers include active robot turns, queued turns, non-idle robot states, pending/running manual compactions, and every current-generation actionable durable dispatch (`pending`, `dispatching`, or retryable `failed` with a non-null `next_attempt_at`). Terminal `failed` rows with no next attempt, superseded, abandoned, dispatched, and stale-generation rows do not block. Ordinary quiescence telemetry may report a running Pi sync, but admission itself first closes robot-work admission, pauses new sync cycles, and boundedly waits for an in-flight cycle before evaluating the real blockers. While acquisition is preparing, a newly eligible robot post wins: preparation is revoked, sync resumes, and the post plus durable dispatch commits atomically. Once acquired, eligible topic/reply/adapter/explicit-dispatch writes receive retryable HTTP 503 semantics before their transaction can commit; silent, robot-off, and non-mention cases remain intentional non-dispatch posts. The operation-scoped lease expires automatically, and blocked, revoked, cancelled, or expired attempts reopen admission and resume sync.
+
+Deploy on Finish uses the same durable-dispatch blocker, also checks agentd, persists its intent across forum restart, and retains/retries that intent after the host script returns exit 75. The host script remains the final race-safe authority. On SIGTERM/Fastify close, the server synchronously stops new post-dispatch, compaction, and fork claims, waits for their in-flight operations and Pi sync to finish, stops robot/ECHS timers and SSE subscriptions, closes Redis if enabled, and closes the forum SQLite database. If the process instead crashes, startup requeues interrupted compactions and reconciles them through agentd's canonical expected-leaf proof. Ordinary post dispatches retain the same durable identity across ambiguous transport failures and remain pending at bounded backoff; startup/outage handling does not unlink sessions or manufacture replacement canonical work.
 
 ## Host script
 
@@ -58,16 +61,17 @@ Forum deploy blockers include active robot turns, queued turns, non-idle robot s
 2. Defers if the checkout is dirty, detached, lacks an upstream, cannot fetch, or is behind upstream.
 3. Pulls the configured Monika and forum images.
 4. Exits cleanly if the pulled image IDs already match the running containers.
-5. Checks forum quiescence.
+5. Acquires an operation-ID-scoped forum admission lease, which pauses/waits Pi sync and atomically fences new eligible robot work.
 6. If the `monika` image changed, drains agentd to reject new work before shutdown. The script POSTs `/v1/admin/drain` even when agentd already reports `safe_to_stop`; drain is a deploy lock, not only an idle-conversation cleanup step.
-7. Defers with exit code `75` (`EX_TEMPFAIL`) if either service is blocked, including while an interactive Pi TUI owns a session.
+7. Defers with exit code `75` (`EX_TEMPFAIL`) if either admission or agentd is blocked, including while an interactive Pi TUI owns a session.
 8. Creates and verifies a whole-repo `.tar.zst` runtime capsule backup.
 9. If the `monika` image changed, re-checks/re-starts agentd drain immediately before Docker Compose runs.
 10. Applies exactly the changed Monika/forum service with `--no-deps`. Hosts with `MONIKA_PUBLIC_INGRESS=1` reconcile the digest-pinned `cloudflared` connector independently before image comparison.
 11. The replacement Monika container restores the unexpired durable drain; the script cancels it on the new agentd after Compose and waits for healthy/undrained state.
 12. After every applied Monika or forum image change—including forum-only updates—waits a bounded interval for the forum's exact unprefixed `/readyz`. A readiness failure aborts before backup/image pruning. Monika updates cancel drain and prove agentd health first because forum readiness depends on the undrained backend.
-13. Prunes old redeploy backups by tiered retention bucket.
-14. Prunes old dangling Docker image layers conservatively.
+13. Cancels/reopens forum admission after readiness (or after backup-only completion); the exit trap attempts both forum cancellation and agentd drain cancellation on every abort.
+14. Prunes old redeploy backups by tiered retention bucket.
+15. Prunes old dangling Docker image layers conservatively.
 
 Forum-only image updates do not drain agentd because Docker Compose is not expected to recreate the `monika` container. Backup-only mode still drains and cancels agentd because its purpose is to create a quiescence-gated **local redeploy** runtime capsule. It does not run the tiered B2 writer. Off-host jobs take a read-only Btrfs capture independently and root executes only the immutable Shadowsea Nix-store program, never this writable checkout.
 
