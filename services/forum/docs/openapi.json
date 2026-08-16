@@ -225,8 +225,21 @@
                         "hasPassword": {
                           "type": "boolean"
                         },
-                        "quickReplyDockedByDefault": {
-                          "type": "boolean"
+                        "quickReplyDesktopMode": {
+                          "type": "string",
+                          "nullable": true,
+                          "enum": [
+                            "inline",
+                            "docked"
+                          ]
+                        },
+                        "quickReplyMobileMode": {
+                          "type": "string",
+                          "nullable": true,
+                          "enum": [
+                            "inline",
+                            "docked"
+                          ]
                         }
                       },
                       "required": [
@@ -366,8 +379,21 @@
                         "hasPassword": {
                           "type": "boolean"
                         },
-                        "quickReplyDockedByDefault": {
-                          "type": "boolean"
+                        "quickReplyDesktopMode": {
+                          "type": "string",
+                          "nullable": true,
+                          "enum": [
+                            "inline",
+                            "docked"
+                          ]
+                        },
+                        "quickReplyMobileMode": {
+                          "type": "string",
+                          "nullable": true,
+                          "enum": [
+                            "inline",
+                            "docked"
+                          ]
                         }
                       },
                       "required": [
@@ -567,8 +593,21 @@
                         "hasPassword": {
                           "type": "boolean"
                         },
-                        "quickReplyDockedByDefault": {
-                          "type": "boolean"
+                        "quickReplyDesktopMode": {
+                          "type": "string",
+                          "nullable": true,
+                          "enum": [
+                            "inline",
+                            "docked"
+                          ]
+                        },
+                        "quickReplyMobileMode": {
+                          "type": "string",
+                          "nullable": true,
+                          "enum": [
+                            "inline",
+                            "docked"
+                          ]
                         }
                       },
                       "required": [
@@ -698,8 +737,21 @@
                         "hasPassword": {
                           "type": "boolean"
                         },
-                        "quickReplyDockedByDefault": {
-                          "type": "boolean"
+                        "quickReplyDesktopMode": {
+                          "type": "string",
+                          "nullable": true,
+                          "enum": [
+                            "inline",
+                            "docked"
+                          ]
+                        },
+                        "quickReplyMobileMode": {
+                          "type": "string",
+                          "nullable": true,
+                          "enum": [
+                            "inline",
+                            "docked"
+                          ]
                         }
                       },
                       "required": [
@@ -935,8 +987,21 @@
                         "hasPassword": {
                           "type": "boolean"
                         },
-                        "quickReplyDockedByDefault": {
-                          "type": "boolean"
+                        "quickReplyDesktopMode": {
+                          "type": "string",
+                          "nullable": true,
+                          "enum": [
+                            "inline",
+                            "docked"
+                          ]
+                        },
+                        "quickReplyMobileMode": {
+                          "type": "string",
+                          "nullable": true,
+                          "enum": [
+                            "inline",
+                            "docked"
+                          ]
                         }
                       },
                       "required": [
@@ -1250,7 +1315,7 @@
         "tags": [
           "auth"
         ],
-        "summary": "Update the current user quick-reply dock preference",
+        "summary": "Update the current user desktop and mobile quick-reply preferences",
         "requestBody": {
           "required": true,
           "content": {
@@ -1258,12 +1323,24 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "quickReplyDockedByDefault": {
-                    "type": "boolean"
+                  "desktopMode": {
+                    "type": "string",
+                    "enum": [
+                      "inline",
+                      "docked"
+                    ]
+                  },
+                  "mobileMode": {
+                    "type": "string",
+                    "enum": [
+                      "inline",
+                      "docked"
+                    ]
                   }
                 },
                 "required": [
-                  "quickReplyDockedByDefault"
+                  "desktopMode",
+                  "mobileMode"
                 ]
               }
             }
@@ -1280,13 +1357,25 @@
                     "ok": {
                       "type": "boolean"
                     },
-                    "quickReplyDockedByDefault": {
-                      "type": "boolean"
+                    "desktopMode": {
+                      "type": "string",
+                      "enum": [
+                        "inline",
+                        "docked"
+                      ]
+                    },
+                    "mobileMode": {
+                      "type": "string",
+                      "enum": [
+                        "inline",
+                        "docked"
+                      ]
                     }
                   },
                   "required": [
                     "ok",
-                    "quickReplyDockedByDefault"
+                    "desktopMode",
+                    "mobileMode"
                   ]
                 }
               }

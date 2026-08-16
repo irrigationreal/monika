@@ -141,12 +141,12 @@ describe('schema migrations', () => {
     expect(rows.at(-1)?.version).toBe(SCHEMA_VERSION);
   });
 
-  it('adds a default-false constrained quick-reply dock preference to populated v44 databases', () => {
+  it('adds the legacy default-false constrained quick-reply dock preference to populated v44 databases', () => {
     runMigrations(db, { targetVersion: 44 });
     const legacyStore = new ForumStore(db);
     const identity = legacyStore.createIdentity('Reader', 'human');
 
-    runMigrations(db);
+    runMigrations(db, { targetVersion: 45 });
 
     const row = db
       .prepare('select quick_reply_docked_by_default as value from identities where id = ?')
@@ -155,6 +155,33 @@ describe('schema migrations', () => {
     expect(() =>
       db.prepare('update identities set quick_reply_docked_by_default = 2 where id = ?').run(identity.id)
     ).toThrow();
+  });
+
+  it('migrates the legacy dock preference into nullable desktop and mobile modes', () => {
+    runMigrations(db, { targetVersion: 47 });
+    const legacyStore = new ForumStore(db);
+    const unset = legacyStore.createIdentity('Default reader', 'human');
+    const docked = legacyStore.createIdentity('Docked reader', 'human');
+    db.prepare('update identities set quick_reply_docked_by_default = 1 where id = ?').run(docked.id);
+
+    runMigrations(db);
+
+    expect(
+      db
+        .prepare(
+          'select quick_reply_desktop_mode as desktop, quick_reply_mobile_mode as mobile from identities where id = ?'
+        )
+        .get(unset.id)
+    ).toEqual({ desktop: null, mobile: null });
+    expect(
+      db
+        .prepare(
+          'select quick_reply_desktop_mode as desktop, quick_reply_mobile_mode as mobile from identities where id = ?'
+        )
+        .get(docked.id)
+    ).toEqual({ desktop: 'docked', mobile: 'docked' });
+    expect(() => db.prepare("update identities set quick_reply_desktop_mode = 'floating'").run()).toThrow();
+    expect(() => db.prepare('select quick_reply_docked_by_default from identities').all()).toThrow();
   });
 
   it('indexes undeleted posts for bounded recent-post lookups', () => {

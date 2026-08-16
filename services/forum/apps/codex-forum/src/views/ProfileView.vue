@@ -8,9 +8,10 @@ import { useForumState } from '../composables/useForumState';
 import { useMarkdown } from '../composables/useMarkdown';
 import { useTheme } from '../composables/useTheme';
 import { api } from '../lib/apiClient';
+import { resolveQuickReplyPreferences } from '../lib/quickReplyPreferences';
 import { FORUM_THEMES, FORUM_THEME_BY_KEY } from '../themes/forumThemes';
 
-import type { ForumThemeKey } from '@irrigationreal/codex-forum-contracts';
+import type { ForumThemeKey, QuickReplyMode } from '@irrigationreal/codex-forum-contracts';
 
 import type { ForumThemeDefinition } from '../themes/forumThemes';
 
@@ -37,7 +38,8 @@ const selectedFile = ref<File | null>(null);
 const selectedFilePreview = ref<string | null>(null);
 const selectedTheme = ref<ForumThemeKey>('vmonika');
 const originalTheme = ref<ForumThemeKey>('vmonika');
-const quickReplyDockedByDefault = ref(false);
+const quickReplyDesktopMode = ref<QuickReplyMode>('inline');
+const quickReplyMobileMode = ref<QuickReplyMode>('docked');
 const passkeyName = ref('My passkey');
 const passkeys = ref<{ id: string; name: string; deviceType: string }[]>([]);
 
@@ -146,7 +148,9 @@ function startEdit(): void {
   clearPrivateEmail.value = false;
   selectedTheme.value = currentUser.value.theme ?? 'vmonika';
   originalTheme.value = selectedTheme.value;
-  quickReplyDockedByDefault.value = currentUser.value.quickReplyDockedByDefault ?? false;
+  const quickReplyPreferences = resolveQuickReplyPreferences(currentUser.value);
+  quickReplyDesktopMode.value = quickReplyPreferences.desktopMode;
+  quickReplyMobileMode.value = quickReplyPreferences.mobileMode;
   editMode.value = true;
   errorMessage.value = '';
   successMessage.value = '';
@@ -305,7 +309,10 @@ async function saveProfile(): Promise<void> {
     } else if (privateEmail.value.trim()) {
       await state.updatePrivateEmail(privateEmail.value.trim());
     }
-    await state.updateQuickReplyPreference(quickReplyDockedByDefault.value);
+    await state.updateQuickReplyPreference({
+      desktopMode: quickReplyDesktopMode.value,
+      mobileMode: quickReplyMobileMode.value,
+    });
 
     successMessage.value = 'Profile updated successfully.';
     editMode.value = false;
@@ -447,9 +454,15 @@ onMounted(async () => {
               <span class="vb-profile-value">{{ FORUM_THEME_BY_KEY[currentUser.theme ?? 'vmonika']?.label }}</span>
             </div>
             <div class="vb-profile-row">
-              <span class="vb-profile-label">Quick Reply Style:</span>
+              <span class="vb-profile-label">Quick Reply on desktop:</span>
               <span class="vb-profile-value">
-                {{ currentUser.quickReplyDockedByDefault ? 'Docked' : 'Inline' }}
+                {{ resolveQuickReplyPreferences(currentUser).desktopMode === 'docked' ? 'Docked' : 'Inline' }}
+              </span>
+            </div>
+            <div class="vb-profile-row">
+              <span class="vb-profile-label">Quick Reply on mobile:</span>
+              <span class="vb-profile-value">
+                {{ resolveQuickReplyPreferences(currentUser).mobileMode === 'docked' ? 'Docked' : 'Inline' }}
               </span>
             </div>
             <div class="vb-modal-actions">
@@ -512,14 +525,21 @@ onMounted(async () => {
               <span class="vb-form-hint">Live preview: picking a theme applies instantly while you browse.</span>
             </div>
             <div class="vb-form-row">
-              <label for="quickReplyStyle">Quick Reply Style:</label>
-              <select id="quickReplyStyle" v-model="quickReplyDockedByDefault">
-                <option :value="false">Inline</option>
-                <option :value="true">Docked</option>
+              <label for="quickReplyDesktopMode">Quick Reply on desktop:</label>
+              <select id="quickReplyDesktopMode" v-model="quickReplyDesktopMode">
+                <option value="inline">Inline</option>
+                <option value="docked">Docked</option>
+              </select>
+            </div>
+            <div class="vb-form-row">
+              <label for="quickReplyMobileMode">Quick Reply on mobile:</label>
+              <select id="quickReplyMobileMode" v-model="quickReplyMobileMode">
+                <option value="inline">Inline</option>
+                <option value="docked">Docked</option>
               </select>
               <span class="vb-form-hint">
-                Chooses the default layout when opening topics. Temporary expand, collapse, or undock actions do not
-                change this account preference.
+                Mobile uses the forum's compact layout at 600px wide or narrower. Docked topics open collapsed and can
+                still be expanded or collapsed without changing these preferences.
               </span>
             </div>
             <div class="vb-form-row">

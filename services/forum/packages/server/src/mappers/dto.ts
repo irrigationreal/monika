@@ -350,7 +350,8 @@ export function mapAuthenticatedIdentityToDto(identity: IdentityPrivate): AuthId
     theme: identity.theme as ForumThemeKey | null | undefined,
     hasPrivateEmail: Boolean(identity.privateEmail),
     hasPassword: Boolean(identity.passwordHash),
-    quickReplyDockedByDefault: Boolean(identity.quickReplyDockedByDefault),
+    quickReplyDesktopMode: identity.quickReplyDesktopMode ?? null,
+    quickReplyMobileMode: identity.quickReplyMobileMode ?? null,
   };
 }
 

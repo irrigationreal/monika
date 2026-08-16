@@ -73,12 +73,16 @@ export interface IdentityPublic {
   updatedAt: string;
 }
 
+export const QuickReplyModeValues = ['inline', 'docked'] as const;
+export type QuickReplyMode = (typeof QuickReplyModeValues)[number];
+
 export interface IdentityPrivate extends IdentityPublic {
   username?: string | null;
   passwordHash?: string | null;
   privateEmail?: string | null;
-  /** Private authenticated-account presentation preference. */
-  quickReplyDockedByDefault?: boolean;
+  /** Private authenticated-account presentation preferences. Null uses the product default for that viewport. */
+  quickReplyDesktopMode?: QuickReplyMode | null;
+  quickReplyMobileMode?: QuickReplyMode | null;
 }
 
 export type Identity = IdentityPublic;

@@ -4475,12 +4475,17 @@ export class ForumStore {
       .run(emailAddress ?? null, now, identityId);
   }
 
-  setIdentityQuickReplyDockDefault(identityId: string, enabled: boolean): void {
+  setIdentityQuickReplyPreferences(
+    identityId: string,
+    preferences: { desktopMode: 'inline' | 'docked'; mobileMode: 'inline' | 'docked' }
+  ): void {
     const existing = this.getIdentity(identityId);
     if (!existing) throw new Error('identity not found');
     this.db
-      .prepare('update identities set quick_reply_docked_by_default = ?, updated_at = ? where id = ?')
-      .run(enabled ? 1 : 0, nowIso(), identityId);
+      .prepare(
+        'update identities set quick_reply_desktop_mode = ?, quick_reply_mobile_mode = ?, updated_at = ? where id = ?'
+      )
+      .run(preferences.desktopMode, preferences.mobileMode, nowIso(), identityId);
     this.invalidateIdentityCache(identityId);
   }
 

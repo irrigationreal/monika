@@ -158,8 +158,9 @@ export interface IdentityRow {
    * This field must never be exposed in public DTOs.
    */
   private_email: string | null;
-  /** Private account preference; never expose through public identity/profile DTOs. */
-  quick_reply_docked_by_default?: number;
+  /** Private account preferences; never expose through public identity/profile DTOs. */
+  quick_reply_desktop_mode?: 'inline' | 'docked' | null;
+  quick_reply_mobile_mode?: 'inline' | 'docked' | null;
   created_at: string;
   updated_at: string;
 }

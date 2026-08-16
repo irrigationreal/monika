@@ -11,7 +11,8 @@ import type { BrowserContext, Page, Request } from '@playwright/test';
 type IdentityRecord = IdentityDto & {
   username?: string;
   password?: string;
-  quickReplyDockedByDefault?: boolean;
+  quickReplyDesktopMode?: 'inline' | 'docked' | null;
+  quickReplyMobileMode?: 'inline' | 'docked' | null;
 };
 
 type InviteRecord = InviteInfoDto & {
@@ -250,11 +251,19 @@ class MockAuthApi {
     if (method === 'PATCH' && path === '/me/preferences/quick-reply') {
       const identity = this.getIdentityFromAuth(request);
       if (!identity) return { status: 401, body: { message: 'Please log in to continue.' } };
-      const body = (await request.postDataJSON()) as { quickReplyDockedByDefault?: boolean };
-      identity.quickReplyDockedByDefault = Boolean(body.quickReplyDockedByDefault);
+      const body = (await request.postDataJSON()) as {
+        desktopMode?: 'inline' | 'docked';
+        mobileMode?: 'inline' | 'docked';
+      };
+      identity.quickReplyDesktopMode = body.desktopMode ?? 'inline';
+      identity.quickReplyMobileMode = body.mobileMode ?? 'docked';
       return {
         status: 200,
-        body: { ok: true, quickReplyDockedByDefault: identity.quickReplyDockedByDefault },
+        body: {
+          ok: true,
+          desktopMode: identity.quickReplyDesktopMode,
+          mobileMode: identity.quickReplyMobileMode,
+        },
       };
     }
 
@@ -400,7 +409,8 @@ class MockAuthApi {
       theme: identity.theme,
       hasPrivateEmail: includePrivate ? false : undefined,
       hasPassword: Boolean(identity.password),
-      quickReplyDockedByDefault: identity.quickReplyDockedByDefault ?? false,
+      quickReplyDesktopMode: identity.quickReplyDesktopMode ?? null,
+      quickReplyMobileMode: identity.quickReplyMobileMode ?? null,
     };
   }
 
@@ -496,8 +506,10 @@ test.describe('Auth registration and profile flows', () => {
     await page.locator('#editLocation').fill('Seattle, WA');
     await page.locator('#editSignature').fill('See you in the threads.');
     await page.locator('#editTheme').selectOption('classic-dark');
-    await expect(page.locator('#quickReplyStyle')).toHaveValue('false');
-    await page.locator('#quickReplyStyle').selectOption('true');
+    await expect(page.locator('#quickReplyDesktopMode')).toHaveValue('inline');
+    await expect(page.locator('#quickReplyMobileMode')).toHaveValue('docked');
+    await page.locator('#quickReplyDesktopMode').selectOption('docked');
+    await page.locator('#quickReplyMobileMode').selectOption('inline');
 
     await page.locator('button', { hasText: 'Save Changes' }).click();
     await expect(page.locator('.vb-success-banner')).toContainText('Profile updated successfully.');
@@ -505,7 +517,8 @@ test.describe('Auth registration and profile flows', () => {
     await expect(page.locator('.vb-profile-row', { hasText: 'Location:' })).toContainText('Seattle, WA');
     await expect(page.locator('.vb-profile-row', { hasText: 'Signature:' })).toContainText('See you in the threads.');
     await expect(page.locator('.vb-profile-row', { hasText: 'Theme:' })).toContainText('Classic RoboBB');
-    await expect(page.locator('.vb-profile-row', { hasText: 'Quick Reply Style:' })).toContainText('Docked');
+    await expect(page.locator('.vb-profile-row', { hasText: 'Quick Reply on desktop:' })).toContainText('Docked');
+    await expect(page.locator('.vb-profile-row', { hasText: 'Quick Reply on mobile:' })).toContainText('Inline');
     await expect(page.locator('.vb-welcome')).toContainText('Riley Updated');
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'classic-dark');
     await expect(page.locator('.vb-theme-toggle')).toHaveAttribute('title', 'Theme: Classic RoboBB (Dark)');
@@ -514,7 +527,8 @@ test.describe('Auth registration and profile flows', () => {
     await expect(page.locator('.vb-profile-row', { hasText: 'Display Name:' })).toContainText('Riley Updated');
     await expect(page.locator('.vb-profile-row', { hasText: 'Location:' })).toContainText('Seattle, WA');
     await expect(page.locator('.vb-profile-row', { hasText: 'Signature:' })).toContainText('See you in the threads.');
-    await expect(page.locator('.vb-profile-row', { hasText: 'Quick Reply Style:' })).toContainText('Docked');
+    await expect(page.locator('.vb-profile-row', { hasText: 'Quick Reply on desktop:' })).toContainText('Docked');
+    await expect(page.locator('.vb-profile-row', { hasText: 'Quick Reply on mobile:' })).toContainText('Inline');
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'classic-dark');
 
     const identityId = api.getIdentityByDisplayName('Riley Updated')?.id ?? '';

@@ -45,19 +45,19 @@ describe('Auth route access controls', () => {
     return app;
   }
 
-  it('persists the authenticated user quick-reply dock preference', async () => {
+  it('persists the authenticated user desktop and mobile quick-reply preferences', async () => {
     const app = await buildApp();
     const human = store.createIdentityWithPassword('Human', 'human', 'pw-hash', 'human');
     store.createAuthSession('human-preference-token', human.id);
     const headers = { authorization: 'Bearer human-preference-token' };
 
     const initial = await app.inject({ method: 'GET', url: '/auth/me', headers });
-    expect(initial.json().identity.quickReplyDockedByDefault).toBe(false);
+    expect(initial.json().identity).toMatchObject({ quickReplyDesktopMode: null, quickReplyMobileMode: null });
 
     const unauthenticated = await app.inject({
       method: 'PATCH',
       url: '/me/preferences/quick-reply',
-      payload: { quickReplyDockedByDefault: true },
+      payload: { desktopMode: 'docked', mobileMode: 'inline' },
     });
     expect(unauthenticated.statusCode).toBe(401);
 
@@ -65,7 +65,7 @@ describe('Auth route access controls', () => {
       method: 'PATCH',
       url: '/me/preferences/quick-reply',
       headers,
-      payload: { quickReplyDockedByDefault: 'yes' },
+      payload: { desktopMode: 'floating', mobileMode: 'inline' },
     });
     expect(malformed.statusCode).toBe(400);
 
@@ -73,13 +73,16 @@ describe('Auth route access controls', () => {
       method: 'PATCH',
       url: '/me/preferences/quick-reply',
       headers,
-      payload: { quickReplyDockedByDefault: true },
+      payload: { desktopMode: 'docked', mobileMode: 'inline' },
     });
     expect(updated.statusCode).toBe(200);
-    expect(updated.json()).toEqual({ ok: true, quickReplyDockedByDefault: true });
+    expect(updated.json()).toEqual({ ok: true, desktopMode: 'docked', mobileMode: 'inline' });
 
     const refreshed = await app.inject({ method: 'GET', url: '/auth/me', headers });
-    expect(refreshed.json().identity.quickReplyDockedByDefault).toBe(true);
+    expect(refreshed.json().identity).toMatchObject({
+      quickReplyDesktopMode: 'docked',
+      quickReplyMobileMode: 'inline',
+    });
 
     await app.close();
   });

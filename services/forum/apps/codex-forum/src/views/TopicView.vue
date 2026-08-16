@@ -16,6 +16,7 @@ import { applyTemplateToTextarea } from '../composables/useMessageTemplateInsert
 import { api } from '../lib/apiClient';
 import { createClientOperationId } from '../lib/clientOperationId';
 import { copyTextToClipboard } from '../lib/clipboard';
+import { isMobileQuickReplyViewport, resolveQuickReplyMode } from '../lib/quickReplyPreferences';
 
 import type {
   AttachmentDto,
@@ -45,11 +46,11 @@ const quickReplyContainerRef = ref<HTMLElement | null>(null);
 const postsContainerRef = ref<HTMLElement | null>(null);
 const liveTurnRef = ref<HTMLElement | null>(null);
 const quickReplyExpandButtonRef = ref<HTMLButtonElement | null>(null);
-const quickReplyKeepVisibleButtonRef = ref<HTMLButtonElement | null>(null);
 const quickReplyPresentation = ref<'inline' | 'docked-expanded' | 'docked-collapsed'>('inline');
 const quickReplyPresentationReady = ref(false);
 const quickReplyOptionsOpen = ref(false);
 let quickReplyPresentationTouched = Boolean(false);
+let quickReplyPreferenceNeedsReapply = false;
 const quickReplyDocked = computed(() => quickReplyPresentation.value !== 'inline');
 const quickReplyExpanded = computed(() => quickReplyPresentation.value === 'docked-expanded');
 const editingPost = ref<PostDto | null>(null);
@@ -1566,12 +1567,12 @@ async function saveEdit(): Promise<void> {
   }
 }
 
-async function activateQuickReply(focus = true): Promise<void> {
+async function activateQuickReply(): Promise<void> {
   if (!canDockQuickReply.value) return;
   quickReplyPresentationTouched = true;
   quickReplyPresentation.value = 'docked-expanded';
   await nextTick();
-  if (focus) quickReplyTextareaRef.value?.focus();
+  quickReplyTextareaRef.value?.focus();
 }
 
 async function collapseQuickReply(): Promise<void> {
@@ -1598,22 +1599,18 @@ async function focusInlineQuickReply(): Promise<void> {
   quickReplyTextareaRef.value?.focus({ preventScroll: true });
 }
 
-async function undockQuickReply(): Promise<void> {
-  quickReplyPresentationTouched = true;
-  quickReplyPresentation.value = 'inline';
-  await scrollInlineQuickReply();
-  quickReplyKeepVisibleButtonRef.value?.focus({ preventScroll: true });
-}
-
-function resetQuickReplyPresentation(): void {
+function resetQuickReplyPresentation(options: { reapplyPreference?: boolean } = {}): void {
   quickReplyPresentationTouched = false;
   quickReplyOptionsOpen.value = false;
   quickReplyPresentation.value = 'inline';
+  quickReplyPreferenceNeedsReapply = options.reapplyPreference ?? false;
 }
 
 function applyQuickReplyDefault(): void {
   if (quickReplyPresentationTouched || !canDockQuickReply.value) return;
-  quickReplyPresentation.value = state.currentUser.value?.quickReplyDockedByDefault ? 'docked-collapsed' : 'inline';
+  const mode = resolveQuickReplyMode(state.currentUser.value, isMobileQuickReplyViewport());
+  quickReplyPresentation.value = mode === 'docked' ? 'docked-collapsed' : 'inline';
+  quickReplyPreferenceNeedsReapply = false;
 }
 
 async function quotePost(post: PostDto): Promise<void> {
@@ -1628,7 +1625,7 @@ async function quotePost(post: PostDto): Promise<void> {
   if (quickReplyPresentation.value === 'inline') {
     await focusInlineQuickReply();
   } else if (quickReplyPresentation.value === 'docked-collapsed') {
-    await activateQuickReply(true);
+    await activateQuickReply();
   } else {
     await nextTick();
     quickReplyTextareaRef.value?.focus();
@@ -2222,11 +2219,16 @@ watch(
   ],
   ([authChecked, loggedIn, topicId, selectedTopicId]) => {
     const baseTopicReady = Boolean(authChecked && topicId && selectedTopicId === topicId);
-    if (baseTopicReady && !quickReplyPresentationReady.value) {
+    if (
+      baseTopicReady &&
+      (!quickReplyPresentationReady.value || (canDockQuickReply.value && quickReplyPreferenceNeedsReapply))
+    ) {
       applyQuickReplyDefault();
       quickReplyPresentationReady.value = true;
     }
-    if (!canDockQuickReply.value && quickReplyDocked.value) resetQuickReplyPresentation();
+    if (!canDockQuickReply.value && quickReplyDocked.value) {
+      resetQuickReplyPresentation({ reapplyPreference: true });
+    }
     if (baseTopicReady && loggedIn && !autosavedReply.hydrated.value) void autosavedReply.load();
   },
   { immediate: true }
@@ -3343,17 +3345,7 @@ onUnmounted(() => {
             {{ quickReplyOptionsOpen ? 'Hide options' : 'Options' }}
           </button>
           <button
-            v-if="!quickReplyDocked && canDockQuickReply"
-            ref="quickReplyKeepVisibleButtonRef"
-            class="vb-small-btn"
-            type="button"
-            aria-label="Keep Quick Reply visible while reading"
-            @click="activateQuickReply(false)"
-          >
-            Keep visible
-          </button>
-          <button
-            v-else-if="quickReplyDocked && quickReplyExpanded && canDockQuickReply"
+            v-if="quickReplyDocked && quickReplyExpanded && canDockQuickReply"
             class="vb-small-btn"
             type="button"
             aria-expanded="true"
@@ -3369,11 +3361,10 @@ onUnmounted(() => {
             type="button"
             aria-expanded="false"
             aria-controls="quick-reply-dock-body"
-            @click="activateQuickReply(true)"
+            @click="activateQuickReply"
           >
             Expand
           </button>
-          <button v-if="quickReplyDocked" class="vb-small-btn" type="button" @click="undockQuickReply">Undock</button>
         </div>
       </div>
       <div id="quick-reply-dock-body" v-show="!quickReplyDocked || quickReplyExpanded" class="vb-quick-reply-dock-body">

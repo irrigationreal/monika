@@ -3,6 +3,7 @@ import type {
   MessageTemplateForumScope,
   NotepadDraftOptions,
   NotepadExpirationPreset,
+  QuickReplyMode,
 } from '@irrigationreal/codex-forum-core';
 
 import type {
@@ -152,7 +153,8 @@ export interface UpdatePrivateEmailRequest {
 }
 
 export interface UpdateQuickReplyPreferenceRequest {
-  quickReplyDockedByDefault: boolean;
+  desktopMode: QuickReplyMode;
+  mobileMode: QuickReplyMode;
 }
 
 export interface CreateApiKeyRequest {

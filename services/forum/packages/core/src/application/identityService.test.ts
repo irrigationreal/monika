@@ -12,7 +12,8 @@ const privateIdentity: IdentityPrivate = {
   username: 'reader',
   passwordHash: 'secret',
   privateEmail: 'reader@example.com',
-  quickReplyDockedByDefault: true,
+  quickReplyDesktopMode: 'docked',
+  quickReplyMobileMode: 'inline',
   createdAt: new Date(0).toISOString(),
   updatedAt: new Date(0).toISOString(),
 };
@@ -33,6 +34,7 @@ describe('IdentityServiceImpl', () => {
     expect(identity).not.toHaveProperty('username');
     expect(identity).not.toHaveProperty('passwordHash');
     expect(identity).not.toHaveProperty('privateEmail');
-    expect(identity).not.toHaveProperty('quickReplyDockedByDefault');
+    expect(identity).not.toHaveProperty('quickReplyDesktopMode');
+    expect(identity).not.toHaveProperty('quickReplyMobileMode');
   });
 });

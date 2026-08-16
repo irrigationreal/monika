@@ -23,6 +23,8 @@ import type {
 
 import type { ForumThemeKey } from './themes';
 
+export type QuickReplyMode = import('@irrigationreal/codex-forum-core').QuickReplyMode;
+
 export interface ForumLastPostDto {
   postId: string;
   topicId: string;
@@ -1027,8 +1029,9 @@ export interface AuthIdentityDto {
    */
   hasPrivateEmail?: boolean;
   hasPassword?: boolean;
-  /** Private account preference; returned only from authenticated self endpoints. */
-  quickReplyDockedByDefault?: boolean;
+  /** Private account preferences; returned only from authenticated self endpoints. Null uses the product default. */
+  quickReplyDesktopMode?: QuickReplyMode | null;
+  quickReplyMobileMode?: QuickReplyMode | null;
 }
 
 export const RegistrationModeValues = ['disabled', 'invite-only', 'public'] as const;
@@ -1104,7 +1107,8 @@ export interface UpdatePrivateEmailResponseDto {
 
 export interface UpdateQuickReplyPreferenceResponseDto {
   ok: boolean;
-  quickReplyDockedByDefault: boolean;
+  desktopMode: QuickReplyMode;
+  mobileMode: QuickReplyMode;
 }
 
 export interface ChangePasswordRequest {

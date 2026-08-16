@@ -78,15 +78,19 @@ describe('OpenAPI request bodies', () => {
     expect(operation?.requestBody?.required).toBe(true);
     expect(operation?.requestBody?.content?.['application/json']?.schema).toMatchObject({
       type: 'object',
-      required: ['quickReplyDockedByDefault'],
-      properties: { quickReplyDockedByDefault: { type: 'boolean' } },
+      required: ['desktopMode', 'mobileMode'],
+      properties: {
+        desktopMode: { type: 'string', enum: ['inline', 'docked'] },
+        mobileMode: { type: 'string', enum: ['inline', 'docked'] },
+      },
     });
     expect(operation?.responses?.['200']?.content?.['application/json']?.schema).toMatchObject({
       type: 'object',
-      required: ['ok', 'quickReplyDockedByDefault'],
+      required: ['ok', 'desktopMode', 'mobileMode'],
       properties: {
         ok: { type: 'boolean' },
-        quickReplyDockedByDefault: { type: 'boolean' },
+        desktopMode: { type: 'string', enum: ['inline', 'docked'] },
+        mobileMode: { type: 'string', enum: ['inline', 'docked'] },
       },
     });
   });

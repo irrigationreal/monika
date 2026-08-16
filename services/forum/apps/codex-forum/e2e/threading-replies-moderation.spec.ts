@@ -57,7 +57,8 @@ type MockState = {
   compactionRequests: Array<Record<string, unknown>>;
   messageTemplates: MessageTemplateDto[];
   drafts: Record<string, MessageDraftDto>;
-  quickReplyDockedByDefault: boolean;
+  quickReplyDesktopMode: 'inline' | 'docked' | null;
+  quickReplyMobileMode: 'inline' | 'docked' | null;
   authDelayMs: number;
   topicHydrationDelayMs: number;
   topicHydrationPending: boolean;
@@ -136,7 +137,8 @@ function createMockState(): MockState {
     operationalEventsByTopic: {},
     compactionOperations: {},
     compactionRequests: [],
-    quickReplyDockedByDefault: false,
+    quickReplyDesktopMode: null,
+    quickReplyMobileMode: null,
     authDelayMs: 0,
     topicHydrationDelayMs: 0,
     topicHydrationPending: false,
@@ -475,7 +477,8 @@ async function attachMockApi(target: Page | BrowserContext, state: MockState): P
           ? {
             ...identity,
               hasPrivateEmail: false,
-              quickReplyDockedByDefault: state.quickReplyDockedByDefault,
+              quickReplyDesktopMode: state.quickReplyDesktopMode,
+              quickReplyMobileMode: state.quickReplyMobileMode,
           }
           : null,
       });
@@ -483,10 +486,12 @@ async function attachMockApi(target: Page | BrowserContext, state: MockState): P
     }
 
     if (path === '/api/me/preferences/quick-reply' && method === 'PATCH') {
-      state.quickReplyDockedByDefault = Boolean(payload?.quickReplyDockedByDefault);
+      state.quickReplyDesktopMode = payload?.desktopMode === 'docked' ? 'docked' : 'inline';
+      state.quickReplyMobileMode = payload?.mobileMode === 'docked' ? 'docked' : 'inline';
       await fulfillJson(route, 200, {
         ok: true,
-        quickReplyDockedByDefault: state.quickReplyDockedByDefault,
+        desktopMode: state.quickReplyDesktopMode,
+        mobileMode: state.quickReplyMobileMode,
       });
       return;
     }
@@ -1301,7 +1306,8 @@ test.describe('Threading and reply flows', () => {
     context,
   }) => {
     const state = createMockState();
-    state.quickReplyDockedByDefault = true;
+    state.quickReplyDesktopMode = 'docked';
+    state.quickReplyMobileMode = 'docked';
     await attachMockApi(page, state);
     await setAuthTokens(context, MODERATOR_TOKEN);
     await page.goto('/');
@@ -1359,6 +1365,44 @@ test.describe('Threading and reply flows', () => {
     await expect(composer).toHaveClass(/vb-quick-reply--collapsed/);
     await expect.poll(() => state.stateStreamOpened).toBe(true);
     await deepLinkPage.close();
+  });
+
+  test('desktop and mobile Quick Reply modes resolve independently and stay fixed for an open topic', async ({
+    page,
+    context,
+  }) => {
+    const state = createMockState();
+    state.quickReplyDesktopMode = 'docked';
+    state.quickReplyMobileMode = 'inline';
+    await attachMockApi(page, state);
+    await setAuthTokens(context, REGULAR_TOKEN);
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await page.goto('/');
+    const fixture = await createFixture(page, { postCount: 2 });
+
+    await page.goto(`/topics/${fixture.topicId}`);
+    const desktopComposer = page.locator('#quick-reply-composer');
+    await expect(desktopComposer).toHaveClass(/vb-quick-reply--collapsed/);
+    await page.setViewportSize({ width: 390, height: 800 });
+    await expect(desktopComposer).toHaveClass(/vb-quick-reply--collapsed/);
+
+    const mobilePage = await context.newPage();
+    await attachMockApi(mobilePage, state);
+    await mobilePage.setViewportSize({ width: 390, height: 800 });
+    await mobilePage.goto(`/topics/${fixture.topicId}`);
+    const mobileComposer = mobilePage.locator('#quick-reply-composer');
+    await expect(mobileComposer).not.toHaveClass(/vb-quick-reply--docked/);
+    await expect(mobileComposer.getByRole('button', { name: 'Keep visible' })).toHaveCount(0);
+    await mobilePage.close();
+
+    state.quickReplyDesktopMode = null;
+    state.quickReplyMobileMode = null;
+    const defaultMobilePage = await context.newPage();
+    await attachMockApi(defaultMobilePage, state);
+    await defaultMobilePage.setViewportSize({ width: 390, height: 800 });
+    await defaultMobilePage.goto(`/topics/${fixture.topicId}`);
+    await expect(defaultMobilePage.locator('#quick-reply-composer')).toHaveClass(/vb-quick-reply--collapsed/);
+    await defaultMobilePage.close();
   });
 
   test('topic edge controls scroll within the current page without changing navigation', async ({ page, context }) => {
@@ -1469,12 +1513,13 @@ test.describe('Threading and reply flows', () => {
     });
   });
 
-  test('quick reply dock preserves controls, scroll chaining, focus, files, and layout across presentations', async ({
+  test('quick reply dock preserves controls, scroll chaining, focus, files, and layout while fixed docked', async ({
     page,
     context,
   }) => {
     const state = createMockState();
-    state.quickReplyDockedByDefault = true;
+    state.quickReplyDesktopMode = 'docked';
+    state.quickReplyMobileMode = 'docked';
     state.sessionContext = {
       model: 'openai/gpt-5.2',
       provider: 'openai',
@@ -1591,32 +1636,8 @@ test.describe('Threading and reply flows', () => {
     await expect(textarea).toHaveValue(/\[QUOTE=/);
     await expect(composer.locator('.vb-attachment-selected')).toContainText('dock-note.txt');
 
-    await page.evaluate(() => {
-      const elementPrototype = Element.prototype as any;
-      const originalScrollIntoView = elementPrototype.scrollIntoView;
-      elementPrototype.scrollIntoView = function (options?: ScrollIntoViewOptions) {
-        (window as any).__quickReplyScrollOptions = options;
-        return originalScrollIntoView.call(this, options);
-      };
-    });
-    await composer.getByRole('button', { name: 'Undock' }).click();
-    await expect(composer).not.toHaveClass(/vb-quick-reply--docked/);
-    await expect(composer.getByRole('button', { name: 'Keep Quick Reply visible while reading' })).toBeFocused();
-    await expect.poll(() => page.evaluate(() => (window as any).__quickReplyScrollOptions?.behavior)).toBe('auto');
-    await scrollRegion.hover();
-    const inlineBeforeWheel = await page.evaluate(() => window.scrollY);
-    await page.mouse.wheel(0, -300);
-    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeLessThan(inlineBeforeWheel);
-
-    await page.getByRole('button', { name: 'Quote' }).nth(1).click();
-    await expect(composer).not.toHaveClass(/vb-quick-reply--docked/);
-    await expect(textarea).toBeFocused();
-
-    await composer.getByRole('button', { name: 'Keep Quick Reply visible while reading' }).click();
-    await expect(composer).toHaveClass(/vb-quick-reply--expanded/);
-    await page.getByRole('button', { name: 'Quote' }).nth(2).click();
-    await expect(composer).toHaveClass(/vb-quick-reply--expanded/);
-    await expect(textarea).toBeFocused();
+    await expect(composer.getByRole('button', { name: 'Undock' })).toHaveCount(0);
+    await expect(composer.getByRole('button', { name: 'Keep visible' })).toHaveCount(0);
 
     page.once('dialog', async (dialog) => {
       expect(dialog.message()).toContain('Selected files are not saved with drafts');
@@ -1701,7 +1722,8 @@ test.describe('Threading and reply flows', () => {
     context,
   }) => {
     const state = createMockState();
-    state.quickReplyDockedByDefault = true;
+    state.quickReplyDesktopMode = 'docked';
+    state.quickReplyMobileMode = 'docked';
     await attachMockApi(page, state);
     await setAuthTokens(context, REGULAR_TOKEN);
     await page.setViewportSize({ width: 568, height: 240 });
@@ -1728,39 +1750,34 @@ test.describe('Threading and reply flows', () => {
 
     const header = composer.locator('.vb-quick-reply-header');
     const collapse = composer.getByRole('button', { name: 'Collapse' });
-    const undock = composer.getByRole('button', { name: 'Undock' });
     const footer = composer.locator('.vb-quick-reply-footer');
     const submit = composer.getByRole('button', { name: 'Post Quick Reply' });
     await expect(collapse).toBeVisible();
-    await expect(undock).toBeVisible();
     await expect(submit).toBeVisible();
 
-    const [composerBox, headerBox, collapseBox, undockBox, footerBox, submitBox] = await Promise.all([
+    const [composerBox, headerBox, collapseBox, footerBox, submitBox] = await Promise.all([
       composer.boundingBox(),
       header.boundingBox(),
       collapse.boundingBox(),
-      undock.boundingBox(),
       footer.boundingBox(),
       submit.boundingBox(),
     ]);
-    if (!composerBox || !headerBox || !collapseBox || !undockBox || !footerBox || !submitBox) {
+    if (!composerBox || !headerBox || !collapseBox || !footerBox || !submitBox) {
       throw new Error('Short-viewport Quick Reply boxes unavailable');
     }
     expect(composerBox.y).toBeGreaterThanOrEqual(11);
     expect(composerBox.y + composerBox.height).toBeLessThanOrEqual(241);
     expect(footerBox.y).toBeGreaterThanOrEqual(headerBox.y + headerBox.height);
     expect(collapseBox.y).toBeGreaterThanOrEqual(headerBox.y);
-    expect(undockBox.y).toBeGreaterThanOrEqual(headerBox.y);
     expect(collapseBox.y + collapseBox.height).toBeLessThanOrEqual(headerBox.y + headerBox.height + 1);
-    expect(undockBox.y + undockBox.height).toBeLessThanOrEqual(headerBox.y + headerBox.height + 1);
     expect(submitBox.width).toBeGreaterThanOrEqual(footerBox.width - 22);
     expect(submitBox.y).toBeGreaterThanOrEqual(footerBox.y);
     expect(submitBox.y + submitBox.height).toBeLessThanOrEqual(footerBox.y + footerBox.height + 1);
 
     await collapse.click();
     await expect(composer).toHaveClass(/vb-quick-reply--collapsed/);
-    await composer.getByRole('button', { name: 'Undock' }).click();
-    await expect(composer.getByRole('button', { name: 'Keep Quick Reply visible while reading' })).toBeFocused();
+    await expect(composer.getByRole('button', { name: 'Undock' })).toHaveCount(0);
+    await expect(composer.getByRole('button', { name: 'Keep visible' })).toHaveCount(0);
   });
 
   test('autosaved reply is shared by quick and full composers and consumed on post', async ({ page, context }) => {
@@ -2026,7 +2043,7 @@ test.describe('Threading and reply flows', () => {
     await page.goto(`/topics/${fixture.lockedTopicId}`);
     await page.waitForResponse(
       (response) =>
-      response.url().includes(`/api/topics/${fixture.lockedTopicId}`) && response.request().method() === 'GET'
+        response.url().includes(`/api/topics/${fixture.lockedTopicId}`) && response.request().method() === 'GET'
     );
     await expect(page.locator('.vb-locked-badge')).toContainText('Locked');
     await expect(page.locator('.vb-quick-reply .vb-locked-notice')).toBeVisible();

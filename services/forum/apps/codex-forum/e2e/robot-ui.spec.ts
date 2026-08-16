@@ -219,6 +219,8 @@ function toAuthIdentity(identity: IdentityDto, includePrivateEmail = false): Aut
     signature: identity.signature ?? null,
     theme: identity.theme ?? null,
     hasPrivateEmail: includePrivateEmail ? false : undefined,
+    quickReplyDesktopMode: 'inline',
+    quickReplyMobileMode: 'inline',
   };
 }
 
