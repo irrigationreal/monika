@@ -59,6 +59,13 @@ type MockState = {
   drafts: Record<string, MessageDraftDto>;
   quickReplyDockedByDefault: boolean;
   authDelayMs: number;
+  topicHydrationDelayMs: number;
+  topicHydrationPending: boolean;
+  draftHydrationDelayMs: number;
+  draftHydrationPending: boolean;
+  sessionHydrationDelayMs: number;
+  sessionHydrationPending: boolean;
+  stateStreamOpened: boolean;
   robotActivity: RobotStateDto['activity'];
   sessionContext: SessionContextDto | null;
 };
@@ -131,6 +138,13 @@ function createMockState(): MockState {
     compactionRequests: [],
     quickReplyDockedByDefault: false,
     authDelayMs: 0,
+    topicHydrationDelayMs: 0,
+    topicHydrationPending: false,
+    draftHydrationDelayMs: 0,
+    draftHydrationPending: false,
+    sessionHydrationDelayMs: 0,
+    sessionHydrationPending: false,
+    stateStreamOpened: false,
     robotActivity: 'idle',
     sessionContext: null,
     messageTemplates: [
@@ -577,7 +591,12 @@ async function attachMockApi(target: Page | BrowserContext, state: MockState): P
       const current =
         Object.values(state.drafts).find((item) => item.context === 'reply' && item.topicId === topicId) ?? null;
       if (method === 'GET') {
+        state.draftHydrationPending = true;
+        if (state.draftHydrationDelayMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, state.draftHydrationDelayMs));
+        }
         await fulfillJson(route, 200, { draft: current });
+        state.draftHydrationPending = false;
         return;
       }
       if (method === 'PUT') {
@@ -677,6 +696,10 @@ async function attachMockApi(target: Page | BrowserContext, state: MockState): P
     if (path.startsWith('/api/topics/') && path.endsWith('/posts')) {
       const topicId = path.split('/')[3];
       if (method === 'GET') {
+        state.topicHydrationPending = true;
+        if (state.topicHydrationDelayMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, state.topicHydrationDelayMs));
+        }
         const posts = state.postsByTopic[topicId] ?? [];
         await fulfillJson(route, 200, {
           page: 1,
@@ -684,6 +707,7 @@ async function attachMockApi(target: Page | BrowserContext, state: MockState): P
           total: posts.length,
           items: posts,
         });
+        state.topicHydrationPending = false;
         return;
       }
       if (method === 'POST') {
@@ -884,11 +908,17 @@ async function attachMockApi(target: Page | BrowserContext, state: MockState): P
     }
 
     if (path.startsWith('/api/topics/') && path.endsWith('/session') && method === 'GET') {
+      state.sessionHydrationPending = true;
+      if (state.sessionHydrationDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, state.sessionHydrationDelayMs));
+      }
       await fulfillJson(route, 200, null);
+      state.sessionHydrationPending = false;
       return;
     }
 
     if (path.startsWith('/api/topics/') && path.endsWith('/state/stream')) {
+      state.stateStreamOpened = true;
       const topicId = path.split('/')[3];
       const streamState: RobotStateDto = {
         topicId,
@@ -1266,14 +1296,14 @@ test.describe('Threading and reply flows', () => {
     expect(blockBox.width).toBeLessThanOrEqual(contentBox.width + 1);
   });
 
-  test('docked Quick Reply resolves before the composer first appears on a direct topic load', async ({
+  test('docked Quick Reply appears before slow topic enrichment and never flashes inline', async ({
     page,
     context,
   }) => {
     const state = createMockState();
     state.quickReplyDockedByDefault = true;
     await attachMockApi(page, state);
-    await setAuthTokens(context, REGULAR_TOKEN);
+    await setAuthTokens(context, MODERATOR_TOKEN);
     await page.goto('/');
     const fixture = await createFixture(page, { postCount: 2 });
 
@@ -1299,14 +1329,35 @@ test.describe('Threading and reply flows', () => {
       else document.addEventListener('DOMContentLoaded', observe, { once: true });
     });
     state.authDelayMs = 350;
+    state.topicHydrationDelayMs = 2500;
+    state.draftHydrationDelayMs = 2500;
+    state.sessionHydrationDelayMs = 2500;
 
-    await deepLinkPage.goto(`/topics/${fixture.topicId}`);
+    const navigation = deepLinkPage.goto(`/topics/${fixture.topicId}`);
     const composer = deepLinkPage.locator('#quick-reply-composer');
     await expect(composer).toHaveClass(/vb-quick-reply--collapsed/);
+    expect(state.topicHydrationPending).toBe(true);
+    await expect.poll(() => state.draftHydrationPending).toBe(true);
+    await composer.getByRole('button', { name: 'Expand' }).click();
+    await quickReplyBox(deepLinkPage).fill('Typed before draft hydration');
     const firstClass = await deepLinkPage.evaluate(() => (window as any).__quickReplyFirstClass as string | null);
     expect(firstClass).toContain('vb-quick-reply--docked');
     expect(firstClass).toContain('vb-quick-reply--collapsed');
     expect(firstClass).not.toContain('vb-quick-reply--expanded');
+    await navigation;
+    await expect.poll(() => state.topicHydrationPending).toBe(false);
+    await expect.poll(() => state.draftHydrationPending).toBe(false);
+    await expect(quickReplyBox(deepLinkPage)).toHaveValue('Typed before draft hydration');
+    await expect.poll(() => state.stateStreamOpened).toBe(true);
+    expect(state.sessionHydrationPending).toBe(true);
+    await expect.poll(() => state.sessionHydrationPending).toBe(false);
+
+    await deepLinkPage.goto(`/topics/${fixture.topicId}/reply`);
+    await expect(deepLinkPage.locator('.vb-editor-textarea')).toBeVisible();
+    state.stateStreamOpened = false;
+    await deepLinkPage.getByRole('button', { name: 'Back (keep draft)' }).click();
+    await expect(composer).toHaveClass(/vb-quick-reply--collapsed/);
+    await expect.poll(() => state.stateStreamOpened).toBe(true);
     await deepLinkPage.close();
   });
 

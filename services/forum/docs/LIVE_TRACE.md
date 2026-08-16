@@ -163,9 +163,13 @@ session inspector's persisted plans, checkpoints, and tool runs through the same
 `src/lib/unifiedTrace.ts` ordering helper used by saved Trace History. The admin
 inspector returns complete plan and tool rows for the session; Tool Usage bounds
 presentation to the latest 20 response groups rather than truncating individual
-responses. Missing checkpoints fall back to reasoning followed by chronologically
-sorted tools. Equal tool timestamps converge through deterministic newest-first
-storage ordering and chronological reversal in the shared helper. This keeps
+responses. Session metadata and inspector hydration are optional background
+enrichment: topic selection, Quick Reply, and SSE startup do not await them. The
+Session Inspector and Tool Usage present explicit loading and failure states while
+those requests settle, with stale-topic responses fenced out.
+Missing checkpoints fall back to reasoning followed by chronologically sorted tools.
+Equal tool timestamps converge through deterministic newest-first storage ordering
+and chronological reversal in the shared helper. This keeps
 ordering stable across live execution, completion, and refresh while remaining
 compatible with old and imported sessions.
 

@@ -2697,23 +2697,29 @@ watch(
     forkError.value = '';
     forkSubmitting.value = false;
     replyBody.value = '';
-    if (topicId) {
-      await loadTopic(topicId);
-      if (routeTopicId.value !== topicId) return;
-      applyQuickReplyDefault();
-      quickReplyPresentationReady.value = true;
-      if (state.isLoggedIn.value) await autosavedReply.load();
-    }
+    if (topicId) await loadTopic(topicId);
   },
   { immediate: true }
 );
 
 watch(
-  [() => state.isLoggedIn.value, () => state.selectedTopic.value?.id, () => state.selectedTopic.value?.status],
-  ([loggedIn]) => {
+  [
+    () => state.authChecked.value,
+    () => state.isLoggedIn.value,
+    routeTopicId,
+    () => state.selectedTopic.value?.id,
+    () => state.selectedTopic.value?.status,
+  ],
+  ([authChecked, loggedIn, topicId, selectedTopicId]) => {
+    const baseTopicReady = Boolean(authChecked && topicId && selectedTopicId === topicId);
+    if (baseTopicReady && !quickReplyPresentationReady.value) {
+      applyQuickReplyDefault();
+      quickReplyPresentationReady.value = true;
+    }
     if (!canDockQuickReply.value && quickReplyDocked.value) resetQuickReplyPresentation();
-    if (loggedIn && routeTopicId.value && !autosavedReply.hydrated.value) void autosavedReply.load();
-  }
+    if (baseTopicReady && loggedIn && !autosavedReply.hydrated.value) void autosavedReply.load();
+  },
+  { immediate: true }
 );
 
 onMounted(() => {
@@ -4339,7 +4345,21 @@ onUnmounted(() => {
               </button>
             </div>
           </div>
-          <div v-if="toolUsageTraceGroups.length === 0" class="vb-empty">No trace activity yet.</div>
+          <div
+            v-if="state.sessionInspectorLoading.value && toolUsageTraceGroups.length === 0"
+            class="vb-empty"
+            role="status"
+          >
+            Loading Tool Usage…
+          </div>
+          <div
+            v-else-if="state.sessionInspectorError.value && toolUsageTraceGroups.length === 0"
+            class="vb-empty"
+            role="alert"
+          >
+            Tool Usage unavailable: {{ state.sessionInspectorError.value }}
+          </div>
+          <div v-else-if="toolUsageTraceGroups.length === 0" class="vb-empty">No trace activity yet.</div>
           <div v-else-if="visibleToolUsageEntryCount === 0" class="vb-empty">No tool runs yet.</div>
           <div
             v-for="group in visibleToolUsageGroups"
@@ -4435,6 +4455,12 @@ onUnmounted(() => {
               </div>
             </template>
           </div>
+          <div v-if="state.sessionInspectorLoading.value && toolUsageTraceGroups.length > 0" class="vb-tool-hint" role="status">
+            Refreshing Tool Usage…
+          </div>
+          <div v-if="state.sessionInspectorError.value && toolUsageTraceGroups.length > 0" class="vb-tool-hint" role="alert">
+            Tool Usage refresh failed; showing the most recent available trace.
+          </div>
           <div v-if="!showingAllToolUsageGroups && canExpandToolUsage" class="vb-tool-hint">
             Latest tool shown. Choose Show All for the complete trace.
           </div>
@@ -4446,7 +4472,14 @@ onUnmounted(() => {
       <div class="vb-table-header">
         <span>Session Inspector</span>
         <div class="vb-inspector-actions">
-          <button class="vb-small-btn" type="button" @click="state.loadSessionInspector">Refresh</button>
+          <button
+            class="vb-small-btn"
+            type="button"
+            :disabled="state.sessionInspectorLoading.value"
+            @click="state.loadSessionInspector()"
+          >
+            Refresh
+          </button>
           <button
             class="vb-small-btn"
             type="button"
@@ -4466,7 +4499,17 @@ onUnmounted(() => {
         </div>
       </div>
       <div class="vb-robot-body">
-        <div v-if="!state.sessionInfo.value" class="vb-empty">No session yet.</div>
+        <div v-if="state.sessionInspectorLoading.value && !state.sessionInfo.value" class="vb-empty" role="status">
+          Loading session metadata…
+        </div>
+        <div
+          v-else-if="state.sessionInspectorError.value && !state.sessionInfo.value"
+          class="vb-empty"
+          role="alert"
+        >
+          Session metadata unavailable: {{ state.sessionInspectorError.value }}
+        </div>
+        <div v-else-if="!state.sessionInfo.value" class="vb-empty">No session yet.</div>
         <div v-else class="vb-session-meta">
           <div><strong>Session:</strong> {{ state.sessionInfo.value.id }}</div>
           <div><strong>Status:</strong> {{ state.sessionInfo.value.status }}</div>

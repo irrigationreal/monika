@@ -99,6 +99,8 @@ export type RobotActivityEvent =
 const activityLog = ref<RobotActivityEvent[]>([]);
 const sessionInfo = ref<SessionDto | null>(null);
 const sessionInspector = ref<SessionInspectorDto | null>(null);
+const sessionInspectorLoading = ref(false);
+const sessionInspectorError = ref<string | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
 const currentPage = ref(1);
@@ -169,6 +171,7 @@ let forumsLoadCounter = 0;
 let archivedForumsLoadCounter = 0;
 let recentPostsLoadCounter = 0;
 let topicHydrationEnabled = true;
+let sessionInspectorLoadCounter = 0;
 let liveTurnStartedAt: number | null = null;
 // --- Committed segments (append-only trace model) ---
 // No longer using client-side checkpoints for trace interleaving.
@@ -711,6 +714,13 @@ export function useForumState() {
     assistantDraft.value = aFullText.slice(aCursor);
   }
 
+  function resetSessionInspectorState(): void {
+    sessionInspectorLoadCounter += 1;
+    sessionInspector.value = null;
+    sessionInspectorLoading.value = false;
+    sessionInspectorError.value = null;
+  }
+
   function resetTopicState(): void {
     robotState.value = null;
     sessionContext.value = null;
@@ -718,7 +728,7 @@ export function useForumState() {
     autoRunError.value = null;
     autoRunLoading.value = false;
     sessionInfo.value = null;
-    sessionInspector.value = null;
+    resetSessionInspectorState();
     assistantDraft.value = '';
     reasoningDraft.value = '';
     activePlanId = null;
@@ -882,26 +892,38 @@ export function useForumState() {
     }
   }
 
-  async function loadSession(topicId: string): Promise<void> {
-    if (!isAdmin.value) {
+  async function loadSessionInspector(topicId = selectedTopicId.value): Promise<void> {
+    const loadId = ++sessionInspectorLoadCounter;
+    if (!isAdmin.value || !topicId) {
       sessionInfo.value = null;
       sessionInspector.value = null;
+      sessionInspectorLoading.value = false;
+      sessionInspectorError.value = null;
       return;
     }
-    const result = await api.getSessionByTopic(topicId);
-    if (!isActiveTopic(topicId)) return;
-    sessionInfo.value = result;
-    sessionInspector.value = null;
-  }
-
-  async function loadSessionInspector(): Promise<void> {
-    if (!isAdmin.value) return;
-    if (!sessionInfo.value) return;
-    const topicId = selectedTopicId.value;
-    if (!topicId) return;
-    const result = await api.inspectSession(sessionInfo.value.id);
-    if (selectedTopicId.value !== topicId) return;
-    sessionInspector.value = result;
+    sessionInspectorLoading.value = true;
+    sessionInspectorError.value = null;
+    try {
+      const previousSessionId = sessionInfo.value?.id ?? null;
+      const session = await api.getSessionByTopic(topicId);
+      if (loadId !== sessionInspectorLoadCounter || selectedTopicId.value !== topicId) return;
+      sessionInfo.value = session;
+      if (!session) {
+        sessionInspector.value = null;
+        return;
+      }
+      if (previousSessionId !== session.id) sessionInspector.value = null;
+      const result = await api.inspectSession(session.id);
+      if (loadId !== sessionInspectorLoadCounter || selectedTopicId.value !== topicId) return;
+      sessionInspector.value = result;
+    } catch (err) {
+      if (loadId !== sessionInspectorLoadCounter || selectedTopicId.value !== topicId) return;
+      sessionInspectorError.value = err instanceof Error ? err.message : 'Failed to load Tool Usage.';
+    } finally {
+      if (loadId === sessionInspectorLoadCounter && selectedTopicId.value === topicId) {
+        sessionInspectorLoading.value = false;
+      }
+    }
   }
 
   async function interruptRobot(): Promise<void> {
@@ -1097,10 +1119,10 @@ export function useForumState() {
         loadAttachmentsForPosts(posts.value.map((post) => post.id)),
         loadAutoRun(topicId),
         loadState(topicId, { reconstructTrace: false }),
-        loadSessionInspector(),
       ]);
       if (!isActiveTopic(topicId)) return;
       clearCompletedAssistantTurnTrace();
+      void loadSessionInspector();
     }
   }
 
@@ -1136,6 +1158,8 @@ export function useForumState() {
     topicHydrationEnabled = hydrateState;
     robotStopResult.value = null;
     selectedTopic.value = topic;
+    sessionInfo.value = null;
+    resetSessionInspectorState();
     currentPage.value = 1;
     assistantDraft.value = '';
     reasoningDraft.value = '';
@@ -1156,10 +1180,16 @@ export function useForumState() {
       return;
     }
     if (hydrateState) {
-      await Promise.all([loadState(topic.id), loadAutoRun(topic.id), loadSession(topic.id)]);
-      await loadSessionInspector();
+      if (isAdmin.value) sessionInspectorLoading.value = true;
+      try {
+        await Promise.all([loadState(topic.id), loadAutoRun(topic.id)]);
+      } catch (err) {
+        if (isActiveTopic(topic.id) && loadId === topicLoadCounter) sessionInspectorLoading.value = false;
+        throw err;
+      }
       if (isActiveTopic(topic.id) && loadId === topicLoadCounter) {
         openStream(topic.id);
+        void loadSessionInspector(topic.id);
       }
     }
   }
@@ -1175,11 +1205,21 @@ export function useForumState() {
           return;
         }
         const loadId = ++topicLoadCounter;
-        await Promise.all([loadState(topicId), loadAutoRun(topicId), loadSession(topicId)]);
-        await loadSessionInspector();
+        if (isAdmin.value) sessionInspectorLoading.value = true;
+        try {
+          await Promise.all([loadState(topicId), loadAutoRun(topicId)]);
+        } catch (err) {
+          if (requestId === topicSelectionRequestCounter && isActiveTopic(topicId) && loadId === topicLoadCounter) {
+            sessionInspectorLoading.value = false;
+          }
+          throw err;
+        }
         if (requestId === topicSelectionRequestCounter && isActiveTopic(topicId) && loadId === topicLoadCounter) {
           openStream(topicId);
+          void loadSessionInspector(topicId);
         }
+      } else if (topicHydrationEnabled) {
+        openStream(topicId);
       }
       return;
     }
@@ -1196,7 +1236,7 @@ export function useForumState() {
     identities.value = {};
     robotPersonas.value = {};
     sessionInfo.value = null;
-    sessionInspector.value = null;
+    resetSessionInspectorState();
     attachmentsByPost.value = {};
     topicAutoRun.value = null;
     autoRunError.value = null;
@@ -1446,7 +1486,7 @@ export function useForumState() {
       await loadIdentities(result.topic.id);
       await loadRobotPersonas(result.topic.id);
       await loadState(result.topic.id);
-      await loadSession(result.topic.id);
+      void loadSessionInspector(result.topic.id);
       return result.topic;
     } finally {
       loading.value = false;
@@ -1641,6 +1681,8 @@ export function useForumState() {
     activityLog,
     sessionInfo,
     sessionInspector,
+    sessionInspectorLoading,
+    sessionInspectorError,
     robotControlPending,
     robotStopResult,
     loading,
@@ -1706,7 +1748,6 @@ export function useForumState() {
     loadRobotPersonas,
     loadState,
     loadAutoRun,
-    loadSession,
     loadSessionInspector,
     loadRegistrationSettings,
     loadModelCatalog,
