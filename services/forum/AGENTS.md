@@ -196,8 +196,10 @@ three-card preview in the draft-post position and can open the complete Trace in
 Non-admins, including authenticated members, receive and render only a neutral "Response in progress…" placeholder.
 Completed posts never embed trace history.
 
-Trace, Robot Diagnostics, Session Details, and Auto-Director are secondary operational surfaces in the Admin Workspace.
-Quick Reply retains immediate model/context, steering, failure, and confirmed Stop Robot controls.
+Trace, Session Diagnostics, and Auto-Director are secondary operational surfaces in the Admin Workspace. Session
+Diagnostics combines robot activity/context controls with canonical session metadata so closely related operational
+state can be inspected together. Quick Reply retains immediate model/context, steering, failure, and confirmed Stop
+Robot controls.
 
 ### Key files
 

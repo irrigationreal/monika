@@ -1877,7 +1877,7 @@
   flex-direction: column;
   border: 1px solid var(--brand-primary);
   box-shadow: 0 8px 30px var(--shadow-color);
-  background: var(--bg-primary);
+  background: var(--bg-surface);
 }
 
 .vb-admin-workspace--reply-expanded {
@@ -1926,6 +1926,23 @@
 .vb-admin-workspace-title h2 {
   margin: 0;
   font-size: 1rem;
+}
+
+.vb-admin-workspace-title-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.vb-diagnostics-section + .vb-diagnostics-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-default);
+}
+
+.vb-diagnostics-section h3 {
+  margin: 0 0 8px;
+  font-size: 0.95rem;
 }
 
 @media (max-width: 700px) {
