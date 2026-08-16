@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 describe('TopicView persistent Quick Reply dock', () => {
   const source = readFileSync(resolve(process.cwd(), 'src/views/TopicView.vue'), 'utf8');
+  const stateSource = readFileSync(resolve(process.cwd(), 'src/composables/useForumState.ts'), 'utf8');
   const styles = readFileSync(resolve(process.cwd(), 'src/styles/posts.css'), 'utf8');
   const responsiveStyles = readFileSync(resolve(process.cwd(), 'src/styles/responsive.css'), 'utf8');
   const componentStyles = readFileSync(resolve(process.cwd(), 'src/styles/components.css'), 'utf8');
@@ -113,8 +114,16 @@ describe('TopicView persistent Quick Reply dock', () => {
     expect(source).toContain('const quickReplyPresentationReady = ref(false);');
     expect(source).toContain('v-if="quickReplyPresentationReady"');
     expect(source).toContain('quickReplyPresentationReady.value = false;');
+    expect(source).toContain('const baseTopicReady = Boolean(authChecked && topicId && selectedTopicId === topicId);');
     expect(source).toContain('applyQuickReplyDefault();\n      quickReplyPresentationReady.value = true;');
     expect(source).toContain('@input="quickReplyPresentationTouched = true"');
+    const routeLoad = source.slice(
+      source.indexOf('watch(\n  routeTopicId,'),
+      source.indexOf('watch(\n  [', source.indexOf('watch(\n  routeTopicId,'))
+    );
+    expect(routeLoad).not.toContain('quickReplyPresentationReady.value = true;');
+    expect(routeLoad).not.toContain('autosavedReply.load');
+    expect(source).toContain('},\n  { immediate: true }\n);');
     expect(source).not.toContain('() => state.currentUser.value?.quickReplyDockedByDefault,');
     expect(source).toContain('if (!canDockQuickReply.value) return;');
     expect(source).toContain('v-if="!quickReplyDocked && canDockQuickReply"');
@@ -133,9 +142,23 @@ describe('TopicView persistent Quick Reply dock', () => {
     expect(source).toContain('const wasSteeringRobot = quickReplyWillSteerRobot.value;');
     expect(source).toContain('quickReplyOptionsOpen.value = false;');
     expect(source).toContain('if (quickReplyDocked.value && !wasSteeringRobot) await collapseQuickReply();');
-    expect(source.indexOf('quickReplyOptionsOpen.value = false;', source.indexOf('async function reply()'))).toBeGreaterThan(
-      source.indexOf("scrollToAnchor('smooth');", source.indexOf('async function reply()'))
-    );
+    expect(
+      source.indexOf('quickReplyOptionsOpen.value = false;', source.indexOf('async function reply()'))
+    ).toBeGreaterThan(source.indexOf("scrollToAnchor('smooth');", source.indexOf('async function reply()')));
+  });
+
+  it('keeps Tool Usage enrichment off the topic and live-stream critical path', () => {
+    expect(stateSource).toContain('const sessionInspectorLoading = ref(false);');
+    expect(stateSource).toContain('const sessionInspectorError = ref<string | null>(null);');
+    expect(stateSource).not.toContain('await loadSessionInspector');
+    expect(stateSource).not.toContain('function loadSession(');
+    expect(stateSource).toContain('openStream(topic.id);\n        void loadSessionInspector(topic.id);');
+    expect(source).toContain('state.sessionInspectorLoading.value && toolUsageTraceGroups.length === 0');
+    expect(source).toContain('Tool Usage unavailable: {{ state.sessionInspectorError.value }}');
+    expect(source).toContain('@click="state.loadSessionInspector()"');
+    expect(source).toContain('Loading session metadata…');
+    expect(source).toContain('Session metadata unavailable: {{ state.sessionInspectorError.value }}');
+    expect(stateSource).toContain('if (previousSessionId !== session.id) sessionInspector.value = null;');
   });
 
   it('stops stale topic-load continuations before topic-specific side effects', () => {
