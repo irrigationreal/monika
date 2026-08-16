@@ -7,6 +7,22 @@ export interface EchsClientOptions {
   apiToken?: string | null;
 }
 
+export class EchsTransportError extends Error {
+  readonly retryable = true;
+  constructor(
+    message: string,
+    readonly status: number | null = null,
+    options?: { cause?: unknown }
+  ) {
+    super(message, options);
+    this.name = 'EchsTransportError';
+  }
+}
+
+export function isEchsTransportError(error: unknown): error is EchsTransportError {
+  return error instanceof EchsTransportError;
+}
+
 export interface EchsThreadState {
   thread_id: string;
   state?: {
@@ -283,8 +299,11 @@ export class EchsClient {
     lineageKind?: string | null;
     lineageSource?: string | null;
     lineageMetadata?: unknown;
+    creationId?: string;
   }): Promise<string> {
-    const payload: Record<string, unknown> = {};
+    const payload: Record<string, unknown> = opts.creationId
+      ? { durable_session: true, creation_id: opts.creationId }
+      : {};
     const cwd = opts.cwd ?? opts.workdir;
     if (cwd) payload['cwd'] = cwd;
     if (opts.model) payload['model'] = opts.model;
@@ -321,6 +340,7 @@ export class EchsClient {
     lineageKind?: string | null;
     lineageSource?: string | null;
     lineageMetadata?: unknown;
+    creationId?: string;
   }): Promise<EchsConversationRecord> {
     const conversationId = await this.createConversation(opts);
     const conversation = await this.getConversation(conversationId);
@@ -539,20 +559,7 @@ export class EchsClient {
 
   async checkHealth(): Promise<{ ok: boolean; status: string; queue_depth?: number; active_threads?: number } | null> {
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 2000);
-      const headers: Record<string, string> = {};
-      headers['Accept'] = 'application/json';
-      if (this.apiToken) headers['Authorization'] = `Bearer ${this.apiToken}`;
-      const response = await fetch(`${this.baseUrl}/healthz`, {
-        headers,
-        signal: controller.signal,
-      });
-      clearTimeout(timeout);
-      if (!response.ok) {
-        return { ok: false, status: `http_${response.status}` };
-      }
-      const data = (await response.json()) as Record<string, unknown>;
+      const data = (await this.request('/healthz', { timeoutMs: 2_000 })) as Record<string, unknown>;
       const isOk = data['ok'] === true;
       const result: { ok: boolean; status: string; queue_depth?: number; active_threads?: number } = {
         ok: isOk,
@@ -648,12 +655,15 @@ export class EchsClient {
     try {
       response = await fetch(`${this.baseUrl}${path.startsWith('/') ? path : `/${path}`}`, fetchInit);
       text = await response.text();
+    } catch (error) {
+      throw new EchsTransportError('Agent runtime transport is unavailable', null, { cause: error });
     } finally {
       clearTimeout(timeout);
     }
     const data = text ? safeJsonParse(text) : null;
     if (!response.ok) {
       const message = `ECHS ${response.status}: ${typeof data === 'string' ? data : JSON.stringify(data)}`;
+      if (response.status >= 500) throw new EchsTransportError(message, response.status);
       const error = new Error(message) as Error & { status?: number; details?: unknown };
       error.status = response.status;
       error.details = data;

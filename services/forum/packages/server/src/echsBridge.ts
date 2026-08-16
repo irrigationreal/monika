@@ -616,8 +616,9 @@ export class EchsBridge {
     topicId: string,
     opts?: { model?: string | null; reasoningEffort?: string | null }
   ): Promise<{ sessionId: string; conversationId: string; link: ReturnType<ForumStore['getPiSessionLinkByTopic']> }> {
+    void opts;
     const session = this.store.ensureSession({ topicId });
-    const link = this.store.getPiSessionLinkByTopic(topicId);
+    let link = this.store.getPiSessionLinkByTopic(topicId);
     const topic = this.store.getTopic(topicId);
     const forum = topic ? this.store.getForum(topic.forum_id) : null;
     const cwd = forum?.cwd ?? this.config.workDir;
@@ -628,39 +629,32 @@ export class EchsBridge {
       if (!existing) {
         this.cleanupDeadThread(conversationId, topicId);
         conversationId = null;
+      } else if (!link) {
+        if (!existing.session_id || !existing.session_path) {
+          throw new Error('canonical_session_link_missing: loaded conversation has no canonical session identity');
+        }
+        link = this.store.upsertPiSessionLink({
+          piSessionId: existing.session_id,
+          piSessionPath: existing.session_path,
+          topicId,
+          sessionId: session.id,
+          cwd: existing.cwd ?? cwd,
+          kind: 'normal',
+          metadata: { source: 'agentd-conversation-recovery' },
+        });
       }
     }
     if (!conversationId) {
-      if (link) {
-        const conversation = await this.client.openConversation({
-          piSessionId: link.pi_session_id,
-          piSessionPath: link.pi_session_path,
-          cwd,
-          autoCompact,
-        });
-        conversationId = conversation.conversation_id;
-      } else {
-        const conversation = await this.client.createConversationRecord({
-          cwd,
-          autoCompact,
-          model: opts?.model ?? this.config.model,
-          ...((opts?.reasoningEffort ?? this.config.reasoningEffort)
-            ? { reasoning: opts?.reasoningEffort ?? this.config.reasoningEffort }
-            : {}),
-        });
-        conversationId = conversation.conversation_id;
-        if (conversation.session_id && conversation.session_path) {
-          this.store.upsertPiSessionLink({
-            piSessionId: conversation.session_id,
-            piSessionPath: conversation.session_path,
-            topicId,
-            sessionId: session.id,
-            cwd: conversation.cwd ?? cwd,
-            kind: 'normal',
-            metadata: { source: 'forum-created' },
-          });
-        }
+      if (!link) {
+        throw new Error('canonical_session_link_missing: non-dispatch operations cannot create canonical state');
       }
+      const conversation = await this.client.openConversation({
+        piSessionId: link.pi_session_id,
+        piSessionPath: link.pi_session_path,
+        cwd,
+        autoCompact,
+      });
+      conversationId = conversation.conversation_id;
       this.store.setSessionAgentThread(session.id, 'echs', conversationId);
     }
     return { sessionId: session.id, conversationId, link };
@@ -757,6 +751,11 @@ export class EchsBridge {
     }
     this.store.setSessionAgentThread(session.id, 'echs', conversation.conversation_id);
     return conversation;
+  }
+
+  async checkReadiness(): Promise<boolean> {
+    const health = await this.client.checkHealth();
+    return health?.ok === true && health.status === 'healthy';
   }
 
   async getSubagentWorkload(): Promise<EchsSubagentWorkload> {
@@ -1441,7 +1440,7 @@ export class EchsBridge {
       if (!this.store.isTopicDispatchGenerationCurrent(topicId, generation))
         throw new Error('stale_dispatch_generation');
       const session = this.store.getSession(turn.sessionId) ?? this.store.ensureSession({ topicId });
-      const piSessionLink = this.store.getPiSessionLinkByTopic(topicId);
+      let piSessionLink = this.store.getPiSessionLinkByTopic(topicId);
       const model = options?.model ?? this.config.model;
       const reasoningEffort = options?.reasoningEffort ?? this.config.reasoningEffort ?? null;
       let threadId = session.agent_thread_id;
@@ -1457,18 +1456,44 @@ export class EchsBridge {
       let pendingMoveToClear: string | null = null;
 
       const actorId = parentPostId ? (this.store.getPost(parentPostId)?.author_id ?? null) : null;
+      const persistConversationLink = (
+        conversation: EchsConversationRecord,
+        source: 'forum-created' | 'agentd-conversation-recovery'
+      ) => {
+        if (!conversation.session_id || !conversation.session_path) {
+          throw new Error('canonical_session_link_missing: agentd conversation has no canonical session identity');
+        }
+        return this.store.upsertPiSessionLink({
+          piSessionId: conversation.session_id,
+          piSessionPath: conversation.session_path,
+          topicId,
+          sessionId: session.id,
+          cwd: conversation.cwd ?? cwd,
+          kind: 'normal',
+          metadata: { source },
+        });
+      };
 
       if (threadId) {
         const conversation = await this.client.getConversation(threadId);
         if (!conversation) {
-          // ECHS conversation is gone — clean up stale references
+          if (!piSessionLink) {
+            throw new Error(
+              'canonical_session_link_missing: established conversation cannot be recovered automatically'
+            );
+          }
+          // The transient loaded-runtime reference is stale; retain the
+          // canonical link and reopen only that exact session below.
           this.cleanupDeadThread(threadId, topicId);
           threadId = null;
           isFirstMessage = true;
         } else {
+          if (!piSessionLink) piSessionLink = persistConversationLink(conversation, 'agentd-conversation-recovery');
           conversationWasActive = conversation.activity === 'active';
           if (!conversationWasActive) this.store.clearActiveTurnOrigin?.(topicId);
         }
+      } else if (!piSessionLink && !this.store.isPristineConversationCreation(topicId, dispatchId)) {
+        throw new Error('canonical_session_link_missing: established or ambiguous history requires manual recovery');
       }
       writeRequesterMetadataFile({
         cwd,
@@ -1560,6 +1585,7 @@ export class EchsBridge {
           conversationId = conversation.conversation_id;
         } else {
           conversationId = await this.client.createConversation({
+            creationId: dispatchId,
             model,
             ...(reasoningEffort ? { reasoning: reasoningEffort } : {}),
             cwd,
@@ -1567,17 +1593,10 @@ export class EchsBridge {
             ...(instructions != null ? { instructions } : {}),
           });
           const conversation = await this.client.getConversation(conversationId);
-          if (conversation?.session_id && conversation.session_path) {
-            this.store.upsertPiSessionLink({
-              piSessionId: conversation.session_id,
-              piSessionPath: conversation.session_path,
-              topicId,
-              sessionId: session.id,
-              cwd: conversation.cwd ?? cwd,
-              kind: 'normal',
-              metadata: { source: 'forum-created' },
-            });
+          if (!conversation) {
+            throw new Error('canonical_session_link_missing: created conversation disappeared before linking');
           }
+          piSessionLink = persistConversationLink(conversation, 'forum-created');
         }
         this.store.setSessionAgentThread(session.id, 'echs', conversationId);
 

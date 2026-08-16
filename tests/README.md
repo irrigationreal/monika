@@ -52,7 +52,14 @@ The container build runs this suite after installing agentd's frozen production
 lockfile, so the tests exercise the same Pi packages shipped in the image. The
 agentd test command creates explicit temporary runtime, result/session, and
 runtime-instance roots; tests must never inherit the live `/data/pi-subagents`
-root. The subagent lifecycle tests use temporary files and injected process
+root. Session-resolution coverage proves known-path dispatch reads only one target
+amid 1,800 decoys and rejects containment escapes, symlinks, malformed/mismatched
+headers, unresolved fork candidates, and ancestor-directory swaps both after
+opening the validation descriptor and around Pi's unavoidable pathname reopen.
+Shutdown seam tests prove HTTP/SSE termination and forced exit remain bounded when
+canonical cleanup is fenced. HTTP safety coverage uses a real aborted HTTP socket
+and keeps reset/destroyed clients from terminating agentd while preserving ordinary
+errors. The subagent lifecycle tests use temporary files and injected process
 inspection—no Docker timing, sleeps, model calls, or live state. They cover
 passive restart recovery with zero recovered Pi messages/transcript writes,
 structurally validated canonical settlement after exact claim, explicit
@@ -149,8 +156,10 @@ The script verifies:
    `additionalProperties: false` and required-property rules;
 10. an interactive Pi ownership lease evicts an idle agentd runtime, blocks forum reopen and deployment, heartbeats, and releases cleanly;
 11. agentd quiescence reports the reloaded idle conversation and deploy drain closes it;
-12. `scripts/deploy-if-safe --backup-only` can create and verify an isolated runtime capsule backup through a mock forum quiescence endpoint;
-13. the container stops cleanly on SIGTERM.
+12. a replacement container sharing only isolated `/data` restores that drain, rejects new work, and becomes healthy only after cancellation clears the durable state;
+13. `scripts/deploy-if-safe --backup-only` can create and verify an isolated runtime capsule backup through a mock forum quiescence endpoint;
+14. the container stops cleanly on SIGTERM;
+15. isolated second runtimes exit nonzero and reap their sibling when either agentd or memstore dies unexpectedly.
 
 The model fixture runs in a second throwaway container on an isolated Docker
 network. It exercises Pi's real extension loading, tool serialization, provider
@@ -179,11 +188,23 @@ The script verifies:
 
 1. a forum-only image update does not drain agentd;
 2. a monika image update starts drain before backup;
-3. the deploy script renews drain immediately before Compose runs;
-4. the deploy script cancels drain after Compose reports the deployment applied.
+3. the deploy script renews durable drain immediately before Compose runs;
+4. a Monika replacement is applied only while the durable drain marker exists;
+5. after Compose applies the update, agentd drain cancel and healthy/undrained
+   proof precede forum `/readyz`, `compose ps`, and pruning in that order.
 
 This protects the failure mode where agentd stays in deploy drain after a
 forum-only update because the monika container was not recreated.
+
+### `smoke/compose-agentd-port.sh`
+
+Statically checks that Compose keeps agentd on internal port 7724 for service
+health and forum traffic while `MONIKA_AGENTD_PORT` changes only the host-side
+loopback publication.
+
+```bash
+tests/smoke/compose-agentd-port.sh
+```
 
 ### `smoke/backup-doc-contract.sh`
 
@@ -209,7 +230,7 @@ tests/smoke/forum-runtime.sh monika-forum-test
 The script verifies:
 
 1. the container starts with ephemeral state and a dummy agentd URL;
-2. `/healthz` returns `{"ok":true}`;
+2. `/healthz` returns `{"ok":true}` because liveness is deliberately independent of backend readiness; shared route tests behaviorally cover the exact unprefixed `/readyz` handler used by Compose in both ready and unavailable states;
 3. `GET /` serves the built frontend HTML;
 4. representative dev-only packages (vitest, vite, typescript, eslint, prettier,
    vue-tsc, playwright, husky, lint-staged) are absent from `node_modules`;

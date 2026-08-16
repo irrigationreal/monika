@@ -2,6 +2,7 @@ import sensible from '@fastify/sensible';
 import Database from 'better-sqlite3';
 import Fastify from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
 import { migrate } from '../db';
 import { ForumStore } from '../store';
 import { createAccessHelpers } from '../utils/access';
@@ -21,27 +22,28 @@ describe('System route access controls', () => {
     db.close();
   });
 
-  async function buildApp(opts: { deployToken?: string | null } = {}) {
+  async function buildApp(opts: { deployToken?: string | null; ready?: boolean } = {}) {
     const app = Fastify({ logger: false });
     await app.register(sensible);
     const access = createAccessHelpers(app, store);
     const modelCatalog = {
       listModels: vi.fn(async () => ({
         items: [{ id: 'codex/gpt-5.6-sol', family: 'codex', label: 'GPT 5.6 Sol' }],
-        updatedAt: '2026-06-20T00:00:00.000Z'
-      }))
+        updatedAt: '2026-06-20T00:00:00.000Z',
+      })),
     };
     registerSystemRoutes({
       app,
       access,
       modelCatalog,
       deployToken: 'deployToken' in opts ? opts.deployToken : 'deploy-secret',
+      readiness: async () => opts.ready ?? true,
       deploymentStatus: () => ({
         safeToStop: false,
         blockers: [{ code: 'active_robot_turns', count: 1 }],
         robot: { activeTurns: 1, queuedTurns: 0 },
-        piSessionSync: { enabled: true, running: false, intervalMs: 60000 }
-      })
+        piSessionSync: { enabled: true, running: false, intervalMs: 60000 },
+      }),
     });
     await app.ready();
     return { app, modelCatalog };
@@ -56,6 +58,18 @@ describe('System route access controls', () => {
     expect(res.json()).toEqual({ ok: true });
     expect(res.body).not.toContain('deployment');
     expect(res.body).not.toContain('echs');
+  });
+
+  it('reports minimal backend readiness without exposing diagnostics', async () => {
+    const readyApp = await buildApp({ ready: true });
+    const ready = await readyApp.app.inject({ method: 'GET', url: '/readyz' });
+    expect(ready.statusCode).toBe(200);
+    expect(ready.json()).toEqual({ ok: true });
+
+    const unavailableApp = await buildApp({ ready: false });
+    const unavailable = await unavailableApp.app.inject({ method: 'GET', url: '/readyz' });
+    expect(unavailable.statusCode).toBe(503);
+    expect(unavailable.json()).toEqual({ ok: false });
   });
 
   it('keeps public build metadata limited to client-safe fields', async () => {
@@ -73,7 +87,7 @@ describe('System route access controls', () => {
 
     const res = await app.inject({
       method: 'GET',
-      url: '/robot-attachments?topicId=public-topic&path=private-output.txt'
+      url: '/robot-attachments?topicId=public-topic&path=private-output.txt',
     });
 
     expect(res.statusCode).toBe(404);
@@ -88,14 +102,14 @@ describe('System route access controls', () => {
     const badRes = await app.inject({
       method: 'GET',
       url: '/deploy/quiescence',
-      headers: { authorization: 'Bearer wrong' }
+      headers: { authorization: 'Bearer wrong' },
     });
     expect(badRes.statusCode).toBe(403);
 
     const goodRes = await app.inject({
       method: 'GET',
       url: '/deploy/quiescence',
-      headers: { authorization: 'Bearer deploy-secret' }
+      headers: { authorization: 'Bearer deploy-secret' },
     });
     expect(goodRes.statusCode).toBe(200);
     expect(goodRes.json()).toMatchObject({ safeToStop: false, robot: { activeTurns: 1, queuedTurns: 0 } });
@@ -107,7 +121,7 @@ describe('System route access controls', () => {
     const res = await app.inject({
       method: 'GET',
       url: '/deploy/quiescence',
-      headers: { authorization: 'Bearer deploy-secret' }
+      headers: { authorization: 'Bearer deploy-secret' },
     });
 
     expect(res.statusCode).toBe(503);
@@ -125,7 +139,7 @@ describe('System route access controls', () => {
     const humanRes = await app.inject({
       method: 'GET',
       url: '/models',
-      headers: { authorization: 'Bearer human-token' }
+      headers: { authorization: 'Bearer human-token' },
     });
     expect(humanRes.statusCode).toBe(200);
     expect(humanRes.json()).toMatchObject({ items: [{ id: 'codex/gpt-5.6-sol' }] });
@@ -143,7 +157,7 @@ describe('System route access controls', () => {
       const memberRes = await app.inject({
         method: 'GET',
         url,
-        headers: { authorization: 'Bearer member-token' }
+        headers: { authorization: 'Bearer member-token' },
       });
       expect(memberRes.statusCode).toBe(200);
     }

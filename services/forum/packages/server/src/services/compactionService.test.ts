@@ -99,7 +99,12 @@ describe('CompactionService', () => {
     });
     subject.start();
     const before = store.listPosts(topic.id, 1, 100).length;
-    await subject.enqueue({ operationId: 'op-fail', topicId: topic.id, initiatedBy: admin.id, recoveryPrompt: 'Never posted' });
+    await subject.enqueue({
+      operationId: 'op-fail',
+      topicId: topic.id,
+      initiatedBy: admin.id,
+      recoveryPrompt: 'Never posted',
+    });
     await vi.waitFor(() => expect(store.getCompactionOperation('op-fail')?.status).toBe('failed'));
     expect(store.getCompactionOperation('op-fail')?.recoveryPostId).toBeNull();
     expect(store.listPosts(topic.id, 1, 100).length).toBe(before);
@@ -126,7 +131,9 @@ describe('CompactionService', () => {
     });
     await vi.waitFor(() => expect(compactTopicConversation).toHaveBeenCalledTimes(1));
     expect(store.getCompactionOperation('op-uncertain')).toMatchObject({ status: 'pending' });
-    const row = db.prepare('select error_message, next_attempt_at from compaction_operations where id = ?').get('op-uncertain') as any;
+    const row = db
+      .prepare('select error_message, next_attempt_at from compaction_operations where id = ?')
+      .get('op-uncertain') as any;
     expect(row.error_message).toContain('connection reset');
     expect(row.next_attempt_at).toBeTruthy();
     expect(store.listTopicOperationalEvents(topic.id)).toEqual([]);
@@ -142,7 +149,12 @@ describe('CompactionService', () => {
     );
     const subject = service({ getTopicCompactionLeaf: vi.fn(), compactTopicConversation });
     subject.start();
-    await subject.enqueue({ operationId: 'op-busy-reconcile', topicId: topic.id, initiatedBy: admin.id, recoveryPrompt: 'recover' });
+    await subject.enqueue({
+      operationId: 'op-busy-reconcile',
+      topicId: topic.id,
+      initiatedBy: admin.id,
+      recoveryPrompt: 'recover',
+    });
     await vi.waitFor(() => expect(compactTopicConversation).toHaveBeenCalledTimes(1));
     expect(store.getCompactionOperation('op-busy-reconcile')).toMatchObject({ status: 'pending' });
     expect(store.listTopicOperationalEvents(topic.id)).toEqual([]);
@@ -188,7 +200,10 @@ describe('CompactionService', () => {
 
     expect(subject.start()).toBe(1);
     await vi.waitFor(() => expect(store.getCompactionOperation('op-recovered')?.status).toBe('succeeded'));
-    expect(compactTopicConversation).toHaveBeenCalledWith(topic.id, expect.objectContaining({ expectedLeafId: 'leaf-1' }));
+    expect(compactTopicConversation).toHaveBeenCalledWith(
+      topic.id,
+      expect.objectContaining({ expectedLeafId: 'leaf-1' })
+    );
   });
 
   it('hydrates active/latest state and allows an admin retry of a terminal checkpoint dispatch', async () => {
@@ -204,7 +219,9 @@ describe('CompactionService', () => {
     store.claimCompactionOperation('op-checkpoint');
     const completed = store.finishCompactionSuccess('op-checkpoint');
     const dispatch = store.getPostDispatchByPost(completed.recoveryPostId!);
-    db.prepare("update post_dispatches set status = 'failed', error_message = 'provider unavailable' where id = ?").run(dispatch!.id);
+    db.prepare("update post_dispatches set status = 'failed', error_message = 'provider unavailable' where id = ?").run(
+      dispatch!.id
+    );
     const wake = vi.fn();
     const subject = service({ getTopicCompactionLeaf: vi.fn(), compactTopicConversation: vi.fn() }, wake);
 
@@ -217,6 +234,30 @@ describe('CompactionService', () => {
     expect(subject.retryCheckpoint(topic.id, 'op-checkpoint').checkpointDispatch).toMatchObject({ status: 'pending' });
     expect(wake).toHaveBeenCalledTimes(1);
   });
+
+  it.each(['superseded', 'abandoned'] as const)(
+    'does not resurrect a %s checkpoint and releases the topic fence',
+    async (status) => {
+      const { topic, admin, session } = seed(store, db);
+      store.createCompactionOperation({
+        id: `op-${status}`,
+        topicId: topic.id,
+        sessionId: session.id,
+        initiatedBy: admin.id,
+        expectedLeafId: 'leaf-1',
+        recoveryPrompt: 'recover',
+      });
+      store.claimCompactionOperation(`op-${status}`);
+      const completed = store.finishCompactionSuccess(`op-${status}`);
+      const dispatch = store.getPostDispatchByPost(completed.recoveryPostId!);
+      db.prepare('update post_dispatches set status = ? where id = ?').run(status, dispatch!.id);
+      const subject = service({ getTopicCompactionLeaf: vi.fn(), compactTopicConversation: vi.fn() });
+
+      expect(store.hasCompactionFence(topic.id)).toBe(false);
+      expect(() => subject.retryCheckpoint(topic.id, `op-${status}`)).toThrow(/must not be retried/);
+      expect(store.getPostDispatch(dispatch!.id)?.status).toBe(status);
+    }
+  );
 
   it('rejects locked topics before reserving a compaction operation', async () => {
     const { topic, admin } = seed(store, db);
@@ -239,7 +280,12 @@ describe('CompactionService', () => {
     });
 
     await expect(
-      subject.enqueue({ operationId: 'op-stopped', topicId: topic.id, initiatedBy: admin.id, recoveryPrompt: 'recover' })
+      subject.enqueue({
+        operationId: 'op-stopped',
+        topicId: topic.id,
+        initiatedBy: admin.id,
+        recoveryPrompt: 'recover',
+      })
     ).resolves.toMatchObject({ id: 'op-stopped', status: 'pending' });
   });
 

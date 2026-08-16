@@ -250,23 +250,53 @@ if [ "${MONIKA_AGENTD_ENABLED:-1}" != "0" ]; then
   AGENTD_PID=$!
 fi
 
-# ── Signal handling ──────────────────────────────────────
-cleanup() {
+# ── Signal handling and essential-child supervision ──────
+stop_children() {
+  local exit_status="$1"
+  local agentd_status=0
+  trap - SIGTERM SIGINT
   monika_log "[monika] Shutting down..."
+  # Agentd drains loaded sessions while memstore is still available. Preserve a
+  # canonical-close failure as the container result instead of calling it a
+  # graceful shutdown.
   if [ -n "$AGENTD_PID" ]; then
     kill "$AGENTD_PID" 2>/dev/null || true
-    wait "$AGENTD_PID" 2>/dev/null || true
+    set +e
+    wait "$AGENTD_PID" 2>/dev/null
+    agentd_status=$?
+    set -e
+    if [ "$exit_status" -eq 0 ] && [ "$agentd_status" -ne 0 ]; then
+      exit_status="$agentd_status"
+    fi
   fi
-  kill "$MEMSTORE_PID" 2>/dev/null
-  wait "$MEMSTORE_PID" 2>/dev/null
-  exit 0
+  kill "$MEMSTORE_PID" 2>/dev/null || true
+  wait "$MEMSTORE_PID" 2>/dev/null || true
+  exit "$exit_status"
 }
+cleanup() { stop_children 0; }
 trap cleanup SIGTERM SIGINT
 
 # ── Run command or keep alive ────────────────────────────
 if [ $# -gt 0 ]; then
+  # Command/runner mode intentionally preserves the historical exec contract.
   exec "$@"
 else
   monika_log "[monika] Running. Use 'docker exec -it monika pi' for interactive session."
-  wait "$MEMSTORE_PID"
+  set +e
+  if [ -n "$AGENTD_PID" ]; then
+    EXITED_PID=""
+    wait -n -p EXITED_PID "$MEMSTORE_PID" "$AGENTD_PID"
+    child_status=$?
+    child_name="memstore"
+    [ "$EXITED_PID" = "$AGENTD_PID" ] && child_name="agentd"
+  else
+    wait "$MEMSTORE_PID"
+    child_status=$?
+    child_name="memstore"
+  fi
+  set -e
+  monika_log "[monika] ERROR: essential child $child_name exited unexpectedly (status=$child_status)"
+  # Even a clean essential-child exit is unexpected in daemon mode. Exit
+  # nonzero after reaping its sibling so Docker's restart policy can recover.
+  stop_children "$([ "$child_status" -eq 0 ] && echo 1 || echo "$child_status")"
 fi

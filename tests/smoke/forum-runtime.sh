@@ -55,7 +55,7 @@ cleanup() {
     docker logs "$CONTAINER_NAME" 2>/dev/null || true
     endsection
   fi
-  docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  docker rm -fv "$CONTAINER_NAME" >/dev/null 2>&1 || true
   exit "$status"
 }
 trap cleanup EXIT
@@ -66,7 +66,7 @@ section "Start forum container"
 info "Image: $IMAGE"
 info "Container: $CONTAINER_NAME"
 
-docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+docker rm -fv "$CONTAINER_NAME" >/dev/null 2>&1 || true
 CONTAINER_ID="$(docker run -d \
   --name "$CONTAINER_NAME" \
   -p "127.0.0.1::${CONTAINER_PORT}" \

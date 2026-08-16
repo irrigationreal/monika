@@ -165,8 +165,11 @@ export class CompactionService {
     if (dispatch.status === 'pending' || dispatch.status === 'dispatching' || dispatch.status === 'dispatched') {
       return this.getState(topicId);
     }
-    if (!['failed', 'superseded', 'abandoned'].includes(dispatch.status)) {
-      throw new CompactionConflictError('Recovery checkpoint dispatch is not retryable');
+    // Superseded/abandoned checkpoints are cancellation outcomes. Reanimating
+    // them would bypass the durable dispatch generation fence; unlike a failed
+    // current-generation attempt, they intentionally release the topic fence.
+    if (dispatch.status !== 'failed') {
+      throw new CompactionConflictError('Recovery checkpoint dispatch is terminal and must not be retried');
     }
     if (!this.store.retryTerminalPostDispatch(dispatch.id)) {
       const current = this.store.getPostDispatch(dispatch.id);

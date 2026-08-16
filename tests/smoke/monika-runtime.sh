@@ -48,8 +48,10 @@ AGENTD_CONTAINER_PORT="7724"
 MEMSTORE_SOCKET="/tmp/memstore.sock"
 MEMSTORE_DATA_DIR="/data/memstore"
 SMOKE_TMP_DIR=""
+SMOKE_RUNTIME_DATA=""
 MOCK_FORUM_PID=""
 MOCK_MODEL_CONTAINER=""
+SUPERVISION_CONTAINER=""
 SMOKE_NETWORK=""
 
 section() {
@@ -85,14 +87,26 @@ cleanup() {
     kill "$MOCK_FORUM_PID" >/dev/null 2>&1 || true
     wait "$MOCK_FORUM_PID" >/dev/null 2>&1 || true
   fi
-  docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  docker rm -fv "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  if [ -n "$SUPERVISION_CONTAINER" ]; then
+    docker rm -fv "$SUPERVISION_CONTAINER" >/dev/null 2>&1 || true
+  fi
   if [ -n "$MOCK_MODEL_CONTAINER" ]; then
-    docker rm -f "$MOCK_MODEL_CONTAINER" >/dev/null 2>&1 || true
+    docker rm -fv "$MOCK_MODEL_CONTAINER" >/dev/null 2>&1 || true
   fi
   if [ -n "$SMOKE_NETWORK" ]; then
     docker network rm "$SMOKE_NETWORK" >/dev/null 2>&1 || true
   fi
   if [ -n "$SMOKE_TMP_DIR" ]; then
+    # Runtime containers create root-owned state beneath this test-only bind
+    # mount. Remove only children of the exact mktemp root from a short-lived
+    # root helper before the host shell removes the now-empty directory.
+    docker run --rm \
+      --entrypoint sh \
+      -v "$SMOKE_TMP_DIR:/cleanup" \
+      "$IMAGE" \
+      -c 'find /cleanup -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +' \
+      >/dev/null 2>&1 || true
     rm -rf "$SMOKE_TMP_DIR"
   fi
   exit "$status"
@@ -101,9 +115,10 @@ trap cleanup EXIT
 
 SMOKE_TMP_DIR="$(mktemp -d)"
 SMOKE_RUNTIME_SECRETS="$SMOKE_TMP_DIR/runtime-secrets"
+SMOKE_RUNTIME_DATA="$SMOKE_TMP_DIR/runtime-data"
 SMOKE_NETWORK="monika-smoke-net-$$"
 MOCK_MODEL_CONTAINER="monika-mock-model-$$"
-mkdir -p "$SMOKE_RUNTIME_SECRETS/ssh/targets"
+mkdir -p "$SMOKE_RUNTIME_SECRETS/ssh/targets" "$SMOKE_RUNTIME_DATA"
 docker network create "$SMOKE_NETWORK" >/dev/null
 docker run -d \
   --name "$MOCK_MODEL_CONTAINER" \
@@ -147,7 +162,7 @@ cat >"$SMOKE_RUNTIME_SECRETS/models.json" <<'MODELS_SMOKE'
 MODELS_SMOKE
 
 section "Start standalone runtime"
-docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+docker rm -fv "$CONTAINER_NAME" >/dev/null 2>&1 || true
 CONTAINER_ID="$(docker run -d \
   --name "$CONTAINER_NAME" \
   --network "$SMOKE_NETWORK" \
@@ -161,6 +176,7 @@ CONTAINER_ID="$(docker run -d \
   -e PI_SUBAGENT_EXECUTION_TARGET_ROOT=/runtime/secrets/ssh/targets \
   -e PI_SUBAGENT_SSH_LOCK_EXTENSION=/app/.pi/agent/extensions/ssh.ts \
   -v "$SMOKE_RUNTIME_SECRETS:/runtime/secrets:ro" \
+  -v "$SMOKE_RUNTIME_DATA:/data" \
   "$IMAGE")"
 AGENTD_PORT="$(docker port "$CONTAINER_NAME" "${AGENTD_CONTAINER_PORT}/tcp" | sed 's/.*://')"
 if [ -z "$AGENTD_PORT" ]; then
@@ -607,6 +623,56 @@ console.log('✓ agentd quiescence safe after drain');
 NODE_SMOKE
 endsection
 
+section "Drain survives container replacement"
+docker stop --time 30 "$CONTAINER_NAME" >/dev/null
+docker rm "$CONTAINER_NAME" >/dev/null
+CONTAINER_ID="$(docker run -d \
+  --name "$CONTAINER_NAME" \
+  --network "$SMOKE_NETWORK" \
+  -p "127.0.0.1::${AGENTD_CONTAINER_PORT}" \
+  -e HOME=/app \
+  -e MEMSTORE_SOCKET="$MEMSTORE_SOCKET" \
+  -e MEMSTORE_DATA_DIR="$MEMSTORE_DATA_DIR" \
+  -e MONIKA_AGENTD_HOST=0.0.0.0 \
+  -e MONIKA_AGENTD_PORT="$AGENTD_CONTAINER_PORT" \
+  -e AGENTLOGS_HOME=/agentlogs-home \
+  -e PI_SUBAGENT_EXECUTION_TARGET_ROOT=/runtime/secrets/ssh/targets \
+  -e PI_SUBAGENT_SSH_LOCK_EXTENSION=/app/.pi/agent/extensions/ssh.ts \
+  -v "$SMOKE_RUNTIME_SECRETS:/runtime/secrets:ro" \
+  -v "$SMOKE_RUNTIME_DATA:/data" \
+  "$IMAGE")"
+AGENTD_PORT="$(docker port "$CONTAINER_NAME" "${AGENTD_CONTAINER_PORT}/tcp" | sed 's/.*://')"
+for _ in {1..60}; do
+  if curl -fsS "http://127.0.0.1:${AGENTD_PORT}/healthz" >"$SMOKE_TMP_DIR/replacement-health.json" 2>/dev/null; then
+    break
+  fi
+  sleep 1
+done
+if ! grep -q '"status":"draining"' "$SMOKE_TMP_DIR/replacement-health.json"; then
+  echo "replacement agentd did not restore the deploy drain"
+  cat "$SMOKE_TMP_DIR/replacement-health.json"
+  exit 1
+fi
+CREATE_STATUS="$(curl -sS -o "$SMOKE_TMP_DIR/drained-create.json" -w '%{http_code}' \
+  -H 'content-type: application/json' --data '{}' \
+  "http://127.0.0.1:${AGENTD_PORT}/v1/conversations")"
+if [ "$CREATE_STATUS" != "503" ]; then
+  echo "replacement agentd accepted new work while drained: HTTP $CREATE_STATUS"
+  cat "$SMOKE_TMP_DIR/drained-create.json"
+  exit 1
+fi
+curl -fsS -X POST "http://127.0.0.1:${AGENTD_PORT}/v1/admin/drain/cancel" >/dev/null
+if ! curl -fsS "http://127.0.0.1:${AGENTD_PORT}/healthz" | grep -q '"status":"healthy"'; then
+  echo "replacement agentd did not become healthy after drain cancellation"
+  exit 1
+fi
+if [ -e "$SMOKE_RUNTIME_DATA/agentd-drain-state.json" ]; then
+  echo "drain cancellation did not clear durable state"
+  exit 1
+fi
+pass "replacement restored the deploy drain, rejected work, and cleared it on cancellation"
+endsection
+
 section "Redeploy backup smoke"
 SMOKE_DEPLOY_ROOT="$SMOKE_TMP_DIR/deploy-root"
 MOCK_FORUM_PORT_FILE="$SMOKE_TMP_DIR/mock-forum-port"
@@ -702,6 +768,71 @@ if [ "$EXIT_CODE" != "0" ]; then
   exit 1
 fi
 pass "container stopped cleanly with exit code 0"
+endsection
+
+section "Essential child supervision"
+SUPERVISION_CONTAINER="${CONTAINER_NAME}-supervision"
+docker run -d \
+  --name "$SUPERVISION_CONTAINER" \
+  --network "$SMOKE_NETWORK" \
+  -e HOME=/app \
+  -e MEMSTORE_SOCKET="$MEMSTORE_SOCKET" \
+  -e MEMSTORE_DATA_DIR="$MEMSTORE_DATA_DIR" \
+  -e MONIKA_AGENTD_HOST=0.0.0.0 \
+  -e MONIKA_AGENTD_PORT="$AGENTD_CONTAINER_PORT" \
+  -e AGENTLOGS_HOME=/agentlogs-home \
+  -v "$SMOKE_RUNTIME_SECRETS:/runtime/secrets:ro" \
+  "$IMAGE" >/dev/null
+for _ in {1..60}; do
+  if docker exec "$SUPERVISION_CONTAINER" test -S "$MEMSTORE_SOCKET" 2>/dev/null \
+    && docker exec "$SUPERVISION_CONTAINER" node -e "fetch('http://127.0.0.1:7724/healthz').then(r=>{if(!r.ok)process.exit(1)})" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+docker exec "$SUPERVISION_CONTAINER" sh -lc "kill \$(pgrep -f '/opt/agentd/src/server.mjs' | head -1)"
+for _ in {1..30}; do
+  [ "$(docker inspect -f '{{.State.Running}}' "$SUPERVISION_CONTAINER")" = "false" ] && break
+  sleep 1
+done
+if [ "$(docker inspect -f '{{.State.Running}}' "$SUPERVISION_CONTAINER")" != "false" ]; then
+  echo "container remained running after agentd exited"
+  exit 1
+fi
+SUPERVISION_EXIT="$(docker inspect -f '{{.State.ExitCode}}' "$SUPERVISION_CONTAINER")"
+if [ "$SUPERVISION_EXIT" = "0" ]; then
+  echo "expected nonzero container exit after essential agentd death"
+  exit 1
+fi
+pass "agentd death stopped the runtime with nonzero exit"
+docker rm -fv "$SUPERVISION_CONTAINER" >/dev/null
+SUPERVISION_CONTAINER="${CONTAINER_NAME}-memstore-supervision"
+docker run -d \
+  --name "$SUPERVISION_CONTAINER" \
+  --network "$SMOKE_NETWORK" \
+  -e HOME=/app \
+  -e MEMSTORE_SOCKET="$MEMSTORE_SOCKET" \
+  -e MEMSTORE_DATA_DIR="$MEMSTORE_DATA_DIR" \
+  -e MONIKA_AGENTD_HOST=0.0.0.0 \
+  -e MONIKA_AGENTD_PORT="$AGENTD_CONTAINER_PORT" \
+  -e AGENTLOGS_HOME=/agentlogs-home \
+  -v "$SMOKE_RUNTIME_SECRETS:/runtime/secrets:ro" \
+  "$IMAGE" >/dev/null
+for _ in {1..60}; do
+  docker exec "$SUPERVISION_CONTAINER" test -S "$MEMSTORE_SOCKET" 2>/dev/null && break
+  sleep 1
+done
+docker exec "$SUPERVISION_CONTAINER" sh -lc "kill \$(pgrep -x memstore | head -1)"
+for _ in {1..30}; do
+  [ "$(docker inspect -f '{{.State.Running}}' "$SUPERVISION_CONTAINER")" = "false" ] && break
+  sleep 1
+done
+if [ "$(docker inspect -f '{{.State.Running}}' "$SUPERVISION_CONTAINER")" != "false" ] \
+  || [ "$(docker inspect -f '{{.State.ExitCode}}' "$SUPERVISION_CONTAINER")" = "0" ]; then
+  echo "runtime did not fail closed after memstore exited"
+  exit 1
+fi
+pass "memstore death stopped the runtime with nonzero exit"
 endsection
 
 echo "Monika runtime smoke test passed."

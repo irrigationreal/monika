@@ -73,10 +73,14 @@ it from the host:
 ```bash
 curl -fsS http://127.0.0.1:4310/healthz
 curl -fsS http://127.0.0.1:4310/api/healthz
+curl -fsS http://127.0.0.1:4310/readyz
+curl -fsS http://127.0.0.1:4310/api/readyz
 ```
 
-Both public health responses are intentionally minimal. Operational deployment state requires
-`CODEX_FORUM_DEPLOY_TOKEN`; model catalog and administrative routes require an authenticated forum identity.
+Health is intentionally minimal liveness and can succeed without agentd. Readiness is also public and minimal, but
+returns HTTP 503 with `{ "ok": false }` when the selected Monika Pi backend is unreachable, draining, or unhealthy; the
+integrated Compose health check uses this surface. Operational deployment state requires `CODEX_FORUM_DEPLOY_TOKEN`;
+model catalog and administrative routes require an authenticated forum identity.
 
 ## Persistent data
 

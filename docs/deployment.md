@@ -29,8 +29,18 @@ The guarded persona copy initializes the persistent mount from the tracked
 defaults. Subsequent runs and image updates do not overwrite the deployment's
 evolving persona.
 
-The forum listens on host loopback port 4310 by default. Agentd listens on host
-loopback port 7724 for health and deployment automation; it is not a public API.
+The forum listens on host loopback port 4310 by default. Agentd uses fixed port
+7724 inside the Compose network and publishes it on host loopback port 7724 for
+health and deployment automation; it is not a public API. `MONIKA_AGENTD_PORT`
+changes only that host-side published port in Compose. Compose waits for the
+supervised Monika runtime (memstore socket plus healthy, undrained agentd) before
+starting the forum, and uses the forum's minimal `/readyz` backend readiness for
+the integrated container health check. Outside Compose, the image healthcheck
+continues to honor `MEMSTORE_SOCKET` and an explicitly configured internal
+`MONIKA_AGENTD_PORT`. Public `/healthz`
+remains liveness-only. If agentd or memstore exits unexpectedly, PID 1 stops the
+sibling and exits nonzero so `restart: unless-stopped` can recover the complete
+runtime instead of leaving a partially alive container.
 
 Open interactive Pi inside the runtime:
 
@@ -157,8 +167,8 @@ The cross-service projection contract lives in [`forum.md`](forum.md).
 By default both administrative host surfaces bind to loopback:
 
 ```text
-127.0.0.1:4310  forum health and local UI
-127.0.0.1:7724  agentd health and deployment control
+127.0.0.1:4310  forum liveness/readiness and local UI
+127.0.0.1:7724  supervised agentd readiness and deployment control
 ```
 
 Public traffic should reach only the forum through a trusted reverse proxy or the

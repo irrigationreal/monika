@@ -21,8 +21,10 @@ fi
 
 ROOT="${MONIKA_DEPLOY_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 COMPOSE_FILE="${MONIKA_DEPLOY_COMPOSE_FILE:-$ROOT/compose.yaml}"
-AGENTD_URL="${MONIKA_AGENTD_BASE_URL:-http://127.0.0.1:7724}"
+AGENTD_URL="${MONIKA_AGENTD_BASE_URL:-http://127.0.0.1:${MONIKA_AGENTD_PORT:-7724}}"
 FORUM_URL="${MONIKA_FORUM_BASE_URL:-http://127.0.0.1:4310/api}"
+FORUM_READY_URL="${MONIKA_FORUM_READY_URL:-http://127.0.0.1:4310/readyz}"
+FORUM_POST_DEPLOY_TIMEOUT_MS="${MONIKA_FORUM_POST_DEPLOY_TIMEOUT_MS:-120000}"
 FORUM_DEPLOY_TOKEN="${MONIKA_FORUM_DEPLOY_TOKEN:-${CODEX_FORUM_DEPLOY_TOKEN:-}}"
 AGENTD_DRAIN_TIMEOUT_MS="${MONIKA_AGENTD_DRAIN_TIMEOUT_MS:-0}"
 AGENTD_DRAIN_AUTO_CANCEL_MS="${MONIKA_AGENTD_DRAIN_AUTO_CANCEL_MS:-900000}"
@@ -134,6 +136,23 @@ wait_for_agentd_drain_cancel_after_deploy() {
     now=$(date +%s)
     if [ "$now" -ge "$deadline" ]; then
       echo "agentd did not become healthy/undrained after deploy within ${AGENTD_POST_DEPLOY_TIMEOUT_MS}ms" >&2
+      return 1
+    fi
+    sleep 2
+  done
+}
+
+wait_for_forum_ready_after_deploy() {
+  local deadline now
+  deadline=$(( $(date +%s) + (FORUM_POST_DEPLOY_TIMEOUT_MS / 1000) ))
+  while true; do
+    if curl -fsS "$FORUM_READY_URL" >/dev/null 2>&1; then
+      echo "forum ready after deploy"
+      return 0
+    fi
+    now=$(date +%s)
+    if [ "$now" -ge "$deadline" ]; then
+      echo "forum did not become ready after deploy within ${FORUM_POST_DEPLOY_TIMEOUT_MS}ms" >&2
       return 1
     fi
     sleep 2
@@ -503,7 +522,11 @@ fi
 # --no-deps is the safety boundary: a forum-only update cannot recreate Monika
 # because of unrelated Compose configuration drift.
 compose up -d --no-deps "${APPLY_SERVICES[@]}"
-compose ps "${STATUS_SERVICES[@]}"
+# A Monika replacement starts in the inherited drained state. Cancel and prove
+# agentd health first; forum readiness intentionally depends on that undrained
+# backend. Forum-only replacements skip this step but still prove /readyz.
 wait_for_agentd_drain_cancel_after_deploy
+wait_for_forum_ready_after_deploy
+compose ps "${STATUS_SERVICES[@]}"
 prune_backups
 prune_docker_images

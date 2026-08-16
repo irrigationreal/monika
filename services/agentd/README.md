@@ -43,6 +43,9 @@ services/agentd/
 ├── pnpm-lock.yaml
 ├── src/
 │   ├── server.mjs                 HTTP/SSE service and Pi runtime ownership
+│   ├── drain-state.mjs            Durable deploy-drain lease state
+│   ├── session-resolution.mjs     Direct canonical-path validation
+│   ├── http-safety.mjs            Disconnect-safe HTTP/SSE writes
 │   ├── compaction-operation.mjs   Idempotent canonical compaction recognition
 │   ├── message-provenance.mjs     Subagent continuation provenance and settlement
 │   └── subagent-cancellation.mjs  Scoped descendant cancellation support
@@ -50,7 +53,15 @@ services/agentd/
 ```
 
 `Containerfile` installs the service into `/opt/agentd`. `entrypoint.sh` starts
-memstore first and then agentd unless `MONIKA_AGENTD_ENABLED=0`.
+memstore first and then agentd unless `MONIKA_AGENTD_ENABLED=0`. In daemon mode
+PID 1 supervises both essential children: it forwards shutdown to agentd before
+memstore, reaps both, and exits nonzero if either dies unexpectedly so Docker can
+restart the complete runtime. Agentd stops accepting HTTP and closes SSE before
+canonical cleanup, then allows Pi close/memory save up to
+`MONIKA_AGENTD_SHUTDOWN_DEADLINE_MS` (30 seconds by default). At that deadline it
+forcibly closes remaining HTTP connections and exits nonzero rather than hanging
+behind a session-operation fence. The Monika health check requires the memstore
+socket and healthy, undrained agentd.
 
 ## API families
 
@@ -65,8 +76,13 @@ exposes these conceptual groups:
 - **administration** — quiescence, drain, subagent workload/repair/retention, and
   privacy-safe aggregate analytics.
 
-Conversation records expose canonical `session_id` and `session_path`. Model and
-thinking settings use Pi model identifiers directly.
+Conversation records expose canonical `session_id` and `session_path`. When both
+are supplied on reopen, agentd opens and validates exactly that canonical path:
+it must remain under the session root, be a non-symlink regular file, match the
+header ID, and remain outside unresolved fork quarantine. Loaded branch checks use
+the same target-only path. Archive-wide discovery remains only for explicit session
+listing and ID-only legacy callers. Model and thinking settings use Pi model
+identifiers directly.
 
 ## Event lifecycle and provenance
 
@@ -98,6 +114,14 @@ Deployment quiescence treats a live interactive lease as a blocker.
 A cached agentd conversation is not itself canonical authority. Runtime state must
 be reconciled with the JSONL tree when a session may have advanced elsewhere.
 
+Forum callers that request `durable_session: true` must also send a stable, URL-safe
+`creation_id`; ordinary forum post-dispatch creation uses its durable dispatch ID. Agentd writes a creation
+record with the intended Pi session ID/path under
+`/data/agentd-operations/forum-creations` before anchoring JSONL. After lineage is durable it appends a completed-creation marker; a retry reopens only that
+same fully operation-marked session. If a `creating` record has missing or ambiguous canonical
+evidence, creation fails closed for manual recovery rather than allocating another
+session. `creation_id` reuse with different creation parameters is rejected.
+
 ## Forum-native forks
 
 Agentd exposes an idle-only, optimistic before-user fork operation for the forum.
@@ -114,6 +138,9 @@ all sessions plausibly created in that scope—including unmarked candidates aft
 has become `manual_recovery`—without opening, adopting, or modifying them. While
 acknowledgement or manual recovery is unresolved, conversation writes, canonical
 cancellation reconciliation, and interactive ownership claims against the parent are fenced.
+Every parent writer takes the same per-session operation lock and checks the durable fork
+fence inside that lock immediately before mutation; the fork operation takes the lock
+directly so it does not recursively deadlock on its own newly published fence.
 
 ## Compaction
 
@@ -146,10 +173,20 @@ remain pending for operator review. See
 
 ## Deployment safety
 
+Client disconnects are request-transport events, not canonical turn cancellation.
+Finite bodies are consumed before session-operation waits, disconnected responses
+and SSE subscribers are discarded safely, and an already accepted prompt continues
+to canonical settlement for idempotent retry.
+
 Quiescence reports active turns, loaded conversations, interactive ownership,
 memstore save state, subagent execution, uncertain remote effects, and whether a
 drain is required. Drain rejects new work and closes idle conversations so their
-shutdown memory saves complete before container replacement.
+shutdown memory saves complete before container replacement. Deploy drain writes
+its reason and lease expiry to `/data/agentd-drain-state.json` before success; an
+unexpired lease is restored after replacement until cancel clears it. The path is
+configurable with the absolute `MONIKA_AGENTD_DRAIN_STATE_FILE` value. Expiry keeps
+the original 15-minute default across restart, while SIGTERM-only shutdown state
+is not persisted as a deploy drain.
 
 The complete safety and repair contract lives in
 [`../../docs/redeployment.md`](../../docs/redeployment.md). Host automation lives in
