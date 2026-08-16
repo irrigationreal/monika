@@ -8,8 +8,8 @@ in [`../../../docs/forum.md`](../../../docs/forum.md).
 The forum exposes one trace visualization: the admin-only topic **Trace**.
 
 - During an active response, the draft-post position shows admins the latest three chronological reasoning/tool cards
-  from that response. **Open Trace** opens the complete session trace; **Stop Robot** uses the shared destructive-action
-  confirmation.
+  from that response. **Open Trace** opens the complete session trace newest-first by default and offers a temporary
+  oldest-first view; **Stop Robot** uses the shared destructive-action confirmation.
 - Guests and authenticated non-admins see only a neutral “Response in progress…” placeholder.
 - Completed posts contain conversation content only. There is no per-post Trace History.
 - Trace remains available while idle from Admin Tools.
@@ -18,7 +18,9 @@ The forum exposes one trace visualization: the admin-only topic **Trace**.
   Quick Reply so steering remains usable.
 
 `TopicTraceViewer.vue` is the canonical renderer for both preview and workspace modes. Preview mode only selects the
-active response's three-card tail; it does not maintain a second ordering or card implementation.
+active response's three-card tail and always presents those cards chronologically. The complete workspace applies its
+selected display direction without changing the canonical chronological trace model or maintaining a second card
+implementation.
 
 ## Authorization boundary
 
@@ -82,9 +84,13 @@ The bridge stores:
 checkpoints are expected for old or imported sessions; fallback rendering places parsed reasoning before chronologically
 ordered tools.
 
-The full workspace renders all response groups returned by the topic trace projection, newest response first. Within a
-response, cards remain chronological. The active preview takes only the final three cards from the active response and
-never fills empty slots with stale cards from an earlier response.
+The canonical trace model remains chronological within each response. The full workspace defaults to a globally
+newest-first display: newest response first and newest card first within each response. Its **Order** control can
+reverse both levels to oldest-first for the lifetime of the open Trace view. The direction is deliberately not
+persisted, so closing and reopening Trace or navigating to another topic restores the operational newest-first default.
+
+The active preview is independent of that temporary workspace direction. It takes only the final three cards from the
+active response, presents them chronologically, and never fills empty slots with stale cards from an earlier response.
 
 ## Reasoning and tool presentation
 
@@ -116,7 +122,8 @@ confirmation and never interrupts directly.
 5. Idle state cannot retain a live current plan.
 6. Completion reloads cannot resurrect stale trace state.
 7. Equal tool timestamps use deterministic storage ordering.
-8. One renderer and one ordering model serve preview and complete Trace.
+8. One renderer and one canonical chronological ordering model serve preview and complete Trace; workspace direction is
+   an immutable presentation projection only.
 
 ## Tests
 
@@ -126,5 +133,5 @@ Coverage belongs in:
 - `apps/codex-forum/src/lib/unifiedTrace.test.ts` for live/persisted ordering and checkpoint fallback;
 - `apps/codex-forum/src/views/TopicView.traceWorkspace.test.ts` for canonical surface and dead-implementation removal;
 - `apps/codex-forum/src/views/TopicView.quickReplyDock.test.ts` for non-blocking admin enrichment;
-- Robot UI Playwright coverage for mobile containment, preview controls, workspace tabs, focus, and confirmed Stop
-  behavior.
+- Robot UI Playwright coverage for mobile containment, fixed chronological preview ordering, temporary workspace
+  direction, workspace tabs, focus, and confirmed Stop behavior.

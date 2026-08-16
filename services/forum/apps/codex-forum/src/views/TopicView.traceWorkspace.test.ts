@@ -13,6 +13,10 @@ describe('canonical topic Trace workspace', () => {
     expect(topicSource).toContain('<TopicTraceViewer :topic-id="routeTopicId" />');
     expect(traceSource).toContain('previewCardLimit?: number;');
     expect(traceSource).toContain('group.cards.slice(-props.previewCardLimit)');
+    expect(traceSource).toContain("const traceDirection = ref<TraceDirection>('newest-first');");
+    expect(traceSource).toContain("if (traceDirection.value === 'oldest-first') return [...groups].reverse();");
+    expect(traceSource).toContain('cards: [...group.cards].reverse()');
+    expect(traceSource).not.toContain('codex-forum:trace:order');
     expect(traceSource).toContain('buildLiveTraceItems');
     expect(traceSource).toContain('buildPersistedTraceItems');
   });

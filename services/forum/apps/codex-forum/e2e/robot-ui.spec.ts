@@ -907,25 +907,59 @@ test.describe('Robot UI (mocked)', () => {
     await login(page, context.user.displayName);
     await page.goto(`/topics/${topicId}`);
 
+    const previewItems = page.locator('.vb-topic-trace--preview .vb-tool-item');
+    await expect(previewItems).toHaveCount(2);
+    await expect(previewItems.nth(0)).toHaveClass(/vb-tool-item--reasoning/);
+    await expect(previewItems.nth(1)).not.toHaveClass(/vb-tool-item--reasoning/);
+
     await page.getByRole('button', { name: 'Admin Tools' }).click();
     await page.locator('.vb-admin-panel').getByRole('button', { name: 'Open Trace' }).click();
     const workspace = page.locator('.vb-admin-workspace');
     await expect(workspace).toBeVisible();
     const reasoningToggle = workspace.getByRole('button', { name: 'Reasoning: On' });
+    const directionToggle = workspace.getByRole('button', { name: /Trace order:/ });
     const reasoningItem = workspace.locator('.vb-tool-item--reasoning');
+    const responseGroups = workspace.locator('.vb-tool-response');
     const traceItems = workspace.locator('.vb-tool-response .vb-tool-item');
     await expect(reasoningToggle).toBeVisible();
+    await expect(directionToggle).toHaveText('Order: Newest first');
     await expect(reasoningItem).toContainText('Inspect the path');
     await expect(workspace.locator('.vb-tool-response-label')).toHaveCount(2);
     await expect(traceItems).toHaveCount(3);
 
+    // The complete Trace reverses both response groups and cards without changing the chronological preview/source.
+    await expect(responseGroups.nth(0).locator('.vb-tool-item--reasoning')).toHaveCount(1);
+    await expect(responseGroups.nth(0).locator('.vb-tool-item').nth(0)).not.toHaveClass(/vb-tool-item--reasoning/);
+    await expect(responseGroups.nth(0).locator('.vb-tool-item').nth(1)).toHaveClass(/vb-tool-item--reasoning/);
+    await expect(responseGroups.nth(1).locator('.vb-tool-item--reasoning')).toHaveCount(0);
+
+    await directionToggle.click();
+    await expect(directionToggle).toHaveText('Order: Oldest first');
+    await expect(responseGroups.nth(0).locator('.vb-tool-item--reasoning')).toHaveCount(0);
+    await expect(responseGroups.nth(1).locator('.vb-tool-item').nth(0)).toHaveClass(/vb-tool-item--reasoning/);
+    await expect(responseGroups.nth(1).locator('.vb-tool-item').nth(1)).not.toHaveClass(/vb-tool-item--reasoning/);
+
+    // Stable card keys preserve expansion state while the presentation order changes.
+    await reasoningItem.locator('.vb-tool-toggle').click();
+    await expect(reasoningItem.locator('.vb-tool-reasoning-detail')).toContainText(
+      'Confirm the long path before reading it.'
+    );
+    await directionToggle.click();
+    await expect(directionToggle).toHaveText('Order: Newest first');
+    await expect(reasoningItem.locator('.vb-tool-reasoning-detail')).toContainText(
+      'Confirm the long path before reading it.'
+    );
+
     await reasoningToggle.click();
     await expect(reasoningItem).toHaveCount(0);
     await expect(traceItems).toHaveCount(2);
+    await directionToggle.click();
+    await expect(directionToggle).toHaveText('Order: Oldest first');
     await page.reload();
     await page.getByRole('button', { name: 'Admin Tools' }).click();
     await page.locator('.vb-admin-panel').getByRole('button', { name: 'Open Trace' }).click();
     await expect(workspace.getByRole('button', { name: 'Reasoning: Off' })).toBeVisible();
+    await expect(workspace.getByRole('button', { name: /Trace order:/ })).toHaveText('Order: Newest first');
 
     await workspace.getByRole('button', { name: 'Reasoning: Off' }).click();
     await expect(reasoningItem).toContainText('Inspect the path');

@@ -192,9 +192,10 @@ Key files:
 ## Canonical admin Trace
 
 The forum has one reasoning/tool visualization: the admin-only topic **Trace**. While a response is active, admins see a
-three-card preview in the draft-post position and can open the complete Trace in the viewport Admin Workspace.
-Non-admins, including authenticated members, receive and render only a neutral "Response in progress…" placeholder.
-Completed posts never embed trace history.
+chronological three-card preview in the draft-post position and can open the complete Trace in the viewport Admin
+Workspace. The complete Trace opens newest-first and can be reversed temporarily; its direction never persists across
+Trace views or topics. Non-admins, including authenticated members, receive and render only a neutral "Response in
+progress…" placeholder. Completed posts never embed trace history.
 
 Trace, Session Diagnostics, and Auto-Director are secondary operational surfaces in the Admin Workspace. Session
 Diagnostics combines robot activity/context controls with canonical session metadata so closely related operational
@@ -220,8 +221,9 @@ Robot controls.
    usage, errors, or stream diagnostics. Vue hiding is never a security boundary.
 2. **Append-only ordering is canonical.** Flush buffered deltas before every synchronous `tool_started` commit. Never
    reconstruct incremental progression by diffing batched `recentToolRuns` snapshots.
-3. **Preview capping is presentation-only.** The three-card preview takes the chronological tail of the active response.
-   Never trim committed segments, persisted plans, checkpoints, or the full topic trace.
+3. **Preview capping and workspace direction are presentation-only.** The three-card preview takes the chronological
+   tail of the active response. The workspace reverses copied groups/cards only; never reverse or trim committed
+   segments, persisted plans, checkpoints, or the canonical chronological trace model.
 4. **Admin enrichment stays off the critical path.** Quick Reply and SSE startup must not await session metadata or
    persisted trace hydration.
 5. **Missing checkpoints are valid.** Imported and older sessions fall back to reasoning followed by deterministically
