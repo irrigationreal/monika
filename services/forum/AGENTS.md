@@ -140,7 +140,10 @@ Scheduled subagent runs are disabled and are
 not covered by the current cancellation descendant model.
 
 Forum startup conversation reconciliation is passive: call `getConversation` only,
-reattach already-loaded conversations, and clear stale links for missing ones.
+reattach already-loaded conversations, and clear only transient loaded-thread references
+when agentd authoritatively reports that conversation absent. Never remove a canonical
+Pi session link because of list omission, timeout, aborted request, backend outage, or
+an ambiguous missing response; accepted/ambiguous missing history requires manual review.
 Durable cancellation reconciliation is the exception: query the canonical Pi session
 so agentd actively re-runs its latest operation without loading the conversation.
 Never call `openTopicConversation`, bind a newly loaded Pi runtime, consume recovered
@@ -148,7 +151,9 @@ results, or dispatch a turn merely because forum/agentd restarted. Preserve
 `stopping`/`uncertain` until that canonical reconciliation proves `stopped`. Reconcile
 durable post dispatch generations before starting `PostDispatchService`; the first
 interrupt advances the topic generation and cancels older queued work, while an
-unresolved retry reuses the current generation/operation. Apply cancellation results
+unresolved retry reuses the current generation/operation. Aborted/reset/5xx transport
+outcomes keep the same dispatch ID, generation, and ordered contributors pending at
+bounded backoff; they never authorize link cleanup or fresh canonical work. Apply cancellation results
 only when their generation still matches the topic.
 
 Key files:
@@ -166,7 +171,9 @@ Manual compaction must remain admin-only and idle-only, use the canonical Pi lea
 as an optimistic concurrency guard, and create the recovery-checkpoint post only
 after Pi compaction succeeds. The forum must durably accept work before returning,
 execute it outside the request lifecycle, resume pending/interrupted work at startup,
-and keep checkpoint dispatch independently retryable. See `../../docs/forum.md` for
+and keep a failed current-generation checkpoint dispatch independently retryable.
+Superseded/abandoned checkpoints are cancellation outcomes and must never be resurrected
+or keep the topic fenced. See `../../docs/forum.md` for
 the complete cross-service workflow.
 
 Key files:

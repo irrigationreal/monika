@@ -13,7 +13,10 @@ This directory contains repo-level wrappers used by local development and CI. Ke
 tests/forum/unit.sh
 ```
 
-Runs the forum workspace Vitest suites with isolated upload storage.
+Runs the forum workspace Vitest suites with isolated upload storage. Coverage includes
+minimal backend readiness, durable exact-identity retry across agentd transport outages,
+definite terminal failures, non-resurrection of superseded/abandoned dispatches, and
+fail-closed handling of an authoritatively missing canonical session link.
 
 ## E2E
 

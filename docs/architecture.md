@@ -107,7 +107,11 @@ image pins Pi and installs the deployment-owned extensions and packages around i
 `agentd` embeds Pi through its SDK and exposes conversation, model, context,
 ownership, cancellation, compaction, analytics, workload, and quiescence surfaces
 over HTTP/SSE. It is the boundary through which alternate frontends operate. It
-is not a second conversation store. See [`services/agentd/README.md`](../services/agentd/README.md).
+is not a second conversation store. Loaded conversations resolve and validate their
+known canonical JSONL path directly; historical archive enumeration is reserved for
+explicit discovery, never the normal dispatch path. PID 1 supervises agentd and
+memstore as essential children and fails the container if either exits unexpectedly.
+See [`services/agentd/README.md`](../services/agentd/README.md).
 
 ### memstore and stateful-memory
 
@@ -197,7 +201,9 @@ choosing between transformed and raw content.
 
 Derived stores must preserve provenance back to their authority. Forum projection
 must not invent Pi origins, and memory retrieval must not be mistaken for the raw
-conversation record.
+conversation record. A missing forum link is derived-state damage, not permission to
+invent a replacement canonical session: absence must be confirmed against agentd,
+and accepted or ambiguous history remains a manual-recovery condition.
 
 ## State ownership
 

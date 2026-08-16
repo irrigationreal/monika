@@ -60,7 +60,11 @@ packages/
 
 - Fastify server in `packages/server` with SQLite storage and optional Redis stream bus.
 - Robot orchestration is handled by the Monika Pi bridge, which calls `agentd` over HTTP/SSE and reconciles canonical Pi
-  provenance into forum state.
+  provenance into forum state. Ambiguous disconnect/5xx outages retain the exact durable dispatch identity at bounded
+  backoff; definite failures remain terminal, and superseded/abandoned work cannot be manually resurrected. Ordinary
+  durable post-dispatch creation also supplies that identity as agentd `creation_id` with `durable_session: true`, so a
+  lost create response reopens the same anchored session. Non-dispatch operations never manufacture a missing canonical link; they may repair
+  one only from a currently loaded conversation carrying canonical session ID and path.
 - A canonical utterance is channel-neutral. One agent run may persist zero, one, or several ordered assistant messages;
   Pi's internal `agent_settled` is idle-only, and agentd maps it to wire `turn_completed`; neither asks the forum to
   publish a raw aggregate.
@@ -340,7 +344,9 @@ keys/impersonation tokens; anonymous buckets use `request.ip`. Set `CODEX_FORUM_
 is private behind a trusted reverse proxy or Cloudflare Tunnel, so forwarded client IP headers cannot be spoofed by
 direct public traffic.
 
-Public `/healthz` and `/api/healthz` responses are intentionally minimal. Operational deploy state is available through
+Public `/healthz` and `/api/healthz` responses are intentionally minimal liveness checks. Minimal `/readyz` and
+`/api/readyz` return only `{ok}` and HTTP 503 unless the selected Monika Pi backend is reachable, healthy, and undrained;
+the standalone Compose deployment uses readiness for container health. Operational deploy state is available through
 `/api/deploy/quiescence` only with `CODEX_FORUM_DEPLOY_TOKEN`, while `/api/models` requires an authenticated forum user.
 
 For full deployment guidance, see `docs/DEPLOYMENT.md`.

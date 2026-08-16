@@ -160,6 +160,10 @@ export class AgentBridge {
     return this.echs.closeTopic(topicId);
   }
 
+  async checkReadiness(): Promise<boolean> {
+    return this.echs.checkReadiness();
+  }
+
   async getSubagentWorkload(): Promise<EchsSubagentWorkload> {
     return this.echs.getSubagentWorkload();
   }

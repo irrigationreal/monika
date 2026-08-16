@@ -221,7 +221,7 @@ const checkpointDispatchPending = computed(
 const checkpointNeedsRecovery = computed(
   () =>
     compactionState.value.latest?.status === 'succeeded' &&
-    ['failed', 'superseded', 'abandoned'].includes(compactionState.value.checkpointDispatch?.status ?? '')
+    compactionState.value.checkpointDispatch?.status === 'failed'
 );
 const forkFence = computed(() => {
   const operation = forkState.value.active ?? forkOperation.value;

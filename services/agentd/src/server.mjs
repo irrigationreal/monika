@@ -17,12 +17,18 @@ import {
   ConversationConflictError,
 } from "./compaction-operation.mjs";
 import {
-  assertForumForkSourceMutable,
   ForumForkConflictError,
   ForumForkLedger,
   filterForumForkSessionDiscovery,
   forkConversationBeforeUser,
 } from './forum-fork-operation.mjs';
+import {
+  ForumCreationConflictError,
+  ForumCreationLedger,
+  forumCreationRequestHash,
+  reconcileForumCreation,
+  validateForumCreationId,
+} from './forum-creation-operation.mjs';
 import {
   createProvenanceState,
   discardDispatch,
@@ -45,6 +51,19 @@ import {
   resolveDispatchGeneration,
 } from "./dispatch-fence.mjs";
 import { SessionOwnershipRegistry } from "./session-ownership.mjs";
+import { SessionOperationCoordinator, withForumMutableSessionOperation } from './session-operation.mjs';
+import { endResponse, isClientDisconnect, responseWritable, runAfterRequestBody, writeJson, writeSse } from './http-safety.mjs';
+import { DurableDrainState } from './drain-state.mjs';
+import { runBoundedShutdown, runCanonicalShutdownCleanup } from './shutdown.mjs';
+import {
+  ensureDurableForumSession,
+  initialCanonicalSessionFilePending,
+  loadedConversationForCanonicalSession,
+  readKnownSession,
+  SessionResolutionError,
+  uniqueSessionById,
+  withVerifiedSessionReopen,
+} from './session-resolution.mjs';
 import {
   modelRefreshIntervalMs,
   startModelCatalogRefresh,
@@ -115,6 +134,10 @@ const FORUM_FORK_OPERATION_ROOT = path.resolve(
   process.env.MONIKA_AGENTD_FORUM_FORK_OPERATION_ROOT ?? '/data/agentd-operations/forum-forks',
 );
 const forumForkLedger = new ForumForkLedger(FORUM_FORK_OPERATION_ROOT);
+const FORUM_CREATION_OPERATION_ROOT = path.resolve(
+  process.env.MONIKA_AGENTD_FORUM_CREATION_OPERATION_ROOT ?? '/data/agentd-operations/forum-creations',
+);
+const forumCreationLedger = new ForumCreationLedger(FORUM_CREATION_OPERATION_ROOT);
 // Agentd owns background lifetime. Pi's print-mode auto-drain must not await
 // subagents before returning a forum turn. Persist lifecycle/results so a
 // recreated agentd runtime can deliver completed work exactly once.
@@ -138,9 +161,15 @@ const IDLE_REAP_MS = Number(
 const IDLE_REAP_INTERVAL_MS = Number(
   process.env.MONIKA_AGENTD_IDLE_REAP_INTERVAL_MS ?? 60 * 1000,
 );
-const DRAIN_AUTO_CANCEL_MS = Number(
+const configuredDrainAutoCancelMs = Number(
   process.env.MONIKA_AGENTD_DRAIN_AUTO_CANCEL_MS ?? 15 * 60 * 1000,
 );
+const DRAIN_AUTO_CANCEL_MS = Number.isFinite(configuredDrainAutoCancelMs) && configuredDrainAutoCancelMs > 0
+  ? configuredDrainAutoCancelMs
+  : 15 * 60 * 1000;
+const DRAIN_STATE_FILE = process.env.MONIKA_AGENTD_DRAIN_STATE_FILE ?? '/data/agentd-drain-state.json';
+const durableDrainState = new DurableDrainState(DRAIN_STATE_FILE);
+const restoredDrainState = await durableDrainState.restore();
 const ATTACHMENT_IMAGE_INLINE_MAX_BYTES = Number(
   process.env.MONIKA_AGENTD_ATTACHMENT_IMAGE_INLINE_MAX_BYTES ??
     5 * 1024 * 1024,
@@ -218,7 +247,7 @@ Files involved:
 [Clear description of what to do next based on user's goal]`;
 
 const conversations = new Map();
-const sessionOperationTails = new Map();
+const sessionOperations = new SessionOperationCoordinator();
 let runtimeCreationTail = Promise.resolve();
 const sessionOwnership = new SessionOwnershipRegistry({
   storagePath:
@@ -290,6 +319,9 @@ function setDraining(value, opts = {}) {
   drainAutoCancelTimer = setTimeout(() => {
     if (!draining) return;
     setDraining(false);
+    void durableDrainState.clear().catch((error) => {
+      console.warn('[agentd] failed to clear expired drain state:', error instanceof Error ? error.message : String(error));
+    });
     console.warn(
       `[agentd] drain auto-cancelled after ${autoCancelMs}ms without shutdown`,
     );
@@ -297,13 +329,18 @@ function setDraining(value, opts = {}) {
   drainAutoCancelTimer.unref?.();
 }
 
+if (restoredDrainState) {
+  const remainingMs = restoredDrainState.leaseExpiresAtMs - Date.now();
+  if (remainingMs > 0) {
+    setDraining(true, { reason: restoredDrainState.reason, autoCancelMs: remainingMs });
+    console.log(`[agentd] restored deploy drain until ${new Date(restoredDrainState.leaseExpiresAtMs).toISOString()}`);
+  } else {
+    await durableDrainState.clear();
+  }
+}
+
 function json(res, status, body) {
-  const data = JSON.stringify(body);
-  res.writeHead(status, {
-    "content-type": "application/json; charset=utf-8",
-    "content-length": Buffer.byteLength(data),
-  });
-  res.end(data);
+  return writeJson(res, status, body);
 }
 
 function notFound(res) {
@@ -424,7 +461,18 @@ function cancellationPublic(result) {
 async function interruptSession(session, body = {}) {
   const conv = loadedConversationForSession(session);
   const operationId = typeof body.operation_id === 'string' && body.operation_id.trim() ? body.operation_id.trim() : randomUUID();
-  const manager = conv?.session?.sessionManager ?? SessionManager.open(session.path, undefined, session.cwd ?? DEFAULT_CWD);
+  let manager = conv?.session?.sessionManager;
+  if (!manager) {
+    const inspected = await directSession(session.path, session.id);
+    if (!inspected) throw new SessionResolutionError('session_not_found', 'canonical session no longer exists');
+    manager = withVerifiedSessionReopen(
+      inspected,
+      () => SessionManager.open(inspected.path, undefined, inspected.cwd ?? DEFAULT_CWD),
+    );
+    if (manager.getSessionId?.() !== inspected.id || manager.getSessionFile?.() !== inspected.path) {
+      throw new SessionResolutionError('session_identity_mismatch', 'reopened canonical session identity changed');
+    }
+  }
   const currentFence = readDispatchFence(manager.getBranch()).generation;
   const generation = Number.isSafeInteger(body.generation) && body.generation >= 0 ? body.generation : currentFence + 1;
   if (generation < currentFence) throw new Error('stale cancellation generation');
@@ -603,7 +651,7 @@ async function closeIdleConversations(reason) {
   );
   await Promise.all(
     idle.map((conv) =>
-      closeConversation(conv, reason).catch((err) => {
+      withMutableSessionOperation(conv.piSessionId, () => closeConversation(conv, reason)).catch((err) => {
         console.warn(
           "[agentd] failed to close idle conversation during drain:",
           err instanceof Error ? err.message : String(err),
@@ -1107,6 +1155,7 @@ async function bindConversation(conv) {
   conv.subagentLifecycle = conv.runtime.services.subagentLifecycle;
   await conv.subagentLifecycle.attach(conv);
   conv.unsubscribe = session.subscribe((event) => {
+    if (!conv.sessionFileObserved && existsSync(conv.sessionPath)) conv.sessionFileObserved = true;
     conv.subagentLifecycle.handleSessionEvent(event);
     const reconciliation = handleProvenanceEvent(conv, event, {
       consumeCausalMetadata: () => conv.subagentLifecycle.consumeCausalMetadata(),
@@ -1127,6 +1176,7 @@ async function conversationFromRuntime(runtime, cwd) {
     id: runtime.session.sessionId,
     piSessionId: sessionManager?.getSessionId?.() ?? runtime.session.sessionId,
     sessionPath: sessionManager?.getSessionFile?.() ?? null,
+    sessionFileObserved: existsSync(sessionManager?.getSessionFile?.() ?? ''),
     cwd,
     runtime,
     session: runtime.session,
@@ -1170,77 +1220,131 @@ async function withRuntimeCreation(operation) {
 
 async function createConversation(opts = {}) {
   const cwd = path.resolve(opts.cwd ?? opts.workdir ?? DEFAULT_CWD);
-  const sessionManager = SessionManager.create(cwd);
-  const parentSession = await resolveParentSessionPath(opts);
-  if (parentSession) sessionManager.newSession({ parentSession });
-  const conv = await withRuntimeCreation(async () => {
-    const runtime = await createRuntime(cwd, sessionManager, opts);
-    return conversationFromRuntime(runtime, cwd);
-  });
-  if (parentSession || opts.lineage_kind || opts.lineage_source) {
-    appendLineage(conv, {
-      kind: opts.lineage_kind ?? (parentSession ? "parent" : "unknown"),
-      parentSession,
-      source: opts.lineage_source ?? "agentd",
-      metadata: opts.lineage_metadata ?? null,
+  const durable = opts.durable_session === true;
+  const creationId = durable ? validateForumCreationId(opts.creation_id) : null;
+  const requestHash = durable ? forumCreationRequestHash({ ...opts, cwd }) : null;
+
+  if (durable) {
+    const existing = await reconcileForumCreation({
+      ledger: forumCreationLedger,
+      creationId,
+      requestHash,
+      resolveCanonical: (record) => directSession(record.session_path, record.session_id),
     });
+    if (existing) {
+      const reopened = await openConversation({
+        ...opts,
+        pi_session_id: existing.record.session_id,
+        pi_session_path: existing.record.session_path,
+        cwd,
+        auto_compact: opts.auto_compact,
+      });
+      if (!reopened) throw new ForumCreationConflictError('creation_manual_recovery', 'Anchored durable conversation could not be reopened');
+      return reopened;
+    }
   }
+
+  const parentSession = await resolveParentSessionPath(opts);
+  let retryDurableCreation = false;
+  const conv = await withRuntimeCreation(async () => {
+    if (durable && await forumCreationLedger.read(creationId)) {
+      retryDurableCreation = true;
+      return null;
+    }
+    const sessionManager = SessionManager.create(cwd);
+    if (parentSession) sessionManager.newSession({ parentSession });
+    const runtime = await createRuntime(cwd, sessionManager, opts);
+    try {
+      let intended = null;
+      if (durable) {
+        const manager = runtime.session.sessionManager;
+        intended = {
+          creation_id: creationId,
+          request_hash: requestHash,
+          state: 'creating',
+          session_id: manager.getSessionId(),
+          session_path: manager.getSessionFile(),
+          cwd,
+          created_at: new Date().toISOString(),
+        };
+        // Persist intended identity before the first canonical write. Any crash
+        // after this point is reconciled only from the operation-marked target.
+        await forumCreationLedger.write(intended);
+        ensureDurableForumSession(manager, true, creationId);
+      }
+      if (parentSession || opts.lineage_kind || opts.lineage_source) {
+        appendLineage(runtime.session.sessionManager, {
+          kind: opts.lineage_kind ?? (parentSession ? 'parent' : 'unknown'),
+          parentSession,
+          source: opts.lineage_source ?? 'agentd',
+          metadata: opts.lineage_metadata ?? null,
+        });
+      }
+      if (intended) {
+        runtime.session.sessionManager.appendCustomEntry('monika.forum.creation.completed', {
+          version: 1,
+          creation_id: creationId,
+          completed_at: new Date().toISOString(),
+        });
+        await forumCreationLedger.write({ ...intended, state: 'anchored', anchored_at: new Date().toISOString() });
+      }
+      return await conversationFromRuntime(runtime, cwd);
+    } catch (error) {
+      await runtime.dispose().catch(() => {});
+      throw error;
+    }
+  });
+  if (retryDurableCreation) return createConversation(opts);
   return conv;
 }
 
 async function withSessionOperation(sessionId, operation) {
-  const previous = sessionOperationTails.get(sessionId) ?? Promise.resolve();
-  let release;
-  const gate = new Promise((resolve) => {
-    release = resolve;
-  });
-  const tail = previous.then(() => gate);
-  sessionOperationTails.set(sessionId, tail);
-  await previous;
-  try {
-    return await operation();
-  } finally {
-    release();
-    if (sessionOperationTails.get(sessionId) === tail)
-      sessionOperationTails.delete(sessionId);
-  }
+  return sessionOperations.run(sessionId, operation);
+}
+
+async function withMutableSessionOperation(sessionId, operation) {
+  return withForumMutableSessionOperation(sessionOperations, forumForkLedger, sessionId, operation);
 }
 
 async function openConversation(opts = {}) {
-  const sessionRef =
-    opts.pi_session_id ??
-    opts.session_id ??
-    opts.id ??
-    opts.pi_session_path ??
-    opts.path;
+  const sessionId = opts.pi_session_id ?? opts.session_id ?? opts.id ?? null;
+  const sessionPath = opts.pi_session_path ?? opts.path ?? null;
+  const sessionRef = sessionId ?? sessionPath;
   if (!sessionRef)
     throw new Error("pi_session_id or pi_session_path is required");
-  const sessionInfo = await findSession(sessionRef);
+  const sessionInfo = await findSession(sessionRef, sessionId && sessionPath ? sessionPath : null);
   if (!sessionInfo) return null;
 
-  return withSessionOperation(sessionInfo.id, async () => {
+  return withMutableSessionOperation(sessionInfo.id, async () => {
     const lease = sessionOwnership.get(sessionInfo.id);
     if (lease) throw new SessionOwnershipConflict(sessionInfo.id, lease);
 
-    for (const conv of conversations.values()) {
-      if (conv.piSessionId !== sessionInfo.id && conv.sessionPath !== sessionInfo.path) continue;
-      const raw = await fs.readFile(sessionInfo.path, 'utf8');
+    const loaded = loadedConversationForCanonicalSession(conversations.values(), sessionInfo);
+    if (loaded) {
+      const raw = sessionInfo.raw ?? await fs.readFile(sessionInfo.path, 'utf8');
       const entries = raw.split('\n').filter((line) => line.trim()).flatMap((line) => {
         try { return [parseSessionLine(line)]; } catch { return []; }
       });
       const branch = activeBranchMetadata(sessionInfo, entries);
       if (branch.branch_conflict) throw new SessionBranchConflict(sessionInfo.id, branch);
-      if (!conversationIsActive(conv) && branch.external_advance) {
-        await closeConversation(conv, 'external-session-advance');
-        break;
+      if (!conversationIsActive(loaded) && branch.external_advance) {
+        await closeConversation(loaded, 'external-session-advance');
+      } else {
+        await loaded.subagentLifecycle.recoverPendingFollowUps();
+        return loaded;
       }
-      await conv.subagentLifecycle.recoverPendingFollowUps();
-      return conv;
     }
 
     const cwd = path.resolve(opts.cwd ?? sessionInfo.cwd ?? DEFAULT_CWD);
     return withRuntimeCreation(async () => {
-      const runtime = await createRuntime(cwd, SessionManager.open(sessionInfo.path, undefined, cwd), opts);
+      const manager = withVerifiedSessionReopen(
+        sessionInfo,
+        () => SessionManager.open(sessionInfo.path, undefined, cwd),
+      );
+      if (manager.getSessionId?.() !== sessionInfo.id || manager.getSessionFile?.() !== sessionInfo.path) {
+        throw new SessionResolutionError('session_identity_mismatch', 'reopened canonical session identity changed');
+      }
+      const runtime = await createRuntime(cwd, manager, opts);
       const conv = await conversationFromRuntime(runtime, cwd);
       await conv.subagentLifecycle.recoverPendingFollowUps();
       return conv;
@@ -1254,7 +1358,13 @@ function emit(conv, event, data) {
   conv.history.push(packet);
   if (conv.history.length > 1000) conv.history.shift();
   const wire = `id: ${packet.id}\nevent: ${packet.event}\ndata: ${JSON.stringify(packet.data)}\n\n`;
-  for (const res of conv.subscribers) res.write(wire);
+  for (const res of [...conv.subscribers]) {
+    if (!responseWritable(res)) {
+      conv.subscribers.delete(res);
+      continue;
+    }
+    if (!writeSse(res, wire)) conv.subscribers.delete(res);
+  }
 }
 
 function modelInfo(model) {
@@ -1391,10 +1501,30 @@ async function scanSessions() {
   return visible;
 }
 
-async function findSession(sessionRef) {
+async function directSession(sessionPath, expectedId = null) {
+  const session = await readKnownSession({
+    sessionsRoot: path.join(AGENT_DIR, 'sessions'),
+    subagentRoot: SUBAGENT_SESSION_ROOT,
+    sessionPath,
+    expectedId,
+  });
+  if (!session) return null;
+  const visible = filterForumForkSessionDiscovery([session], await forumForkLedger.records());
+  return visible[0] ?? null;
+}
+
+async function findSession(sessionRef, knownPath = null) {
   const decoded = String(sessionRef);
+  if (knownPath) return directSession(String(knownPath), decoded);
+  if (path.isAbsolute(decoded)) return directSession(decoded);
+  // ID-only legacy callers retain discovery compatibility. Normal forum
+  // open/dispatch paths provide the canonical path and never reach this scan.
   const sessions = await scanSessions();
-  return sessions.find((candidate) => candidate.id === decoded || candidate.path === decoded) ?? null;
+  const discovered = uniqueSessionById(sessions, decoded);
+  // Archive discovery metadata is intentionally lightweight. Re-resolve the
+  // selected exact path through the descriptor-bound reader before any reopen;
+  // otherwise inode validation compares against absent discovery fields.
+  return discovered ? directSession(discovered.path, discovered.id) : null;
 }
 
 async function readAllowlistedAnalyticsSessions(sessionIds) {
@@ -1684,24 +1814,17 @@ async function resolveParentSessionPath(opts = {}) {
   return session?.path ?? String(ref);
 }
 
-function appendLineage(conv, data) {
-  try {
-    const payload = {
-      kind: data.kind ?? "unknown",
-      parentSession: data.parentSession ?? null,
-      source: data.source ?? "agentd",
-      createdAt: new Date().toISOString(),
-      ...(data.metadata && typeof data.metadata === "object"
-        ? { metadata: data.metadata }
-        : {}),
-    };
-    conv.session.sessionManager.appendCustomEntry("monika.lineage", payload);
-  } catch (err) {
-    console.warn(
-      "[agentd] failed to append lineage custom entry:",
-      err instanceof Error ? err.message : String(err),
-    );
-  }
+function appendLineage(sessionManager, data) {
+  const payload = {
+    kind: data.kind ?? "unknown",
+    parentSession: data.parentSession ?? null,
+    source: data.source ?? "agentd",
+    createdAt: new Date().toISOString(),
+    ...(data.metadata && typeof data.metadata === "object"
+      ? { metadata: data.metadata }
+      : {}),
+  };
+  sessionManager.appendCustomEntry("monika.lineage", payload);
 }
 
 function extractLineage(entries) {
@@ -1722,10 +1845,7 @@ function extractLineage(entries) {
 }
 
 function activeBranchMetadata(session, entries) {
-  const live = [...conversations.values()].find(
-    (conv) =>
-      conv.piSessionId === session.id || conv.sessionPath === session.path,
-  );
+  const live = loadedConversationForCanonicalSession(conversations.values(), session);
   if (live) {
     const manager = live.session.sessionManager;
     const leafEntryId =
@@ -1819,17 +1939,28 @@ async function closeConversation(conv, reason = 'api', { emitCompletion = true }
   await conv.runtime.dispose();
   conversations.delete(conv.id);
   if (emitCompletion) emit(conv, 'turn_completed', { thread_id: conv.id, closed: true, reason });
+  for (const subscriber of [...conv.subscribers]) {
+    conv.subscribers.delete(subscriber);
+    endResponse(subscriber);
+  }
 }
 
 function loadedConversationForSession(session) {
-  return [...conversations.values()].find((conv) => conv.piSessionId === session.id || conv.sessionPath === session.path) ?? null;
+  return loadedConversationForCanonicalSession(conversations.values(), session);
 }
 
 async function inspectLoadedConversationBranch(conv) {
-  const session = await findSession(conv.piSessionId ?? conv.sessionPath);
-  if (!session) return null;
-  const raw = await fs.readFile(session.path, 'utf8');
-  const entries = raw.split('\n').filter((line) => line.trim()).flatMap((line) => {
+  const session = await directSession(conv.sessionPath, conv.piSessionId);
+  if (!session) {
+    const initialPathPending = initialCanonicalSessionFilePending(conv);
+    // Pi defers a newly created JSONL until the first prompt. That one initial
+    // mutation must be allowed to create the canonical file; after it has ever
+    // been observed, disappearance is an identity failure rather than a reset.
+    if (initialPathPending) return null;
+    throw new SessionResolutionError('session_not_found', 'loaded canonical session no longer exists');
+  }
+  conv.sessionFileObserved = true;
+  const entries = session.raw.split('\n').filter((line) => line.trim()).flatMap((line) => {
     try { return [parseSessionLine(line)]; } catch { return []; }
   });
   return activeBranchMetadata(session, entries);
@@ -1853,8 +1984,7 @@ async function claimExternalSession(sessionRef, body) {
   const timeoutValue = Number(body.timeout_ms ?? 10_000);
   const timeoutMs = Number.isFinite(timeoutValue) ? Math.min(30_000, Math.max(1_000, timeoutValue)) : 10_000;
 
-  return withSessionOperation(session.id, async () => {
-    await assertForumForkSourceMutable(forumForkLedger, session.id);
+  return withMutableSessionOperation(session.id, async () => {
     const existingLease = sessionOwnership.get(session.id);
     if (existingLease && existingLease.clientId !== clientId) {
       return {
@@ -2147,10 +2277,13 @@ const server = http.createServer(async (req, res) => {
     }
     if (method === "POST" && url.pathname === "/v1/admin/drain") {
       const body = await readBody(req);
-      setDraining(true, {
-        reason: "deploy-api",
-        autoCancelMs: body.auto_cancel_ms ?? body.autoCancelMs ?? undefined,
-      });
+      const requestedAutoCancelMs = Number(body.auto_cancel_ms ?? body.autoCancelMs ?? DRAIN_AUTO_CANCEL_MS);
+      const autoCancelMs = Number.isFinite(requestedAutoCancelMs) && requestedAutoCancelMs > 0
+        ? requestedAutoCancelMs
+        : DRAIN_AUTO_CANCEL_MS;
+      const leaseExpiresAtMs = Date.now() + autoCancelMs;
+      setDraining(true, { reason: "deploy-api", autoCancelMs });
+      await durableDrainState.publish({ reason: 'deploy-api', leaseExpiresAtMs });
       const closed = await closeIdleConversations("deploy-drain");
       const state = await waitForDeployState({
         timeoutMs: body.timeout_ms ?? body.timeoutMs ?? 0,
@@ -2161,6 +2294,7 @@ const server = http.createServer(async (req, res) => {
       });
     }
     if (method === "POST" && url.pathname === "/v1/admin/drain/cancel") {
+      await durableDrainState.clear();
       setDraining(false);
       return json(res, 200, await deployState());
     }
@@ -2256,10 +2390,9 @@ const server = http.createServer(async (req, res) => {
           : await subagentCancellation.latestForSession(session.id, session.path);
         if (!operation || operation.parent_session_id !== session.id) return notFound(res);
         try {
-          const reconciled = await withSessionOperation(session.id, async () => {
-            await assertForumForkSourceMutable(forumForkLedger, session.id);
-            return reconcileCancellationOperation(session, operation);
-          });
+          const reconciled = await withMutableSessionOperation(session.id, async () =>
+            reconcileCancellationOperation(session, operation)
+          );
           return json(res, reconciled.state === 'stopping' ? 202 : 200, cancellationPublic(reconciled));
         } catch (error) {
           if (error instanceof ForumForkConflictError) return conflict(res, error);
@@ -2269,10 +2402,9 @@ const server = http.createServer(async (req, res) => {
       if (method === 'POST') {
         const body = await readBody(req);
         try {
-          const result = await withSessionOperation(session.id, async () => {
-            await assertForumForkSourceMutable(forumForkLedger, session.id);
-            return interruptSession(session, body);
-          });
+          const result = await withMutableSessionOperation(session.id, async () =>
+            interruptSession(session, body)
+          );
           return json(res, result.state === 'stopping' ? 202 : 200, cancellationPublic(result));
         } catch (error) {
           if (error instanceof ForumForkConflictError) return conflict(res, error);
@@ -2300,8 +2432,13 @@ const server = http.createServer(async (req, res) => {
       if (draining)
         return unavailable(res, "agentd is draining for deployment");
       const body = await readBody(req);
-      const conv = await createConversation(body);
-      return json(res, 200, { conversation: conversationRecord(conv) });
+      try {
+        const conv = await createConversation(body);
+        return json(res, 200, { conversation: conversationRecord(conv) });
+      } catch (error) {
+        if (error instanceof TypeError) return badRequest(res, error.message);
+        throw error;
+      }
     }
 
     if (method === "POST" && url.pathname === "/v1/conversations/open") {
@@ -2331,15 +2468,6 @@ const server = http.createServer(async (req, res) => {
       const conv = conversations.get(decodeURIComponent(convMatch[1]));
       const tail = convMatch[2] ?? "";
       if (!conv) return notFound(res);
-      if (method !== 'GET' && tail !== 'fork') {
-        try {
-          await assertForumForkSourceMutable(forumForkLedger, conv.piSessionId);
-        } catch (error) {
-          if (error instanceof ForumForkConflictError) return conflict(res, error);
-          throw error;
-        }
-      }
-
       if (method === "GET" && tail === "")
         return json(res, 200, { conversation: conversationRecord(conv) });
       if (method === "GET" && tail === "history")
@@ -2354,22 +2482,29 @@ const server = http.createServer(async (req, res) => {
           context: liveContext(conv),
         });
       if (method === "PATCH" && tail === "") {
-        if (conv.takeoverPending)
-          return json(res, 409, { error: "session_takeover_pending" });
-        const lease = sessionOwnership.get(conv.piSessionId);
-        if (lease) throw new SessionOwnershipConflict(conv.piSessionId, lease);
-        conv.pendingMutations += 1;
+        const body = await readBody(req);
         try {
-          const branch = await inspectLoadedConversationBranch(conv);
-          if (branch?.branch_conflict)
-            throw new SessionBranchConflict(conv.piSessionId, branch);
-          if (branch?.external_advance)
-            throw new SessionExternalAdvance(conv.piSessionId, branch);
-          const body = await readBody(req);
-          await applySessionConfig(conv, body.config ?? body);
-          return json(res, 200, { conversation: conversationRecord(conv) });
-        } finally {
-          conv.pendingMutations -= 1;
+          return await withMutableSessionOperation(conv.piSessionId, async () => {
+            if (conv.takeoverPending)
+              return json(res, 409, { error: "session_takeover_pending" });
+            const lease = sessionOwnership.get(conv.piSessionId);
+            if (lease) throw new SessionOwnershipConflict(conv.piSessionId, lease);
+            conv.pendingMutations += 1;
+            try {
+              const branch = await inspectLoadedConversationBranch(conv);
+              if (branch?.branch_conflict)
+                throw new SessionBranchConflict(conv.piSessionId, branch);
+              if (branch?.external_advance)
+                throw new SessionExternalAdvance(conv.piSessionId, branch);
+              await applySessionConfig(conv, body.config ?? body);
+              return json(res, 200, { conversation: conversationRecord(conv) });
+            } finally {
+              conv.pendingMutations -= 1;
+            }
+          });
+        } catch (error) {
+          if (error instanceof ForumForkConflictError) return conflict(res, error);
+          throw error;
         }
       }
       if (method === 'POST' && tail === 'handoff/draft') {
@@ -2379,7 +2514,9 @@ const server = http.createServer(async (req, res) => {
       if (method === 'POST' && tail === 'compact') {
         const body = await readBody(req);
         try {
-          return json(res, 200, await compactConversation(conv, body));
+          return await withMutableSessionOperation(conv.piSessionId, async () =>
+            json(res, 200, await compactConversation(conv, body))
+          );
         } catch (err) {
           if (err instanceof ConversationConflictError) return conflict(res, err);
           if (err instanceof TypeError) return badRequest(res, err.message);
@@ -2427,7 +2564,10 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       if (method === 'POST' && tail === 'messages') {
-        return withSessionOperation(conv.piSessionId, async () => {
+        // Consume the finite body before waiting behind canonical session work.
+        // A timed-out client must not leave a dead stream for a later holder.
+        return await runAfterRequestBody(req, readBody, async (body) =>
+          withMutableSessionOperation(conv.piSessionId, async () => {
         if (draining) return unavailable(res, 'agentd is draining for deployment');
         if (conv.takeoverPending) return json(res, 409, { error: 'session_takeover_pending' });
         const initialLease = sessionOwnership.get(conv.piSessionId);
@@ -2438,7 +2578,6 @@ const server = http.createServer(async (req, res) => {
           const branch = await inspectLoadedConversationBranch(conv);
           if (branch?.branch_conflict) throw new SessionBranchConflict(conv.piSessionId, branch);
           if (branch?.external_advance) throw new SessionExternalAdvance(conv.piSessionId, branch);
-          const body = await readBody(req);
           if (body.provenance?.origin === 'forum' && body.generation === undefined) {
             return badRequest(res, 'forum dispatch generation is required');
           }
@@ -2499,6 +2638,7 @@ const server = http.createServer(async (req, res) => {
             ...(attachmentPrompt.images.length > 0 ? { images: attachmentPrompt.images } : {}),
           };
           const promptPromise = conv.session.prompt(text, promptOptions);
+          if (!conv.sessionFileObserved && existsSync(conv.sessionPath)) conv.sessionFileObserved = true;
           mutationTransferredToPrompt = true;
           void (async () => {
             try {
@@ -2519,24 +2659,35 @@ const server = http.createServer(async (req, res) => {
         } finally {
           if (!mutationTransferredToPrompt) conv.pendingMutations -= 1;
         }
-        });
+          })
+        );
       }
       if (method === 'POST' && tail === 'interrupt') {
         const body = await readBody(req);
-        const session = await findSession(conv.piSessionId);
+        const session = await directSession(conv.sessionPath, conv.piSessionId);
         if (!session) return notFound(res);
         try {
-          const result = await withSessionOperation(session.id, () => interruptSession(session, body));
+          const result = await withMutableSessionOperation(session.id, () => interruptSession(session, body));
           return json(res, result.state === 'stopping' ? 202 : 200, cancellationPublic(result));
-        } catch (error) { return badRequest(res, error instanceof Error ? error.message : String(error)); }
+        } catch (error) {
+          if (error instanceof ForumForkConflictError) return conflict(res, error);
+          return badRequest(res, error instanceof Error ? error.message : String(error));
+        }
       }
       if (method === 'POST' && tail === 'close') {
         const snapshot = await subagentSnapshot().catch(() => null);
         if (!snapshot) return json(res, 503, { error: 'subagent_lifecycle_unavailable' });
         await conv.subagentLifecycle.reconcileArtifacts(snapshot);
         if (hasActiveBackgroundWork(conv)) return json(res, 409, { error: 'active_subagent_runs', background: backgroundStatus(conv) });
-        await closeConversation(conv, 'api');
-        return json(res, 200, { ok: true, memory_saved: true });
+        try {
+          return await withMutableSessionOperation(conv.piSessionId, async () => {
+            await closeConversation(conv, 'api');
+            return json(res, 200, { ok: true, memory_saved: true });
+          });
+        } catch (error) {
+          if (error instanceof ForumForkConflictError) return conflict(res, error);
+          throw error;
+        }
       }
       if (method === 'POST' && tail === 'memory/save') {
         return json(res, 501, {
@@ -2574,6 +2725,20 @@ const server = http.createServer(async (req, res) => {
         message: err.message,
       });
     }
+    if (err instanceof ForumForkConflictError) return conflict(res, err);
+    if (err instanceof ForumCreationConflictError) {
+      return json(res, 409, { error: err.code, message: err.message });
+    }
+    if (err instanceof SessionResolutionError) {
+      return json(res, err.code === 'session_not_found' ? 404 : 409, {
+        error: err.code,
+        message: err.message,
+      });
+    }
+    if (isClientDisconnect(req, res, err)) {
+      console.warn('[agentd] client disconnected before request completion');
+      return;
+    }
     console.error('[agentd]', err);
     return serverError(res, err);
   }
@@ -2589,7 +2754,8 @@ function startIdleReaper() {
       for (const conv of [...conversations.values()]) {
         if (conversationIsActive(conv) || sessionOwnership.get(conv.piSessionId)) continue;
         if (now - conv.lastActivityAt < IDLE_REAP_MS) continue;
-        closeConversation(conv, 'idle-reap').catch((err) => console.warn('[agentd] idle reap failed:', err instanceof Error ? err.message : String(err)));
+        withMutableSessionOperation(conv.piSessionId, () => closeConversation(conv, 'idle-reap'))
+          .catch((err) => console.warn('[agentd] idle reap failed:', err instanceof Error ? err.message : String(err)));
       }
     })().catch((err) => console.warn('[agentd] idle reap lifecycle reconciliation failed:', err instanceof Error ? err.message : String(err)));
   }, Math.max(5000, IDLE_REAP_INTERVAL_MS));
@@ -2630,20 +2796,57 @@ function startSubagentRetention() {
 startIdleReaper();
 startSubagentRetention();
 
+server.on('clientError', (error, socket) => {
+  if (error?.code !== 'ECONNRESET') {
+    console.warn('[agentd] client error:', error instanceof Error ? error.message : String(error));
+  }
+  if (!socket.destroyed) socket.destroy();
+});
+
 server.listen(PORT, HOST, () => {
   console.log(
     `[agentd] listening on http://${HOST}:${PORT} (agentDir=${AGENT_DIR})`,
   );
 });
 
-process.on("SIGTERM", async () => {
+let shutdownStarted = false;
+async function shutdown(signal) {
+  if (shutdownStarted) return;
+  shutdownStarted = true;
   forumCatalogRefresh.stop();
-  setDraining(true, { reason: "sigterm", autoCancel: false });
-  await retentionCoordinator.wait();
-  for (const conv of conversations.values()) {
-    try {
-      await closeConversation(conv, "sigterm");
-    } catch {}
-  }
-  server.close(() => process.exit(0));
-});
+  setDraining(true, { reason: signal.toLowerCase(), autoCancel: false });
+  const configuredDeadline = Number(process.env.MONIKA_AGENTD_SHUTDOWN_DEADLINE_MS ?? 30_000);
+  const deadlineMs = Number.isFinite(configuredDeadline) ? Math.max(1_000, configuredDeadline) : 30_000;
+  await runBoundedShutdown({
+    deadlineMs,
+    beginTransportShutdown: () => {
+      // SSE must not keep HTTP shutdown open while a canonical mutation fence
+      // is held. Stop accepting requests and end streams independently of Pi.
+      for (const conv of conversations.values()) {
+        for (const subscriber of [...conv.subscribers]) {
+          conv.subscribers.delete(subscriber);
+          endResponse(subscriber);
+        }
+      }
+      server.close();
+    },
+    gracefulShutdown: () => runCanonicalShutdownCleanup({
+      waitForRetention: () => retentionCoordinator.wait(),
+      conversations: [...conversations.values()],
+      closeConversation: (conv) => withMutableSessionOperation(
+        conv.piSessionId,
+        () => closeConversation(conv, signal.toLowerCase()),
+      ),
+    }),
+    forceTransportShutdown: () => {
+      // Node's closeAllConnections is the final bounded transport seam. The
+      // deadline may sacrifice a fenced close/memory save; normal shutdown gets
+      // the full interval above to complete it.
+      server.closeAllConnections?.();
+    },
+    exit: (code) => process.exit(code),
+  });
+}
+
+process.once('SIGTERM', () => { void shutdown('SIGTERM'); });
+process.once('SIGINT', () => { void shutdown('SIGINT'); });

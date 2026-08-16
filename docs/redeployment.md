@@ -18,7 +18,7 @@ For the generic operator runbook and autodeploy lifecycle, see [`docs/autodeploy
 
 Subagent execution state comes from the durable run ledger below `/data/pi-subagents/async-subagent-runs`, not stale loaded-memory flags. Stop Robot uses the same authority by canonical Pi session, including unloaded parents: dispatch is fenced before agentd performs scoped top-level/nested fixed-point cancellation. A stop response distinguishes accepted/still `stopping`, proven-local `stopped`, and `uncertain`; cancelled result bytes remain retained, and remote `effects_state=unknown` remains a deployment blocker. Continue stays disabled until reconciliation proves the barrier resolved. Scheduled package runs remain disabled and are not silently included in the cancellation claim. `GET /v1/admin/subagents` exposes a capped operational summary. Exact observed terminal proof, same-container PID/start-identity reconciliation, and container runtime epochs distinguish active, terminal, interrupted, and uncertain work. Pending result projection is durable delivery work, not a live execution blocker. Effects-unknown also does not claim a live process, but it blocks safe deployment and prohibits automatic replay or unaudited delivery dismissal until reconciled or operator-attested. Lifecycle traversal errors fail closed as `subagent_lifecycle_unavailable`.
 
-`/v1/admin/drain` marks agentd as draining, rejects new conversation/message requests, installs a pi-subagents launch/completion barrier, closes idle loaded conversations, and reports the resulting quiescence state. Automation should defer if the response still contains blockers. If automation drains agentd but does not proceed to restart the runtime, it should call `/v1/admin/drain/cancel` before exiting. Drain also has a lease for defense in depth: by default agentd auto-cancels drain after 15 minutes without shutdown, unless the caller provides another `auto_cancel_ms` value or the process is handling SIGTERM.
+`/v1/admin/drain` marks agentd as draining, rejects new conversation/message requests, installs a pi-subagents launch/completion barrier, closes idle loaded conversations, and reports the resulting quiescence state. Before reporting success it stores the deploy-drain reason and lease expiry in `/data/agentd-drain-state.json` (override with the absolute `MONIKA_AGENTD_DRAIN_STATE_FILE` path). A replacement container restores an unexpired lease and continues rejecting work until `/v1/admin/drain/cancel` clears both runtime and durable state; expired state is removed at startup. Automation should defer if the response still contains blockers. If automation drains agentd but does not proceed to restart the runtime, it should call `/v1/admin/drain/cancel` before exiting. The lease remains defense in depth across replacement: by default agentd auto-cancels 15 minutes after the original drain request unless the caller provides another `auto_cancel_ms` value. SIGTERM's internal shutdown fence does not create or extend a deploy-drain record.
 
 Host-side deploy automation reaches agentd and forum administrative endpoints
 through loopback-only Compose bindings:
@@ -37,7 +37,7 @@ Do not publish agentd on a non-loopback host address unless the service has gain
 
 ### memstore
 
-memstore reports save queue state through `memstore_status` and `queue_status`, including queue depth, whether a save is currently processing, and the current job metadata. On SIGTERM, memstore stops accepting new socket connections and waits for the save processor to finish any in-flight job before allowing the SQLite handle to close.
+memstore reports save queue state through `memstore_status` and `queue_status`, including queue depth, whether a save is currently processing, and the current job metadata. On SIGTERM, memstore stops accepting new socket connections and waits for the save processor to finish any in-flight job before allowing the SQLite handle to close. PID 1 keeps memstore available while agentd drains, then reaps both children. An unexpected exit from either essential child terminates the container nonzero rather than advertising a partial runtime.
 
 ### Forum
 
@@ -46,9 +46,9 @@ The forum reports deploy safety in:
 - `GET /api/deploy/quiescence` for host-side deploy automation, authenticated with `CODEX_FORUM_DEPLOY_TOKEN`
 - `GET /api/admin/deploy/status` for authenticated admin views
 
-`GET /api/healthz` is intentionally minimal and public (`{ "ok": true }`) so Docker and reverse-proxy health checks do not expose operational state.
+`GET /api/healthz` is intentionally minimal public liveness (`{ "ok": true }`). Both `GET /readyz` (the exact Compose/autodeploy target) and `GET /api/readyz` share the same minimal handler and return 503 unless the configured Monika backend reports healthy and undrained.
 
-Forum deploy blockers include active robot turns, queued turns, non-idle robot states, pending/running manual compactions, and a currently running Pi session sync. Deploy on Finish also checks agentd, persists its intent across forum restart, and retains/retries that intent after the host script returns exit 75. The host script remains the final race-safe authority. On SIGTERM/Fastify close, the server stops new post-dispatch and compaction claims, waits for an in-flight compaction and Pi sync to finish, stops robot/ECHS timers and SSE subscriptions, closes Redis if enabled, and closes the forum SQLite database. If the process instead crashes, startup requeues interrupted compactions and reconciles them through agentd's canonical expected-leaf proof.
+Forum deploy blockers include active robot turns, queued turns, non-idle robot states, pending/running manual compactions, and a currently running Pi session sync. Deploy on Finish also checks agentd, persists its intent across forum restart, and retains/retries that intent after the host script returns exit 75. The host script remains the final race-safe authority. On SIGTERM/Fastify close, the server stops new post-dispatch and compaction claims, waits for an in-flight compaction and Pi sync to finish, stops robot/ECHS timers and SSE subscriptions, closes Redis if enabled, and closes the forum SQLite database. If the process instead crashes, startup requeues interrupted compactions and reconciles them through agentd's canonical expected-leaf proof. Ordinary post dispatches retain the same durable identity across ambiguous transport failures and remain pending at bounded backoff; startup/outage handling does not unlink sessions or manufacture replacement canonical work.
 
 ## Host script
 
@@ -64,9 +64,10 @@ Forum deploy blockers include active robot turns, queued turns, non-idle robot s
 8. Creates and verifies a whole-repo `.tar.zst` runtime capsule backup.
 9. If the `monika` image changed, re-checks/re-starts agentd drain immediately before Docker Compose runs.
 10. Applies exactly the changed Monika/forum service with `--no-deps`. Hosts with `MONIKA_PUBLIC_INGRESS=1` reconcile the digest-pinned `cloudflared` connector independently before image comparison.
-11. If agentd was drained, cancels drain on the running agentd after Compose and waits for healthy/undrained state.
-12. Prunes old redeploy backups by tiered retention bucket.
-13. Prunes old dangling Docker image layers conservatively.
+11. The replacement Monika container restores the unexpired durable drain; the script cancels it on the new agentd after Compose and waits for healthy/undrained state.
+12. After every applied Monika or forum image change—including forum-only updates—waits a bounded interval for the forum's exact unprefixed `/readyz`. A readiness failure aborts before backup/image pruning. Monika updates cancel drain and prove agentd health first because forum readiness depends on the undrained backend.
+13. Prunes old redeploy backups by tiered retention bucket.
+14. Prunes old dangling Docker image layers conservatively.
 
 Forum-only image updates do not drain agentd because Docker Compose is not expected to recreate the `monika` container. Backup-only mode still drains and cancels agentd because its purpose is to create a quiescence-gated **local redeploy** runtime capsule. It does not run the tiered B2 writer. Off-host jobs take a read-only Btrfs capture independently and root executes only the immutable Shadowsea Nix-store program, never this writable checkout.
 

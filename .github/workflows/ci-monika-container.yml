@@ -76,6 +76,12 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
+      - name: Check deploy drain lifecycle
+        run: tests/smoke/deploy-if-safe-drain-lifecycle.sh
+
+      - name: Check Compose agentd port semantics
+        run: tests/smoke/compose-agentd-port.sh
+
       - name: Build Monika runtime image
         run: |
           docker build \

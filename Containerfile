@@ -210,4 +210,7 @@ RUN chmod +x /app/bin/agent-runner.mjs
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
+HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
+  CMD test -S "${MEMSTORE_SOCKET:-/tmp/memstore.sock}" && curl -fsS "http://127.0.0.1:${MONIKA_AGENTD_PORT:-7724}/healthz" | grep -q '"status":"healthy"'
+
 ENTRYPOINT ["/entrypoint.sh"]

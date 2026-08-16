@@ -11,7 +11,8 @@ run_case() {
   local forum_current="$4"
   local forum_target="$5"
   local public_ingress="$6"
-  local tmp log bin deploy_root
+  local forum_ready="${7:-1}"
+  local tmp log bin deploy_root status
 
   tmp="$(mktemp -d)"
   log="$tmp/calls.log"
@@ -46,7 +47,14 @@ if [ "${1:-}" = "compose" ]; then
       fi
       exit 0
       ;;
-    up) echo up >> "$CALL_LOG"; exit 0 ;;
+    up)
+      echo up >> "$CALL_LOG"
+      if printf '%s\n' "$*" | grep -qw monika; then
+        test -f "$DRAIN_MARKER"
+        echo replacement > "$REPLACEMENT_MARKER"
+      fi
+      exit 0
+      ;;
   esac
 fi
 if [ "${1:-}" = "inspect" ]; then
@@ -92,20 +100,33 @@ case "$url" in
   */v1/admin/drain)
     [ "$method" = "POST" ] || exit 1
     echo drain >> "$CALL_LOG"
+    echo durable > "$DRAIN_MARKER"
     echo '{"ok":true,"status":"safe_to_stop","draining":true,"blockers":[],"drain_required":[]}'
     ;;
   */v1/admin/drain/cancel)
     [ "$method" = "POST" ] || exit 1
+    if [ -f "$REPLACEMENT_MARKER" ]; then
+      test -f "$DRAIN_MARKER"
+    fi
     echo cancel >> "$CALL_LOG"
+    rm -f "$DRAIN_MARKER"
     echo '{"ok":true,"status":"safe_to_stop","draining":false,"blockers":[],"drain_required":[]}'
     ;;
   */healthz) echo '{"ok":true,"status":"healthy"}' ;;
+  */readyz)
+    echo ready >> "$CALL_LOG"
+    [ "${FORUM_READY:-1}" = "1" ] || exit 22
+    echo '{"ok":true}'
+    ;;
   *) echo "unexpected curl URL: $url" >&2; exit 1 ;;
 esac
 SH
   chmod +x "$bin/curl"
 
+  set +e
   CALL_LOG="$log" \
+  DRAIN_MARKER="$tmp/drain-state" \
+  REPLACEMENT_MARKER="$tmp/replacement" \
   PATH="$bin:$PATH" \
   MONIKA_DEPLOY_ROOT="$deploy_root" \
   MONIKA_DEPLOY_COMPOSE_FILE="$deploy_root/compose.yaml" \
@@ -118,8 +139,49 @@ SH
   MONIKA_TARGET_ID="$monika_target" \
   FORUM_CURRENT_ID="$forum_current" \
   FORUM_TARGET_ID="$forum_target" \
+  FORUM_READY="$forum_ready" \
+  MONIKA_FORUM_POST_DEPLOY_TIMEOUT_MS=0 \
   CODEX_FORUM_DEPLOY_TOKEN=test-token \
   "$deploy_root/deploy-if-safe" >"/tmp/deploy-if-safe-$name.out" 2>"/tmp/deploy-if-safe-$name.err"
+  status=$?
+  set -e
+
+  if [ "$forum_ready" != "1" ]; then
+    if [ "$status" -eq 0 ] || ! grep -q '^ready$' "$log" || grep -q 'docker image prune' "$log"; then
+      echo "failed forum readiness must fail deploy before image pruning" >&2
+      cat "$log" >&2
+      return 1
+    fi
+    rm -rf "$tmp"
+    return 0
+  fi
+  if [ "$status" -ne 0 ]; then
+    cat "/tmp/deploy-if-safe-$name.err" >&2
+    return "$status"
+  fi
+
+  if [ "$name" != "no-update" ]; then
+    local up_line ready_line status_line prune_line
+    up_line="$(grep -n '^up$' "$log" | tail -n 1 | cut -d: -f1)"
+    ready_line="$(grep -n '^ready$' "$log" | tail -n 1 | cut -d: -f1)"
+    status_line="$(grep -nE '^docker .*compose .* ps( |$)' "$log" | tail -n 1 | cut -d: -f1)"
+    prune_line="$(grep -n 'docker image prune' "$log" | tail -n 1 | cut -d: -f1)"
+    if [ -z "$ready_line" ] || [ "$ready_line" -le "$up_line" ] || [ "$status_line" -le "$ready_line" ] || [ "$status_line" -ge "$prune_line" ]; then
+      echo "applied updates must pass forum /readyz, then compose ps, before pruning" >&2
+      cat "$log" >&2
+      return 1
+    fi
+    if [ "$monika_current" != "$monika_target" ]; then
+      local cancel_line healthy_line
+      cancel_line="$(grep -n '^cancel$' "$log" | tail -n 1 | cut -d: -f1)"
+      healthy_line="$(grep -n '/healthz' "$log" | tail -n 1 | cut -d: -f1)"
+      if [ -z "$cancel_line" ] || [ -z "$healthy_line" ] || [ "$cancel_line" -ge "$ready_line" ] || [ "$healthy_line" -ge "$ready_line" ]; then
+        echo "agentd drain cancel and healthy proof must precede forum readiness" >&2
+        cat "$log" >&2
+        return 1
+      fi
+    fi
+  fi
 
   if [ "$public_ingress" = "1" ]; then
     if ! grep -Eq ' up -d --no-deps cloudflared$' "$log"; then
@@ -177,5 +239,6 @@ run_case forum-only same same old-forum new-forum 1
 run_case monika-update old-monika new-monika same same 1
 run_case no-update same same same same 1
 run_case no-ingress same same old-forum new-forum 0
+run_case forum-readiness-failure same same old-forum new-forum 0 0
 
 echo "deploy-if-safe drain lifecycle smoke passed"

@@ -49,6 +49,11 @@ services:
       - "${MONIKA_FORUM_BIND:-127.0.0.1:4310:4310}"
 ```
 
+`MONIKA_AGENTD_PORT` is the host-side published-port override only; Compose keeps
+agentd health and forum-to-agentd traffic on container port 7724. The deploy
+script derives its default loopback URL from the same host override (an explicit
+`MONIKA_AGENTD_BASE_URL` still takes precedence).
+
 This lets host automation call:
 
 ```text
@@ -78,10 +83,11 @@ python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
 8. Create and verify a whole-repo backup archive.
 9. If the `monika` image changed, re-check/re-start agentd drain immediately before Compose runs. This closes the race where a long backup or external drain cancel could otherwise reopen agentd to new work.
 10. Recreate exactly the application service whose image changed, using `--no-deps`. A forum-only update therefore cannot recreate Monika because of unrelated Compose configuration drift.
-11. If agentd was drained, wait for the running agentd to accept `/v1/admin/drain/cancel` and report healthy/undrained.
-12. Print `docker compose ps` for the managed services.
-13. Prune old redeploy backups by retention bucket.
-14. Prune old dangling Docker images conservatively.
+11. The replacement Monika container restores the original unexpired deploy drain from `/data`; wait for the new agentd to accept `/v1/admin/drain/cancel` and report healthy/undrained.
+12. After every applied Monika or forum image change, wait a bounded interval for the exact unprefixed forum `/readyz`; a failure stops before pruning. Monika updates cancel drain first because forum readiness depends on the undrained backend.
+13. Print `docker compose ps` for the managed services.
+14. Prune old redeploy backups by retention bucket.
+15. Prune old dangling Docker images conservatively.
 
 Forum-only image updates do not drain agentd because the `monika` container is not expected to restart. The recreated forum passively reattaches only conversations agentd still reports loaded; it does not reopen missing Pi sessions. A coordinated runtime restart leaves historical sessions unloaded and recovered completion/request evidence non-waking until explicit new work. Backup-only mode still drains and cancels agentd so the runtime capsule is quiescence-gated.
 
@@ -121,7 +127,7 @@ MONIKA_FORUM_IMAGE=ghcr.io/irrigationreal/monika-forum:sha-OLD \
 
 If the command exits `75`, do not force a restart. Inspect both forum deploy status and `curl -fsS http://127.0.0.1:7724/v1/admin/subagents`, wait for active work to finish, and retry. An `uncertain` run requires runtime/PID reconciliation or the audited quarantine procedure in `docs/redeployment.md`; an `effects_state: "unknown"` run requires remote-effect investigation and an audited effects attestation. Never remove lifecycle files merely to make either counter disappear.
 
-Agentd drain has a lease as defense in depth. `MONIKA_AGENTD_DRAIN_AUTO_CANCEL_MS` controls the lease passed by `deploy-if-safe` and defaults to 15 minutes. Agentd also defaults to the same 15-minute auto-cancel window for any `/v1/admin/drain` call that does not override it. The deploy script still owns the normal lifecycle: drain, apply, cancel drain after Compose.
+Agentd drain has a durable lease as defense in depth. `MONIKA_AGENTD_DRAIN_AUTO_CANCEL_MS` controls the lease passed by `deploy-if-safe` and defaults to 15 minutes. Agentd publishes its reason and absolute expiry under `/data` before drain succeeds, restores the remaining lease after container replacement, and clears it only when it expires or `/v1/admin/drain/cancel` succeeds. The deploy script still owns the normal lifecycle: drain, apply, cancel drain on the replacement after Compose.
 
 ## Backups
 
@@ -197,6 +203,7 @@ Verify:
 ```bash
 docker compose ps
 curl -fsS http://127.0.0.1:4310/api/healthz
+curl -fsS http://127.0.0.1:4310/readyz
 . /home/monika/repos/monika/runtime/secrets/forum.env
 curl -fsS -H "authorization: Bearer $CODEX_FORUM_DEPLOY_TOKEN" \
   http://127.0.0.1:4310/api/deploy/quiescence

@@ -2931,7 +2931,7 @@ export class ForumStore {
         `select 1 from compaction_operations c
          join post_dispatches d on d.post_id = c.recovery_post_id
          where c.topic_id = ? and c.status = 'succeeded'
-           and d.status in ('pending', 'dispatching', 'failed', 'superseded', 'abandoned')
+           and d.status in ('pending', 'dispatching', 'failed')
          limit 1`
       )
       .get(topicId) as unknown | undefined;
@@ -3420,7 +3420,7 @@ export class ForumStore {
                  select 1 from compaction_operations completed
                  join post_dispatches checkpoint on checkpoint.post_id = completed.recovery_post_id
                  where completed.topic_id = d.topic_id and completed.status = 'succeeded'
-                   and checkpoint.status in ('pending', 'dispatching', 'failed', 'superseded', 'abandoned')
+                   and checkpoint.status in ('pending', 'dispatching', 'failed')
                )
              )
            )
@@ -3593,9 +3593,9 @@ export class ForumStore {
     const result = this.db
       .prepare(
         `update post_dispatches set status = 'pending', claim_token = null, attempt_count = 0,
-         last_attempt_at = null, next_attempt_at = ?, error_message = null, updated_at = ?,
-         generation = (select generation from post_dispatch_generations where topic_id = post_dispatches.topic_id)
-         where id = ? and status in ('failed', 'superseded', 'abandoned')`
+         last_attempt_at = null, next_attempt_at = ?, error_message = null, updated_at = ?
+         where id = ? and status = 'failed' and generation =
+           (select generation from post_dispatch_generations where topic_id = post_dispatches.topic_id)`
       )
       .run(now, now, id);
     return result.changes === 1 ? this.getPostDispatch(id) : null;
@@ -4142,6 +4142,27 @@ export class ForumStore {
     const row = this.db.prepare('select * from pi_session_links where topic_id = ? limit 1').get(topicId) as
       PiSessionLinkRow | undefined;
     return row ?? null;
+  }
+
+  isPristineConversationCreation(topicId: string, creationDispatchId: string): boolean {
+    const session = this.getSessionByTopic(topicId);
+    if (!session || session.agent_thread_id || session.last_dispatched_post_id) return false;
+    const canonicalMessage = this.db
+      .prepare(
+        `select 1 from pi_message_links m
+         join posts p on p.id = m.post_id
+         where p.topic_id = ? limit 1`
+      )
+      .get(topicId);
+    if (canonicalMessage) return false;
+    const otherDispatch = this.db
+      .prepare(
+        `select 1 from post_dispatches
+         where topic_id = ? and id <> ?
+         limit 1`
+      )
+      .get(topicId, creationDispatchId);
+    return !otherDispatch;
   }
 
   listPiSessionLinksWithUnresolvedCancellation(): PiSessionLinkRow[] {

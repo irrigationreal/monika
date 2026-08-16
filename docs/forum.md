@@ -128,8 +128,16 @@ Implemented in `services/forum`:
 - `pi_import_runs`, `pi_session_links`, and `pi_message_links` tables.
 - Forum replies in linked/imported topics call `POST /v1/conversations/open` and
   continue the canonical Pi session instead of creating a parallel session.
-- Forum-created Pi conversations immediately write a `pi_session_links` row using
-  the `session_id` and `session_path` returned by agentd.
+- When ordinary durable post dispatch creates a canonical conversation, it uses its
+  dispatch ID as agentd `creation_id` together with `durable_session: true`. Agentd
+  records the intended session ID/path under its
+  dedicated persistent creation-operation root before writing the invisible canonical
+  anchor, then returns that exact anchored session on a same-request retry. A `creating`
+  record is adopted only when that intended file contains both the matching anchor and completed-creation markers (written after lineage);
+  missing or ambiguous evidence fails closed and never manufactures a replacement orphan.
+  Only then does the forum write `pi_session_links`. Non-dispatch operations never create
+  canonical state: they reopen an existing link, or repair a missing derived link solely
+  from a currently loaded conversation that supplies both canonical ID and path.
 - Background sync worker is enabled by default:
   - `MONIKA_PI_SYNC_ENABLED=1`
   - `MONIKA_PI_SYNC_INTERVAL_MS=5000`
@@ -206,7 +214,12 @@ The forum also persists the normalized origin of the currently active causal tur
 Only an exact origin-key match may use Pi steering; Discord, Matrix, and web work
 from any other origin is enqueued as a later follow-up turn. The active origin is
 retained across accepted-dispatch retry/restart and is cleared only when canonical
-settlement, interruption, or idle reconciliation proves that turn ended.
+settlement, interruption, or idle reconciliation proves that turn ended. Aborted
+HTTP requests, connection resets, agentd 5xx responses, and backend outages are
+ambiguous transport outcomes: the durable dispatch remains pending with the same
+ID, generation, and ordered contributors at a bounded retry cadence. Definite
+application rejection can become terminal; superseded or abandoned work cannot be
+resurrected through the manual failed-dispatch retry path.
 Discord and Matrix adapters can only offer best-effort behavior at their external
 API boundary; their forum post, external dedupe reference, and local dispatch are
 transactional, but remote acknowledgement or outbound publication is not
@@ -257,7 +270,14 @@ emitted as separate posts. New external continuations bump the topic once;
 high-confidence legacy repairs are silent.
 
 Posts already linked to canonical Pi are excluded from later catch-up envelopes,
-preventing imported CLI input from being sent back into the same session. Admin
+preventing imported CLI input from being sent back into the same session. Targeted
+forum reopen/dispatch supplies both canonical ID and path, so agentd validates that
+single path directly instead of enumerating historical JSONL files. Path containment,
+header identity, symlink rejection, and unresolved-fork quarantine fail closed.
+An authoritative `404` for a linked session is distinct from timeout, outage, or list
+omission: the forum retains the link and does not create a replacement automatically;
+accepted or ambiguous history requires manual review.
+Admin
 Sync Health uses “rescan” for reconciliation, while explicit backfill remains a
 separate action. `GET /api/admin/pi-sync/repair-inventory` returns a dry-run list
 of unresolved candidates and proposed actions. Historical repairs remain silent;
@@ -368,10 +388,12 @@ default prompt asks the assistant to restate goals, completed work, current work
 remaining steps, blockers, and possibly lost details without doing further work. If
 compaction fails, the forum records a durable failure event and creates no recovery
 post. If later dispatch fails, the existing post-dispatch retry path retries only the
-checkpoint turn; it never repeats compaction. After automatic retries are exhausted—or if an old checkpoint was superseded or
-abandoned—an admin-visible topic status exposes **Retry recovery checkpoint**, which
-idempotently resets only that durable dispatch. A lost retry response can be repeated
-without creating another checkpoint or repeating compaction.
+checkpoint turn; it never repeats compaction. After automatic retries are exhausted, a current-generation `failed` checkpoint exposes
+**Retry recovery checkpoint**, which idempotently resets only that durable dispatch. A lost
+retry response can be repeated without creating another checkpoint or repeating compaction.
+`superseded` and `abandoned` checkpoints are safe cancellation outcomes: they are never
+resurrected, do not expose a retry control, and release the topic fence so later canonical
+work can proceed.
 
 Forum endpoints (admin only except operational-event visibility):
 

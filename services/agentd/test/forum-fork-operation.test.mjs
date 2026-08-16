@@ -169,14 +169,6 @@ test('recovers only the exact operation-marked child', async () => {
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test('wires the source fence into canonical cancellation and ownership mutation paths', async () => {
-  const source = await readFile(new URL('../src/server.mjs', import.meta.url), 'utf8');
-  const ownership = source.slice(source.indexOf('async function claimExternalSession'), source.indexOf('async function exportSession'));
-  assert.match(ownership, /assertForumForkSourceMutable\(forumForkLedger, session\.id\)/);
-  const cancellation = source.slice(source.indexOf('const piCancellationMatch'), source.indexOf('const piContextMatch'));
-  assert.equal((cancellation.match(/assertForumForkSourceMutable\(forumForkLedger, session\.id\)/g) ?? []).length, 2);
-  assert.match(cancellation, /ForumForkConflictError/);
-});
 
 test('fails closed when the durable fork ledger is unreadable', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'forum-fork-'));

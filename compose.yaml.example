@@ -19,6 +19,12 @@ services:
     container_name: monika
     restart: unless-stopped
     stop_grace_period: 10m
+    healthcheck:
+      test: ["CMD-SHELL", "test -S \"$${MEMSTORE_SOCKET:-/tmp/memstore.sock}\" && curl -fsS \"http://127.0.0.1:7724/healthz\" | grep -q '\"status\":\"healthy\"'"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 20s
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -56,6 +62,10 @@ services:
       MONIKA_WORKSPACE: /workspace
       AGENTLOGS_HOME: /agentlogs-home
       MONIKA_AGENTD_HOST: 0.0.0.0
+      # Compose keeps the service port fixed; MONIKA_AGENTD_PORT above is only
+      # the host-side loopback publication override.
+      MONIKA_AGENTD_PORT: "7724"
+      MONIKA_AGENTD_DRAIN_STATE_FILE: ${MONIKA_AGENTD_DRAIN_STATE_FILE:-/data/agentd-drain-state.json}
       MONIKA_AGENTD_DEFAULT_CWD: ${MONIKA_AGENTD_DEFAULT_CWD:-/workspace/monika}
       MONIKA_AGENTD_MODEL_REFRESH_MS: ${MONIKA_AGENTD_MODEL_REFRESH_MS:-14400000}
       MONIKA_AGENTD_ATTACHMENT_ALLOWED_ROOTS: /forum/uploads
@@ -85,7 +95,8 @@ services:
     networks:
       - ingress
     depends_on:
-      - forum
+      forum:
+        condition: service_healthy
 
   forum:
     image: ${MONIKA_FORUM_IMAGE:-ghcr.io/irrigationreal/monika-forum:main}
@@ -95,9 +106,16 @@ services:
     container_name: monika-forum
     restart: unless-stopped
     stop_grace_period: 10m
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4310/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 20s
     user: "0:0"
     depends_on:
-      - monika
+      monika:
+        condition: service_healthy
     ports:
       # Public traffic should arrive through the private Docker network via a
       # trusted tunnel/proxy. Keep host-side health and deploy APIs on loopback.

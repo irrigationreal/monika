@@ -1,3 +1,5 @@
+import { isEchsTransportError } from '../echsClient';
+
 import type { UtteranceOrigin } from '@irrigationreal/codex-forum-core';
 
 import type { AgentBridge } from '../agentBridge';
@@ -9,6 +11,7 @@ const DEFAULT_MAX_CONCURRENT = 5;
 const MAX_ATTEMPTS = 5;
 const RETRY_DELAYS_MS = [10_000, 30_000, 2 * 60_000, 5 * 60_000];
 const DISPATCHING_STALE_MS = 5 * 60_000;
+const TRANSPORT_OUTAGE_RETRY_MS = 5 * 60_000;
 
 function retryAtForAttempt(attemptCount: number): string | null {
   if (attemptCount >= MAX_ATTEMPTS) return null;
@@ -163,7 +166,13 @@ export class PostDispatchService {
       const claimed = pending.find((item) => item.claim_token === claimToken) ?? row;
       const latest = this.store.getPostDispatch(claimed.id) ?? claimed;
       const message = err instanceof Error ? err.message : String(err);
-      const retryAt = retryAtForAttempt(latest.attempt_count);
+      // A transport failure is ambiguous: agentd may be unavailable, or it may
+      // have accepted the canonical dispatch before the response was lost.
+      // Retain the exact durable identity and retry at a bounded cadence; Pi's
+      // dispatch fence deduplicates any already-accepted request.
+      const retryAt = isEchsTransportError(err)
+        ? new Date(Date.now() + TRANSPORT_OUTAGE_RETRY_MS).toISOString()
+        : retryAtForAttempt(latest.attempt_count);
       if (claimToken) this.store.markPostDispatchFailed(latest.id, claimToken, message, { retryAt });
     } finally {
       this.activeTopics.delete(row.topic_id);

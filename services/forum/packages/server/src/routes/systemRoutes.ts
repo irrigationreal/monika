@@ -2,25 +2,39 @@ import { timingSafeEqual } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { FastifyInstance } from 'fastify';
-import type { ModelCatalogSnapshot } from '../modelCatalog';
+
 import { DEPLOY_TOKEN } from '../runtimeConfig';
+
+import type { FastifyInstance } from 'fastify';
+
+import type { ModelCatalogSnapshot } from '../modelCatalog';
 import type { AccessHelpers } from '../utils/access';
 
 type HeaderRequest = { headers: Record<string, string | string[] | undefined> };
 type JsonObject = Record<string, unknown>;
+
+export async function sendReadiness(
+  readiness: (() => Promise<boolean>) | null | undefined,
+  reply: { code(statusCode: number): unknown }
+): Promise<{ ok: boolean }> {
+  const ready = readiness ? await readiness().catch(() => false) : true;
+  reply.code(ready ? 200 : 503);
+  return { ok: ready };
+}
 
 export function registerSystemRoutes({
   app,
   modelCatalog,
   access,
   deploymentStatus,
-  deployToken = DEPLOY_TOKEN
+  readiness,
+  deployToken = DEPLOY_TOKEN,
 }: {
   app: FastifyInstance;
   modelCatalog?: { listModels: () => Promise<ModelCatalogSnapshot> } | null;
   access?: Pick<AccessHelpers, 'getCurrentUser' | 'requireScope'> | null;
   deploymentStatus?: (() => unknown) | null;
+  readiness?: (() => Promise<boolean>) | null;
   deployToken?: string | null;
 }): void {
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
@@ -54,7 +68,7 @@ export function registerSystemRoutes({
       label: typeof info['label'] === 'string' ? info['label'] : 'local build',
       commit: typeof info['commit'] === 'string' ? info['commit'] : null,
       source: typeof info['source'] === 'string' ? info['source'] : null,
-      date: typeof info['date'] === 'string' ? info['date'] : null
+      date: typeof info['date'] === 'string' ? info['date'] : null,
     };
   }
 
@@ -101,6 +115,8 @@ export function registerSystemRoutes({
   app.get('/healthz', () => {
     return { ok: true };
   });
+
+  app.get('/readyz', async (_request, reply) => sendReadiness(readiness, reply));
 
   app.get('/build', () => {
     cachedBuildInfo ??= loadJsonFile(buildInfoPath) ?? defaultBuildInfo();

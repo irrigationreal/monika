@@ -41,7 +41,7 @@ import { registerNotificationRoutes } from './routes/notificationRoutes';
 import { registerProfileRoutes } from './routes/profileRoutes';
 import { registerRobotRoutes } from './routes/robotRoutes';
 import { registerSearchRoutes } from './routes/searchRoutes';
-import { registerSystemRoutes } from './routes/systemRoutes';
+import { registerSystemRoutes, sendReadiness } from './routes/systemRoutes';
 import { registerTenantRoutes } from './routes/tenantRoutes';
 import { registerWebhookRoutes } from './routes/webhookRoutes';
 import {
@@ -414,6 +414,7 @@ const publicIndex = await registerStaticAssets(app, {
 // Avoid duplicate registration when API_PREFIX is empty (system routes already register /healthz).
 if (apiPrefix) {
   app.get('/healthz', async () => ({ ok: true }));
+  app.get('/readyz', async (_request, reply) => sendReadiness(() => codex.checkReadiness(), reply));
 }
 
 if (featureFlags.enableRateLimiting) {
@@ -464,7 +465,13 @@ const forumDeploymentStatus = () => {
 };
 
 const registerApiRoutes: FastifyPluginAsync = async (api) => {
-  registerSystemRoutes({ app: api, modelCatalog, access, deploymentStatus: forumDeploymentStatus });
+  registerSystemRoutes({
+    app: api,
+    modelCatalog,
+    access,
+    deploymentStatus: forumDeploymentStatus,
+    readiness: () => codex.checkReadiness(),
+  });
   registerAuthRoutes({ app: api, store, featureFlags, linkIssuer, emailService, access });
   registerAdminRoutes({ app: api, store, db, access, codex, piSessionSync });
   registerAnalyticsRoutes({ app: api, access, service: analyticsService });
