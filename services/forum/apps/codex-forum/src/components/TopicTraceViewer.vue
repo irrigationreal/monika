@@ -7,6 +7,7 @@
     <div v-if="preview" class="vb-trace-preview-header">
       <div>
         <strong>Trace</strong>
+        <span class="vb-spinner vb-spinner-dark" aria-hidden="true"></span>
         <span class="vb-status-pill">{{ state.robotState.value?.activity ?? 'starting' }}</span>
       </div>
       <div class="vb-trace-preview-actions">
