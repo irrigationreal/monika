@@ -1162,6 +1162,22 @@ async function expectThemedStyle(
 
 test.describe('Threading and reply flows', () => {
   test.describe.configure({ mode: 'serial' });
+
+  test('short forum pages extend the shell and footer to the viewport bottom', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await attachMockApi(page, createMockState());
+    await page.goto('/');
+
+    const shellBox = await page.locator('.vb-shell').boundingBox();
+    const footerBox = await page.locator('.vb-footer').boundingBox();
+    expect(shellBox).not.toBeNull();
+    expect(footerBox).not.toBeNull();
+    if (!shellBox || !footerBox) throw new Error('Short-page layout boxes unavailable');
+    expect(shellBox.y + shellBox.height).toBeCloseTo(900, 0);
+    expect(footerBox.y + footerBox.height).toBeLessThanOrEqual(shellBox.y + shellBox.height - 20 + 1);
+    expect(footerBox.y).toBeGreaterThan(700);
+  });
+
   test('create new thread with preview, BBCode insertions, validation, and cancel confirmation', async ({
     page,
     context,
@@ -1663,10 +1679,14 @@ test.describe('Threading and reply flows', () => {
     expect(scrollTopBox).not.toBeNull();
     if (!dockBox || !scrollTopBox) throw new Error('Quick Reply dock layout boxes unavailable');
     expect(scrollTopBox.y + scrollTopBox.height).toBeLessThanOrEqual(dockBox.y + 1);
-    const reservedBottom = await page
-      .locator('.vb-topic-with-reply-dock--expanded')
+    const shellBottomPadding = await page
+      .locator('.vb-shell')
       .evaluate((element) => Number.parseFloat(getComputedStyle(element).paddingBottom));
-    expect(reservedBottom).toBeCloseTo(dockBox.height + 12, 0);
+    expect(shellBottomPadding).toBeCloseTo(dockBox.height + 32, 0);
+    const globalFooterBox = await page.locator('.vb-footer').boundingBox();
+    expect(globalFooterBox).not.toBeNull();
+    if (!globalFooterBox) throw new Error('Global footer box unavailable');
+    expect(globalFooterBox.y + globalFooterBox.height).toBeLessThanOrEqual(dockBox.y - 20 + 1);
 
     await expect(options).toHaveAttribute('aria-expanded', 'true');
     await composer.locator('input[type="file"]').setInputFiles([]);

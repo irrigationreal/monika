@@ -407,7 +407,9 @@ onMounted(async () => {
 
       <div v-if="state.error.value" class="vb-banner">{{ state.error.value }}</div>
 
-      <router-view />
+      <main class="vb-main">
+        <router-view />
+      </main>
 
       <footer class="vb-footer">
         <div class="vb-footer-bar"></div>

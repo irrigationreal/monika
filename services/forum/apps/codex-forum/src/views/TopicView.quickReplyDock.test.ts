@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 describe('TopicView persistent Quick Reply dock', () => {
   const source = readFileSync(resolve(process.cwd(), 'src/views/TopicView.vue'), 'utf8');
+  const appSource = readFileSync(resolve(process.cwd(), 'src/App.vue'), 'utf8');
   const stateSource = readFileSync(resolve(process.cwd(), 'src/composables/useForumState.ts'), 'utf8');
   const styles = readFileSync(resolve(process.cwd(), 'src/styles/posts.css'), 'utf8');
   const responsiveStyles = readFileSync(resolve(process.cwd(), 'src/styles/responsive.css'), 'utf8');
@@ -88,10 +89,10 @@ describe('TopicView persistent Quick Reply dock', () => {
   });
 
   it('scopes one chainable scrolling middle to the expanded dock and shares one clamped height', () => {
-    expect(styles).toContain('--quick-reply-dock-height: min(');
-    expect(styles).toContain('calc(100dvh - env(safe-area-inset-bottom) - 12px)');
+    expect(componentStyles).toContain('--quick-reply-dock-height: min(');
+    expect(componentStyles).toContain('calc(100dvh - env(safe-area-inset-bottom) - 12px)');
     expect(styles).toContain('height: var(--quick-reply-dock-height)');
-    expect(styles).toContain('padding-bottom: calc(var(--quick-reply-dock-height) + 12px)');
+    expect(componentStyles).toContain('var(--quick-reply-dock-height) + var(--quick-reply-dock-expanded-gap)');
     expect(styles).toContain('bottom: calc(var(--quick-reply-dock-height) + 32px)');
     expect(responsiveStyles).toContain('--quick-reply-dock-height: min(');
     expect(responsiveStyles).toContain('calc(100dvh - env(safe-area-inset-bottom) - 12px)');
@@ -99,6 +100,18 @@ describe('TopicView persistent Quick Reply dock', () => {
     expect(styles).not.toMatch(/\.vb-quick-reply-dock-body\s*\{[^}]*overflow-y/s);
     expect(styles).not.toMatch(/\.vb-quick-reply[^}]*\{[^}]*overscroll-behavior/s);
     expect(styles).toContain('.vb-quick-reply-submit {\n  width: 100%;');
+  });
+
+  it('fills short pages and reserves dock clearance after the global footer', () => {
+    expect(appSource).toContain('<main class="vb-main">\n        <router-view />\n      </main>');
+    expect(componentStyles).toContain('grid-template-columns: minmax(0, 1fr)');
+    expect(componentStyles).toContain('grid-template-rows: auto minmax(0, 1fr)');
+    expect(componentStyles).toContain('min-height: 100dvh');
+    expect(componentStyles).toMatch(/\.vb-shell\s*\{[^}]*display: flex[^}]*flex-direction: column/s);
+    expect(componentStyles).toMatch(/\.vb-main\s*\{[^}]*flex: 1 0 auto/s);
+    expect(componentStyles).toContain('.vb-shell:has(.vb-quick-reply--docked.vb-quick-reply--collapsed)');
+    expect(componentStyles).toContain('.vb-shell:has(.vb-quick-reply--docked.vb-quick-reply--expanded)');
+    expect(styles).not.toMatch(/\.vb-topic-with-reply-dock--(?:collapsed|expanded)\s*\{[^}]*padding-bottom/s);
   });
 
   it('does not animate scroll-to-top bottom changes through the dock', () => {

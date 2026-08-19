@@ -5,8 +5,16 @@
 
 /* Layout */
 .vb-body {
+  --quick-reply-dock-height: min(clamp(18rem, 40dvh, 28rem), calc(100dvh - env(safe-area-inset-bottom) - 12px));
+  --quick-reply-dock-expanded-gap: 12px;
+  --quick-reply-dock-collapsed-height: 50px;
+  --quick-reply-dock-collapsed-gap: 8px;
+
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   min-height: 100vh;
-  padding-bottom: 40px;
+  min-height: 100dvh;
 }
 
 .vb-topbar {
@@ -16,6 +24,9 @@
 }
 
 .vb-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   width: 95%;
   max-width: 980px;
   margin: 0 auto;
@@ -24,6 +35,19 @@
   border-right: 1px solid var(--text-muted);
   box-shadow: 0 8px 20px var(--shadow-color);
   padding: 10px 12px 20px;
+}
+
+.vb-main {
+  flex: 1 0 auto;
+  min-width: 0;
+}
+
+.vb-shell:has(.vb-quick-reply--docked.vb-quick-reply--collapsed) {
+  padding-bottom: calc(20px + var(--quick-reply-dock-collapsed-height) + var(--quick-reply-dock-collapsed-gap));
+}
+
+.vb-shell:has(.vb-quick-reply--docked.vb-quick-reply--expanded) {
+  padding-bottom: calc(20px + var(--quick-reply-dock-height) + var(--quick-reply-dock-expanded-gap));
 }
 
 /* Header */
