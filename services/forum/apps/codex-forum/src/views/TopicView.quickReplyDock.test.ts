@@ -10,6 +10,7 @@ describe('TopicView persistent Quick Reply dock', () => {
   const styles = readFileSync(resolve(process.cwd(), 'src/styles/posts.css'), 'utf8');
   const responsiveStyles = readFileSync(resolve(process.cwd(), 'src/styles/responsive.css'), 'utf8');
   const componentStyles = readFileSync(resolve(process.cwd(), 'src/styles/components.css'), 'utf8');
+  const themeStyles = readFileSync(resolve(process.cwd(), 'src/styles/theme.css'), 'utf8');
 
   it('keeps one composer, textarea, and action across presentation states', () => {
     expect(source).toContain("ref<'inline' | 'docked-expanded' | 'docked-collapsed'>('inline')");
@@ -104,11 +105,17 @@ describe('TopicView persistent Quick Reply dock', () => {
 
   it('fills short pages and reserves dock clearance after the global footer', () => {
     expect(appSource).toContain('<main class="vb-main">\n        <router-view />\n      </main>');
-    expect(componentStyles).toContain('grid-template-columns: minmax(0, 1fr)');
-    expect(componentStyles).toContain('grid-template-rows: auto minmax(0, 1fr)');
+    expect(appSource).not.toContain('vb-topbar');
+    expect(componentStyles).toMatch(/\.vb-body\s*\{[^}]*display: flex/s);
     expect(componentStyles).toContain('min-height: 100dvh');
-    expect(componentStyles).toMatch(/\.vb-shell\s*\{[^}]*display: flex[^}]*flex-direction: column/s);
+    expect(componentStyles).toMatch(
+      /\.vb-shell\s*\{[^}]*display: flex[^}]*flex: 1 0 auto[^}]*flex-direction: column/s
+    );
     expect(componentStyles).toMatch(/\.vb-main\s*\{[^}]*flex: 1 0 auto/s);
+    expect(componentStyles).not.toContain('.vb-topbar');
+    expect(themeStyles).not.toContain('.vb-topbar');
+    expect(themeStyles).not.toContain('--topbar-bg');
+    expect(styles).toContain('background: var(--status-pill-bg)');
     expect(componentStyles).toContain('.vb-shell:has(.vb-quick-reply--docked.vb-quick-reply--collapsed)');
     expect(componentStyles).toContain('.vb-shell:has(.vb-quick-reply--docked.vb-quick-reply--expanded)');
     expect(styles).not.toMatch(/\.vb-topic-with-reply-dock--(?:collapsed|expanded)\s*\{[^}]*padding-bottom/s);

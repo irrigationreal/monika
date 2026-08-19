@@ -899,7 +899,7 @@
 
 /* Status pill */
 .vb-status-pill {
-  background: var(--topbar-bg);
+  background: var(--status-pill-bg);
   color: var(--text-inverse);
   padding: 2px 6px;
   border-radius: 3px;

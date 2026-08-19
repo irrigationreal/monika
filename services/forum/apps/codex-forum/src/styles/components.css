@@ -10,21 +10,14 @@
   --quick-reply-dock-collapsed-height: 50px;
   --quick-reply-dock-collapsed-gap: 8px;
 
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto minmax(0, 1fr);
+  display: flex;
   min-height: 100vh;
   min-height: 100dvh;
 }
 
-.vb-topbar {
-  height: 12px;
-  background: var(--topbar-bg);
-  border-bottom: 1px solid var(--bg-surface);
-}
-
 .vb-shell {
   display: flex;
+  flex: 1 0 auto;
   flex-direction: column;
   min-height: 0;
   width: 95%;

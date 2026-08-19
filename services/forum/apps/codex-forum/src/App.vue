@@ -267,8 +267,6 @@ onMounted(async () => {
 
 <template>
   <div class="vb-body">
-    <div class="vb-topbar"></div>
-
     <div class="vb-shell">
       <header class="vb-header">
         <button class="vb-logo" type="button" aria-label="Go to forum home" @click="goHome">
