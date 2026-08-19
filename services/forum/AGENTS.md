@@ -191,12 +191,12 @@ Key files:
 
 ## Canonical admin Trace
 
-The forum has one reasoning/tool visualization: the admin-only topic **Trace**. While a response is active, admins see a
-persistent spinning activity indicator beside the current state and a chronological three-card preview in the draft-post
-position, and can open the complete Trace in the viewport Admin Workspace. The complete Trace opens newest-first and can
-be reversed temporarily; its direction never persists across Trace views or topics. Non-admins, including authenticated
-members, receive and render only a neutral "Response in progress…" placeholder. Completed posts never embed trace
-history.
+The forum has one reasoning/tool visualization: the admin-only topic **Trace**. While a response is starting, admins see
+one spinner in the empty preview; once trace cards arrive, that movement hands off to a persistent spinner beside the
+current state in the chronological three-card preview. Admins can open the complete Trace in the viewport Admin
+Workspace. The complete Trace opens newest-first and can be reversed temporarily; its direction never persists across
+Trace views or topics. Non-admins, including authenticated members, receive and render only a neutral "Response in
+progress…" placeholder. Completed posts never embed trace history.
 
 Trace, Session Diagnostics, and Auto-Director are secondary operational surfaces in the Admin Workspace. Session
 Diagnostics combines robot activity/context controls with canonical session metadata so closely related operational

@@ -7,9 +7,9 @@ in [`../../../docs/forum.md`](../../../docs/forum.md).
 
 The forum exposes one trace visualization: the admin-only topic **Trace**.
 
-- During an active response, the draft-post position shows admins a continuously spinning activity indicator beside the
-  current state and the latest three chronological reasoning/tool cards from that response. Before the first card, the
-  existing “Starting response…” state retains its own spinner. **Open Trace** opens the complete session trace
+- During an active response, the draft-post position shows admins the latest three chronological reasoning/tool cards
+  from that response and a spinning activity indicator beside the current state once cards are available. Before the
+  first card, only the existing “Starting response…” spinner is shown. **Open Trace** opens the complete session trace
   newest-first by default and offers a temporary oldest-first view; **Stop Robot** uses the shared destructive-action
   confirmation.
 - Guests and authenticated non-admins see only a neutral “Response in progress…” placeholder.
@@ -93,8 +93,8 @@ persisted, so closing and reopening Trace or navigating to another topic restore
 
 The active preview is independent of that temporary workspace direction. It takes only the final three cards from the
 active response, presents them chronologically, and never fills empty slots with stale cards from an earlier response.
-Its header spinner remains mounted throughout the preview rather than disappearing when the first trace card replaces
-the “Starting response…” state.
+The “Starting response…” spinner is the only spinner before cards exist. When the first trace card replaces that state,
+the header spinner takes over and remains mounted for the rest of the active preview.
 
 ## Reasoning and tool presentation
 
