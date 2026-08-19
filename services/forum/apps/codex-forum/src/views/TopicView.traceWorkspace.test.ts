@@ -21,9 +21,9 @@ describe('canonical topic Trace workspace', () => {
     expect(traceSource).toContain('buildPersistedTraceItems');
   });
 
-  it('keeps visible movement throughout the active Trace preview', () => {
+  it('hands off visible movement from startup to the active Trace preview', () => {
     expect(traceSource).toContain(
-      '<strong>Trace</strong>\n        <span class="vb-spinner vb-spinner-dark" aria-hidden="true"></span>\n        <span class="vb-status-pill">'
+      '<strong>Trace</strong>\n        <span v-if="renderGroups.length > 0" class="vb-spinner vb-spinner-dark" aria-hidden="true"></span>\n        <span class="vb-status-pill">'
     );
     expect(traceSource).toContain(
       '<span class="vb-spinner vb-spinner-dark" aria-hidden="true"></span>\n        Starting response…'
