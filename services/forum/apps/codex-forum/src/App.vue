@@ -267,8 +267,6 @@ onMounted(async () => {
 
 <template>
   <div class="vb-body">
-    <div class="vb-topbar"></div>
-
     <div class="vb-shell">
       <header class="vb-header">
         <button class="vb-logo" type="button" aria-label="Go to forum home" @click="goHome">
@@ -407,7 +405,9 @@ onMounted(async () => {
 
       <div v-if="state.error.value" class="vb-banner">{{ state.error.value }}</div>
 
-      <router-view />
+      <main class="vb-main">
+        <router-view />
+      </main>
 
       <footer class="vb-footer">
         <div class="vb-footer-bar"></div>

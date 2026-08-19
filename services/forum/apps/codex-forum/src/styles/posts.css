@@ -899,7 +899,7 @@
 
 /* Status pill */
 .vb-status-pill {
-  background: var(--topbar-bg);
+  background: var(--status-pill-bg);
   color: var(--text-inverse);
   padding: 2px 6px;
   border-radius: 3px;
@@ -1720,18 +1720,6 @@
 }
 
 /* Viewport-persistent Quick Reply. The composer is never duplicated or remounted. */
-.vb-topic-with-reply-dock {
-  --quick-reply-dock-height: min(clamp(18rem, 40dvh, 28rem), calc(100dvh - env(safe-area-inset-bottom) - 12px));
-}
-
-.vb-topic-with-reply-dock--collapsed {
-  padding-bottom: 58px;
-}
-
-.vb-topic-with-reply-dock--expanded {
-  padding-bottom: calc(var(--quick-reply-dock-height) + 12px);
-}
-
 .vb-quick-reply-header {
   flex: none;
   align-items: center;
@@ -1816,7 +1804,7 @@
 }
 
 .vb-quick-reply--collapsed {
-  height: 50px;
+  height: var(--quick-reply-dock-collapsed-height);
 }
 
 .vb-quick-reply--collapsed .vb-quick-reply-header {

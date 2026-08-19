@@ -342,19 +342,13 @@
 }
 
 @media (max-width: 600px) {
-  .vb-topic-with-reply-dock {
+  .vb-body {
     --quick-reply-dock-height: min(
       clamp(18rem, calc(55dvh + env(safe-area-inset-bottom)), 34rem),
       calc(100dvh - env(safe-area-inset-bottom) - 12px)
     );
-  }
-
-  .vb-topic-with-reply-dock--collapsed {
-    padding-bottom: calc(56px + env(safe-area-inset-bottom));
-  }
-
-  .vb-topic-with-reply-dock--expanded {
-    padding-bottom: calc(var(--quick-reply-dock-height) + 12px);
+    --quick-reply-dock-collapsed-height: calc(52px + env(safe-area-inset-bottom));
+    --quick-reply-dock-collapsed-gap: 4px;
   }
 
   .vb-quick-reply--docked {
@@ -375,10 +369,6 @@
   .vb-quick-reply--docked .vb-btn {
     min-height: 44px;
     min-width: 44px;
-  }
-
-  .vb-quick-reply--collapsed {
-    height: calc(52px + env(safe-area-inset-bottom));
   }
 
   .vb-topic-with-reply-dock--collapsed .vb-scroll-top {
