@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { migrate } from '../db';
 import { ForumStore } from '../store';
 import { DeploymentAdmissionCoordinator, DispatchAdmissionFencedError } from './deploymentAdmissionCoordinator';
-import { ForkService } from './forkService';
+import { ForkBoundariesUnavailableError, ForkService } from './forkService';
 
 describe('ForkService', () => {
   let db: Database.Database;
@@ -60,7 +60,7 @@ describe('ForkService', () => {
         piMessageId: ids[index]!,
         postId: post.id,
         role: index % 2 === 0 ? 'user' : 'assistant',
-        metadata: { contributorPostIds: [post.id] },
+        metadata: index % 2 === 0 ? { contributorPostIds: [post.id] } : { linkedBy: 'assistant-projection' },
       });
     db.prepare(
       'insert into pi_session_heads(pi_session_id,leaf_entry_id,active_entry_ids_json,observed_at) values(?,?,?,?)'
@@ -225,6 +225,30 @@ describe('ForkService', () => {
     });
     await expect(stat(join(uploads, 'fork-prestage', 'fork-1'))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(wake).toHaveBeenCalled();
+  });
+
+  it('refreshes canonical projection before listing boundaries and reports refresh outages distinctly', async () => {
+    const seeded = await seed();
+    const refreshBoundaries = vi.fn().mockResolvedValue(undefined);
+    const service = new ForkService(
+      store,
+      {
+        getTopicCompactionLeaf: vi.fn(),
+        forkTopicConversation: vi.fn(),
+        acknowledgeFork: vi.fn(),
+      },
+      { wake: vi.fn() },
+      { intervalMs: 60_000, uploadsDir: uploads, refreshBoundaries }
+    );
+    services.push(service);
+
+    await expect(service.boundaries(seeded.topic.id)).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ postId: seeded.boundary.id })])
+    );
+    expect(refreshBoundaries).toHaveBeenCalledWith(seeded.topic.id);
+
+    refreshBoundaries.mockRejectedValueOnce(new Error('agentd unavailable'));
+    await expect(service.boundaries(seeded.topic.id)).rejects.toBeInstanceOf(ForkBoundariesUnavailableError);
   });
 
   it('excludes grouped and incomplete/deleted projection boundaries', async () => {

@@ -12,7 +12,7 @@ import {
   mapTopicOperationalEventToDto,
 } from '../mappers/dto';
 import { CompactionConflictError, CompactionNotFoundError } from '../services/compactionService';
-import { ForkConflictError, ForkNotFoundError } from '../services/forkService';
+import { ForkBoundariesUnavailableError, ForkConflictError, ForkNotFoundError } from '../services/forkService';
 import { serializePost, serializeTopic } from '../utils/serializers';
 import { parseBody } from '../utils/validation';
 
@@ -540,14 +540,20 @@ export function registerForumRoutes({
     const { topicId } = request.params as { topicId: string };
     requireTopicVisible(topicId, request);
     if (!forkService) throw app.httpErrors.serviceUnavailable('Fork service is unavailable');
-    return {
-      items: forkService.boundaries(topicId).map((boundary) => ({
-        postId: boundary.postId,
-        postNumber: boundary.postNumber,
-        excerpt: boundary.excerpt,
-        body: boundary.body,
-      })),
-    };
+    try {
+      const boundaries = await forkService.boundaries(topicId);
+      return {
+        items: boundaries.map((boundary) => ({
+          postId: boundary.postId,
+          postNumber: boundary.postNumber,
+          excerpt: boundary.excerpt,
+          body: boundary.body,
+        })),
+      };
+    } catch (error) {
+      if (error instanceof ForkBoundariesUnavailableError) throw app.httpErrors.serviceUnavailable(error.message);
+      throw error;
+    }
   });
 
   app.post('/topics/:topicId/forks', async (request, reply) => {
@@ -570,6 +576,7 @@ export function registerForumRoutes({
       reply.header('Location', `${request.url}/${encodeURIComponent(operation.id)}`);
       return mapForkOperationToDto(operation);
     } catch (error) {
+      if (error instanceof ForkBoundariesUnavailableError) throw app.httpErrors.serviceUnavailable(error.message);
       if (error instanceof ForkConflictError) throw app.httpErrors.conflict(error.message);
       throw error;
     }

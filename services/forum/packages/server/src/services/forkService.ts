@@ -36,6 +36,7 @@ function definitive(error: unknown): boolean {
   return typeof value.status === 'number' && value.status >= 400 && value.status < 500;
 }
 
+export class ForkBoundariesUnavailableError extends Error {}
 export class ForkConflictError extends Error {}
 export class ForkNotFoundError extends Error {}
 
@@ -61,7 +62,11 @@ export class ForkService {
       acknowledgeFork(operationId: string, childSessionId: string): Promise<void>;
     },
     private readonly dispatcher: { wake(): void },
-    private readonly opts: { intervalMs?: number; uploadsDir?: string } = {}
+    private readonly opts: {
+      intervalMs?: number;
+      uploadsDir?: string;
+      refreshBoundaries?: (topicId: string) => Promise<void>;
+    } = {}
   ) {}
 
   start(): number {
@@ -92,7 +97,16 @@ export class ForkService {
     });
   }
 
-  boundaries(topicId: string): ForkBoundary[] {
+  async boundaries(topicId: string): Promise<ForkBoundary[]> {
+    if (this.opts.refreshBoundaries) {
+      try {
+        await this.opts.refreshBoundaries(topicId);
+      } catch (error) {
+        throw new ForkBoundariesUnavailableError(
+          error instanceof Error ? error.message : 'Canonical fork boundaries could not be refreshed'
+        );
+      }
+    }
     return this.store.listEligibleForkBoundaries(topicId);
   }
   get(topicId: string, operationId: string): ForkOperation {
@@ -184,7 +198,9 @@ export class ForkService {
 
     const releaseAdmission = this.store.beginRobotWork();
     try {
-      const boundary = this.boundaries(input.topicId).find((candidate) => candidate.postId === input.boundaryPostId);
+      const boundary = (await this.boundaries(input.topicId)).find(
+        (candidate) => candidate.postId === input.boundaryPostId
+      );
       if (!boundary) throw new ForkConflictError('Selected post is not an eligible canonical fork boundary');
       const session = this.store.getSessionByTopic(input.topicId);
       const link = this.store.getPiSessionLinkByTopic(input.topicId);

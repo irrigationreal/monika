@@ -5,6 +5,7 @@ import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vu
 import AutoCompactOption from '../components/AutoCompactOption.vue';
 import ConfirmationDialog from '../components/ConfirmationDialog.vue';
 import DraftStatus from '../components/DraftStatus.vue';
+import ForkTopicDialog from '../components/ForkTopicDialog.vue';
 import MessageTemplatePicker from '../components/MessageTemplatePicker.vue';
 import OperationalEventBar from '../components/OperationalEventBar.vue';
 import RenderedContent from '../components/RenderedContent.vue';
@@ -165,10 +166,9 @@ const forkOperation = ref<ForkOperationDto | null>(null);
 const forkState = ref<TopicForkStateDto>({ active: null, latest: null });
 const forkError = ref('');
 const forkSubmitting = ref(false);
-const forkModalRef = ref<HTMLElement | null>(null);
+const forkBoundariesLoading = ref(false);
 let forkPollTimer: number | null = null;
-let forkFocusOrigin: HTMLElement | null = null;
-let bodyOverflowBeforeForkModal = '';
+let forkBoundaryRequestGeneration = 0;
 interface ForkIntent {
   operationId: string;
   topicId: string;
@@ -218,6 +218,15 @@ const canFork = computed(
     !forkSubmitting.value &&
     forkOperation.value?.status !== 'pending' &&
     forkOperation.value?.status !== 'running'
+);
+const canSubmitFork = computed(
+  () =>
+    canFork.value &&
+    showForkModal.value &&
+    !forkBoundariesLoading.value &&
+    forkBoundaries.value.some((boundary) => boundary.postId === forkBoundaryPostId.value) &&
+    Boolean(forkTitle.value.trim()) &&
+    Boolean(forkOpeningBody.value.trim())
 );
 const canCompact = computed(
   () =>
@@ -566,69 +575,49 @@ function clearForkIntent(topicId: string): void {
   }
 }
 
-function restoreForkModalEnvironment(): void {
-  document.body.style.overflow = bodyOverflowBeforeForkModal;
-  const focusTarget = forkFocusOrigin;
-  forkFocusOrigin = null;
-  void nextTick(() => focusTarget?.focus());
-}
-
-function handleForkKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Escape' && !forkSubmitting.value) {
-    event.preventDefault();
-    closeForkModal();
-    return;
-  }
-  if (event.key !== 'Tab') return;
-  const focusable = Array.from(
-    forkModalRef.value?.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href]'
-    ) ?? []
-  ).filter((element) => element.offsetParent !== null);
-  const first = focusable.at(0);
-  const last = focusable.at(-1);
-  if (!first || !last) return;
-  if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault();
-    last.focus();
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault();
-    first.focus();
-  }
-}
-
 async function openForkModal(): Promise<void> {
   const topicId = routeTopicId.value;
   if (!topicId || !canFork.value) return;
-  forkFocusOrigin = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  bodyOverflowBeforeForkModal = document.body.style.overflow;
-  document.body.style.overflow = 'hidden';
+  const requestGeneration = ++forkBoundaryRequestGeneration;
   forkError.value = '';
   forkBoundaries.value = [];
+  forkBoundaryPostId.value = '';
+  forkOpeningBody.value = '';
+  forkTitle.value = `Fork: ${state.selectedTopic.value?.title ?? 'Topic'}`;
+  forkBoundariesLoading.value = true;
   showForkModal.value = true;
-  void nextTick(() => forkModalRef.value?.querySelector<HTMLElement>('.vb-modal-close')?.focus());
   try {
     const response = await api.listForkBoundaries(topicId);
-    if (routeTopicId.value !== topicId) return;
+    if (routeTopicId.value !== topicId || requestGeneration !== forkBoundaryRequestGeneration) return;
     forkBoundaries.value = response.items;
-    const boundary = response.items.at(-1);
-    if (!boundary) {
+    const defaultBoundary = response.items.at(-1);
+    if (!defaultBoundary) {
       forkError.value = 'No stable completed user-message boundary is available.';
       return;
     }
     const intent = loadForkIntent(topicId);
-    forkBoundaryPostId.value = intent?.boundaryPostId ?? boundary.postId;
-    forkOpeningBody.value = intent?.openingBody ?? boundary.body;
-    forkTitle.value = intent?.title ?? `Fork: ${state.selectedTopic.value?.title ?? 'Topic'}`;
+    const intendedBoundary = intent
+      ? response.items.find((boundary) => boundary.postId === intent.boundaryPostId)
+      : undefined;
+    if (intent && !intendedBoundary) clearForkIntent(topicId);
+    const boundary = intendedBoundary ?? defaultBoundary;
+    forkBoundaryPostId.value = boundary.postId;
+    forkOpeningBody.value = intendedBoundary && intent ? intent.openingBody : boundary.body;
+    forkTitle.value = intendedBoundary && intent ? intent.title : forkTitle.value;
   } catch (error) {
-    forkError.value = error instanceof Error ? error.message : 'Could not load fork boundaries.';
+    if (routeTopicId.value === topicId && requestGeneration === forkBoundaryRequestGeneration) {
+      forkError.value = error instanceof Error ? error.message : 'Could not refresh canonical fork boundaries.';
+    }
+  } finally {
+    if (requestGeneration === forkBoundaryRequestGeneration) forkBoundariesLoading.value = false;
   }
 }
 
 function closeForkModal(): void {
   if (forkSubmitting.value) return;
+  forkBoundaryRequestGeneration += 1;
+  forkBoundariesLoading.value = false;
   showForkModal.value = false;
-  restoreForkModalEnvironment();
 }
 
 function selectForkBoundary(): void {
@@ -653,10 +642,7 @@ async function pollFork(topicId: string, operationId: string): Promise<void> {
     if (operation.status === 'succeeded' && operation.childTopicId) {
       if (intent?.operationId === operation.id) {
         clearForkIntent(topicId);
-        if (showForkModal.value) {
-          showForkModal.value = false;
-          restoreForkModalEnvironment();
-        }
+        if (showForkModal.value) showForkModal.value = false;
         await router.push({ name: 'topic.view', params: { topicId: operation.childTopicId } });
       }
     } else if (operation.status === 'needs_manual_review') {
@@ -744,7 +730,7 @@ function scheduleForkPoll(topicId: string, operationId: string): void {
 
 async function submitFork(): Promise<void> {
   const topicId = routeTopicId.value;
-  if (!topicId || !forkBoundaryPostId.value || !canFork.value) return;
+  if (!topicId || !canSubmitFork.value) return;
   forkSubmitting.value = true;
   forkError.value = '';
   const intent = loadForkIntent(topicId) ?? {
@@ -2194,11 +2180,13 @@ watch(
     compactionError.value = '';
     if (forkPollTimer !== null) window.clearTimeout(forkPollTimer);
     forkPollTimer = null;
-    if (showForkModal.value) {
-      showForkModal.value = false;
-      restoreForkModalEnvironment();
-    }
+    forkBoundaryRequestGeneration += 1;
+    forkBoundariesLoading.value = false;
+    if (showForkModal.value) showForkModal.value = false;
     forkBoundaries.value = [];
+    forkBoundaryPostId.value = '';
+    forkTitle.value = '';
+    forkOpeningBody.value = '';
     forkOperation.value = null;
     forkState.value = { active: null, latest: null };
     forkError.value = '';
@@ -2249,8 +2237,7 @@ onUnmounted(() => {
   state.closeStream();
   stopCompactionPolling();
   if (forkPollTimer !== null) window.clearTimeout(forkPollTimer);
-  if (showForkModal.value) document.body.style.overflow = bodyOverflowBeforeForkModal;
-  else if (showCompactionModal.value) document.body.style.overflow = bodyOverflowBeforeCompactionModal;
+  if (showCompactionModal.value) document.body.style.overflow = bodyOverflowBeforeCompactionModal;
   window.removeEventListener('scroll', handleScroll);
 });
 </script>
@@ -2389,61 +2376,21 @@ onUnmounted(() => {
     @cancel="showDiscardDraftConfirm = false"
   />
 
-  <div v-if="showForkModal" class="vb-modal-overlay">
-    <div
-      ref="forkModalRef"
-      class="vb-modal"
-      role="dialog"
-      tabindex="-1"
-      aria-modal="true"
-      aria-labelledby="fork-modal-title"
-      @keydown="handleForkKeydown"
-    >
-      <div class="vb-modal-header">
-        <span id="fork-modal-title">Fork Topic</span>
-        <button
-          class="vb-modal-close"
-          type="button"
-          aria-label="Close fork dialog"
-          :disabled="forkSubmitting"
-          @click="closeForkModal"
-        >
-          &times;
-        </button>
-      </div>
-      <div class="vb-modal-body">
-        <p>Create a new canonical conversation inheriting history before a completed user message.</p>
-        <label for="fork-boundary">Fork boundary</label>
-        <select id="fork-boundary" v-model="forkBoundaryPostId" @change="selectForkBoundary">
-          <option v-for="boundary in forkBoundaries" :key="boundary.postId" :value="boundary.postId">
-            #{{ boundary.postNumber }} — {{ boundary.excerpt }}
-          </option>
-        </select>
-        <label for="fork-title">New topic title</label>
-        <input id="fork-title" v-model="forkTitle" type="text" maxlength="300" />
-        <label for="fork-opening">Edited opening message</label>
-        <textarea id="fork-opening" v-model="forkOpeningBody" rows="10"></textarea>
-        <p v-if="forkError" class="vb-error">{{ forkError }}</p>
-        <div class="vb-modal-actions">
-          <button
-            class="vb-btn"
-            type="button"
-            :disabled="forkSubmitting || !forkTitle.trim() || !forkOpeningBody.trim()"
-            @click="submitFork"
-          >
-            {{
-              forkSubmitting || forkOperation?.status === 'pending' || forkOperation?.status === 'running'
-                ? 'Forking…'
-                : 'Create fork'
-            }}
-          </button>
-          <button class="vb-btn vb-btn-secondary" type="button" :disabled="forkSubmitting" @click="closeForkModal">
-            Cancel
-          </button>
-        </div>
-      </div>
-    </div>
-  </div>
+  <ForkTopicDialog
+    v-if="showForkModal"
+    v-model:boundary-post-id="forkBoundaryPostId"
+    v-model:title="forkTitle"
+    v-model:opening-body="forkOpeningBody"
+    :boundaries="forkBoundaries"
+    :loading="forkBoundariesLoading"
+    :submitting="forkSubmitting"
+    :operation-status="forkOperation?.status ?? null"
+    :error="forkError"
+    :can-submit="canSubmitFork"
+    @boundary-change="selectForkBoundary"
+    @submit="submitFork"
+    @close="closeForkModal"
+  />
 
   <div v-if="showCompactionModal" class="vb-modal-overlay vb-compaction-modal-overlay">
     <div

@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 describe('TopicView fork controls', () => {
   const source = readFileSync(resolve(process.cwd(), 'src/views/TopicView.vue'), 'utf8');
+  const dialog = readFileSync(resolve(process.cwd(), 'src/components/ForkTopicDialog.vue'), 'utf8');
 
   it('keeps Fork admin-only beside Handoff and Compact', () => {
     expect(source).toContain(
@@ -17,8 +18,8 @@ describe('TopicView fork controls', () => {
   });
 
   it('displays forum post numbers while selecting and submitting stable post ids', () => {
-    expect(source).toContain(':value="boundary.postId"');
-    expect(source).toContain('#{{ boundary.postNumber }}');
+    expect(dialog).toContain(':value="boundary.postId"');
+    expect(dialog).toContain('#{{ boundary.postNumber }}');
     expect(source).toContain('boundaryPostId: forkBoundaryPostId.value');
   });
 
@@ -38,14 +39,13 @@ describe('TopicView fork controls', () => {
     expect(source).toContain("if (operation.status === 'pending' || operation.status === 'running') scheduleForkPoll");
   });
 
-  it('implements accessible dialog focus, keyboard trapping, and restoration', () => {
-    expect(source).toContain('ref="forkModalRef"');
-    expect(source).toContain('role="dialog"');
-    expect(source).toContain('aria-modal="true"');
-    expect(source).toContain('aria-labelledby="fork-modal-title"');
-    expect(source).toContain('@keydown="handleForkKeydown"');
-    expect(source).toContain("event.key === 'Escape'");
-    expect(source).toContain('restoreForkModalEnvironment()');
-    expect(source).toContain('aria-label="Close fork dialog"');
+  it('mounts the dedicated dialog with canonical refresh and authoritative submit state', () => {
+    expect(source).toContain('<ForkTopicDialog');
+    expect(source).toContain(':loading="forkBoundariesLoading"');
+    expect(source).toContain(':can-submit="canSubmitFork"');
+    expect(source).toContain('requestGeneration !== forkBoundaryRequestGeneration');
+    expect(dialog).toContain('role="dialog"');
+    expect(dialog).toContain('aria-describedby="fork-modal-description"');
+    expect(dialog).toContain("event.key === 'Escape'");
   });
 });

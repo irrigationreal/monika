@@ -165,7 +165,11 @@ API cannot provide atomic delivery or acknowledgement.
 
 Forum-native session forks preserve the same authority boundary. Agentd owns the
 canonical before-user Pi branch copy and its durable idempotency ledger; the forum
-owns a recoverable projection/materialization job. Pending children are quarantined
+owns a recoverable projection/materialization job. Before candidate selection, the
+forum refreshes canonical topology and reconciles v2 contributor provenance so a
+single-post user boundary is proven rather than inferred from forum adjacency; the
+following assistant entry is validated through its unique canonical projection.
+Pending children are quarantined
 from generic session discovery until the forum has atomically created the child
 topic, copied active-branch posts with fresh identities, copied attachment bytes,
 linked canonical message IDs, and seeded the inherited dispatch generation. The

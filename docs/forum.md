@@ -144,7 +144,12 @@ Implemented in `services/forum`:
 - Sync polls agentd list/export endpoints, indexes canonical entry topology,
   imports active-branch messages idempotently, and reconciles forum-origin
   messages by canonical provenance before using `[FORUM TURN]` or text matching
-  as legacy fallbacks. Deployment admission pauses new cycles and boundedly waits
+  as legacy fallbacks. Canonical v2 `utteranceIds` are also reconciled into the
+  forum message link for existing as well as newly projected user prompts; this
+  preserves whether one Pi prompt came from one forum post or a grouped dispatch.
+  Existing forum-local mappings remain authoritative after fork materialization,
+  because inherited canonical provenance still names the parent topic's post IDs.
+  Deployment admission pauses new cycles and boundedly waits
   for an already-running cycle, so the five-second poll is telemetry rather than
   a source of autodeploy starvation.
 - Forum-created, Pi-imported, and hybrid topics share one reconciliation path.
@@ -161,7 +166,12 @@ Implemented in `services/forum`:
   metadata, edited draft post, and first robot turn.
 - Forum-native fork is an admin-only, idle-only durable operation. V1 forks in the
   same forum and cwd, from a canonical single-post user boundary selected by stable
-  forum post ID (the UI labels it with the forum post number). Agentd performs Pi's
+  forum post ID (the UI labels it with the forum post number). Opening the selector
+  performs a targeted canonical export/reconciliation so existing links self-repair;
+  refresh failure is reported as unavailable rather than as an empty candidate list.
+  Eligibility uses v2 contributor provenance for the user boundary, while the following
+  canonical assistant entry needs its ordinary unique projected link rather than
+  user-contributor metadata. Grouped prompts remain ineligible. Agentd performs Pi's
   exact before-user branch extraction with a detached manager, leaving parent bytes
   and the loaded parent runtime unchanged. The forum copies the inherited active
   projection and attachments, seeds the child's inherited dispatch generation, and
@@ -181,7 +191,9 @@ Implemented in `services/forum`:
   state and reuses that exact ID only while acceptance itself is unknown. Agentd's
   `fork_manual_recovery` response becomes the durable active forum status
   `needs_manual_review`: it is not failed or retried, the source mutation fence and prestaged
-  custody remain in place, and the UI tells an operator that review is required. The admin API is
+  custody remain in place, and the UI tells an operator that review is required. The
+  responsive dialog disables stale values during canonical refresh, uses themed shared
+  form controls, and keeps pending operations visibly non-submittable. The admin API is
   `GET /api/topics/:topicId/forks`, `GET /api/topics/:topicId/forks/boundaries`,
   `POST /api/topics/:topicId/forks`, and `GET /api/topics/:topicId/forks/:operationId`.
 - `pi_session_links` stores `parent_pi_session_id`, `parent_pi_session_path`,

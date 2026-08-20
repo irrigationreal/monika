@@ -2557,8 +2557,7 @@ export class ForumStore {
         !response.entry.has_visible_text ||
         !response.message ||
         nextCanonicalMessageId !== response.message.pi_message_id ||
-        !active.has(response.message.pi_message_id) ||
-        !response.singleton
+        !active.has(response.message.pi_message_id)
       )
         continue;
       boundaries.push({
