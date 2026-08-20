@@ -63,6 +63,8 @@ export type PiMessageProvenance = {
   postId?: string | null;
   messageKind?: string | null;
   utteranceId?: string | null;
+  utteranceIds?: string[] | null;
+  utterance_ids?: string[] | null;
   executionOrigins?: Array<Record<string, unknown>> | null;
   continuation?: Record<string, unknown> | null;
   attachmentRefs?: Array<Record<string, unknown>> | null;
@@ -176,6 +178,14 @@ const LIVE_DUPLICATE_WINDOW_MS = 5 * 60 * 1000;
 const LIVE_ANOMALY_RETRY_LIMIT_MS = 10 * 60 * 1000;
 const LIVE_ANOMALY_BACKOFF_MS = [30_000, 60_000, 120_000, 300_000];
 const EXTERNAL_SETTLEMENT_MS = 60_000;
+
+function provenanceContributorPostIds(value: PiMessageProvenance | undefined): string[] | null {
+  if (value?.origin !== 'forum' || value.messageKind !== 'user_prompt') return null;
+  const raw = value.utteranceIds ?? value.utterance_ids;
+  if (!Array.isArray(raw)) return null;
+  const ids = [...new Set(raw.filter((id): id is string => typeof id === 'string' && Boolean(id.trim())).map((id) => id.trim()))];
+  return ids.length > 0 && ids.length <= 100 ? ids : null;
+}
 
 function provenanceSourceKind(value: PiMessageProvenance | undefined): string | null {
   return value?.sourceKind ?? value?.source_kind ?? (value?.origin === 'subagent-completion' ? value.origin : null);
@@ -395,6 +405,19 @@ export class PiSessionSyncService {
 
   async runManualSync(piSessionId?: string | null): Promise<PiSyncRunResult> {
     return this.runSync({ changedOnly: false, piSessionId: piSessionId ?? null });
+  }
+
+  async refreshSession(piSessionId: string, waitTimeoutMs = 10_000): Promise<PiSyncRunResult> {
+    if (!(await this.waitForIdle(waitTimeoutMs))) {
+      return {
+        ok: false,
+        message: 'Pi sync remained busy while refreshing canonical fork boundaries.',
+        sessionsChecked: 0,
+        postsImported: 0,
+        anomaliesProcessed: 0,
+      };
+    }
+    return this.runSync({ changedOnly: false, piSessionId });
   }
 
   private async runSync(opts: { changedOnly: boolean; piSessionId?: string | null }): Promise<PiSyncRunResult> {
@@ -1272,7 +1295,24 @@ export class PiSessionSyncService {
       const link = this.db.prepare(
         'select id, post_id, metadata_json, imported_at from pi_message_links where pi_session_id = ? and pi_message_id = ? limit 1'
       ).get(exported.session.id, entry.id) as { id: string; post_id: string | null; metadata_json: string | null; imported_at: string } | undefined;
+      const directProvenance = provenance.get(entry.id);
+      const contributorPostIds = entry.role === 'user' ? provenanceContributorPostIds(directProvenance) : null;
       if (link?.post_id) {
+        const linkMetadata = parseJsonObject(link.metadata_json);
+        const existingContributorPostIds = linkMetadata['contributorPostIds'];
+        const hasForumContributorMapping =
+          Array.isArray(existingContributorPostIds) &&
+          existingContributorPostIds.length > 0 &&
+          existingContributorPostIds.every((postId) => typeof postId === 'string' && Boolean(postId));
+        // Fork materialization remaps contributor IDs to fresh child post IDs,
+        // while inherited canonical provenance still names the parent posts.
+        // Canonical export repairs missing metadata but must not overwrite an
+        // already-materialized forum-local mapping.
+        if (contributorPostIds && !hasForumContributorMapping) {
+          this.db
+            .prepare('update pi_message_links set metadata_json = ? where id = ?')
+            .run(json({ ...linkMetadata, contributorPostIds }), link.id);
+        }
         this.resolveAnomalies(exported.session.id, entry.id, 'linked_by_bridge', link.post_id);
         continue;
       }
@@ -1286,6 +1326,7 @@ export class PiSessionSyncService {
         usage: entry.usage ?? null,
         mtimeMs: summary.mtime_ms ?? null,
         sizeBytes: summary.size_bytes ?? null,
+        ...(contributorPostIds ? { contributorPostIds } : {}),
       };
       const isPostMessage = entry.type === 'message' && entry.hasVisibleText && (entry.role === 'user' || entry.role === 'assistant');
       if (!isPostMessage) continue;
@@ -1296,7 +1337,6 @@ export class PiSessionSyncService {
         : { text: rawText, handoffs: [] };
       const text = legacyAttachments.text;
       if (!text.trim()) continue;
-      const directProvenance = provenance.get(entry.id);
       const sourceKind = provenanceSourceKind(directProvenance);
       const subagentCompletion = entry.role === 'assistant' && sourceKind === 'subagent-completion';
       const forumOrigin = directProvenance?.origin === 'forum'

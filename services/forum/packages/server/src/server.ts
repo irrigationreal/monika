@@ -284,8 +284,6 @@ const postDispatchService = new PostDispatchService(store, codex, {
   maxConcurrent: Math.max(1, Math.min(10, MAX_CONCURRENT_TURNS)),
 });
 const compactionService = new CompactionService(store, codex, postDispatchService);
-const forkService = new ForkService(store, codex, postDispatchService);
-
 const piSessionSync = MONIKA_PI_SYNC_ENABLED
   ? new PiSessionSyncService(db, {
       agentdBaseUrl: ECHS_BASE_URL,
@@ -294,6 +292,18 @@ const piSessionSync = MONIKA_PI_SYNC_ENABLED
       assistantProjections: codex.assistantProjectionService,
     })
   : null;
+const forkService = new ForkService(store, codex, postDispatchService, {
+  refreshBoundaries: piSessionSync
+    ? async (topicId) => {
+        const link = store.getPiSessionLinkByTopic(topicId);
+        if (!link) throw new Error('Linked canonical Pi session is unavailable');
+        const result = await piSessionSync.refreshSession(link.pi_session_id);
+        if (!result.ok || result.sessionsChecked !== 1) {
+          throw new Error(result.ok ? 'Linked canonical Pi session could not be exported' : result.message);
+        }
+      }
+    : undefined,
+});
 
 const getForumDeploymentBlockers = (includePiSync: boolean) => {
   const activeTurns = codex.listActiveTurns().length;

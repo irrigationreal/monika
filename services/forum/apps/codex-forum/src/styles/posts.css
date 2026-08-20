@@ -1023,12 +1023,33 @@
   font-size: 12px;
 }
 
-.vb-modal-select {
+.vb-modal-select,
+.vb-modal-input {
+  box-sizing: border-box;
+  width: 100%;
   border: 1px solid var(--text-muted);
   padding: 6px 8px;
   font-size: 12px;
+  font-family: Verdana, Tahoma, Arial, sans-serif;
   background: var(--bg-input);
   color: var(--text-primary);
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+.vb-modal-select:focus,
+.vb-modal-input:focus {
+  outline: none;
+  border-color: var(--textarea-focus-color);
+  box-shadow: 0 0 0 3px rgba(74, 144, 217, 0.2);
+}
+
+.vb-modal-select:disabled,
+.vb-modal-input:disabled,
+.vb-modal-textarea:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
 }
 
 .vb-modal-warning {
@@ -1628,6 +1649,7 @@
   letter-spacing: 0.01em;
 }
 
+.vb-fork-modal-overlay,
 .vb-compaction-modal-overlay,
 .vb-confirmation-modal-overlay {
   box-sizing: border-box;
@@ -1636,6 +1658,32 @@
   padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right))
     max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
   overscroll-behavior: contain;
+}
+.vb-fork-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(680px, 100%);
+  max-width: 680px;
+  max-height: 100%;
+  min-height: 0;
+}
+.vb-fork-modal .vb-modal-header {
+  flex: 0 0 auto;
+}
+.vb-fork-modal .vb-modal-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.vb-fork-modal .vb-modal-textarea {
+  box-sizing: border-box;
+  width: 100%;
+}
+.vb-fork-modal-actions {
+  flex: 0 0 auto;
+  padding: 12px;
+  background: var(--bg-surface-alt);
+  border-top: 1px solid var(--border-default);
 }
 .vb-confirmation-modal {
   display: flex;

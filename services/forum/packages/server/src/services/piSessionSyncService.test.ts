@@ -257,6 +257,7 @@ describe('PiSessionSyncService provenance-aware reconciliation', async () => {
           topicId: target.topic_id,
           postId: 'forum-post-1',
           messageKind: 'user_prompt',
+          utteranceIds: ['forum-post-1'],
         },
         {
           piMessageId: 'a1',
@@ -271,13 +272,37 @@ describe('PiSessionSyncService provenance-aware reconciliation', async () => {
     expect(db.prepare("select post_id from pi_message_links where pi_message_id = 'u1'").get()).toEqual({
       post_id: 'forum-post-1',
     });
+    expect(
+      JSON.parse(
+        (db.prepare("select metadata_json from pi_message_links where pi_message_id = 'u1'").get() as {
+          metadata_json: string;
+        }).metadata_json
+      )
+    ).toMatchObject({ contributorPostIds: ['forum-post-1'] });
     const assistantLink = db.prepare("select post_id from pi_message_links where pi_message_id = 'a1'").get() as { post_id: string };
     expect(assistantLink.post_id).toBeTruthy();
     expect(db.prepare('select body from posts where id = ?').get(assistantLink.post_id)).toEqual({ body: 'Forum answer' });
     expect(db.prepare("select count(*) as count from pi_sync_anomalies where pi_message_id in ('a-tool', 'a1')").get()).toEqual({
       count: 0,
     });
+    db.prepare("update pi_message_links set metadata_json = '{}' where pi_message_id = 'u1'").run();
     expect(await importExported(value)).toBe(0);
+    expect(
+      JSON.parse(
+        (db.prepare("select metadata_json from pi_message_links where pi_message_id = 'u1'").get() as {
+          metadata_json: string;
+        }).metadata_json
+      )
+    ).toEqual({ contributorPostIds: ['forum-post-1'] });
+    value.message_provenance![0]!.utteranceIds = ['parent-topic-post-1'];
+    expect(await importExported(value)).toBe(0);
+    expect(
+      JSON.parse(
+        (db.prepare("select metadata_json from pi_message_links where pi_message_id = 'u1'").get() as {
+          metadata_json: string;
+        }).metadata_json
+      )
+    ).toEqual({ contributorPostIds: ['forum-post-1'] });
     expect(db.prepare("select count(*) as count from posts where body = 'Forum answer'").get()).toEqual({ count: 1 });
     db.close();
   });
