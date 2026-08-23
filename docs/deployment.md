@@ -137,6 +137,38 @@ likewise persisted under `runtime/data/`.
 Do not commit `runtime/` or store public-ingress connector credentials anywhere
 inside the mounted workspace tree.
 
+### Web search configuration
+
+`web_search` defaults to the sequential order `native, exa, brave, tavily`.
+Set `WEB_SEARCH_PROVIDER_ORDER` in `runtime/secrets/secrets.env` to change the
+deployment default, or use `/search_providers provider,provider` in Pi to store an
+explicit v2 order in the current session. `/search_providers reset` returns that
+session to the deployment default. Existing sessions that explicitly selected
+only Brave/Tavily retain their exact legacy order.
+
+Optional external-provider credentials are `EXA_TOKEN`,
+`BRAVE_SEARCH_API_KEY` (with `BRAVE_API_KEY` retained as an alias), and
+`TAVILY_API_KEY`. Exa is attempted before Brave and Tavily in the canonical
+order. Each provider request is bounded and sequential; operational, auth,
+quota, timeout, malformed, unavailable, and empty-result failures may fall
+through, while caller cancellation stops immediately.
+
+Native search does not depend on the conversation's active model. It discovers
+advertised web-search routes from configured pool models in quality order
+(Grok, Codex, Antigravity, Kimi, Z.AI, Claude). Set the optional
+`WEB_SEARCH_POOL_ORIGIN` to an HTTPS origin when discovery cannot infer one from
+at least two configured pool providers sharing an origin. Catalog and native
+route requests remain same-origin and use credentials resolved by Pi's model
+registry; the extension does not read `models.json` directly. The catalog must
+be served at `GET /api/pool/models` using schema version 1 and the native route
+contract documented by the pool service. `WEB_SEARCH_NATIVE_ATTEMPTS` may bound
+native route attempts from 1 through 4 (default 2).
+
+Only the successful native call's normalized token usage is attached to the tool
+result. Failed attempts do not expose raw provider usage or upstream bodies.
+All returned answers, titles, snippets, and source URLs are explicitly labeled
+as untrusted external web-derived data.
+
 ## Forum configuration
 
 Copy the example and generate separate random values for the internal attachment
