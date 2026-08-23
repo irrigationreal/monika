@@ -888,7 +888,7 @@ export function useForumState() {
     });
   }
 
-  function openStream(topicId: string): void {
+  function openStream(topicId: string, onOpen?: () => void): void {
     if (stream) stream.close();
     streamManuallyClosed = false;
     if (reconnectTimer) {
@@ -910,6 +910,7 @@ export function useForumState() {
     nextStream.addEventListener('open', () => {
       if (!isCurrentConnection()) return;
       reconnectDelayMs = 2000;
+      onOpen?.();
     });
     nextStream.addEventListener('context_updated', (event: MessageEvent<string>) => {
       if (!isCurrentConnection()) return;
@@ -1003,7 +1004,9 @@ export function useForumState() {
       liveStateRevision += 1;
       // Clear at the event boundary, not when a queued reload eventually starts:
       // trace events after this canonical item belong to the continuing turn.
-      clearCompletedAssistantTurnTrace();
+      // A completion projected after an interruption must not erase that newer,
+      // durable cancellation boundary.
+      if (!interruptedTrace.value) clearCompletedAssistantTurnTrace();
       // A single Pi settlement may publish multiple canonical assistant items.
       // Coalesce bursts for this connection, but never let an old topic's
       // completion reload whichever topic happens to be selected later.
@@ -1024,12 +1027,13 @@ export function useForumState() {
         reconnectTimer = null;
         if (!isCurrentGeneration()) return;
         reconnectDelayMs = Math.min(reconnectDelayMs * 2, 30_000);
-        // Start snapshot hydration first so it captures the pre-reconnect live
-        // revision, then reopen immediately. Any replacement-stream event
-        // invalidates the older HTTP snapshot without creating an event gap.
-        const hydration = loadState(topicId);
-        openStream(topicId);
-        void hydration.catch(() => {});
+        // The stream bus has no replay. Wait for the replacement subscription
+        // to open before taking the reconciliation snapshot; every later SSE
+        // event then invalidates that older HTTP state by revision.
+        openStream(topicId, () => {
+          const revision = liveStateRevision;
+          void loadState(topicId, { expectedLiveStateRevision: revision }).catch(() => {});
+        });
       }, reconnectDelayMs);
     });
   }
@@ -1046,7 +1050,19 @@ export function useForumState() {
     ) {
       assistantMessageReloadQueued = false;
       const messageRevision = assistantMessageReloadRevision;
-      await handleAssistantMessage(topicId, connectionGeneration, topicGeneration, messageRevision);
+      try {
+        await handleAssistantMessage(topicId, connectionGeneration, topicGeneration, messageRevision);
+      } catch (err) {
+        // A later canonical item may already be queued. Keep draining it rather
+        // than stranding the queue behind an earlier reload failure.
+        if (
+          streamGeneration === connectionGeneration &&
+          isActiveTopicGeneration(topicId, topicGeneration) &&
+          !assistantMessageReloadQueued
+        ) {
+          error.value = err instanceof Error ? err.message : 'Failed to reload the assistant response.';
+        }
+      }
     }
   }
 
@@ -1065,7 +1081,9 @@ export function useForumState() {
     await Promise.all([
       loadAttachmentsForPosts(posts.value.map((post) => post.id)),
       loadAutoRun(topicId),
-      loadState(topicId, { reconstructTrace: false, expectedLiveStateRevision: messageRevision }),
+      interruptedTrace.value
+        ? Promise.resolve()
+        : loadState(topicId, { reconstructTrace: false, expectedLiveStateRevision: messageRevision }),
     ]);
     if (streamGeneration !== connectionGeneration || !isActiveTopicGeneration(topicId, topicGeneration)) return;
     void loadAdminEnrichment(topicId);

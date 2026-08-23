@@ -93,6 +93,45 @@ afterEach(() => {
 });
 
 describe('canonical assistant item reloads', () => {
+  it('preserves a newer interrupted trace when delayed projection completes', async () => {
+    const stream = new FakeStateStream();
+    mocks.createStateStream.mockReturnValue(stream);
+    await state.selectTopic(topic);
+
+    stream.emit('reasoning_delta', { delta: 'reasoning before interruption' });
+    stream.emit('assistant_reset', { reason: 'interrupted' });
+    expect(state.interruptedTrace.value).toBe(true);
+    const frozen = [...state.committedSegments.value];
+
+    stream.emit('assistant_message');
+    await vi.waitFor(() => {
+      expect(mocks.listPosts).toHaveBeenCalledTimes(2);
+      expect(mocks.getTopicAutoRun).toHaveBeenCalledTimes(2);
+    });
+    expect(state.interruptedTrace.value).toBe(true);
+    expect(state.committedSegments.value).toEqual(frozen);
+  });
+
+  it('continues draining a queued item after an earlier reload fails', async () => {
+    const stream = new FakeStateStream();
+    mocks.createStateStream.mockReturnValue(stream);
+    await state.selectTopic(topic);
+
+    const failedReload = Promise.withResolvers<{ items: [] }>();
+    mocks.listPosts.mockImplementationOnce(() => failedReload.promise).mockResolvedValueOnce({ items: [] });
+    stream.emit('assistant_message');
+    await vi.waitFor(() => {
+      expect(mocks.listPosts).toHaveBeenCalledTimes(2);
+    });
+    stream.emit('assistant_message');
+    failedReload.reject(new Error('first reload failed'));
+
+    await vi.waitFor(() => {
+      expect(mocks.listPosts).toHaveBeenCalledTimes(3);
+      expect(mocks.getRobotState).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it('preserves trace events for the continuing turn while the projected item reloads', async () => {
     const stream = new FakeStateStream();
     mocks.createStateStream.mockReturnValue(stream);

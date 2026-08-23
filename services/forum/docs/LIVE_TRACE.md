@@ -61,11 +61,11 @@ robot state, context, trace, attachments, and enrichment before fetching the des
 “Loading topic…” shell until that record is selected. Each topic selection and EventSource has a monotonic generation;
 topic-hydration completions, stream callbacks, reconnect timers, and assistant-message reloads commit only while both
 their captured topic and generation remain current. Robot-state hydration also captures the live-state revision, so an
-HTTP snapshot cannot overwrite a newer event from the active stream. Reconnect hydration starts before the replacement
-stream opens but does not delay it; replacement events invalidate that older snapshot. Closing an EventSource is not
-treated as sufficient cancellation because an event may already be queued by the browser. This transition is local and
-does not add another hydration request or stream—the destination uses the same request sequence as ordinary topic
-selection.
+HTTP snapshot cannot overwrite a newer event from the active stream. Reconnect waits for the replacement subscription's
+open boundary before starting reconciliation hydration; replacement events invalidate that older snapshot. Closing an
+EventSource is not treated as sufficient cancellation because an event may already be queued by the browser. This
+transition is local and does not add another hydration request or stream—the destination uses the same request sequence
+as ordinary topic selection.
 
 ## Append-only live ordering
 
@@ -133,7 +133,8 @@ confirmation and never interrupts directly.
 1. Admin enrichment never blocks base topic selection, Quick Reply readiness, or SSE startup.
 2. Non-admin state and SSE payloads contain no trace details.
 3. Preview capping never truncates source state or persisted history.
-4. Interruption preserves buffered reasoning before clearing drafts.
+4. Interruption preserves buffered reasoning before clearing drafts; delayed projection completion and hydration cannot
+   erase the newer frozen boundary.
 5. Idle state cannot retain a live current plan.
 6. Completion reloads cannot resurrect stale trace state.
 7. Topic navigation clears the outgoing projection before destination hydration, and stale HTTP/SSE generations cannot

@@ -120,9 +120,11 @@ describe('topic stream isolation', () => {
       originalStream.emit('error');
       await vi.advanceTimersByTimeAsync(2000);
 
-      expect(mocks.getRobotState).toHaveBeenCalledTimes(2);
+      expect(mocks.getRobotState).toHaveBeenCalledTimes(1);
       expect(mocks.createStateStream).toHaveBeenCalledTimes(2);
 
+      replacementStream.emit('open');
+      expect(mocks.getRobotState).toHaveBeenCalledTimes(2);
       replacementStream.emit('state', robotState('topic-1', 'stopped'));
       reconnectState.resolve(robotState('topic-1', 'idle'));
       await Promise.resolve();
