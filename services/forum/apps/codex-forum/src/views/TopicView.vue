@@ -1350,6 +1350,7 @@ function scrollToPageBottom(): void {
 }
 
 const routeTopicId = computed(() => (route.params['topicId'] as string | undefined) ?? null);
+const topicReady = computed(() => Boolean(routeTopicId.value && state.selectedTopic.value?.id === routeTopicId.value));
 const autosavedReply = useAutosavedDraft({ context: 'reply', contextId: routeTopicId, body: replyBody });
 const canDockQuickReply = computed(() => {
   const topic = state.selectedTopic.value;
@@ -2503,7 +2504,12 @@ onUnmounted(() => {
     {{ compactionError }}
   </div>
 
+  <div v-if="!topicReady" class="vb-section">
+    <div class="vb-empty" role="status">Loading topic…</div>
+  </div>
+
   <section
+    v-else
     class="vb-section"
     :class="{
       'vb-topic-with-reply-dock': quickReplyDocked,

@@ -44,12 +44,14 @@ function topic(id: string, status: TopicDto['status'] = 'open'): TopicDto {
   };
 }
 
-function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (reason?: unknown) => void } {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((done, fail) => {
     resolve = done;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 const state = useForumState();
@@ -86,6 +88,21 @@ describe('topic selection request fencing', () => {
     expect(mocks.listPosts).toHaveBeenCalledTimes(1);
   });
 
+  it('ignores an older topic fetch failure after a newer selection wins', async () => {
+    const stale = deferred<TopicDto>();
+    const current = deferred<TopicDto>();
+    mocks.getTopic.mockImplementation((id: string) => (id === 'stale' ? stale.promise : current.promise));
+
+    const staleSelection = state.selectTopicById('stale', { hydrateState: false });
+    const currentSelection = state.selectTopicById('current', { hydrateState: false });
+    current.resolve(topic('current'));
+    await currentSelection;
+
+    stale.reject(new Error('stale request failed'));
+    await expect(staleSelection).resolves.toBeUndefined();
+    expect(state.selectedTopic.value?.id).toBe('current');
+  });
+
   it('loads a normally resolved topic', async () => {
     mocks.getTopic.mockResolvedValue(topic('topic-1'));
 
@@ -97,5 +114,65 @@ describe('topic selection request fencing', () => {
       pageSize: 100_000,
       include: ['reactions'],
     });
+  });
+
+  it('clears the previous projection before the destination topic record resolves', async () => {
+    await state.selectTopic(topic('source'), { hydrateState: false });
+    state.posts.value = [{ id: 'source-post' } as never];
+    state.robotState.value = {
+      topicId: 'source',
+      sessionId: 'session-source',
+      activity: 'thinking',
+      lastUpdatedAt: new Date(0).toISOString(),
+      currentPlan: null,
+      recentToolRuns: [],
+    };
+
+    const destination = deferred<TopicDto>();
+    mocks.getTopic.mockReturnValue(destination.promise);
+    const selection = state.selectTopicById('destination', { hydrateState: false });
+
+    expect(state.selectedTopic.value).toBeNull();
+    expect(state.posts.value).toEqual([]);
+    expect(state.robotState.value).toBeNull();
+    expect(state.hasPendingAssistantTurn.value).toBe(false);
+
+    destination.resolve(topic('destination'));
+    await selection;
+    expect(state.selectedTopic.value?.id).toBe('destination');
+  });
+
+  it('ignores an old hydration failure after a newer topic selection wins', async () => {
+    const stalePosts = deferred<{ items: [] }>();
+    mocks.listPosts.mockImplementationOnce(() => stalePosts.promise).mockResolvedValueOnce({ items: [] });
+
+    const staleSelection = state.selectTopic(topic('stale'), { hydrateState: false });
+    const currentSelection = state.selectTopic(topic('current'), { hydrateState: false });
+    await currentSelection;
+
+    stalePosts.reject(new Error('stale hydration failed'));
+    await expect(staleSelection).resolves.toBeUndefined();
+    expect(state.selectedTopic.value?.id).toBe('current');
+  });
+
+  it('rejects an old response after navigating away and back to the same topic id', async () => {
+    const oldA = deferred<{ items: { id: string }[] }>();
+    const currentA = deferred<{ items: { id: string }[] }>();
+    mocks.listPosts
+      .mockImplementationOnce(() => oldA.promise)
+      .mockResolvedValueOnce({ items: [{ id: 'topic-b-post' }] })
+      .mockImplementationOnce(() => currentA.promise);
+
+    const firstASelection = state.selectTopic(topic('topic-a'), { hydrateState: false });
+    await state.selectTopic(topic('topic-b'), { hydrateState: false });
+    const currentASelection = state.selectTopic(topic('topic-a'), { hydrateState: false });
+    currentA.resolve({ items: [{ id: 'current-topic-a-post' }] });
+    await currentASelection;
+
+    oldA.resolve({ items: [{ id: 'stale-topic-a-post' }] });
+    await firstASelection;
+
+    expect(state.selectedTopic.value?.id).toBe('topic-a');
+    expect(state.posts.value).toEqual([{ id: 'current-topic-a-post' }]);
   });
 });
