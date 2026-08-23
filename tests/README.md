@@ -88,6 +88,23 @@ retry/cancellation fencing, bounded uncertain stop results, canonical unloaded-p
 stop, no-Continue gating, text-only interrupted-trace freezing, and dashboard
 blocker/delivery/history grouping.
 
+## Web search tests
+
+The native-first web search helper has dependency-free Node coverage with fully
+mocked HTTP and model-registry boundaries:
+
+```bash
+tests/web-search.sh
+# equivalent focused invocation:
+node --test tests/web-search.test.mjs
+```
+
+The suite covers provider/session ordering and legacy migration, native pool
+origin and catalog validation, all three native wire protocols, resolved auth,
+Exa/Brave/Tavily compatibility, sequential fallback, cancellation and deadlines,
+cooldowns, response bounds, URL sanitization, redaction, and exhaustion. It never
+uses provider credentials or live network services.
+
 ## Stateful-memory tests
 
 Progressive recall selection, excerpt bounds, pagination, enrichment budgets, and
@@ -154,7 +171,7 @@ The script verifies:
 5. npm's 10-day dependency cooldown, pnpm 11.21.0 with fail-closed 10-day release-age enforcement, and the pinned agent-browser version are active;
 6. the reviewed pi-subagents 0.37.2 gitHead (`8063333661476ca48afbca826dc4aab8707c72d3`) is installed, the dedicated runtime/session/operator roots are global, the operator root exists with mode `0700`, unsafe relative or shared top-level operator-root overrides fail startup, a container runtime identity exists, durable pre-spawn launch/drain and artifact-finalization patches are present, forked children use per-run directories, `defaultExtensions=[]` and isolated child profiles are configured, and legacy force-tools/delegate extensions are absent;
 7. interactive project-trust state is linked into persistent `/data`;
-8. agentd sends a complete Pi turn to a local OpenAI Responses fixture, which requires `pi_run`, `browser`, `subagent`, `subagent_wait`, and `subagent_supervisor` while rejecting the legacy `delegate` tool;
+8. agentd sends a complete Pi turn to a local OpenAI Responses fixture, which requires `pi_run`, `browser`, `web_search`, `subagent`, `subagent_wait`, and `subagent_supervisor` while rejecting the legacy `delegate` tool;
 9. every strict function schema in the serialized request satisfies OpenAI's
    `additionalProperties: false` and required-property rules;
 10. an interactive Pi ownership lease evicts an idle agentd runtime, blocks forum reopen and deployment, heartbeats, and releases cleanly;

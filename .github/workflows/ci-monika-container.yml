@@ -82,6 +82,9 @@ jobs:
       - name: Check Compose agentd port semantics
         run: tests/smoke/compose-agentd-port.sh
 
+      - name: Check web search provider logic
+        run: tests/web-search.sh
+
       - name: Build Monika runtime image
         run: |
           docker build \
