@@ -1,7 +1,8 @@
-import type { RobotStateDto, TopicDto } from '@irrigationreal/codex-forum-contracts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useForumState } from './useForumState';
+
+import type { RobotStateDto, TopicDto } from '@irrigationreal/codex-forum-contracts';
 
 const mocks = vi.hoisted(() => ({
   createStateStream: vi.fn(),
@@ -40,18 +41,33 @@ class FakeStateStream {
     const event = new MessageEvent(type, { data: JSON.stringify(data) });
     for (const listener of this.listeners.get(type) ?? []) listener(event);
   }
-  close(): void { this.listeners.clear(); }
+  close(): void {
+    this.listeners.clear();
+  }
 }
 
 const state = useForumState();
 const topic: TopicDto = {
-  id: 'topic-multi', forumId: 'forum-1', title: 'Multiple items', status: 'open', robotMode: 'auto',
-  autoCompactEnabled: false, autoCompactRevision: 0, tags: [], createdBy: 'author-1',
-  createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(), lastPostAt: null,
+  id: 'topic-multi',
+  forumId: 'forum-1',
+  title: 'Multiple items',
+  status: 'open',
+  robotMode: 'auto',
+  autoCompactEnabled: false,
+  autoCompactRevision: 0,
+  tags: [],
+  createdBy: 'author-1',
+  createdAt: new Date(0).toISOString(),
+  updatedAt: new Date(0).toISOString(),
+  lastPostAt: null,
 };
 const thinking: RobotStateDto = {
-  topicId: topic.id, sessionId: 'session-1', activity: 'thinking', lastUpdatedAt: new Date(0).toISOString(),
-  currentPlan: null, recentToolRuns: [],
+  topicId: topic.id,
+  sessionId: 'session-1',
+  activity: 'thinking',
+  lastUpdatedAt: new Date(0).toISOString(),
+  currentPlan: null,
+  recentToolRuns: [],
 };
 
 beforeEach(() => {
@@ -63,12 +79,44 @@ beforeEach(() => {
   mocks.listOperationalEvents.mockResolvedValue({ items: [] });
   mocks.getTopicAutoRun.mockResolvedValue(null);
   mocks.getRobotState.mockResolvedValue(thinking);
-  mocks.registrationMode.mockResolvedValue({ mode: 'disabled', registrationEnabled: false, inviteRegistrationEnabled: false, publicRegistrationEnabled: false, passwordLoginEnabled: false });
+  mocks.registrationMode.mockResolvedValue({
+    mode: 'disabled',
+    registrationEnabled: false,
+    inviteRegistrationEnabled: false,
+    publicRegistrationEnabled: false,
+    passwordLoginEnabled: false,
+  });
 });
 
-afterEach(() => { state.clearTopic(); });
+afterEach(() => {
+  state.clearTopic();
+});
 
 describe('canonical assistant item reloads', () => {
+  it('preserves trace events for the continuing turn while the projected item reloads', async () => {
+    const stream = new FakeStateStream();
+    mocks.createStateStream.mockReturnValue(stream);
+    await state.selectTopic(topic);
+
+    const postReload = Promise.withResolvers<{ items: [] }>();
+    mocks.listPosts.mockImplementationOnce(() => postReload.promise);
+    stream.emit('assistant_message');
+    await vi.waitFor(() => {
+      expect(mocks.listPosts).toHaveBeenCalledTimes(2);
+    });
+
+    stream.emit('reasoning_delta', { delta: 'next item reasoning' });
+    stream.emit('tool_started', { toolRunId: 'next-item-tool' });
+    postReload.resolve({ items: [] });
+
+    await vi.waitFor(() => {
+      expect(state.committedSegments.value).toEqual([
+        { kind: 'reasoning', text: 'next item reasoning' },
+        { kind: 'tool', toolRunId: 'next-item-tool' },
+      ]);
+    });
+  });
+
   it('queues a second completion arriving during reload and waits for server idle state', async () => {
     const stream = new FakeStateStream();
     mocks.createStateStream.mockReturnValue(stream);
@@ -77,11 +125,15 @@ describe('canonical assistant item reloads', () => {
     const firstReload = Promise.withResolvers<{ items: [] }>();
     mocks.listPosts.mockImplementationOnce(() => firstReload.promise).mockResolvedValueOnce({ items: [] });
     stream.emit('assistant_message');
-    await vi.waitFor(() => { expect(mocks.listPosts).toHaveBeenCalledTimes(2); });
+    await vi.waitFor(() => {
+      expect(mocks.listPosts).toHaveBeenCalledTimes(2);
+    });
     stream.emit('assistant_message');
     firstReload.resolve({ items: [] });
 
-    await vi.waitFor(() => { expect(mocks.listPosts).toHaveBeenCalledTimes(3); });
+    await vi.waitFor(() => {
+      expect(mocks.listPosts).toHaveBeenCalledTimes(3);
+    });
     expect(state.robotState.value?.activity).toBe('thinking');
 
     stream.emit('state', { ...thinking, activity: 'idle' });

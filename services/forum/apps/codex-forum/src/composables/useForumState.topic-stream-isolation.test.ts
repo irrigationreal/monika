@@ -105,6 +105,35 @@ afterEach(() => {
 });
 
 describe('topic stream isolation', () => {
+  it('hydrates reconnect state before opening the replacement stream', async () => {
+    vi.useFakeTimers();
+    try {
+      const originalStream = new RetainedListenerStream();
+      const replacementStream = new RetainedListenerStream();
+      const reconnectState = Promise.withResolvers<RobotStateDto>();
+      mocks.createStateStream.mockReturnValueOnce(originalStream).mockReturnValueOnce(replacementStream);
+      mocks.getRobotState
+        .mockResolvedValueOnce(robotState('topic-1', 'thinking'))
+        .mockReturnValueOnce(reconnectState.promise);
+
+      await state.selectTopic(topic('topic-1'));
+      originalStream.emit('error');
+      await vi.advanceTimersByTimeAsync(2000);
+
+      expect(mocks.getRobotState).toHaveBeenCalledTimes(2);
+      expect(mocks.createStateStream).toHaveBeenCalledTimes(1);
+
+      reconnectState.resolve(robotState('topic-1', 'idle'));
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(mocks.createStateStream).toHaveBeenCalledTimes(2);
+      expect(state.robotState.value?.activity).toBe('idle');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps the destination neutral until its robot state finishes hydrating', async () => {
     const sourceStream = new RetainedListenerStream();
     const destinationStream = new RetainedListenerStream();

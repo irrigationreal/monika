@@ -134,9 +134,11 @@ let reconnectDelayMs = 2000;
 let streamManuallyClosed = false;
 let streamGeneration = 0;
 let activeTopicGeneration = 0;
+let liveStateRevision = 0;
 let pendingReasoningDelta = '';
 let flushHandle: number | null = null;
 let assistantMessageReloadOwner: number | null = null;
+let assistantMessageReloadRevision = 0;
 let assistantMessageReloadQueued = false;
 let topicLoadCounter = 0;
 let topicSelectionRequestCounter = 0;
@@ -713,11 +715,17 @@ export function useForumState() {
     }, {});
   }
 
-  async function loadState(topicId: string, opts: { reconstructTrace?: boolean } = {}): Promise<void> {
+  async function loadState(
+    topicId: string,
+    opts: { reconstructTrace?: boolean; expectedLiveStateRevision?: number } = {}
+  ): Promise<void> {
     const generation = activeTopicGeneration;
+    const revision = opts.expectedLiveStateRevision ?? liveStateRevision;
     const { reconstructTrace = true } = opts;
     const nextState = await api.getRobotState(topicId, { include: ['plan', 'toolRuns'] });
-    if (!isActiveTopicGeneration(topicId, generation)) return;
+    // An SSE event received after this snapshot began is newer than the HTTP
+    // response, even when both belong to the same topic generation.
+    if (!isActiveTopicGeneration(topicId, generation) || liveStateRevision !== revision) return;
     const durableStop = isDurableStopBoundary(nextState?.activity);
     const preserveInterruptedTrace = durableStop && hasCurrentTrace();
     // Stop HTTP completion and reconnect hydration can return a durable stopped
@@ -905,11 +913,13 @@ export function useForumState() {
     });
     nextStream.addEventListener('context_updated', (event: MessageEvent<string>) => {
       if (!isCurrentConnection()) return;
+      liveStateRevision += 1;
       const payload = JSON.parse(event.data) as SessionContextDto;
       sessionContext.value = retainSessionContext(sessionContext.value, payload);
     });
     nextStream.addEventListener('state', (event: MessageEvent<string>) => {
       if (!isCurrentConnection()) return;
+      liveStateRevision += 1;
       const payload = JSON.parse(event.data) as RobotStateDto;
       const durableStop = isDurableStopBoundary(payload.activity);
       const newlyStopped = durableStop && !interruptedTrace.value;
@@ -942,6 +952,7 @@ export function useForumState() {
     });
     nextStream.addEventListener('tool_started', (event: MessageEvent<string>) => {
       if (!isCurrentConnection()) return;
+      liveStateRevision += 1;
       // A new tool just started. Flush buffered reasoning, then commit it
       // before the tool boundary. Committed segments never move.
       flushPendingDeltas();
@@ -955,12 +966,14 @@ export function useForumState() {
     });
     nextStream.addEventListener('reasoning_delta', (event: MessageEvent<string>) => {
       if (!isCurrentConnection()) return;
+      liveStateRevision += 1;
       const payload = JSON.parse(event.data) as { delta: string };
       pendingReasoningDelta += payload.delta;
       scheduleStreamFlush();
     });
     nextStream.addEventListener('assistant_reset', (event: MessageEvent<string>) => {
       if (!isCurrentConnection()) return;
+      liveStateRevision += 1;
       const payload = JSON.parse(event.data) as { reason?: string };
       flushPendingDeltas();
       if (payload.reason === 'interrupted') {
@@ -987,9 +1000,11 @@ export function useForumState() {
     });
     nextStream.addEventListener('assistant_message', () => {
       if (!isCurrentConnection()) return;
+      liveStateRevision += 1;
       // A single Pi settlement may publish multiple canonical assistant items.
       // Coalesce bursts for this connection, but never let an old topic's
       // completion reload whichever topic happens to be selected later.
+      assistantMessageReloadRevision = liveStateRevision;
       assistantMessageReloadQueued = true;
       if (assistantMessageReloadOwner === connectionGeneration) return;
       assistantMessageReloadOwner = connectionGeneration;
@@ -1006,8 +1021,14 @@ export function useForumState() {
         reconnectTimer = null;
         if (!isCurrentGeneration()) return;
         reconnectDelayMs = Math.min(reconnectDelayMs * 2, 30_000);
-        void loadState(topicId);
-        openStream(topicId);
+        void loadState(topicId).then(
+          () => {
+            if (isCurrentGeneration()) openStream(topicId);
+          },
+          () => {
+            if (isCurrentGeneration()) openStream(topicId);
+          }
+        );
       }, reconnectDelayMs);
     });
   }
@@ -1023,14 +1044,16 @@ export function useForumState() {
       isActiveTopicGeneration(topicId, topicGeneration)
     ) {
       assistantMessageReloadQueued = false;
-      await handleAssistantMessage(topicId, connectionGeneration, topicGeneration);
+      const messageRevision = assistantMessageReloadRevision;
+      await handleAssistantMessage(topicId, connectionGeneration, topicGeneration, messageRevision);
     }
   }
 
   async function handleAssistantMessage(
     topicId: string,
     connectionGeneration: number,
-    topicGeneration: number
+    topicGeneration: number,
+    messageRevision: number
   ): Promise<void> {
     if (streamGeneration !== connectionGeneration || !isActiveTopicGeneration(topicId, topicGeneration)) return;
     // The canonical item is now represented by a post. Clear its live trace,
@@ -1043,10 +1066,9 @@ export function useForumState() {
     await Promise.all([
       loadAttachmentsForPosts(posts.value.map((post) => post.id)),
       loadAutoRun(topicId),
-      loadState(topicId, { reconstructTrace: false }),
+      loadState(topicId, { reconstructTrace: false, expectedLiveStateRevision: messageRevision }),
     ]);
     if (streamGeneration !== connectionGeneration || !isActiveTopicGeneration(topicId, topicGeneration)) return;
-    clearCompletedAssistantTurnTrace();
     void loadAdminEnrichment(topicId);
   }
 
@@ -1140,7 +1162,13 @@ export function useForumState() {
     topicLoadCounter += 1;
     closeStream();
     resetTopicProjection();
-    const topic = await api.getTopic(topicId);
+    let topic: TopicDto;
+    try {
+      topic = await api.getTopic(topicId);
+    } catch (err) {
+      if (requestId !== topicSelectionRequestCounter) return;
+      throw err;
+    }
     if (requestId !== topicSelectionRequestCounter) return;
     await selectTopic(topic, options);
   }

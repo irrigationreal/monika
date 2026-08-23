@@ -44,12 +44,14 @@ function topic(id: string, status: TopicDto['status'] = 'open'): TopicDto {
   };
 }
 
-function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (reason?: unknown) => void } {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((done, fail) => {
     resolve = done;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 const state = useForumState();
@@ -84,6 +86,21 @@ describe('topic selection request fencing', () => {
     await slowSelection;
     expect(state.selectedTopic.value?.id).toBe('fast');
     expect(mocks.listPosts).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores an older topic fetch failure after a newer selection wins', async () => {
+    const stale = deferred<TopicDto>();
+    const current = deferred<TopicDto>();
+    mocks.getTopic.mockImplementation((id: string) => (id === 'stale' ? stale.promise : current.promise));
+
+    const staleSelection = state.selectTopicById('stale', { hydrateState: false });
+    const currentSelection = state.selectTopicById('current', { hydrateState: false });
+    current.resolve(topic('current'));
+    await currentSelection;
+
+    stale.reject(new Error('stale request failed'));
+    await expect(staleSelection).resolves.toBeUndefined();
+    expect(state.selectedTopic.value?.id).toBe('current');
   });
 
   it('loads a normally resolved topic', async () => {
