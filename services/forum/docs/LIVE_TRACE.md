@@ -56,6 +56,14 @@ Important browser events:
 `assistant_message` is not the idle boundary. One settled agent loop may project several outward items. The later
 `state` emitted from wire `turn_completed` determines idle state.
 
+Topic navigation is an ownership boundary for browser state. The shared forum store clears the previous topic's posts,
+robot state, context, trace, attachments, and enrichment before fetching the destination record, leaving a neutral
+“Loading topic…” shell until that record is selected. Each topic selection and EventSource has a monotonic generation;
+topic-hydration completions, stream callbacks, reconnect timers, and assistant-message reloads commit only while both
+their captured topic and generation remain current. Closing an EventSource is not treated as sufficient cancellation
+because an event may already be queued by the browser. This transition is local and does not add another hydration
+request or stream—the destination uses the same request sequence as ordinary topic selection.
+
 ## Append-only live ordering
 
 The browser maintains frozen committed segments plus a live reasoning tail:
@@ -125,8 +133,10 @@ confirmation and never interrupts directly.
 4. Interruption preserves buffered reasoning before clearing drafts.
 5. Idle state cannot retain a live current plan.
 6. Completion reloads cannot resurrect stale trace state.
-7. Equal tool timestamps use deterministic storage ordering.
-8. One renderer and one canonical chronological ordering model serve preview and complete Trace; workspace direction is
+7. Topic navigation clears the outgoing projection before destination hydration, and stale HTTP/SSE generations cannot
+   mutate a later selection—even after navigating away and back to the same topic ID.
+8. Equal tool timestamps use deterministic storage ordering.
+9. One renderer and one canonical chronological ordering model serve preview and complete Trace; workspace direction is
    an immutable presentation projection only.
 
 ## Tests
@@ -137,5 +147,7 @@ Coverage belongs in:
 - `apps/codex-forum/src/lib/unifiedTrace.test.ts` for live/persisted ordering and checkpoint fallback;
 - `apps/codex-forum/src/views/TopicView.traceWorkspace.test.ts` for canonical surface and dead-implementation removal;
 - `apps/codex-forum/src/views/TopicView.quickReplyDock.test.ts` for non-blocking admin enrichment;
+- `apps/codex-forum/src/composables/useForumState.topic-selection.test.ts` and
+  `useForumState.topic-stream-isolation.test.ts` for navigation reset, request-generation, and EventSource isolation;
 - Robot UI Playwright coverage for mobile containment, fixed chronological preview ordering, temporary workspace
   direction, workspace tabs, focus, and confirmed Stop behavior.

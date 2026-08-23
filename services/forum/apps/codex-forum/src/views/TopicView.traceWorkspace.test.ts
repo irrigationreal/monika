@@ -21,6 +21,15 @@ describe('canonical topic Trace workspace', () => {
     expect(traceSource).toContain('buildPersistedTraceItems');
   });
 
+  it('renders a neutral shell until the selected projection belongs to the route topic', () => {
+    expect(topicSource).toContain(
+      'const topicReady = computed(() => Boolean(routeTopicId.value && state.selectedTopic.value?.id === routeTopicId.value));'
+    );
+    expect(topicSource).toContain('<div v-if="!topicReady" class="vb-section">');
+    expect(topicSource).toContain('<div class="vb-empty" role="status">Loading topic…</div>');
+    expect(topicSource).toContain('<section\n    v-else');
+  });
+
   it('hands off visible movement from startup to the active Trace preview', () => {
     expect(traceSource).toContain(
       '<strong>Trace</strong>\n        <span v-if="renderGroups.length > 0" class="vb-spinner vb-spinner-dark" aria-hidden="true"></span>\n        <span class="vb-status-pill">'

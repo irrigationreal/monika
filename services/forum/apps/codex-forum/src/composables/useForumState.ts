@@ -132,9 +132,11 @@ let activePlanId: string | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectDelayMs = 2000;
 let streamManuallyClosed = false;
+let streamGeneration = 0;
+let activeTopicGeneration = 0;
 let pendingReasoningDelta = '';
 let flushHandle: number | null = null;
-let assistantMessagePending = false;
+let assistantMessageReloadOwner: number | null = null;
 let assistantMessageReloadQueued = false;
 let topicLoadCounter = 0;
 let topicSelectionRequestCounter = 0;
@@ -635,13 +637,31 @@ export function useForumState() {
     autoRunLoading.value = false;
     sessionInfo.value = null;
     resetSessionInspectorState();
+    robotStopResult.value = null;
     reasoningDraft.value = '';
+    interruptedTrace.value = false;
     activePlanId = null;
     resetRobotActivity();
   }
 
+  function resetTopicProjection(): void {
+    activeTopicGeneration += 1;
+    selectedTopic.value = null;
+    posts.value = [];
+    operationalEvents.value = [];
+    identities.value = {};
+    robotPersonas.value = {};
+    attachmentsByPost.value = {};
+    currentPage.value = 1;
+    resetTopicState();
+  }
+
   function isActiveTopic(topicId: string): boolean {
     return selectedTopicId.value === topicId;
+  }
+
+  function isActiveTopicGeneration(topicId: string, generation: number): boolean {
+    return activeTopicGeneration === generation && isActiveTopic(topicId);
   }
 
   async function loadTopics(): Promise<void> {
@@ -651,29 +671,32 @@ export function useForumState() {
   }
 
   async function loadPosts(topicId: string): Promise<void> {
+    const generation = activeTopicGeneration;
     // TopicView paginates this collection client-side, so load the complete
     // canonical sequence. The former API default of 200 broke permalinks to
     // later posts (including links from User Files).
     const res = await api.listPosts(topicId, { page: 1, pageSize: 100_000, include: ['reactions'] });
-    if (!isActiveTopic(topicId)) return;
+    if (!isActiveTopicGeneration(topicId, generation)) return;
     posts.value = res.items;
   }
 
   async function loadOperationalEvents(topicId: string): Promise<void> {
+    const generation = activeTopicGeneration;
     try {
       const res = await operationalEventApi.listOperationalEvents(topicId);
-      if (!isActiveTopic(topicId)) return;
+      if (!isActiveTopicGeneration(topicId, generation)) return;
       operationalEvents.value = Array.isArray(res.items) ? res.items : [];
     } catch {
       // Keep topic rendering compatible during rolling deploys where the forum
       // frontend may briefly precede the operational-events API.
-      if (isActiveTopic(topicId)) operationalEvents.value = [];
+      if (isActiveTopicGeneration(topicId, generation)) operationalEvents.value = [];
     }
   }
 
   async function loadIdentities(topicId: string): Promise<void> {
+    const generation = activeTopicGeneration;
     const res = await api.listIdentities(topicId);
-    if (!isActiveTopic(topicId)) return;
+    if (!isActiveTopicGeneration(topicId, generation)) return;
     identities.value = res.items.reduce<Record<string, IdentityDto>>((acc, identity) => {
       acc[identity.id] = identity;
       return acc;
@@ -681,8 +704,9 @@ export function useForumState() {
   }
 
   async function loadRobotPersonas(topicId: string): Promise<void> {
+    const generation = activeTopicGeneration;
     const res = await api.listTopicPersonas(topicId);
-    if (!isActiveTopic(topicId)) return;
+    if (!isActiveTopicGeneration(topicId, generation)) return;
     robotPersonas.value = res.items.reduce<Record<string, RobotPersonaDto>>((acc, persona) => {
       acc[persona.key] = persona;
       return acc;
@@ -690,9 +714,10 @@ export function useForumState() {
   }
 
   async function loadState(topicId: string, opts: { reconstructTrace?: boolean } = {}): Promise<void> {
+    const generation = activeTopicGeneration;
     const { reconstructTrace = true } = opts;
     const nextState = await api.getRobotState(topicId, { include: ['plan', 'toolRuns'] });
-    if (!isActiveTopic(topicId)) return;
+    if (!isActiveTopicGeneration(topicId, generation)) return;
     const durableStop = isDurableStopBoundary(nextState?.activity);
     const preserveInterruptedTrace = durableStop && hasCurrentTrace();
     // Stop HTTP completion and reconnect hydration can return a durable stopped
@@ -716,18 +741,19 @@ export function useForumState() {
   }
 
   async function loadAutoRun(topicId: string): Promise<void> {
+    const generation = activeTopicGeneration;
     autoRunLoading.value = true;
     autoRunError.value = null;
     try {
       const result = await api.getTopicAutoRun(topicId);
-      if (!isActiveTopic(topicId)) return;
+      if (!isActiveTopicGeneration(topicId, generation)) return;
       topicAutoRun.value = result;
     } catch (err) {
-      if (!isActiveTopic(topicId)) return;
+      if (!isActiveTopicGeneration(topicId, generation)) return;
       autoRunError.value = err instanceof Error ? err.message : 'Failed to load auto-run settings.';
       topicAutoRun.value = null;
     } finally {
-      if (!isActiveTopic(topicId)) return;
+      if (!isActiveTopicGeneration(topicId, generation)) return;
       autoRunLoading.value = false;
     }
   }
@@ -772,18 +798,19 @@ export function useForumState() {
     const uniqueIds = [...new Set(postIds.filter(Boolean))];
     if (uniqueIds.length === 0) return;
     const topicId = selectedTopicId.value;
+    const generation = activeTopicGeneration;
     if (!topicId) return;
 
     try {
       const result = await api.listTopicAttachments(topicId);
-      if (selectedTopicId.value !== topicId) return;
+      if (!isActiveTopicGeneration(topicId, generation)) return;
       const next: Record<string, AttachmentDto[]> = { ...attachmentsByPost.value };
       for (const postId of uniqueIds) {
         next[postId] = result.itemsByPostId[postId] ?? [];
       }
       attachmentsByPost.value = next;
     } catch {
-      if (selectedTopicId.value !== topicId) return;
+      if (!isActiveTopicGeneration(topicId, generation)) return;
       const next: Record<string, AttachmentDto[]> = { ...attachmentsByPost.value };
       for (const postId of uniqueIds) {
         next[postId] = [];
@@ -794,6 +821,7 @@ export function useForumState() {
 
   async function loadAdminEnrichment(topicId = selectedTopicId.value): Promise<void> {
     const loadId = ++adminEnrichmentLoadCounter;
+    const generation = activeTopicGeneration;
     if (!isAdmin.value || !topicId) {
       sessionInfo.value = null;
       topicTrace.value = null;
@@ -805,14 +833,14 @@ export function useForumState() {
     adminEnrichmentError.value = null;
     try {
       const [session, trace] = await Promise.all([api.getSessionByTopic(topicId), api.getTopicTrace(topicId)]);
-      if (loadId !== adminEnrichmentLoadCounter || selectedTopicId.value !== topicId) return;
+      if (loadId !== adminEnrichmentLoadCounter || !isActiveTopicGeneration(topicId, generation)) return;
       sessionInfo.value = session;
       topicTrace.value = trace;
     } catch (err) {
-      if (loadId !== adminEnrichmentLoadCounter || selectedTopicId.value !== topicId) return;
+      if (loadId !== adminEnrichmentLoadCounter || !isActiveTopicGeneration(topicId, generation)) return;
       adminEnrichmentError.value = err instanceof Error ? err.message : 'Failed to load admin diagnostics.';
     } finally {
-      if (loadId === adminEnrichmentLoadCounter && selectedTopicId.value === topicId) {
+      if (loadId === adminEnrichmentLoadCounter && isActiveTopicGeneration(topicId, generation)) {
         adminEnrichmentLoading.value = false;
       }
     }
@@ -820,19 +848,20 @@ export function useForumState() {
 
   async function interruptRobot(): Promise<void> {
     const topicId = selectedTopicId.value;
+    const generation = activeTopicGeneration;
     if (!topicId) return;
     robotControlPending.value = true;
     error.value = null;
     try {
       const result = await api.interruptRobot(topicId);
       // Navigation can finish while Stop is in flight. Never surface a result
-      // from another topic in the newly selected topic's controls.
-      if (!isInitiatingTopicCurrent(topicId, selectedTopicId.value)) return;
+      // from another selection generation in the newly selected topic's controls.
+      if (!isActiveTopicGeneration(topicId, generation)) return;
       robotStopResult.value = result;
       await loadState(topicId);
-      void loadAdminEnrichment(topicId);
+      if (isActiveTopicGeneration(topicId, generation)) void loadAdminEnrichment(topicId);
     } catch (err) {
-      if (isInitiatingTopicCurrent(topicId, selectedTopicId.value)) {
+      if (isActiveTopicGeneration(topicId, generation)) {
         error.value = err instanceof Error ? err.message : 'Failed to interrupt robot.';
       }
     } finally {
@@ -852,23 +881,35 @@ export function useForumState() {
   }
 
   function openStream(topicId: string): void {
-    if (stream) {
-      stream.close();
-    }
+    if (stream) stream.close();
     streamManuallyClosed = false;
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
     }
-    stream = createStateStream(topicId);
-    stream.addEventListener('open', () => {
+
+    const connectionGeneration = ++streamGeneration;
+    const topicGeneration = activeTopicGeneration;
+    const nextStream = createStateStream(topicId);
+    stream = nextStream;
+    const isCurrentConnection = (): boolean =>
+      stream === nextStream &&
+      streamGeneration === connectionGeneration &&
+      isActiveTopicGeneration(topicId, topicGeneration);
+    const isCurrentGeneration = (): boolean =>
+      streamGeneration === connectionGeneration && isActiveTopicGeneration(topicId, topicGeneration);
+
+    nextStream.addEventListener('open', () => {
+      if (!isCurrentConnection()) return;
       reconnectDelayMs = 2000;
     });
-    stream.addEventListener('context_updated', (event: MessageEvent<string>) => {
+    nextStream.addEventListener('context_updated', (event: MessageEvent<string>) => {
+      if (!isCurrentConnection()) return;
       const payload = JSON.parse(event.data) as SessionContextDto;
       sessionContext.value = retainSessionContext(sessionContext.value, payload);
     });
-    stream.addEventListener('state', (event: MessageEvent<string>) => {
+    nextStream.addEventListener('state', (event: MessageEvent<string>) => {
+      if (!isCurrentConnection()) return;
       const payload = JSON.parse(event.data) as RobotStateDto;
       const durableStop = isDurableStopBoundary(payload.activity);
       const newlyStopped = durableStop && !interruptedTrace.value;
@@ -899,7 +940,8 @@ export function useForumState() {
       if (durableStop) freezeCurrentInterruptedTrace();
       if (newlyStopped) void loadAdminEnrichment(topicId);
     });
-    stream.addEventListener('tool_started', (event: MessageEvent<string>) => {
+    nextStream.addEventListener('tool_started', (event: MessageEvent<string>) => {
+      if (!isCurrentConnection()) return;
       // A new tool just started. Flush buffered reasoning, then commit it
       // before the tool boundary. Committed segments never move.
       flushPendingDeltas();
@@ -911,12 +953,14 @@ export function useForumState() {
       }
       committedSegments.value = [...committedSegments.value, { kind: 'tool', toolRunId: payload.toolRunId }];
     });
-    stream.addEventListener('reasoning_delta', (event: MessageEvent<string>) => {
+    nextStream.addEventListener('reasoning_delta', (event: MessageEvent<string>) => {
+      if (!isCurrentConnection()) return;
       const payload = JSON.parse(event.data) as { delta: string };
       pendingReasoningDelta += payload.delta;
       scheduleStreamFlush();
     });
-    stream.addEventListener('assistant_reset', (event: MessageEvent<string>) => {
+    nextStream.addEventListener('assistant_reset', (event: MessageEvent<string>) => {
+      if (!isCurrentConnection()) return;
       const payload = JSON.parse(event.data) as { reason?: string };
       flushPendingDeltas();
       if (payload.reason === 'interrupted') {
@@ -933,72 +977,81 @@ export function useForumState() {
         resetRobotActivity();
       }
     });
-    stream.addEventListener('assistant_error', () => {
-      if (isActiveTopic(topicId)) void loadOperationalEvents(topicId);
+    nextStream.addEventListener('assistant_error', () => {
+      if (!isCurrentConnection()) return;
+      void loadOperationalEvents(topicId);
     });
-    stream.addEventListener('operational_event', () => {
-      if (isActiveTopic(topicId)) void loadOperationalEvents(topicId);
+    nextStream.addEventListener('operational_event', () => {
+      if (!isCurrentConnection()) return;
+      void loadOperationalEvents(topicId);
     });
-    stream.addEventListener('assistant_message', () => {
+    nextStream.addEventListener('assistant_message', () => {
+      if (!isCurrentConnection()) return;
       // A single Pi settlement may publish multiple canonical assistant items.
-      // Coalesce bursts, but remember arrivals during an in-flight snapshot so
-      // the later item cannot be lost behind the first reload.
+      // Coalesce bursts for this connection, but never let an old topic's
+      // completion reload whichever topic happens to be selected later.
       assistantMessageReloadQueued = true;
-      if (assistantMessagePending) return;
-      assistantMessagePending = true;
-      void drainAssistantMessageReloads().finally(() => {
-        assistantMessagePending = false;
+      if (assistantMessageReloadOwner === connectionGeneration) return;
+      assistantMessageReloadOwner = connectionGeneration;
+      void drainAssistantMessageReloads(topicId, connectionGeneration, topicGeneration).finally(() => {
+        if (assistantMessageReloadOwner === connectionGeneration) assistantMessageReloadOwner = null;
       });
     });
-    stream.addEventListener('error', () => {
-      if (streamManuallyClosed || !selectedTopicId.value) {
-        return;
-      }
-      if (stream) {
-        stream.close();
-        stream = null;
-      }
-      if (reconnectTimer) {
-        return;
-      }
-      const currentTopicId = selectedTopicId.value;
+    nextStream.addEventListener('error', () => {
+      if (streamManuallyClosed || !isCurrentConnection()) return;
+      nextStream.close();
+      if (stream === nextStream) stream = null;
+      if (reconnectTimer) return;
       reconnectTimer = setTimeout(() => {
         reconnectTimer = null;
+        if (!isCurrentGeneration()) return;
         reconnectDelayMs = Math.min(reconnectDelayMs * 2, 30_000);
-        void loadState(currentTopicId);
-        openStream(currentTopicId);
+        void loadState(topicId);
+        openStream(topicId);
       }, reconnectDelayMs);
     });
   }
 
-  async function drainAssistantMessageReloads(): Promise<void> {
-    while (assistantMessageReloadQueued) {
+  async function drainAssistantMessageReloads(
+    topicId: string,
+    connectionGeneration: number,
+    topicGeneration: number
+  ): Promise<void> {
+    while (
+      assistantMessageReloadQueued &&
+      streamGeneration === connectionGeneration &&
+      isActiveTopicGeneration(topicId, topicGeneration)
+    ) {
       assistantMessageReloadQueued = false;
-      await handleAssistantMessage();
+      await handleAssistantMessage(topicId, connectionGeneration, topicGeneration);
     }
   }
 
-  async function handleAssistantMessage(): Promise<void> {
+  async function handleAssistantMessage(
+    topicId: string,
+    connectionGeneration: number,
+    topicGeneration: number
+  ): Promise<void> {
+    if (streamGeneration !== connectionGeneration || !isActiveTopicGeneration(topicId, topicGeneration)) return;
     // The canonical item is now represented by a post. Clear its live trace,
     // but retain the server's activity until a later state/turn-completed
     // boundary says the whole agent run is idle.
     flushPendingDeltas();
     clearCompletedAssistantTurnTrace();
-    if (selectedTopicId.value) {
-      const topicId = selectedTopicId.value;
-      await Promise.all([loadPosts(topicId), loadIdentities(topicId), loadRobotPersonas(topicId)]);
-      await Promise.all([
-        loadAttachmentsForPosts(posts.value.map((post) => post.id)),
-        loadAutoRun(topicId),
-        loadState(topicId, { reconstructTrace: false }),
-      ]);
-      if (!isActiveTopic(topicId)) return;
-      clearCompletedAssistantTurnTrace();
-      void loadAdminEnrichment();
-    }
+    await Promise.all([loadPosts(topicId), loadIdentities(topicId), loadRobotPersonas(topicId)]);
+    if (streamGeneration !== connectionGeneration || !isActiveTopicGeneration(topicId, topicGeneration)) return;
+    await Promise.all([
+      loadAttachmentsForPosts(posts.value.map((post) => post.id)),
+      loadAutoRun(topicId),
+      loadState(topicId, { reconstructTrace: false }),
+    ]);
+    if (streamGeneration !== connectionGeneration || !isActiveTopicGeneration(topicId, topicGeneration)) return;
+    clearCompletedAssistantTurnTrace();
+    void loadAdminEnrichment(topicId);
   }
 
   function closeStream(): void {
+    streamGeneration += 1;
     if (stream) {
       stream.close();
       stream = null;
@@ -1013,7 +1066,7 @@ export function useForumState() {
       flushHandle = null;
     }
     pendingReasoningDelta = '';
-    assistantMessagePending = false;
+    assistantMessageReloadOwner = null;
     assistantMessageReloadQueued = false;
     reconnectDelayMs = 2000;
   }
@@ -1021,25 +1074,13 @@ export function useForumState() {
   async function selectTopic(topic: TopicDto, options?: { hydrateState?: boolean }): Promise<void> {
     // A direct selection supersedes any topic fetch still pending in selectTopicById.
     topicSelectionRequestCounter += 1;
-    if (selectedTopicId.value === topic.id) {
-      return;
-    }
+    if (selectedTopicId.value === topic.id) return;
     const loadId = ++topicLoadCounter;
     const hydrateState = options?.hydrateState ?? true;
     topicHydrationEnabled = hydrateState;
-    robotStopResult.value = null;
-    selectedTopic.value = topic;
-    sessionInfo.value = null;
-    resetSessionInspectorState();
-    currentPage.value = 1;
-    reasoningDraft.value = '';
-    interruptedTrace.value = false;
-    activePlanId = null;
-    resetRobotActivity();
     closeStream();
-    if (!hydrateState) {
-      resetTopicState();
-    }
+    resetTopicProjection();
+    selectedTopic.value = topic;
     await Promise.all([loadPosts(topic.id), loadIdentities(topic.id), loadRobotPersonas(topic.id)]);
     // Operational events are an additive projection and must not delay core
     // topic/robot hydration when an older API or test fixture lacks the route.
@@ -1069,6 +1110,7 @@ export function useForumState() {
       if (options?.hydrateState !== undefined && options.hydrateState !== topicHydrationEnabled) {
         topicHydrationEnabled = options.hydrateState;
         closeStream();
+        activeTopicGeneration += 1;
         if (!options.hydrateState) {
           resetTopicState();
           return;
@@ -1092,6 +1134,12 @@ export function useForumState() {
       }
       return;
     }
+    // Route changes reuse TopicView and this singleton store. Relinquish the
+    // previous topic before fetching the next record so no old post, activity,
+    // or trace can render beneath the destination URL while hydration runs.
+    topicLoadCounter += 1;
+    closeStream();
+    resetTopicProjection();
     const topic = await api.getTopic(topicId);
     if (requestId !== topicSelectionRequestCounter) return;
     await selectTopic(topic, options);
@@ -1099,23 +1147,9 @@ export function useForumState() {
 
   function clearTopic(): void {
     topicSelectionRequestCounter += 1;
-    selectedTopic.value = null;
-    posts.value = [];
-    operationalEvents.value = [];
-    identities.value = {};
-    robotPersonas.value = {};
-    sessionInfo.value = null;
-    resetSessionInspectorState();
-    attachmentsByPost.value = {};
-    topicAutoRun.value = null;
-    autoRunError.value = null;
-    autoRunLoading.value = false;
-    robotStopResult.value = null;
-    reasoningDraft.value = '';
-    interruptedTrace.value = false;
-    activePlanId = null;
-    resetRobotActivity();
+    topicLoadCounter += 1;
     closeStream();
+    resetTopicProjection();
   }
 
   async function createTopic(

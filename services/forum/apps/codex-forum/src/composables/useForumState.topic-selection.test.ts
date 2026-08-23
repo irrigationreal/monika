@@ -98,4 +98,51 @@ describe('topic selection request fencing', () => {
       include: ['reactions'],
     });
   });
+
+  it('clears the previous projection before the destination topic record resolves', async () => {
+    await state.selectTopic(topic('source'), { hydrateState: false });
+    state.posts.value = [{ id: 'source-post' } as never];
+    state.robotState.value = {
+      topicId: 'source',
+      sessionId: 'session-source',
+      activity: 'thinking',
+      lastUpdatedAt: new Date(0).toISOString(),
+      currentPlan: null,
+      recentToolRuns: [],
+    };
+
+    const destination = deferred<TopicDto>();
+    mocks.getTopic.mockReturnValue(destination.promise);
+    const selection = state.selectTopicById('destination', { hydrateState: false });
+
+    expect(state.selectedTopic.value).toBeNull();
+    expect(state.posts.value).toEqual([]);
+    expect(state.robotState.value).toBeNull();
+    expect(state.hasPendingAssistantTurn.value).toBe(false);
+
+    destination.resolve(topic('destination'));
+    await selection;
+    expect(state.selectedTopic.value?.id).toBe('destination');
+  });
+
+  it('rejects an old response after navigating away and back to the same topic id', async () => {
+    const oldA = deferred<{ items: { id: string }[] }>();
+    const currentA = deferred<{ items: { id: string }[] }>();
+    mocks.listPosts
+      .mockImplementationOnce(() => oldA.promise)
+      .mockResolvedValueOnce({ items: [{ id: 'topic-b-post' }] })
+      .mockImplementationOnce(() => currentA.promise);
+
+    const firstASelection = state.selectTopic(topic('topic-a'), { hydrateState: false });
+    await state.selectTopic(topic('topic-b'), { hydrateState: false });
+    const currentASelection = state.selectTopic(topic('topic-a'), { hydrateState: false });
+    currentA.resolve({ items: [{ id: 'current-topic-a-post' }] });
+    await currentASelection;
+
+    oldA.resolve({ items: [{ id: 'stale-topic-a-post' }] });
+    await firstASelection;
+
+    expect(state.selectedTopic.value?.id).toBe('topic-a');
+    expect(state.posts.value).toEqual([{ id: 'current-topic-a-post' }]);
+  });
 });
