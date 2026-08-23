@@ -105,7 +105,7 @@ afterEach(() => {
 });
 
 describe('topic stream isolation', () => {
-  it('hydrates reconnect state before opening the replacement stream', async () => {
+  it('reopens immediately and rejects an older reconnect snapshot after a replacement-stream event', async () => {
     vi.useFakeTimers();
     try {
       const originalStream = new RetainedListenerStream();
@@ -121,14 +121,14 @@ describe('topic stream isolation', () => {
       await vi.advanceTimersByTimeAsync(2000);
 
       expect(mocks.getRobotState).toHaveBeenCalledTimes(2);
-      expect(mocks.createStateStream).toHaveBeenCalledTimes(1);
+      expect(mocks.createStateStream).toHaveBeenCalledTimes(2);
 
+      replacementStream.emit('state', robotState('topic-1', 'stopped'));
       reconnectState.resolve(robotState('topic-1', 'idle'));
       await Promise.resolve();
       await Promise.resolve();
 
-      expect(mocks.createStateStream).toHaveBeenCalledTimes(2);
-      expect(state.robotState.value?.activity).toBe('idle');
+      expect(state.robotState.value?.activity).toBe('stopped');
     } finally {
       vi.useRealTimers();
     }

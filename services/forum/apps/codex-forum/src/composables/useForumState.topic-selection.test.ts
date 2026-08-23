@@ -142,6 +142,19 @@ describe('topic selection request fencing', () => {
     expect(state.selectedTopic.value?.id).toBe('destination');
   });
 
+  it('ignores an old hydration failure after a newer topic selection wins', async () => {
+    const stalePosts = deferred<{ items: [] }>();
+    mocks.listPosts.mockImplementationOnce(() => stalePosts.promise).mockResolvedValueOnce({ items: [] });
+
+    const staleSelection = state.selectTopic(topic('stale'), { hydrateState: false });
+    const currentSelection = state.selectTopic(topic('current'), { hydrateState: false });
+    await currentSelection;
+
+    stalePosts.reject(new Error('stale hydration failed'));
+    await expect(staleSelection).resolves.toBeUndefined();
+    expect(state.selectedTopic.value?.id).toBe('current');
+  });
+
   it('rejects an old response after navigating away and back to the same topic id', async () => {
     const oldA = deferred<{ items: { id: string }[] }>();
     const currentA = deferred<{ items: { id: string }[] }>();

@@ -129,12 +129,18 @@ describe('canonical assistant item reloads', () => {
       expect(mocks.listPosts).toHaveBeenCalledTimes(2);
     });
     stream.emit('assistant_message');
+    stream.emit('reasoning_delta', { delta: 'reasoning after second item' });
+    stream.emit('tool_started', { toolRunId: 'post-second-item-tool' });
     firstReload.resolve({ items: [] });
 
     await vi.waitFor(() => {
       expect(mocks.listPosts).toHaveBeenCalledTimes(3);
     });
     expect(state.robotState.value?.activity).toBe('thinking');
+    expect(state.committedSegments.value).toEqual([
+      { kind: 'reasoning', text: 'reasoning after second item' },
+      { kind: 'tool', toolRunId: 'post-second-item-tool' },
+    ]);
 
     stream.emit('state', { ...thinking, activity: 'idle' });
     expect(state.robotState.value?.activity).toBe('idle');

@@ -1001,6 +1001,9 @@ export function useForumState() {
     nextStream.addEventListener('assistant_message', () => {
       if (!isCurrentConnection()) return;
       liveStateRevision += 1;
+      // Clear at the event boundary, not when a queued reload eventually starts:
+      // trace events after this canonical item belong to the continuing turn.
+      clearCompletedAssistantTurnTrace();
       // A single Pi settlement may publish multiple canonical assistant items.
       // Coalesce bursts for this connection, but never let an old topic's
       // completion reload whichever topic happens to be selected later.
@@ -1021,14 +1024,12 @@ export function useForumState() {
         reconnectTimer = null;
         if (!isCurrentGeneration()) return;
         reconnectDelayMs = Math.min(reconnectDelayMs * 2, 30_000);
-        void loadState(topicId).then(
-          () => {
-            if (isCurrentGeneration()) openStream(topicId);
-          },
-          () => {
-            if (isCurrentGeneration()) openStream(topicId);
-          }
-        );
+        // Start snapshot hydration first so it captures the pre-reconnect live
+        // revision, then reopen immediately. Any replacement-stream event
+        // invalidates the older HTTP snapshot without creating an event gap.
+        const hydration = loadState(topicId);
+        openStream(topicId);
+        void hydration.catch(() => {});
       }, reconnectDelayMs);
     });
   }
@@ -1056,11 +1057,9 @@ export function useForumState() {
     messageRevision: number
   ): Promise<void> {
     if (streamGeneration !== connectionGeneration || !isActiveTopicGeneration(topicId, topicGeneration)) return;
-    // The canonical item is now represented by a post. Clear its live trace,
-    // but retain the server's activity until a later state/turn-completed
-    // boundary says the whole agent run is idle.
-    flushPendingDeltas();
-    clearCompletedAssistantTurnTrace();
+    // The canonical item is now represented by a post. The event callback
+    // already cleared its trace synchronously; retain server activity until a
+    // later state/turn-completed boundary says the whole agent run is idle.
     await Promise.all([loadPosts(topicId), loadIdentities(topicId), loadRobotPersonas(topicId)]);
     if (streamGeneration !== connectionGeneration || !isActiveTopicGeneration(topicId, topicGeneration)) return;
     await Promise.all([
@@ -1103,23 +1102,28 @@ export function useForumState() {
     closeStream();
     resetTopicProjection();
     selectedTopic.value = topic;
-    await Promise.all([loadPosts(topic.id), loadIdentities(topic.id), loadRobotPersonas(topic.id)]);
+    const generation = activeTopicGeneration;
+    try {
+      await Promise.all([loadPosts(topic.id), loadIdentities(topic.id), loadRobotPersonas(topic.id)]);
+    } catch (err) {
+      if (!isActiveTopicGeneration(topic.id, generation) || loadId !== topicLoadCounter) return;
+      throw err;
+    }
     // Operational events are an additive projection and must not delay core
     // topic/robot hydration when an older API or test fixture lacks the route.
     void loadOperationalEvents(topic.id);
     await loadAttachmentsForPosts(posts.value.map((post) => post.id));
-    if (!isActiveTopic(topic.id) || loadId !== topicLoadCounter) {
-      return;
-    }
+    if (!isActiveTopicGeneration(topic.id, generation) || loadId !== topicLoadCounter) return;
     if (hydrateState) {
       if (isAdmin.value) adminEnrichmentLoading.value = true;
       try {
         await Promise.all([loadState(topic.id), loadAutoRun(topic.id)]);
       } catch (err) {
-        if (isActiveTopic(topic.id) && loadId === topicLoadCounter) adminEnrichmentLoading.value = false;
+        if (!isActiveTopicGeneration(topic.id, generation) || loadId !== topicLoadCounter) return;
+        adminEnrichmentLoading.value = false;
         throw err;
       }
-      if (isActiveTopic(topic.id) && loadId === topicLoadCounter) {
+      if (isActiveTopicGeneration(topic.id, generation) && loadId === topicLoadCounter) {
         openStream(topic.id);
         void loadAdminEnrichment(topic.id);
       }
@@ -1133,6 +1137,7 @@ export function useForumState() {
         topicHydrationEnabled = options.hydrateState;
         closeStream();
         activeTopicGeneration += 1;
+        const generation = activeTopicGeneration;
         if (!options.hydrateState) {
           resetTopicState();
           return;
@@ -1142,12 +1147,20 @@ export function useForumState() {
         try {
           await Promise.all([loadState(topicId), loadAutoRun(topicId)]);
         } catch (err) {
-          if (requestId === topicSelectionRequestCounter && isActiveTopic(topicId) && loadId === topicLoadCounter) {
-            adminEnrichmentLoading.value = false;
-          }
+          if (
+            requestId !== topicSelectionRequestCounter ||
+            !isActiveTopicGeneration(topicId, generation) ||
+            loadId !== topicLoadCounter
+          )
+            return;
+          adminEnrichmentLoading.value = false;
           throw err;
         }
-        if (requestId === topicSelectionRequestCounter && isActiveTopic(topicId) && loadId === topicLoadCounter) {
+        if (
+          requestId === topicSelectionRequestCounter &&
+          isActiveTopicGeneration(topicId, generation) &&
+          loadId === topicLoadCounter
+        ) {
           openStream(topicId);
           void loadAdminEnrichment(topicId);
         }

@@ -61,10 +61,11 @@ robot state, context, trace, attachments, and enrichment before fetching the des
 “Loading topic…” shell until that record is selected. Each topic selection and EventSource has a monotonic generation;
 topic-hydration completions, stream callbacks, reconnect timers, and assistant-message reloads commit only while both
 their captured topic and generation remain current. Robot-state hydration also captures the live-state revision, so an
-HTTP snapshot cannot overwrite a newer event from the active stream. Reconnect hydration finishes before its replacement
-stream opens. Closing an EventSource is not treated as sufficient cancellation because an event may already be queued by
-the browser. This transition is local and does not add another hydration request or stream—the destination uses the same
-request sequence as ordinary topic selection.
+HTTP snapshot cannot overwrite a newer event from the active stream. Reconnect hydration starts before the replacement
+stream opens but does not delay it; replacement events invalidate that older snapshot. Closing an EventSource is not
+treated as sufficient cancellation because an event may already be queued by the browser. This transition is local and
+does not add another hydration request or stream—the destination uses the same request sequence as ordinary topic
+selection.
 
 ## Append-only live ordering
 
