@@ -3,6 +3,8 @@ import Database from 'better-sqlite3';
 import Fastify from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { TopicPostDispatchProjectionDtoSchema } from '@irrigationreal/codex-forum-contracts';
+
 import { migrate } from '../db';
 import { ForumStore } from '../store';
 import { createAccessHelpers } from '../utils/access';
@@ -83,6 +85,38 @@ describe('Robot routes access controls', () => {
     });
     return { topic, post, session };
   }
+
+  it('keeps post dispatch diagnostics admin-only and returns sanitized attempt history', async () => {
+    const app = await buildApp();
+    const { topic, post, session } = createTopicWithTrace();
+    const admin = store.createIdentityWithPassword('Admin', 'admin', 'pw-hash', 'admin');
+    store.createAuthSession('admin-token', admin.id);
+    const dispatch = store.createPostDispatch({ topicId: topic.id, postId: post.id, sessionId: session.id });
+    const claimed = store.claimPostDispatch(dispatch.id, dispatch)!;
+    store.markPostDispatchFailed(dispatch.id, claimed.claim_token!, 'reset\u0000with\nsecret detail', {
+      retryAt: '2030-01-01T00:00:00.000Z',
+      classification: 'transport',
+    });
+
+    for (const [headers, status] of [
+      [undefined, 401],
+      [{ authorization: 'Bearer author-token' }, 403],
+    ] as const) {
+      const response = await app.inject({ method: 'GET', url: `/topics/${topic.id}/post-dispatches`, headers });
+      expect(response.statusCode).toBe(status);
+      expect(response.body).not.toContain('secret detail');
+    }
+    const response = await app.inject({
+      method: 'GET',
+      url: `/topics/${topic.id}/post-dispatches`,
+      headers: { authorization: 'Bearer admin-token' },
+    });
+    expect(response.statusCode).toBe(200);
+    const body = TopicPostDispatchProjectionDtoSchema.parse(response.json());
+    expect(body).toMatchObject({ topicId: topic.id, polling: true, current: [{ postId: post.id, attemptCount: 1 }] });
+    expect(body.attempts[0]).toMatchObject({ event: 'retry_scheduled', classification: 'transport' });
+    expect(response.body).not.toContain('\\u0000');
+  });
 
   it('redacts robot state details for guests and authenticated non-admins', async () => {
     const app = await buildApp();

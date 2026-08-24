@@ -122,6 +122,7 @@ import type {
   TopicLineageDto,
   TopicMoveDto,
   TopicOperationalEventDto,
+  TopicPostDispatchProjectionDto,
   TopicSubscriptionDto,
   TopicTraceDto,
   TopicUnreadDto,
@@ -852,6 +853,33 @@ export const RobotSubagentRunDtoSchema: z.ZodType<RobotSubagentRunDto> = z.objec
   postId: optionalNullableString,
   startedAt: optionalNullableString,
   updatedAt: optionalNullableString,
+});
+
+export const TopicPostDispatchProjectionDtoSchema: z.ZodType<TopicPostDispatchProjectionDto> = z.object({
+  topicId: z.string(),
+  polling: z.boolean(),
+  current: z.array(
+    z.object({
+      dispatchId: z.string(),
+      postId: z.string(),
+      status: z.enum(['pending', 'dispatching', 'failed']),
+      attemptCount: z.number().int().nonnegative(),
+      nextAttemptAt: z.string().nullable(),
+      updatedAt: z.string(),
+    })
+  ),
+  attempts: z.array(
+    z.object({
+      id: z.string(),
+      dispatchId: z.string(),
+      attemptNumber: z.number().int().nonnegative(),
+      event: z.enum(['claimed', 'dispatched', 'retry_scheduled', 'terminal_failure', 'abandoned', 'superseded']),
+      classification: z.enum(['transport', 'application', 'lifecycle']).nullable(),
+      retryAt: z.string().nullable(),
+      errorMessage: z.string().nullable(),
+      createdAt: z.string(),
+    })
+  ),
 });
 
 export const RobotDashboardDtoSchema: z.ZodType<RobotDashboardDto> = z.object({

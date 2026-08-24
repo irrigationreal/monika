@@ -138,6 +138,12 @@ Implemented in `services/forum`:
   Only then does the forum write `pi_session_links`. Non-dispatch operations never create
   canonical state: they reopen an existing link, or repair a missing derived link solely
   from a currently loaded conversation that supplies both canonical ID and path.
+- Durable post dispatch is strictly ordered per topic: a delayed head cannot be bypassed by a newer due row. Ambiguous
+  transport outcomes retain the exact dispatch ID, generation, normalized origin, and ordered contributors indefinitely,
+  with deterministic retries at about 30 seconds, 60 seconds, two minutes, then a five-minute cap. Claims and outcomes
+  append immutable audit rows transactionally with mutable dispatch state. An admin-only topic projection exposes current
+  delayed/terminal state and bounded sanitized attempt history; the topic UI anchors its warning beneath the source post
+  and polls only while unsettled dispatch work remains.
 - Background sync worker is enabled by default:
   - `MONIKA_PI_SYNC_ENABLED=1`
   - `MONIKA_PI_SYNC_INTERVAL_MS=5000`
@@ -151,12 +157,20 @@ Implemented in `services/forum`:
   because inherited canonical provenance still names the parent topic's post IDs.
   Deployment admission pauses new cycles and boundedly waits
   for an already-running cycle, so the five-second poll is telemetry rather than
-  a source of autodeploy starvation.
+  a source of autodeploy starvation. Robot Dashboard polling is likewise single-flight
+  and completion-scheduled: it stops in hidden tabs, refreshes immediately on visibility,
+  and never overlaps timer, manual, or action-triggered requests. Forum composes workload
+  and retention reads concurrently so either may degrade independently; a cold combined
+  response still awaits both calls and does not promise that workload renders first.
 - Forum-created, Pi-imported, and hybrid topics share one reconciliation path.
   Forum-origin messages wait for bridge persistence, while external Pi CLI
   continuations project after the settlement/idle gate. Ambiguous bridge-owned
   messages move to `needs_manual_review`; ignored and resolved anomalies remain
   as audit history.
+- Agentd's workload and retention GETs are presentation-only immutable DTO caches with in-flight coalescing. Their
+  freshness TTLs are roughly 2s for workload and 30s for retention; their maximum stale-serving windows are 10s and two
+  minutes respectively. Safety paths—including quiescence/deployment, cancellation, close, retention apply, operator
+  resolution, idle reaping, and cleanup—always use fresh scans.
 - Admin → Sync Health exposes anomaly counts, global and targeted rescans,
   silent historical backfill, optional backfill+bump, ignore actions, a dry-run
   repair inventory, and an explicit repaired-topic bump endpoint.

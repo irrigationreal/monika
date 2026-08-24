@@ -74,6 +74,7 @@ describe('schema migrations', () => {
     expect(db.prepare("select name from sqlite_master where type = 'table' and name = 'attachment_handoffs'").get()).toBeTruthy();
     expect(db.prepare("select name from sqlite_master where type = 'table' and name = 'active_turn_origins'").get()).toBeTruthy();
     expect(db.prepare("select name from sqlite_master where type = 'table' and name = 'pending_attachment_reservations'").get()).toBeTruthy();
+    expect(db.prepare("select name from sqlite_master where type = 'table' and name = 'post_dispatch_attempts'").get()).toBeTruthy();
   });
 
   it('preserves and assigns custody to an existing linked v42 handoff on upgrade', () => {

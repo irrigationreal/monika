@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { groupSubagentRuns, retentionDashboard, unavailableRetentionDashboard } from './adminRoutes';
+import { fetchSubagentPresentation, groupSubagentRuns, retentionDashboard, unavailableRetentionDashboard } from './adminRoutes';
 
 describe('robot dashboard subagent grouping', () => {
   it('separates safety blockers, pending delivery, and retained terminal history', () => {
@@ -16,6 +16,22 @@ describe('robot dashboard subagent grouping', () => {
       pendingDelivery: [pending, unproven],
       history: [history],
     });
+  });
+
+  it('starts workload and retention concurrently with independent outcomes', async () => {
+    let finishWorkload!: (value: any) => void;
+    const workload = new Promise((resolve) => { finishWorkload = resolve; });
+    const agent = {
+      getSubagentWorkload: vi.fn(() => workload),
+      getSubagentRetention: vi.fn(async () => { throw new Error('retention unavailable'); }),
+    };
+    const pending = fetchSubagentPresentation(agent as any);
+    expect(agent.getSubagentWorkload).toHaveBeenCalledOnce();
+    expect(agent.getSubagentRetention).toHaveBeenCalledOnce();
+    finishWorkload({ ok: true, runs: [] });
+    const [workloadResult, retentionResult] = await pending;
+    expect(workloadResult.status).toBe('fulfilled');
+    expect(retentionResult.status).toBe('rejected');
   });
 
   it('maps the full retention DTO and preserves an unavailable fallback', () => {

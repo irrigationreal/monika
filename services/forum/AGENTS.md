@@ -134,7 +134,8 @@ recommend tests first.
 
 The Robot Dashboard is an admin projection of parent forum requests plus agentd-owned subagent workload. Agentd owns
 `awaited`/`follow_up`/`silent` disposition, exact claim versus canonical settlement, and scoped nested custody; the
-forum only projects those facts. Explicit `follow_up` posts retain their origin parent and UI badge, while passive
+forum only projects those facts. Dashboard refresh is single-flight, completion-scheduled, and paused while the document
+is hidden. Workload and retention reads are composed concurrently with independent degradation. Explicit `follow_up` posts retain their origin parent and UI badge, while passive
 recovery never wakes a model. Disposable children must not become robot identities, topics, or forum sessions. Fetch
 execution state through agentd's internal API; never read `/data/pi-subagents` from the forum container. Treat
 `uncertain` and an unavailable workload endpoint as operationally visible/fail-closed states. Present deployment- safety
@@ -162,8 +163,10 @@ or dispatch a turn merely because forum/agentd restarted. Preserve `stopping`/`u
 reconciliation proves `stopped`. Reconcile durable post dispatch generations before starting `PostDispatchService`; the
 first interrupt advances the topic generation and cancels older queued work, while an unresolved retry reuses the
 current generation/operation. Aborted/reset/5xx transport outcomes keep the same dispatch ID, generation, and ordered
-contributors pending at bounded backoff; they never authorize link cleanup or fresh canonical work. Apply cancellation
-results only when their generation still matches the topic.
+contributors pending indefinitely at deterministic progressive backoff (about 30s, 60s, 2m, then a 5m cap); they never
+authorize link cleanup or fresh canonical work. Older delayed heads order-fence newer topic dispatches. Attempt claims
+and outcomes are append-only audit history, and only admins may receive the topic-scoped diagnostic projection. Apply
+cancellation results only when their generation still matches the topic.
 
 Key files:
 

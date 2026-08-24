@@ -722,6 +722,31 @@ export interface RobotSubagentRunDto {
   updatedAt?: string | null;
 }
 
+export interface PostDispatchAttemptDto {
+  id: string;
+  dispatchId: string;
+  attemptNumber: number;
+  event: 'claimed' | 'dispatched' | 'retry_scheduled' | 'terminal_failure' | 'abandoned' | 'superseded';
+  classification: 'transport' | 'application' | 'lifecycle' | null;
+  retryAt: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+}
+
+export interface TopicPostDispatchProjectionDto {
+  topicId: string;
+  polling: boolean;
+  current: {
+    dispatchId: string;
+    postId: string;
+    status: 'pending' | 'dispatching' | 'failed';
+    attemptCount: number;
+    nextAttemptAt: string | null;
+    updatedAt: string;
+  }[];
+  attempts: PostDispatchAttemptDto[];
+}
+
 export interface RobotDashboardDto {
   jobs: RobotJobDto[];
   queue: RobotQueueItemDto[];

@@ -103,6 +103,7 @@ import type {
   TopicLineageDto,
   TopicMoveDto,
   TopicOperationalEventDto,
+  TopicPostDispatchProjectionDto,
   TopicSubscriptionDto,
   TopicTraceDto,
   TopicUnreadDto,
@@ -194,6 +195,7 @@ export type {
   TopicDto,
   TopicLineageDto,
   TopicMoveDto,
+  TopicPostDispatchProjectionDto,
   TopicTraceDto,
   UpdatePrivateEmailResponseDto,
   VerifyResponseDto,
@@ -1132,6 +1134,9 @@ export function createForumSdk(options?: ForumSdkOptions) {
         method: 'POST',
         body: JSON.stringify(opts ?? {}),
       }),
+
+    getTopicPostDispatches: (topicId: string) =>
+      json<TopicPostDispatchProjectionDto>(`/topics/${encodeURIComponent(topicId)}/post-dispatches`),
 
     // Deploy Management (Admin)
     getDeployStatus: () => json<AdminDeployStatus>('/admin/deploy/status'),

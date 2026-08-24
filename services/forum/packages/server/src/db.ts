@@ -311,6 +311,18 @@ export interface PostDispatchRow {
   updated_at: string;
 }
 
+export interface PostDispatchAttemptRow {
+  id: string;
+  dispatch_id: string;
+  attempt_number: number;
+  event: 'claimed' | 'dispatched' | 'retry_scheduled' | 'terminal_failure' | 'abandoned' | 'superseded';
+  classification: 'transport' | 'application' | 'lifecycle' | null;
+  retry_at: string | null;
+  error_message: string | null;
+  claim_token: string | null;
+  created_at: string;
+}
+
 export interface TopicOperationalEventRow {
   id: string;
   topic_id: string;

@@ -4,6 +4,8 @@ import type { AgentBridge } from '../agentBridge';
 import type { TopicAutoRunRow } from '../db';
 import type { AutoRunDirector } from '../services/autoRunDirector';
 import type { ForumStore } from '../store';
+import { mapTopicPostDispatchProjectionToDto } from '../mappers/dto';
+import { PostDispatchProjectionService } from '../services/postDispatchProjectionService';
 import type { StreamBusInterface, StreamEvent } from '../streamBus';
 import type { AccessHelpers } from '../utils/access';
 
@@ -128,6 +130,7 @@ export function registerRobotRoutes({
 }): void {
   const { getCurrentUser, requireScope, canPostTopic, requireTopicVisible, requireAdmin, getIdentityFromRequest } =
     access;
+  const postDispatchProjection = new PostDispatchProjectionService(store);
 
   function canViewTraceDetails(request: Parameters<typeof getCurrentUser>[0]): boolean {
     return getIdentityFromRequest(request)?.kind === 'admin';
@@ -163,6 +166,13 @@ export function registerRobotRoutes({
         : null,
     };
   }
+
+  app.get('/topics/:topicId/post-dispatches', async (request) => {
+    const { topicId } = request.params as { topicId: string };
+    requireAdmin(request);
+    requireTopicVisible(topicId, request);
+    return mapTopicPostDispatchProjectionToDto(postDispatchProjection.getTopicProjection(topicId));
+  });
 
   app.get('/topics/:topicId/state', async (request) => {
     const { topicId } = request.params as { topicId: string };

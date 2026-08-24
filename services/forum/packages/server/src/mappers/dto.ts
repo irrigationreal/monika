@@ -30,6 +30,7 @@ import type {
   TopicCompactionStateDto,
   TopicDto,
   TopicOperationalEventDto,
+  TopicPostDispatchProjectionDto,
   UserFileDto,
   UserPostHistoryItemDto,
   UserPostHistoryResponseDto,
@@ -47,6 +48,7 @@ import type {
   RobotState,
   ToolRunSummary,
   TopicOperationalEvent,
+  TopicPostDispatchProjection,
   UserFile,
   WebAuthnCredential,
 } from '@irrigationreal/codex-forum-core';
@@ -75,6 +77,17 @@ import type {
 } from './domain';
 
 type ChatCategorySummaryRow = ChatCategoryRow & { room_count: number };
+
+export function mapTopicPostDispatchProjectionToDto(
+  projection: TopicPostDispatchProjection
+): TopicPostDispatchProjectionDto {
+  return {
+    topicId: projection.topicId,
+    polling: projection.polling,
+    current: projection.current.map((item) => ({ ...item })),
+    attempts: projection.attempts.map((attempt) => ({ ...attempt })),
+  };
+}
 
 export function mapDeploymentAdmissionResultToDto(result: DeploymentAdmissionResult): DeploymentAdmissionResultDto {
   return { ...result, blockers: result.blockers.map((blocker) => ({ ...blocker })) };

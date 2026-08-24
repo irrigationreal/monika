@@ -56,6 +56,7 @@ import { endResponse, isClientDisconnect, responseWritable, runAfterRequestBody,
 import { DurableDrainState } from './drain-state.mjs';
 import { runBoundedShutdown, runCanonicalShutdownCleanup } from './shutdown.mjs';
 import { createActiveThreadHealthCache, createSubagentHealthCache } from './health-state.mjs';
+import { PresentationDtoCache } from './presentation-cache.mjs';
 import {
   ensureDurableForumSession,
   initialCanonicalSessionFilePending,
@@ -455,6 +456,29 @@ async function subagentSnapshot() {
     operatorRoot: SUBAGENT_OPERATOR_ROOT,
     runtimeInstanceFile: RUNTIME_INSTANCE_FILE,
   });
+}
+// These caches contain only immutable, JSON-safe administrative DTOs. Every
+// lifecycle/safety operation below continues to call subagentSnapshot directly.
+const subagentWorkloadPresentationCache = new PresentationDtoCache({ ttlMs: 2_000, staleMs: 10_000 });
+const subagentRetentionPresentationCache = new PresentationDtoCache({ ttlMs: 30_000, staleMs: 2 * 60_000 });
+async function subagentWorkloadDto() {
+  const snapshot = await subagentSnapshot();
+  await reconcileLoadedSubagents(snapshot);
+  const origins = new Map();
+  for (const conv of conversations.values())
+    for (const run of conv.subagents.runs.values()) origins.set(run.runId, run.origin ?? null);
+  const capped = capLifecycleRuns(snapshot.runs, 64);
+  const runs = capped.selected.map((run) => ({ ...run, origin: origins.get(run.run_id) ?? null }));
+  return {
+    ok: true,
+    active_count: snapshot.active_count,
+    uncertain_count: snapshot.uncertain_count,
+    effects_unknown_count: snapshot.effects_unknown_count ?? 0,
+    runs,
+    omitted: capped.omitted,
+    blocker_count: capped.blockerCount,
+    omitted_blocker_count: capped.omittedBlockerCount,
+  };
 }
 const subagentCancellation = createSubagentCancellationCoordinator({
   lifecycleRoot: SUBAGENT_LIFECYCLE_ROOT,
@@ -2173,27 +2197,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (method === "GET" && url.pathname === "/v1/admin/subagents") {
       try {
-        const snapshot = await subagentSnapshot();
-        await reconcileLoadedSubagents(snapshot);
-        const origins = new Map();
-        for (const conv of conversations.values())
-          for (const run of conv.subagents.runs.values())
-            origins.set(run.runId, run.origin ?? null);
-        const capped = capLifecycleRuns(snapshot.runs, 64);
-        const runs = capped.selected.map((run) => ({
-          ...run,
-          origin: origins.get(run.run_id) ?? null,
-        }));
-        return json(res, 200, {
-          ok: true,
-          active_count: snapshot.active_count,
-          uncertain_count: snapshot.uncertain_count,
-          effects_unknown_count: snapshot.effects_unknown_count ?? 0,
-          runs,
-          omitted: capped.omitted,
-          blocker_count: capped.blockerCount,
-          omitted_blocker_count: capped.omittedBlockerCount,
-        });
+        return json(res, 200, await subagentWorkloadPresentationCache.get(subagentWorkloadDto));
       } catch (error) {
         return json(res, 503, {
           ok: false,
@@ -2216,10 +2220,14 @@ const server = http.createServer(async (req, res) => {
             operator: true,
             reason: request.reason,
           });
+          subagentWorkloadPresentationCache.clear();
+          subagentRetentionPresentationCache.clear();
           return json(res, 200, retentionDto());
         }
-        const inventory = await retentionInventory();
-        return json(res, 200, retentionDto({ inventory, error: null }));
+        return json(res, 200, await subagentRetentionPresentationCache.get(async () => {
+          const inventory = await retentionInventory();
+          return retentionDto({ inventory, error: null });
+        }));
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         retentionCache = { ...retentionCache, error: message };
@@ -2245,6 +2253,8 @@ const server = http.createServer(async (req, res) => {
           action: body.action,
           reason: body.reason,
         });
+        subagentWorkloadPresentationCache.clear();
+        subagentRetentionPresentationCache.clear();
         return json(res, 200, { ok: true, resolution });
       } catch (error) {
         return json(res, 409, {
@@ -2267,6 +2277,8 @@ const server = http.createServer(async (req, res) => {
           reason: body.reason,
           runtimeInstanceFile: RUNTIME_INSTANCE_FILE,
         });
+        subagentWorkloadPresentationCache.clear();
+        subagentRetentionPresentationCache.clear();
         return json(res, 200, { ok: true, resolution });
       } catch (error) {
         return json(res, 409, {
@@ -2290,6 +2302,8 @@ const server = http.createServer(async (req, res) => {
           reason: body.reason,
           runtimeInstanceFile: RUNTIME_INSTANCE_FILE,
         });
+        subagentWorkloadPresentationCache.clear();
+        subagentRetentionPresentationCache.clear();
         return json(res, 200, { ok: true, resolution });
       } catch (error) {
         return json(res, 409, {

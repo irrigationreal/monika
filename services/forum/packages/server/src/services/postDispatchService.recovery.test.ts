@@ -9,7 +9,7 @@ import { migrate } from '../db';
 import { EchsBridge } from '../echsBridge';
 import { EchsTransportError } from '../echsClient';
 import { ForumStore } from '../store';
-import { PostDispatchService } from './postDispatchService';
+import { PostDispatchService, transportRetryAtForAttempt } from './postDispatchService';
 
 describe('durable post dispatch recovery fence', () => {
   let db: Database.Database;
@@ -44,6 +44,37 @@ describe('durable post dispatch recovery fence', () => {
     const post = store.createPost({ topicId: topic.id, authorId: author.id, body: 'work' });
     return { topic, session, post, author };
   }
+
+  it('does not let a newer due dispatch bypass a delayed ordered head', () => {
+    const { topic, session, post, author } = fixture();
+    const head = store.createPostDispatch({ topicId: topic.id, sessionId: session.id, postId: post.id });
+    db.prepare('update post_dispatches set next_attempt_at = ? where id = ?').run('9999-01-01T00:00:00.000Z', head.id);
+    const newerPost = store.createPost({ topicId: topic.id, authorId: author.id, body: 'newer work' });
+    store.createPostDispatch({ topicId: topic.id, sessionId: session.id, postId: newerPost.id });
+
+    expect(store.listDuePostDispatches(10)).toEqual([]);
+    db.prepare('update post_dispatches set next_attempt_at = ? where id = ?').run('2000-01-01T00:00:00.000Z', head.id);
+    expect(store.listDuePostDispatches(10).map((row) => row.id)).toEqual([head.id]);
+  });
+
+  it('uses deterministic progressive transport retry delays capped at five minutes', () => {
+    const now = Date.parse('2025-01-01T00:00:00.000Z');
+    expect([1, 2, 3, 4, 99].map((attempt) => Date.parse(transportRetryAtForAttempt(attempt, now)) - now))
+      .toEqual([30_000, 60_000, 120_000, 300_000, 300_000]);
+  });
+
+  it('records immutable claim and terminal attempt events', () => {
+    const { topic, session, post } = fixture();
+    const dispatch = store.createPostDispatch({ topicId: topic.id, sessionId: session.id, postId: post.id });
+    const claimed = store.claimPostDispatch(dispatch.id, dispatch)!;
+    store.markPostDispatchFailed(dispatch.id, claimed.claim_token!, 'network reset', {
+      retryAt: '2030-01-01T00:00:00.000Z', classification: 'transport',
+    });
+    const before = store.listPostDispatchAttempts([dispatch.id]);
+    expect(before.map((attempt) => attempt.event)).toEqual(['retry_scheduled', 'claimed']);
+    db.prepare("update post_dispatches set error_message = 'new mutable error'").run();
+    expect(store.listPostDispatchAttempts([dispatch.id])).toEqual(before);
+  });
 
   it('retries genuinely current pending human posts', async () => {
     const { topic, session, post } = fixture();
@@ -470,6 +501,15 @@ describe('durable post dispatch recovery fence', () => {
     expect(store.listDuePostDispatches(10)).toEqual([]);
   });
 
+  it('does not let late abandonment overwrite a newer cancellation generation', () => {
+    const { topic, session, post } = fixture();
+    const dispatch = store.createPostDispatch({ topicId: topic.id, sessionId: session.id, postId: post.id });
+    store.advanceTopicDispatchGeneration(topic.id, 'cancelled');
+
+    expect(store.markPostDispatchAbandoned(dispatch.id, 'late lifecycle observation')?.status).toBe('superseded');
+    expect(store.listPostDispatchAttempts([dispatch.id]).map((attempt) => attempt.event)).toEqual(['superseded']);
+  });
+
   it('uses claim CAS and prevents an old claimant from finalizing after reclamation', () => {
     const { topic, session, post } = fixture();
     const pending = store.createPostDispatch({ topicId: topic.id, sessionId: session.id, postId: post.id });
@@ -624,6 +664,21 @@ describe('durable post dispatch recovery fence', () => {
       );
     }
     expect(store.getPostDispatch(dispatch.id)?.status).toBe('failed');
+  });
+
+  it('keeps lifetime audit attempt numbers monotonic across manual terminal retry', () => {
+    const { topic, session, post } = fixture();
+    const dispatch = store.createPostDispatch({ topicId: topic.id, sessionId: session.id, postId: post.id });
+    const first = store.claimPostDispatch(dispatch.id, dispatch)!;
+    store.markPostDispatchFailed(dispatch.id, first.claim_token!, 'terminal');
+    store.retryTerminalPostDispatch(dispatch.id);
+    const second = store.claimPostDispatch(dispatch.id, store.getPostDispatch(dispatch.id)!)!;
+
+    expect(store.listPostDispatchAttempts([dispatch.id])
+      .filter((attempt) => attempt.event === 'claimed')
+      .map((attempt) => attempt.attempt_number)
+      .sort()).toEqual([1, 2]);
+    expect(second.attempt_count).toBe(1);
   });
 
   it('manual terminal retry cannot resurrect superseded or abandoned work', () => {

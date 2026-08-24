@@ -177,6 +177,17 @@ describe('TopicView persistent Quick Reply dock', () => {
     expect(source).toContain('Session metadata unavailable: {{ state.adminEnrichmentError.value }}');
   });
 
+  it('forces dispatch discovery after replies and destination hydration', () => {
+    const replyStart = source.indexOf('async function reply()');
+    const postCreated = source.indexOf('postCreated = true;', replyStart);
+    const replyDiscovery = source.indexOf('await postDispatchPoller.refreshAfterCurrent();', postCreated);
+    const hydration = source.indexOf('await postDispatchPoller.refreshAfterCurrent();', replyDiscovery + 1);
+    expect(postCreated).toBeGreaterThan(replyStart);
+    expect(replyDiscovery).toBeGreaterThan(postCreated);
+    expect(hydration).toBeGreaterThan(replyDiscovery);
+    expect(source).toContain('postDispatchPoller.stop();\n    postDispatchRequestGeneration += 1;');
+  });
+
   it('stops stale topic-load continuations before topic-specific side effects', () => {
     const selection = source.indexOf('await state.selectTopicById(topicId);');
     const fence = source.indexOf(

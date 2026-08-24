@@ -60,8 +60,10 @@ packages/
 
 - Fastify server in `packages/server` with SQLite storage and optional Redis stream bus.
 - Robot orchestration is handled by the Monika Pi bridge, which calls `agentd` over HTTP/SSE and reconciles canonical Pi
-  provenance into forum state. Ambiguous disconnect/5xx outages retain the exact durable dispatch identity at bounded
-  backoff; definite failures remain terminal, and superseded/abandoned work cannot be manually resurrected. Ordinary
+  provenance into forum state. Ambiguous disconnect/5xx outages retain the exact durable dispatch ID, generation, origin,
+  and ordered contributors indefinitely, retrying deterministically after roughly 30s, 60s, 2m, then at a 5m cap;
+  definite failures remain terminal, and superseded/abandoned work cannot be manually resurrected. Claim and terminal
+  transitions also append immutable attempt-audit rows; the mutable dispatch error is not the diagnostic source of truth. Ordinary
   durable post-dispatch creation also supplies that identity as agentd `creation_id` with `durable_session: true`, so a
   lost create response reopens the same anchored session. Non-dispatch operations never manufacture a missing canonical link; they may repair
   one only from a currently loaded conversation carrying canonical session ID and path.
@@ -86,7 +88,10 @@ packages/
 - The header separates account navigation from forum navigation: the welcome strip owns personal pages, authentication
   actions, and theme selection, while the primary navbar owns forum, admin, chat, developer, and API destinations.
   Account links remain a single horizontally scrollable row on narrow viewports; forum links use the mobile menu.
-- Topic view exposes live reasoning + tool runs and supports inline moderation. The latest-item pager control targets
+- Topic view exposes live reasoning + tool runs and supports inline moderation. Admins also receive a dedicated,
+  topic-scoped dispatch projection: delayed or failed work is anchored beneath its source post with retry time, attempt
+  count, and expandable bounded history. The endpoint and errors are server-authorized and unavailable to non-admins;
+  polling runs only while unsettled dispatch work exists and is completion-scheduled/visibility-aware. The latest-item pager control targets
   the active response placeholder while a reply is in progress, including its tentative next page, and otherwise retains
   the canonical numbered permalink for the latest settled post. Explicit delayed `follow_up` subagent continuations
   render beneath their origin with a **Follow-up** badge; `awaited` work stays part of the claiming parent synthesis and
