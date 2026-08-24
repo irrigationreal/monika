@@ -59,25 +59,28 @@ Deploy on Finish uses the same durable-dispatch blocker, also checks agentd, per
 
 1. Fetches and inspects the live git checkout without modifying it.
 2. Defers if the checkout is dirty, detached, lacks an upstream, cannot fetch, or is behind upstream.
-3. Pulls the configured Monika and forum images.
-4. Exits cleanly if the pulled image IDs already match the running containers.
-5. Acquires an operation-ID-scoped forum admission lease, which pauses/waits Pi sync and atomically fences new eligible robot work.
-6. If the `monika` image changed, drains agentd to reject new work before shutdown. The script POSTs `/v1/admin/drain` even when agentd already reports `safe_to_stop`; drain is a deploy lock, not only an idle-conversation cleanup step.
-7. Defers with exit code `75` (`EX_TEMPFAIL`) if either admission or agentd is blocked, including while an interactive Pi TUI owns a session.
-8. Creates and verifies a whole-repo `.tar.zst` runtime capsule backup.
-9. If the `monika` image changed, re-checks/re-starts agentd drain immediately before Docker Compose runs.
-10. Applies exactly the changed Monika/forum service with `--no-deps`. Hosts with `MONIKA_PUBLIC_INGRESS=1` reconcile the digest-pinned `cloudflared` connector independently before image comparison.
-11. The replacement Monika container restores the unexpired durable drain; the script cancels it on the new agentd after Compose and waits for healthy/undrained state.
-12. After every applied Monika or forum image change—including forum-only updates—waits a bounded interval for the forum's exact unprefixed `/readyz`. A readiness failure aborts before backup/image pruning. Monika updates cancel drain and prove agentd health first because forum readiness depends on the undrained backend.
-13. Cancels/reopens forum admission after readiness (or after backup-only completion); the exit trap attempts both forum cancellation and agentd drain cancellation on every abort.
-14. Prunes old redeploy backups by tiered retention bucket.
-15. Prunes old dangling Docker image layers conservatively.
+3. Reconciles optional public ingress, then selects the configured pair. Unset/main keeps the `:main` defaults; opt-in stable strictly resolves the latest release's `stable-manifests.json` to exact digest references. Paired explicit image overrides bypass channel resolution.
+4. Pulls the selected Monika and forum images. Stable verifies OCI revision labels and rejects an unacknowledged older, unknown, missing, or divergent running revision before application quiescence; fresh installs and forward ancestry advances proceed.
+5. Exits cleanly if the pulled image IDs already match the running containers.
+6. Acquires an operation-ID-scoped forum admission lease, which pauses/waits Pi sync and atomically fences new eligible robot work.
+7. If the `monika` image changed, drains agentd to reject new work before shutdown. The script POSTs `/v1/admin/drain` even when agentd already reports `safe_to_stop`; drain is a deploy lock, not only an idle-conversation cleanup step.
+8. Defers with exit code `75` (`EX_TEMPFAIL`) if either admission or agentd is blocked, including while an interactive Pi TUI owns a session.
+9. Creates and verifies a whole-repo `.tar.zst` runtime capsule backup.
+10. If the `monika` image changed, re-checks/re-starts agentd drain immediately before Docker Compose runs.
+11. Applies exactly the changed Monika/forum service with `--no-deps`. Hosts with `MONIKA_PUBLIC_INGRESS=1` reconcile the digest-pinned `cloudflared` connector independently before image comparison.
+12. The replacement Monika container restores the unexpired durable drain; the script cancels it on the new agentd after Compose and waits for healthy/undrained state.
+13. After every applied Monika or forum image change—including forum-only updates—waits a bounded interval for the forum's exact unprefixed `/readyz`. A readiness failure aborts before backup/image pruning. Monika updates cancel drain and prove agentd health first because forum readiness depends on the undrained backend.
+14. Cancels/reopens forum admission after readiness (or after backup-only completion); the exit trap attempts both forum cancellation and agentd drain cancellation on every abort.
+15. Prunes old redeploy backups by tiered retention bucket.
+16. Prunes old dangling Docker image layers conservatively.
 
 Forum-only image updates do not drain agentd because Docker Compose is not expected to recreate the `monika` container. Backup-only mode still drains and cancels agentd because its purpose is to create a quiescence-gated **local redeploy** runtime capsule. It does not run the tiered B2 writer. Off-host jobs take a read-only Btrfs capture independently and root executes only the immutable Shadowsea Nix-store program, never this writable checkout.
 
 An exact `404` from admission acquire identifies the one-release bootstrap from a pre-admission forum image. Only then, the host boundedly polls the legacy authenticated quiescence snapshot and rechecks it immediately before Compose. Any other failure remains closed; after replacement, admission is mandatory.
 
-The script intentionally orchestrates only Docker and image tags. The knowledge of whether stopping is safe lives in agentd/forum APIs so the same contract can be reused by admin UI, timers, Watchtower hooks, or future tooling.
+Stable release metadata failure returns exit 75 before forum admission or agentd drain. The public-ingress repair remains before that resolution, after the unchanged git-current gate, so a temporary GitHub API outage cannot prevent connector reconciliation. A reviewed main-to-stable downgrade can be acknowledged for one invocation with `MONIKA_DEPLOY_ALLOW_STABLE_MIGRATION=1`; never persist this override in timer configuration.
+
+The script intentionally orchestrates only Docker and coordinated image selection. The knowledge of whether stopping is safe lives in agentd/forum APIs so the same contract can be reused by admin UI, timers, or future tooling.
 
 ### Uncertain-run repair
 

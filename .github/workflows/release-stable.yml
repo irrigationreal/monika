@@ -100,6 +100,10 @@ jobs:
             defer "Candidate ${SHORT_SHA} has not completed its seven-day soak (${REMAINING_HOURS}h remaining)."
           fi
 
+          STABLE_RELEASES=$(mktemp)
+          gh api --paginate "repos/${{ github.repository }}/releases?per_page=100" \
+            --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name' \
+            > "$STABLE_RELEASES"
           while IFS= read -r STABLE_TAG; do
             [ -n "$STABLE_TAG" ] || continue
             if git rev-parse "refs/tags/${STABLE_TAG}^{commit}" >/dev/null 2>&1 && \
@@ -108,8 +112,8 @@ jobs:
               echo "::notice::Candidate ${SHORT_SHA} is already stable as ${STABLE_TAG}."
               exit 0
             fi
-          done < <(gh api --paginate "repos/${{ github.repository }}/releases?per_page=100" \
-            --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name')
+          done < "$STABLE_RELEASES"
+          rm -f "$STABLE_RELEASES"
 
           RELEASE_TAG="$REQUESTED_TAG"
           if [ -z "$RELEASE_TAG" ]; then
@@ -122,12 +126,20 @@ jobs:
             exit 1
           fi
 
+          EXISTING_DRAFT=false
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            echo "Release '$RELEASE_TAG' already exists; refusing to overwrite it." >&2
-            exit 1
+            read -r RELEASE_IS_DRAFT RELEASE_TARGET < <(gh release view "$RELEASE_TAG" \
+              --json isDraft,targetCommitish --jq '[.isDraft, .targetCommitish] | @tsv')
+            if [ "$RELEASE_IS_DRAFT" != "true" ] || [ "$RELEASE_TARGET" != "$FULL_SHA" ]; then
+              echo "Release '$RELEASE_TAG' already exists and is not a repairable draft for ${FULL_SHA}." >&2
+              exit 1
+            fi
+            EXISTING_DRAFT=true
+            echo "::notice::Resuming matching draft release '$RELEASE_TAG'."
           fi
-          if git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"; then
-            echo "Git tag '$RELEASE_TAG' already exists without a matching release; refusing to reuse it." >&2
+          if git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}" && \
+             { [ "$EXISTING_DRAFT" != "true" ] || [ "$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")" != "$FULL_SHA" ]; }; then
+            echo "Git tag '$RELEASE_TAG' already exists without a matching repairable draft; refusing to reuse it." >&2
             exit 1
           fi
 
@@ -148,6 +160,7 @@ jobs:
             echo "forum_digest=${FORUM_DIGEST}"
             echo "previous_tag=${PREVIOUS_TAG}"
             echo "published_at=${PUBLISHED_AT}"
+            echo "existing_draft=${EXISTING_DRAFT}"
           } >> "$GITHUB_OUTPUT"
 
           if [ "$FORCE" = "true" ] && [ "$AGE_SECONDS" -lt "$SOAK_SECONDS" ]; then
@@ -310,7 +323,32 @@ jobs:
           NOTES
           cat generated-notes.md >> release-notes.md
 
-          gh release create "$RELEASE_TAG" \
-            --title "Stable Release — ${RELEASE_TAG}" \
-            --notes-file release-notes.md \
-            --target "$FULL_SHA"
+          scripts/write-stable-manifest \
+            stable-manifests.json \
+            "$RELEASE_TAG" \
+            "$FULL_SHA" \
+            "ghcr.io/${{ github.repository }}" \
+            "$MONIKA_DIGEST" \
+            "$FORUM_DIGEST"
+
+          if [ "${{ steps.candidate.outputs.existing_draft }}" != "true" ]; then
+            gh release create "$RELEASE_TAG" \
+              --draft \
+              --title "Stable Release — ${RELEASE_TAG}" \
+              --notes-file release-notes.md \
+              --target "$FULL_SHA"
+          else
+            gh release edit "$RELEASE_TAG" \
+              --draft \
+              --title "Stable Release — ${RELEASE_TAG}" \
+              --notes-file release-notes.md \
+              --target "$FULL_SHA"
+          fi
+
+          gh release upload "$RELEASE_TAG" stable-manifests.json --clobber
+          rm -f downloaded-stable-manifests.json
+          gh release download "$RELEASE_TAG" \
+            --pattern stable-manifests.json \
+            --output downloaded-stable-manifests.json
+          cmp stable-manifests.json downloaded-stable-manifests.json
+          gh release edit "$RELEASE_TAG" --draft=false

@@ -299,7 +299,17 @@ Use `MONIKA_IMPORT_TAGS` to override the default `historical-import` tag.
 Manual Compose recreation can terminate active Pi work. Production updates should
 use the admission-aware contract: the host acquires the forum's expiring robot-work fence (which pauses/waits Pi sync
 and checks durable dispatch intent), then retains agentd drain through replacement. The forum admission and agentd drain
-are cancelled on completion or abort:
+are cancelled on completion or abort.
+
+Autodeploy remains on `main` when `MONIKA_RELEASE_CHANNEL` is unset. Operators may
+opt into coordinated exact-digest stable releases by setting
+`MONIKA_RELEASE_CHANNEL=stable` in the host scheduler environment. A Compose `.env`
+file does not configure the host script unless its value is explicitly exported.
+Stable is usable only after a release publishes the versioned
+`stable-manifests.json` asset; there is no fallback to an older release or rolling
+`latest`.
+
+Further contracts:
 
 - [`redeployment.md`](redeployment.md) defines what must be idle and how agentd
   drain works;

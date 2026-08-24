@@ -222,6 +222,29 @@ The script verifies:
 This protects both the old stuck-drain failure and the forum quiescence-to-restart
 race, including release on success and failure.
 
+### `smoke/stable-release-channel.sh`
+
+Validates stable image selection with stubbed GitHub API, Docker, and runtime API
+boundaries. It never contacts GitHub, a registry, Docker, or the live runtime.
+
+```bash
+tests/smoke/stable-release-channel.sh
+```
+
+Coverage generates its valid fixture through the same
+`scripts/write-stable-manifest` producer used by the Stable workflow, checks that
+output against an independently pinned v1 object, keeps unset
+selection on the established `:main` defaults, leaves backup-only independent of
+image-channel validation, proves paired explicit deploy overrides and rejects
+one-sided/empty values, validates exact stable digest references, bounded API calls,
+canonical/custom credential separation, and OCI revision labels, and fails malformed,
+missing, unavailable, wrong-version,
+wrong-tag/commit/repository/digest metadata before quiescence without Python
+tracebacks. It also checks forward ancestry, downgrade/missing/unknown migration
+fences and the one-shot acknowledgment, verifies an available stable update enters
+the established admission/drain lifecycle, and keeps public-ingress reconciliation
+before stable API resolution.
+
 ### `smoke/compose-agentd-port.sh`
 
 Statically checks that Compose keeps agentd on internal port 7724 for service

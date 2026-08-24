@@ -21,16 +21,26 @@ nonblocking. Effects-unknown does not fabricate a live process, but safe deploym
 also fails closed until the evidence is reconciled or an operator records an audited
 effects resolution; it must never be automatically replayed or dismissed.
 
-The deployment source of truth for unattended updates is the container image tag, not the git checkout. The checkout still matters as the reviewed local deployment contract: compose files, deploy scripts, docs, and runtime layout live there. Autodeploy may fetch and inspect git state, but it must not pull or modify files.
+The deployment source of truth for unattended updates is the selected container release channel, not the git checkout. The default `main` channel follows the two container tags; the opt-in `stable` channel follows a GitHub release asset that binds the coordinated pair to exact manifest digests. The checkout still matters as the reviewed local deployment contract: compose files, deploy scripts, docs, and runtime layout live there. Autodeploy may fetch and inspect git state, but it must not pull or modify files.
 
-A typical `main`-tracking deployment uses:
+The unchanged default is `main` and uses:
 
 ```text
 ghcr.io/irrigationreal/monika:main
 ghcr.io/irrigationreal/monika-forum:main
 ```
 
-Git is only used to provide the local compose file, deploy script, docs, and rollback context.
+Git is only used to provide the local compose file, deploy script, docs, ancestry checks, and rollback context.
+
+### Image channels and overrides
+
+Set `MONIKA_RELEASE_CHANNEL=stable` in the **host scheduler's service environment** to opt into coordinated stable autodeploy. A root Compose `.env` file is read by `docker compose`, but it does not automatically export values to `scripts/deploy-if-safe`; do not rely on it for the scheduler unless the scheduler explicitly exports or loads that value. Leaving the variable unset, or setting it to `main`, preserves the existing `:main` behavior and requires no stanza migration.
+
+Stable resolution calls the canonical GitHub latest-release API, requires a non-draft/non-prerelease release with exactly one `stable-manifests.json` asset, and validates version 1 of both its schema and deployment contract. The asset must bind the release tag and full commit to the canonical Monika and Forum repositories and exact `sha256` manifest digests. The script pulls `repository@sha256:...` references and verifies both pulled images' `org.opencontainers.image.revision` labels against the release commit. It never treats `latest`, a Git tag, or `git ls-remote` as coordinated artifact authority. Stable autodeploy becomes usable only when the first stable release carrying `stable-manifests.json` is published; older releases are intentionally not backfilled or accepted as a fallback.
+
+Canonical GitHub API calls may use `GITHUB_TOKEN` and are bounded. `MONIKA_STABLE_RELEASE_API_URL` exists for isolated mirrors/tests, but must be HTTPS, must return same-origin asset API URLs, and requires a separate `MONIKA_STABLE_RELEASE_TOKEN`; `GITHUB_TOKEN` is never sent to a custom URL. Missing, unavailable, or malformed release metadata defers with exit 75 before application quiescence.
+
+Manual image rollback/test overrides remain available, but are deliberately paired: set both non-empty `MONIKA_IMAGE` and `MONIKA_FORUM_IMAGE`, or neither. A one-sided or empty override is rejected. Explicit pairs take precedence over channel resolution and should name a reviewed coordinated pair.
 
 ## Network boundary
 
@@ -78,20 +88,21 @@ python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
 1. Fetch and inspect the live git checkout without modifying it.
 2. Defer if the checkout is dirty, detached, lacks an upstream, cannot fetch, or is behind upstream.
 3. When `MONIKA_PUBLIC_INGRESS=1`, reconcile only the digest-pinned `cloudflared` service with `--no-deps`.
-4. Pull the configured Monika and forum images and compare them with the running containers.
-5. Exit cleanly if no image change is available.
-6. Acquire an expiring forum admission lease with a caller-generated operation ID and the deploy token. Acquisition synchronously closes robot admission, pauses new Pi sync cycles, boundedly waits for any in-flight sync, then evaluates current-generation durable dispatches and the other forum blockers. A robot-eligible post arriving during preparation revokes the attempt and commits with its dispatch; after acquisition, such a post receives retryable 503 without a visible/orphan post.
-7. If the `monika` image changed, start agentd deploy drain. Drain is a lock, so the script POSTs `/v1/admin/drain` even when agentd was already `safe_to_stop`; this rejects new work between the safety check and Docker shutdown.
-8. Create and verify a whole-repo backup archive.
-9. If the `monika` image changed, re-check/re-start agentd drain immediately before Compose runs. This closes the race where a long backup or external drain cancel could otherwise reopen agentd to new work.
-10. Revalidate ownership and renew the same forum admission lease immediately before Compose. A lost or expired lease fails closed before container replacement.
-11. Recreate exactly the application service whose image changed, using `--no-deps`. A forum-only update therefore cannot recreate Monika because of unrelated Compose configuration drift.
-12. The replacement Monika container restores the original unexpired deploy drain from `/data`; wait for the new agentd to accept `/v1/admin/drain/cancel` and report healthy/undrained.
-13. After every applied Monika or forum image change, wait a bounded interval for the exact unprefixed forum `/readyz`; a failure stops before pruning. Monika updates cancel drain first because forum readiness depends on the undrained backend.
-14. Cancel/reopen the forum admission lease, including after forum-only, Monika-only, and backup-only success. The exit trap best-effort cancels it on every abort; automatic lease expiry is the final fail-safe.
-15. Print `docker compose ps` for the managed services.
-16. Prune old redeploy backups by retention bucket.
-17. Prune old dangling Docker images conservatively.
+4. Select the image pair. The default/main and explicit-override paths use their configured references. The stable path resolves and strictly validates the latest release asset after ingress reconciliation, then exports exact digest references.
+5. Pull both images. For stable, verify their OCI revision labels and apply the migration guard before application quiescence.
+6. Compare the pulled image IDs with the running containers and exit cleanly if no image change is available.
+7. Acquire an expiring forum admission lease with a caller-generated operation ID and the deploy token. Acquisition synchronously closes robot admission, pauses new Pi sync cycles, boundedly waits for any in-flight sync, then evaluates current-generation durable dispatches and the other forum blockers. A robot-eligible post arriving during preparation revokes the attempt and commits with its dispatch; after acquisition, such a post receives retryable 503 without a visible/orphan post.
+8. If the `monika` image changed, start agentd deploy drain. Drain is a lock, so the script POSTs `/v1/admin/drain` even when agentd was already `safe_to_stop`; this rejects new work between the safety check and Docker shutdown.
+9. Create and verify a whole-repo backup archive.
+10. If the `monika` image changed, re-check/re-start agentd drain immediately before Compose runs. This closes the race where a long backup or external drain cancel could otherwise reopen agentd to new work.
+11. Revalidate ownership and renew the same forum admission lease immediately before Compose. A lost or expired lease fails closed before container replacement.
+12. Recreate exactly the application service whose image changed, using `--no-deps`. A forum-only update therefore cannot recreate Monika because of unrelated Compose configuration drift.
+13. The replacement Monika container restores the original unexpired deploy drain from `/data`; wait for the new agentd to accept `/v1/admin/drain/cancel` and report healthy/undrained.
+14. After every applied Monika or forum image change, wait a bounded interval for the exact unprefixed forum `/readyz`; a failure stops before pruning. Monika updates cancel drain first because forum readiness depends on the undrained backend.
+15. Cancel/reopen the forum admission lease, including after forum-only, Monika-only, and backup-only success. The exit trap best-effort cancels it on every abort; automatic lease expiry is the final fail-safe.
+16. Print `docker compose ps` for the managed services.
+17. Prune old redeploy backups by retention bucket.
+18. Prune old dangling Docker images conservatively.
 
 Forum-only image updates do not drain agentd because the `monika` container is not expected to restart. The recreated forum passively reattaches only conversations agentd still reports loaded; it does not reopen missing Pi sessions. A coordinated runtime restart leaves historical sessions unloaded and recovered completion/request evidence non-waking until explicit new work. Backup-only mode still drains and cancels agentd so the runtime capsule is quiescence-gated.
 
@@ -128,6 +139,8 @@ MONIKA_IMAGE=ghcr.io/irrigationreal/monika:sha-OLD \
 MONIKA_FORUM_IMAGE=ghcr.io/irrigationreal/monika-forum:sha-OLD \
 ./scripts/deploy-if-safe
 ```
+
+On the first move from a running `main` image to an older stable release, the migration guard will normally defer because that is a deliberate downgrade. Inspect the reported running and target commits, then acknowledge only that reviewed attempt with `MONIKA_DEPLOY_ALLOW_STABLE_MIGRATION=1`. Fresh installs, exact matches, and running revisions proven to be ancestors of the stable target advance without it. Missing/unknown labels, older targets, and divergent histories require the same acknowledgment. Do **not** persist this one-shot variable in the timer or scheduler configuration.
 
 If the command exits `75`, do not force a restart. Inspect both forum deploy status and `curl -fsS http://127.0.0.1:7724/v1/admin/subagents`, wait for active work to finish, and retry. An `uncertain` run requires runtime/PID reconciliation or the audited quarantine procedure in `docs/redeployment.md`; an `effects_state: "unknown"` run requires remote-effect investigation and an audited effects attestation. Never remove lifecycle files merely to make either counter disappear.
 
@@ -235,7 +248,7 @@ Use separate worktrees/directories for development, for example:
 /home/monika/repos/monika-redeploy-safety
 ```
 
-Do not point the systemd timer at a development worktree. Do not make the timer run `git pull`. Source checkout changes should be deliberate and reviewed; unattended automation may fetch to inspect drift, but it should only apply image tag changes.
+Do not point the systemd timer at a development worktree. Do not make the timer run `git pull`. Source checkout changes should be deliberate and reviewed; unattended automation may fetch to inspect drift, but it should only apply the selected container image pair.
 
 ## Docker image pruning
 
@@ -271,7 +284,7 @@ If the runtime capsule is readable by the deploy user, macOS launchd deploys do 
 
 ## systemd timer model
 
-On NixOS hosts, Nix can own the timer and service. On other Linux hosts, the same model can be implemented with ordinary systemd units. The service should run as the runtime owner with Docker access, use a `flock` lock to prevent overlapping manual/timer runs, and treat exit `75` as a successful deferral.
+On NixOS hosts, Nix can own the timer and service. On other Linux hosts, the same model can be implemented with ordinary systemd units. The service should run as the runtime owner with Docker access, use a `flock` lock to prevent overlapping manual/timer runs, and treat exit `75` as a successful deferral. Configure `MONIKA_RELEASE_CHANNEL=stable` in this service environment when opting in; Compose `.env` interpolation does not export it to the host script.
 
 Operational checks:
 
