@@ -54,6 +54,7 @@ import type {
   NotificationRow,
   PendingAttachmentRow,
   PlanRow,
+  PostDispatchAttemptRow,
   PostDispatchRow,
   PostRow,
   ReactionRow,
@@ -3320,6 +3321,56 @@ export class ForumStore {
     return row ?? null;
   }
 
+  listPostDispatchesForTopic(topicId: string): PostDispatchRow[] {
+    return this.db.prepare('select * from post_dispatches where topic_id = ? order by created_at asc, rowid asc')
+      .all(topicId) as PostDispatchRow[];
+  }
+
+  listPostDispatchAttempts(dispatchIds: string[], limit = 100): PostDispatchAttemptRow[] {
+    if (dispatchIds.length === 0) return [];
+    return this.db.prepare(
+      `select * from post_dispatch_attempts where dispatch_id in (select value from json_each(?))
+       order by created_at desc, rowid desc limit ?`
+    ).all(JSON.stringify(dispatchIds), Math.max(1, Math.min(200, Math.trunc(limit)))) as PostDispatchAttemptRow[];
+  }
+
+  private nextPostDispatchAuditAttemptNumber(dispatchId: string): number {
+    const row = this.db.prepare(
+      "select coalesce(max(attempt_number), 0) + 1 as attempt_number from post_dispatch_attempts where dispatch_id = ? and event = 'claimed'"
+    ).get(dispatchId) as { attempt_number: number };
+    return row.attempt_number;
+  }
+
+  private claimedPostDispatchAuditAttemptNumber(dispatchId: string, claimToken: string, fallback: number): number {
+    const row = this.db.prepare(
+      "select attempt_number from post_dispatch_attempts where dispatch_id = ? and event = 'claimed' and claim_token = ? order by rowid desc limit 1"
+    ).get(dispatchId, claimToken) as { attempt_number: number } | undefined;
+    return row?.attempt_number ?? fallback;
+  }
+
+  private insertPostDispatchAttempt(input: {
+    dispatchId: string;
+    attemptNumber: number;
+    event: PostDispatchAttemptRow['event'];
+    classification?: PostDispatchAttemptRow['classification'];
+    retryAt?: string | null;
+    errorMessage?: string | null;
+    claimToken?: string | null;
+    createdAt: string;
+  }): void {
+    const sanitizedError = input.errorMessage
+      ?.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 500) || null;
+    this.db.prepare(
+      `insert into post_dispatch_attempts
+       (id, dispatch_id, attempt_number, event, classification, retry_at, error_message, claim_token, created_at)
+       values (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(randomUUID(), input.dispatchId, input.attemptNumber, input.event, input.classification ?? null,
+      input.retryAt ?? null, sanitizedError, input.claimToken ?? null, input.createdAt);
+  }
+
   getActiveTurnOrigin(topicId: string): ActiveTurnOriginRow | null {
     return (
       (this.db.prepare('select * from active_turn_origins where topic_id = ?').get(topicId) as
@@ -3402,6 +3453,18 @@ export class ForumStore {
          join post_dispatch_generations g on g.topic_id = d.topic_id and g.generation = d.generation
          where d.status in ('pending', 'dispatching')
            and (d.next_attempt_at is null or d.next_attempt_at <= ?)
+           and (
+             exists (
+               select 1 from compaction_operations priority
+               where priority.recovery_post_id = d.post_id and priority.status = 'succeeded'
+             )
+             or not exists (
+               select 1 from post_dispatches earlier
+               where earlier.topic_id = d.topic_id and earlier.generation = d.generation
+                 and earlier.status in ('pending', 'dispatching')
+                 and (earlier.created_at < d.created_at or (earlier.created_at = d.created_at and earlier.rowid < d.rowid))
+             )
+           )
            and (
              exists (
                select 1 from compaction_operations own
@@ -3493,11 +3556,14 @@ export class ForumStore {
           .all(JSON.stringify(rows.map((row) => row.id))) as Array<{ id: string }>;
         if (current.length !== rows.length) return null;
         for (const row of rows.slice(0, -1)) {
-          this.db
+          const reason = 'Included in same-origin dispatch group.';
+          const result = this.db
             .prepare(
               "update post_dispatches set status = 'superseded', next_attempt_at = null, error_message = ?, updated_at = ? where id = ? and status in ('pending', 'dispatching')"
             )
-            .run('Included in same-origin dispatch group.', now, row.id);
+            .run(reason, now, row.id);
+          if (result.changes === 1) this.insertPostDispatchAttempt({ dispatchId: row.id,
+            attemptNumber: row.attempt_count, event: 'superseded', classification: 'lifecycle', errorMessage: reason, createdAt: now });
         }
         this.db
           .prepare(
@@ -3513,16 +3579,21 @@ export class ForumStore {
     if (observed.status !== 'pending' && observed.status !== 'dispatching') return null;
     const now = nowIso();
     const claimToken = randomUUID();
-    const result = this.db
-      .prepare(
-        `update post_dispatches set status = 'dispatching', claim_token = ?, attempt_count = attempt_count + 1, last_attempt_at = ?, next_attempt_at = null, error_message = null, updated_at = ?
-        where id = ? and status = ? and last_attempt_at is ? and generation =
-          (select generation from post_dispatch_generations where topic_id = post_dispatches.topic_id)`
-      )
-      .run(claimToken, now, now, id, observed.status, observed.last_attempt_at);
-    if (result.changes !== 1) return null;
-    const claimed = this.getPostDispatch(id);
-    return claimed?.claim_token === claimToken ? claimed : null;
+    return this.db.transaction(() => {
+      const result = this.db
+        .prepare(
+          `update post_dispatches set status = 'dispatching', claim_token = ?, attempt_count = attempt_count + 1, last_attempt_at = ?, next_attempt_at = null, error_message = null, updated_at = ?
+          where id = ? and status = ? and last_attempt_at is ? and generation =
+            (select generation from post_dispatch_generations where topic_id = post_dispatches.topic_id)`
+        )
+        .run(claimToken, now, now, id, observed.status, observed.last_attempt_at);
+      if (result.changes !== 1) return null;
+      const claimed = this.getPostDispatch(id);
+      if (!claimed || claimed.claim_token !== claimToken) return null;
+      this.insertPostDispatchAttempt({ dispatchId: id, attemptNumber: this.nextPostDispatchAuditAttemptNumber(id),
+        event: 'claimed', claimToken, createdAt: now });
+      return claimed;
+    })();
   }
 
   isPostDispatchClaimCurrent(id: string, claimToken: string): boolean {
@@ -3550,14 +3621,20 @@ export class ForumStore {
 
   markPostDispatchDispatched(id: string, claimToken: string): PostDispatchRow | null {
     const now = nowIso();
-    this.db
-      .prepare(
-        `update post_dispatches set status = 'dispatched', claim_token = null, dispatched_at = ?, next_attempt_at = null, error_message = null, updated_at = ?
-        where id = ? and status = 'dispatching' and claim_token = ? and generation =
-          (select generation from post_dispatch_generations where topic_id = post_dispatches.topic_id)`
-      )
-      .run(now, now, id, claimToken);
-    return this.getPostDispatch(id);
+    return this.db.transaction(() => {
+      const result = this.db
+        .prepare(
+          `update post_dispatches set status = 'dispatched', claim_token = null, dispatched_at = ?, next_attempt_at = null, error_message = null, updated_at = ?
+          where id = ? and status = 'dispatching' and claim_token = ? and generation =
+            (select generation from post_dispatch_generations where topic_id = post_dispatches.topic_id)`
+        )
+        .run(now, now, id, claimToken);
+      const row = this.getPostDispatch(id);
+      if (result.changes === 1 && row) this.insertPostDispatchAttempt({ dispatchId: id,
+        attemptNumber: this.claimedPostDispatchAuditAttemptNumber(id, claimToken, row.attempt_count),
+        event: 'dispatched', claimToken, createdAt: now });
+      return row;
+    })();
   }
 
   markPostDispatchSuperseded(
@@ -3565,42 +3642,58 @@ export class ForumStore {
     reason = 'Included as catch-up context in a newer dispatch.'
   ): PostDispatchRow | null {
     const now = nowIso();
-    this.db
-      .prepare(
+    return this.db.transaction(() => {
+      const result = this.db.prepare(
         `update post_dispatches set status = 'superseded', next_attempt_at = null, error_message = ?, updated_at = ? where id = ? and status in ('pending', 'dispatching')`
-      )
-      .run(reason, now, id);
-    return this.getPostDispatch(id);
+      ).run(reason, now, id);
+      const row = this.getPostDispatch(id);
+      if (result.changes === 1 && row) this.insertPostDispatchAttempt({ dispatchId: id,
+        attemptNumber: row.attempt_count, event: 'superseded', classification: 'lifecycle', errorMessage: reason, createdAt: now });
+      return row;
+    })();
   }
 
   markPostDispatchAbandoned(id: string, reason: string): PostDispatchRow | null {
     const now = nowIso();
-    this.db
-      .prepare(
-        `update post_dispatches set status = 'abandoned', next_attempt_at = null, error_message = ?, updated_at = ? where id = ?`
-      )
-      .run(reason, now, id);
-    return this.getPostDispatch(id);
+    return this.db.transaction(() => {
+      const result = this.db.prepare(
+        `update post_dispatches set status = 'abandoned', next_attempt_at = null, error_message = ?, updated_at = ?
+         where id = ? and status in ('pending', 'dispatching') and generation =
+           (select generation from post_dispatch_generations where topic_id = post_dispatches.topic_id)`
+      ).run(reason, now, id);
+      const row = this.getPostDispatch(id);
+      if (result.changes === 1 && row) this.insertPostDispatchAttempt({ dispatchId: id,
+        attemptNumber: row.attempt_count, event: 'abandoned', classification: 'lifecycle', errorMessage: reason, createdAt: now });
+      return row;
+    })();
   }
 
   markPostDispatchFailed(
     id: string,
     claimToken: string,
     message: string,
-    opts?: { retryAt?: string | null }
+    opts?: { retryAt?: string | null; classification?: 'transport' | 'application' }
   ): PostDispatchRow | null {
     const existing = this.getPostDispatch(id);
     if (!existing) return null;
     const now = nowIso();
     const status = opts?.retryAt ? 'pending' : 'failed';
-    this.db
-      .prepare(
-        `update post_dispatches set status = ?, claim_token = null, next_attempt_at = ?, error_message = ?, updated_at = ?
-        where id = ? and status = 'dispatching' and claim_token = ? and generation =
-          (select generation from post_dispatch_generations where topic_id = post_dispatches.topic_id)`
-      )
-      .run(status, opts?.retryAt ?? null, message.slice(0, 1000), now, id, claimToken);
-    return this.getPostDispatch(id);
+    return this.db.transaction(() => {
+      const result = this.db
+        .prepare(
+          `update post_dispatches set status = ?, claim_token = null, next_attempt_at = ?, error_message = ?, updated_at = ?
+          where id = ? and status = 'dispatching' and claim_token = ? and generation =
+            (select generation from post_dispatch_generations where topic_id = post_dispatches.topic_id)`
+        )
+        .run(status, opts?.retryAt ?? null, message.slice(0, 1000), now, id, claimToken);
+      const row = this.getPostDispatch(id);
+      if (result.changes === 1 && row) this.insertPostDispatchAttempt({ dispatchId: id,
+        attemptNumber: this.claimedPostDispatchAuditAttemptNumber(id, claimToken, row.attempt_count),
+        event: opts?.retryAt ? 'retry_scheduled' : 'terminal_failure',
+        classification: opts?.classification ?? 'application', retryAt: opts?.retryAt ?? null,
+        errorMessage: message, claimToken, createdAt: now });
+      return row;
+    })();
   }
 
   retryTerminalPostDispatch(id: string): PostDispatchRow | null {
@@ -3618,16 +3711,21 @@ export class ForumStore {
 
   reconcilePostDispatchGenerations(): number {
     const now = nowIso();
-    const result = this.db
-      .prepare(
+    const reason = 'Cancelled by a newer topic dispatch generation.';
+    return this.db.transaction(() => {
+      const rows = this.db.prepare(
+        `select * from post_dispatches where status in ('pending', 'dispatching') and generation <> coalesce(
+          (select generation from post_dispatch_generations where topic_id = post_dispatches.topic_id), 0)`
+      ).all() as PostDispatchRow[];
+      const result = this.db.prepare(
         `update post_dispatches set status = 'superseded', next_attempt_at = null,
-      error_message = 'Cancelled by a newer topic dispatch generation.', updated_at = ?
-      where status in ('pending', 'dispatching') and generation <> coalesce(
-        (select generation from post_dispatch_generations where topic_id = post_dispatches.topic_id), 0
-      )`
-      )
-      .run(now);
-    return result.changes;
+        error_message = ?, updated_at = ? where status in ('pending', 'dispatching') and generation <> coalesce(
+          (select generation from post_dispatch_generations where topic_id = post_dispatches.topic_id), 0)`
+      ).run(reason, now);
+      for (const row of rows) this.insertPostDispatchAttempt({ dispatchId: row.id, attemptNumber: row.attempt_count,
+        event: 'superseded', classification: 'lifecycle', errorMessage: reason, createdAt: now });
+      return result.changes;
+    })();
   }
 
   advanceTopicDispatchGeneration(
@@ -3637,6 +3735,9 @@ export class ForumStore {
     const now = nowIso();
     return this.db.transaction(() => {
       this.ensurePostDispatchGeneration(topicId, now);
+      const pending = this.db.prepare(
+        "select * from post_dispatches where topic_id = ? and status in ('pending', 'dispatching')"
+      ).all(topicId) as PostDispatchRow[];
       this.db
         .prepare(`update post_dispatch_generations set generation = generation + 1, updated_at = ? where topic_id = ?`)
         .run(now, topicId);
@@ -3646,6 +3747,8 @@ export class ForumStore {
         error_message = ?, updated_at = ? where topic_id = ? and status in ('pending', 'dispatching')`
         )
         .run(reason.slice(0, 1000), now, topicId).changes;
+      for (const row of pending) this.insertPostDispatchAttempt({ dispatchId: row.id,
+        attemptNumber: row.attempt_count, event: 'superseded', classification: 'lifecycle', errorMessage: reason, createdAt: now });
       this.db.prepare('delete from active_turn_origins where topic_id = ?').run(topicId);
       this.db
         .prepare(

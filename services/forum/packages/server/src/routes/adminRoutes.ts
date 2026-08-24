@@ -73,6 +73,15 @@ export function unavailableRetentionDashboard(error: unknown): RetentionDashboar
     lastError: error instanceof Error ? error.message : 'Retention inventory unavailable' };
 }
 
+export function fetchSubagentPresentation(
+  agent: Pick<AgentBridge, 'getSubagentWorkload' | 'getSubagentRetention'>
+): Promise<[
+  PromiseSettledResult<Awaited<ReturnType<AgentBridge['getSubagentWorkload']>>>,
+  PromiseSettledResult<Awaited<ReturnType<AgentBridge['getSubagentRetention']>>>,
+]> {
+  return Promise.allSettled([agent.getSubagentWorkload(), agent.getSubagentRetention()]);
+}
+
 export function groupSubagentRuns(runs: RobotSubagentRunDto[]): {
   blockers: RobotSubagentRunDto[];
   pendingDelivery: RobotSubagentRunDto[];
@@ -1555,8 +1564,14 @@ export function registerAdminRoutes({
       omitted: number; blockerCount: number; omittedBlockerCount: number; available: boolean; error?: string | null;
       retention?: { available: boolean; generatedAt?: string | null; retentionDays: number; counts: { protected: number; waiting: number; eligible: number; compacted: number; error: number }; trackedRemovableBytes: number; eligibleBytes: number; omitted: number; running: boolean; lastError?: string | null };
     };
-    try {
-      const workload = await codex.getSubagentWorkload();
+    // Independent presentation calls: a slow retention inventory must not hold
+    // workload rendering behind a preceding round trip (or vice versa).
+    const [workloadResult, retentionResult] = await fetchSubagentPresentation(codex);
+    const retention = retentionResult.status === 'fulfilled'
+      ? retentionDashboard(retentionResult.value)
+      : unavailableRetentionDashboard(retentionResult.reason);
+    if (workloadResult.status === 'fulfilled') {
+      const workload = workloadResult.value;
       const runs = workload.runs.map((run) => {
         const directTopicId = run.origin?.topicId ?? null;
         const link = run.parent_session_id
@@ -1578,13 +1593,6 @@ export function registerAdminRoutes({
           postId: run.origin?.postId ?? null, startedAt: iso(run.started_at), updatedAt: iso(run.updated_at)
         };
       });
-      let retention;
-      try {
-        const summary = await codex.getSubagentRetention();
-        retention = retentionDashboard(summary);
-      } catch (retentionError) {
-        retention = unavailableRetentionDashboard(retentionError);
-      }
       subagents = {
         activeCount: workload.active_count, uncertainCount: workload.uncertain_count,
         effectsUnknownCount: workload.effects_unknown_count ?? runs.filter((run) => run.effectsState === 'unknown').length, runs,
@@ -1593,8 +1601,8 @@ export function registerAdminRoutes({
         omittedBlockerCount: workload.omitted_blocker_count ?? 0,
         available: true, error: null, retention,
       };
-    } catch (err) {
-      subagents = { activeCount: 0, uncertainCount: 0, effectsUnknownCount: 0, runs: [], groups: { blockers: [], pendingDelivery: [], history: [] }, omitted: 0, blockerCount: 0, omittedBlockerCount: 0, available: false, error: err instanceof Error ? err.message : 'Agentd subagent workload unavailable' };
+    } else {
+      subagents = { activeCount: 0, uncertainCount: 0, effectsUnknownCount: 0, runs: [], groups: { blockers: [], pendingDelivery: [], history: [] }, omitted: 0, blockerCount: 0, omittedBlockerCount: 0, available: false, error: workloadResult.reason instanceof Error ? workloadResult.reason.message : 'Agentd subagent workload unavailable', retention };
     }
 
     return {

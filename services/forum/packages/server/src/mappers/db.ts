@@ -9,6 +9,7 @@ import type {
   MessageDraft,
   MessageTemplate,
   Post,
+  PostDispatchAttemptAudit,
   RobotActivity,
   RobotState,
   SurfaceKind,
@@ -29,6 +30,7 @@ import type {
   MessageDraftRow,
   MessageTemplateRow,
   PlanRow,
+  PostDispatchAttemptRow,
   PostRow,
   RobotStateRow,
   SessionMessageRow,
@@ -41,6 +43,19 @@ import type {
   WebAuthnCredentialRow,
 } from '../db';
 import type { Attachment, Invite, Plan, Session, SessionMessage, ToolRun, TopicAutoRun } from './domain';
+
+export function mapPostDispatchAttemptRowToDomain(row: PostDispatchAttemptRow): PostDispatchAttemptAudit {
+  return {
+    id: row.id,
+    dispatchId: row.dispatch_id,
+    attemptNumber: row.attempt_number,
+    event: row.event,
+    classification: row.classification,
+    retryAt: row.retry_at,
+    errorMessage: row.error_message,
+    createdAt: row.created_at,
+  };
+}
 
 export function mapForkOperationRowToDomain(row: ForkOperationRow): ForkOperation {
   return {

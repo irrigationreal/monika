@@ -13,6 +13,7 @@ export * from './domain/messageDrafts';
 export * from './domain/notepad';
 export * from './domain/userFiles';
 export * from './domain/dispatchPolicy';
+export * from './domain/postDispatch';
 export * from './domain/deploymentAdmission';
 export * from './domain/authentication';
 export * from './state/robot';

@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router';
 import ConfirmationDialog from '../components/ConfirmationDialog.vue';
 import { useForumState } from '../composables/useForumState';
 import { api, type AdminDeployStatus, type RobotDashboardDto, type RobotJobDto, type RobotStopResultDto } from '../lib/apiClient';
+import { createCompletionPoller } from '../lib/completionPolling';
 
 const router = useRouter();
 const state = useForumState();
@@ -24,7 +25,6 @@ const error = ref<string | null>(null);
 const lastRefreshedAt = ref<string | null>(null);
 const stopResults = ref<Record<string, RobotStopResultDto>>({});
 const stopConfirmationTopicId = ref<string | null>(null);
-let refreshTimer: ReturnType<typeof setInterval> | null = null;
 
 const jobs = computed(() => dashboard.value?.jobs ?? []);
 const queue = computed(() => dashboard.value?.queue ?? []);
@@ -90,7 +90,7 @@ function activityClass(activity: RobotJobDto['activity']): string {
   }
 }
 
-async function refresh(): Promise<void> {
+async function performRefresh(): Promise<void> {
   refreshing.value = true;
   error.value = null;
   try {
@@ -103,6 +103,14 @@ async function refresh(): Promise<void> {
   } finally {
     refreshing.value = false;
   }
+}
+
+const dashboardPoller = createCompletionPoller({ task: performRefresh, intervalMs: 5_000, document });
+function refresh(): Promise<void> {
+  return dashboardPoller.refresh();
+}
+function refreshAfterAction(): Promise<void> {
+  return dashboardPoller.refreshAfterCurrent();
 }
 
 async function openTopic(topicId: string): Promise<void> {
@@ -134,7 +142,7 @@ async function interruptTopic(topicId: string): Promise<void> {
   try {
     const result = await robotApi.interruptRobot(topicId);
     stopResults.value = { ...stopResults.value, [topicId]: result };
-    await refresh();
+    await refreshAfterAction();
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Failed to interrupt robot.';
   } finally {
@@ -151,7 +159,7 @@ async function triggerDeploy(): Promise<void> {
   error.value = null;
   try {
     await robotApi.triggerDeploy();
-    await refresh();
+    await refreshAfterAction();
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Failed to start deploy.';
   } finally {
@@ -169,7 +177,7 @@ async function triggerDeployOnFinish(): Promise<void> {
   error.value = null;
   try {
     await robotApi.triggerDeployOnFinish();
-    await refresh();
+    await refreshAfterAction();
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Failed to schedule deploy.';
   } finally {
@@ -185,7 +193,7 @@ async function cancelDeployOnFinish(): Promise<void> {
   error.value = null;
   try {
     await robotApi.cancelDeployOnFinish();
-    await refresh();
+    await refreshAfterAction();
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Failed to cancel scheduled deploy.';
   } finally {
@@ -199,17 +207,11 @@ onMounted(async () => {
     return;
   }
 
-  await refresh();
-  refreshTimer = setInterval(() => {
-    void refresh();
-  }, 5000);
+  dashboardPoller.start();
 });
 
 onBeforeUnmount(() => {
-  if (refreshTimer) {
-    clearInterval(refreshTimer);
-    refreshTimer = null;
-  }
+  dashboardPoller.stop();
 });
 </script>
 

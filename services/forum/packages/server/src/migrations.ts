@@ -1920,6 +1920,28 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 49,
+    name: 'append-only-post-dispatch-attempts',
+    up: (db) => {
+      db.exec(`
+        create table post_dispatch_attempts (
+          id text primary key,
+          dispatch_id text not null,
+          attempt_number integer not null check (attempt_number >= 0),
+          event text not null check (event in ('claimed', 'dispatched', 'retry_scheduled', 'terminal_failure', 'abandoned', 'superseded')),
+          classification text check (classification in ('transport', 'application', 'lifecycle')),
+          retry_at text,
+          error_message text,
+          claim_token text,
+          created_at text not null,
+          foreign key (dispatch_id) references post_dispatches(id) on delete cascade
+        );
+        create index idx_post_dispatch_attempts_dispatch_created
+          on post_dispatch_attempts(dispatch_id, created_at desc, id desc);
+      `);
+    },
+  },
 ];
 
 export const SCHEMA_VERSION: number = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;

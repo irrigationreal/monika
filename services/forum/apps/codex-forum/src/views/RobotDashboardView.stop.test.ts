@@ -60,6 +60,28 @@ describe('Robot Dashboard Stop', () => {
     wrapper.unmount();
   });
 
+  it('forces a post-mutation refresh after a pre-action refresh finishes', async () => {
+    const wrapper = shallowMount(RobotDashboardView, { global: { stubs: { RouterLink: true } } });
+    await flushPromises();
+
+    const stop = wrapper.findAll('button').find((button) => button.text() === 'Stop');
+    await stop?.trigger('click');
+    let resolveRefresh!: (value: ReturnType<typeof dashboard>) => void;
+    mocks.getRobotDashboard.mockReturnValueOnce(new Promise((resolve) => { resolveRefresh = resolve; }));
+    const refresh = wrapper.findAll('button').find((button) => button.text() === 'Refresh');
+    await refresh?.trigger('click');
+
+    wrapper.findComponent(ConfirmationDialog).vm.$emit('confirm');
+    await flushPromises();
+    expect(mocks.interruptRobot).toHaveBeenCalledTimes(1);
+    expect(mocks.getRobotDashboard).toHaveBeenCalledTimes(2);
+
+    resolveRefresh(dashboard('thinking'));
+    await flushPromises();
+    expect(mocks.getRobotDashboard).toHaveBeenCalledTimes(3);
+    wrapper.unmount();
+  });
+
   it('keeps polling separate from confirmation and revalidates a stale target', async () => {
     const wrapper = shallowMount(RobotDashboardView, { global: { stubs: { RouterLink: true } } });
     await flushPromises();

@@ -182,7 +182,13 @@ deleting another descendant's result.
 
 Recovered historical results do not open a parent session or wake a model. Proven
 pending `follow_up` work can continue on the next explicit open; unproven results
-remain pending for operator review. See
+remain pending for operator review. The administrative workload and retention GETs
+are presentation projections: they coalesce concurrent scans and serve immutable
+JSON DTOs. Workload has a two-second freshness TTL and may serve stale data for at
+most ten seconds; retention preview has a thirty-second freshness TTL and may serve
+stale data for at most two minutes. Quiescence/deployment, cancellation, close,
+retention apply, operator resolution, idle reaping, and cleanup always perform
+fresh lifecycle scans and never consume those caches. See
 [`../../docs/subagents.md`](../../docs/subagents.md).
 
 ## Deployment safety

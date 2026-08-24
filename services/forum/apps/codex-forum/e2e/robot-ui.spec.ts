@@ -590,6 +590,12 @@ async function attachMockApi(page: Page, context: MockContext) {
       return;
     }
 
+    if (pathname.startsWith('/api/topics/') && pathname.endsWith('/post-dispatches') && method === 'GET') {
+      const topicId = pathname.split('/')[3] ?? '';
+      await fulfillJson(route, { topicId, polling: false, current: [], attempts: [] });
+      return;
+    }
+
     if (pathname.startsWith('/api/topics/') && pathname.endsWith('/compactions') && method === 'GET') {
       await fulfillJson(route, { active: null, latest: null, checkpointDispatch: null });
       return;

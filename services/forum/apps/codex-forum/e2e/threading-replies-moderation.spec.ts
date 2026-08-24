@@ -764,6 +764,12 @@ async function attachMockApi(target: Page | BrowserContext, state: MockState): P
       return;
     }
 
+    if (path.startsWith('/api/topics/') && path.endsWith('/post-dispatches') && method === 'GET') {
+      const topicId = path.split('/')[3] ?? '';
+      await fulfillJson(route, 200, { topicId, polling: false, current: [], attempts: [] });
+      return;
+    }
+
     if (/^\/api\/topics\/[^/]+\/compactions$/.test(path) && method === 'GET') {
       const topicId = path.split('/')[3];
       const operations = Object.values(state.compactionOperations).filter((operation) => operation.topicId === topicId);

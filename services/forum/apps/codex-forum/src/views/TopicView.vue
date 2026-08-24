@@ -8,6 +8,7 @@ import DraftStatus from '../components/DraftStatus.vue';
 import ForkTopicDialog from '../components/ForkTopicDialog.vue';
 import MessageTemplatePicker from '../components/MessageTemplatePicker.vue';
 import OperationalEventBar from '../components/OperationalEventBar.vue';
+import PostDispatchIndicator from '../components/PostDispatchIndicator.vue';
 import RenderedContent from '../components/RenderedContent.vue';
 import TopicTraceViewer from '../components/TopicTraceViewer.vue';
 import { useAutosavedDraft } from '../composables/useAutosavedDraft';
@@ -17,6 +18,7 @@ import { applyTemplateToTextarea } from '../composables/useMessageTemplateInsert
 import { api } from '../lib/apiClient';
 import { createClientOperationId } from '../lib/clientOperationId';
 import { copyTextToClipboard } from '../lib/clipboard';
+import { createCompletionPoller } from '../lib/completionPolling';
 import { isMobileQuickReplyViewport, resolveQuickReplyMode } from '../lib/quickReplyPreferences';
 
 import type {
@@ -31,6 +33,7 @@ import type {
   TopicCompactionStateDto,
   TopicForkStateDto,
   TopicOperationalEventDto,
+  TopicPostDispatchProjectionDto,
 } from '../lib/apiClient';
 
 const { renderContent, renderBBCode } = useMarkdown();
@@ -97,6 +100,28 @@ const supportsReasoning = computed(() => state.modelSupportsReasoning(effectiveS
 const replyReasoningOptions = computed(() => state.modelReasoningOptions(effectiveSelectedModel.value));
 const canModerate = computed(() => state.canModerate.value);
 const isAdmin = computed(() => state.currentUser.value?.kind === 'admin');
+const postDispatchProjection = ref<TopicPostDispatchProjectionDto | null>(null);
+let postDispatchRequestGeneration = 0;
+const postDispatchPoller = createCompletionPoller({
+  intervalMs: 5_000,
+  document,
+  task: async () => {
+    const topicId = routeTopicId.value;
+    if (!topicId || !isAdmin.value) return;
+    const generation = ++postDispatchRequestGeneration;
+    try {
+      const projection = await api.getTopicPostDispatches(topicId);
+      if (generation !== postDispatchRequestGeneration || routeTopicId.value !== topicId) return;
+      postDispatchProjection.value = projection;
+      if (projection.polling) postDispatchPoller.start();
+      else postDispatchPoller.stop();
+    } catch {
+      // Dispatch diagnostics are admin enrichment and must not block topic hydration.
+      // Keep an already-started poller alive across transient failures; only an
+      // authoritative projection with polling=false may settle discovery.
+    }
+  },
+});
 const isRobotBusy = computed(() => state.isRobotBusy.value);
 const showStopRobotConfirm = ref(false);
 const showDiscardDraftConfirm = ref(false);
@@ -1746,6 +1771,10 @@ async function reply(): Promise<void> {
       ...(draftReference ? { draft: draftReference } : {}),
     });
     postCreated = true;
+    if (isAdmin.value) {
+      postDispatchPoller.start();
+      await postDispatchPoller.refreshAfterCurrent();
+    }
     if (replyBody.value === submittedBody) replyBody.value = '';
     autosavedReply.resetAfterPublication();
     isPublishingReply.value = false;
@@ -1953,6 +1982,7 @@ async function loadTopic(topicId: string): Promise<void> {
       }
       await refreshCompactionState(topicId);
       await refreshForkState(topicId);
+      await postDispatchPoller.refreshAfterCurrent();
     }
     const page = Number.isFinite(routePage.value) && routePage.value > 0 ? routePage.value : 1;
     state.setPage(page);
@@ -2164,6 +2194,9 @@ watch(
   async (topicId) => {
     quickReplyPresentationReady.value = false;
     resetQuickReplyPresentation();
+    postDispatchPoller.stop();
+    postDispatchRequestGeneration += 1;
+    postDispatchProjection.value = null;
     adminWorkspaceTab.value = null;
     showStopRobotConfirm.value = false;
     showDiscardDraftConfirm.value = false;
@@ -2237,6 +2270,8 @@ onUnmounted(() => {
   }
   state.closeStream();
   stopCompactionPolling();
+  postDispatchPoller.stop();
+  postDispatchRequestGeneration += 1;
   if (forkPollTimer !== null) window.clearTimeout(forkPollTimer);
   if (showCompactionModal.value) document.body.style.overflow = bodyOverflowBeforeCompactionModal;
   window.removeEventListener('scroll', handleScroll);
@@ -3005,6 +3040,11 @@ onUnmounted(() => {
             <button class="vb-small-btn" @click="cancelDelete">Cancel</button>
           </div>
         </div>
+        <PostDispatchIndicator
+          v-if="isAdmin && postDispatchProjection"
+          :post-id="post.id"
+          :projection="postDispatchProjection"
+        />
         <div v-if="operationalEventsAfter(post.id).length > 0" class="vb-operational-event-group">
           <OperationalEventBar
             v-for="event in operationalEventsAfter(post.id)"

@@ -1283,6 +1283,14 @@ export const apiRoutes: ApiRoute[] = [
   },
   {
     method: 'get',
+    path: '/topics/{topicId}/post-dispatches',
+    summary: 'Get admin-only durable post dispatch status and attempt history',
+    tags: ['robot'],
+    request: { params: stringParam('topicId') },
+    response: { schema: schemas.TopicPostDispatchProjectionDtoSchema },
+  },
+  {
+    method: 'get',
     path: '/topics/{topicId}/state',
     summary: 'Get robot state',
     tags: ['robot'],

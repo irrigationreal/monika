@@ -11,12 +11,17 @@ const DEFAULT_MAX_CONCURRENT = 5;
 const MAX_ATTEMPTS = 5;
 const RETRY_DELAYS_MS = [10_000, 30_000, 2 * 60_000, 5 * 60_000];
 const DISPATCHING_STALE_MS = 5 * 60_000;
-const TRANSPORT_OUTAGE_RETRY_MS = 5 * 60_000;
+const TRANSPORT_RETRY_DELAYS_MS = [30_000, 60_000, 2 * 60_000, 5 * 60_000];
 
 function retryAtForAttempt(attemptCount: number): string | null {
   if (attemptCount >= MAX_ATTEMPTS) return null;
   const delayMs = RETRY_DELAYS_MS[Math.max(0, Math.min(RETRY_DELAYS_MS.length - 1, attemptCount - 1))] ?? 5 * 60_000;
   return new Date(Date.now() + delayMs).toISOString();
+}
+
+export function transportRetryAtForAttempt(attemptCount: number, now: number = Date.now()): string {
+  const index = Math.max(0, Math.min(TRANSPORT_RETRY_DELAYS_MS.length - 1, attemptCount - 1));
+  return new Date(now + (TRANSPORT_RETRY_DELAYS_MS[index] ?? 5 * 60_000)).toISOString();
 }
 
 function isStaleDispatching(row: PostDispatchRow): boolean {
@@ -170,10 +175,14 @@ export class PostDispatchService {
       // have accepted the canonical dispatch before the response was lost.
       // Retain the exact durable identity and retry at a bounded cadence; Pi's
       // dispatch fence deduplicates any already-accepted request.
-      const retryAt = isEchsTransportError(err)
-        ? new Date(Date.now() + TRANSPORT_OUTAGE_RETRY_MS).toISOString()
+      const transport = isEchsTransportError(err);
+      const retryAt = transport
+        ? transportRetryAtForAttempt(latest.attempt_count)
         : retryAtForAttempt(latest.attempt_count);
-      if (claimToken) this.store.markPostDispatchFailed(latest.id, claimToken, message, { retryAt });
+      if (claimToken) this.store.markPostDispatchFailed(latest.id, claimToken, message, {
+        retryAt,
+        classification: transport ? 'transport' : 'application',
+      });
     } finally {
       this.activeTopics.delete(row.topic_id);
     }
