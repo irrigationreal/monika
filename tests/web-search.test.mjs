@@ -488,6 +488,17 @@ test("complete exhaustion throws with only normalized attempts", async () => {
   }, WebSearchError);
 });
 
+test("native answer source extraction strips trailing Markdown emphasis", async () => {
+  const models = [model("codex", "gpt-5.6-sol")];
+  const result = await runWebSearch({ query: "repository", maxResults: 3 }, {
+    order: ["native"], env: { WEB_SEARCH_POOL_ORIGIN: "https://pool.example" }, modelRegistry: registry(models),
+    fetch: async (url) => url.endsWith("/api/pool/models")
+      ? responseJson({ schema_version: 1, models: [catalogRoute("codex", "gpt-5.6-sol", "openai-responses", "/v1/responses", "web_search")] })
+      : responseJson({ output_text: "Official repository: **https://github.com/oven-sh/bun**" }),
+  });
+  assert.deepEqual(result.sources.map((source) => source.url), ["https://github.com/oven-sh/bun"]);
+});
+
 test("formatted answers and sources are explicitly delimited as untrusted web data", () => {
   const text = formatWebSearchResult({
     provider: "native", answer: "synthesized", sources: [{ title: "Source", url: "https://source.example/", snippet: "snippet" }],
