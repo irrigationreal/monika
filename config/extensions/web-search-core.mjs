@@ -377,7 +377,9 @@ function sourcesFromAnswerText(text) {
   }
   const bare = /https?:\/\/[^\s<>"'`]+/giu;
   for (const match of text.matchAll(bare)) {
-    const url = match[0].replace(/[),.;!?]+$/u, "");
+    // Bare URLs are often wrapped in Markdown emphasis. Strip only trailing
+    // presentation delimiters and punctuation; URL-encoded characters remain.
+    const url = match[0].replace(/[),.;!?*_~\]}]+$/u, "");
     if (!markdownUrls.has(url)) sources.push({ title: "", url, snippet: "" });
   }
   return sources;
