@@ -45,9 +45,13 @@ TAR_BIN="${MONIKA_DEPLOY_TAR_BIN:-}"
 BACKUP_COMPRESSOR=""
 BACKUP_COMPRESSION_RESOLVED=""
 BACKUP_ARCHIVE_EXTENSION=""
-
-export MONIKA_IMAGE="${MONIKA_IMAGE:-ghcr.io/irrigationreal/monika:main}"
-export MONIKA_FORUM_IMAGE="${MONIKA_FORUM_IMAGE:-ghcr.io/irrigationreal/monika-forum:main}"
+RELEASE_CHANNEL="${MONIKA_RELEASE_CHANNEL:-main}"
+STABLE_RELEASE_API_URL="${MONIKA_STABLE_RELEASE_API_URL:-https://api.github.com/repos/irrigationreal/monika/releases/latest}"
+STABLE_RELEASE_TOKEN="${MONIKA_STABLE_RELEASE_TOKEN:-}"
+STABLE_RELEASE_COMMIT=""
+STABLE_RELEASE_TAG=""
+STABLE_METADATA_DIR=""
+EXPLICIT_IMAGE_OVERRIDES=0
 
 DRAIN_STARTED=0
 CANCEL_DRAIN_ON_EXIT=0
@@ -95,7 +99,212 @@ tempfail() {
   exit 75
 }
 
+configure_image_selection() {
+  local monika_is_set=0 forum_is_set=0
+  [ "${MONIKA_IMAGE+x}" = "x" ] && monika_is_set=1
+  [ "${MONIKA_FORUM_IMAGE+x}" = "x" ] && forum_is_set=1
+
+  if [ "$monika_is_set" != "$forum_is_set" ]; then
+    echo "MONIKA_IMAGE and MONIKA_FORUM_IMAGE must be set together" >&2
+    exit 64
+  fi
+  if [ "$monika_is_set" = "1" ]; then
+    if [ -z "$MONIKA_IMAGE" ] || [ -z "$MONIKA_FORUM_IMAGE" ]; then
+      echo "MONIKA_IMAGE and MONIKA_FORUM_IMAGE must both be non-empty" >&2
+      exit 64
+    fi
+    EXPLICIT_IMAGE_OVERRIDES=1
+    export MONIKA_IMAGE MONIKA_FORUM_IMAGE
+    return 0
+  fi
+
+  case "$RELEASE_CHANNEL" in
+    main)
+      export MONIKA_IMAGE="ghcr.io/irrigationreal/monika:main"
+      export MONIKA_FORUM_IMAGE="ghcr.io/irrigationreal/monika-forum:main"
+      ;;
+    stable)
+      # Stable references are resolved after the git-current and optional
+      # public-ingress gates, before any application quiescence begins.
+      ;;
+    *)
+      echo "unsupported MONIKA_RELEASE_CHANNEL: $RELEASE_CHANNEL (expected main or stable)" >&2
+      exit 64
+      ;;
+  esac
+}
+
+release_curl() {
+  local output_file="$1" url="$2" accept="$3"
+  local -a headers=(-H "accept: $accept")
+  if [ -n "$STABLE_RELEASE_TOKEN" ]; then
+    headers+=(-H "authorization: Bearer $STABLE_RELEASE_TOKEN")
+  fi
+  curl -fsS -L \
+    --connect-timeout 5 \
+    --max-time 15 \
+    --max-redirs 3 \
+    --max-filesize 1048576 \
+    --proto '=https' \
+    --proto-redir '=https' \
+    "${headers[@]}" \
+    -o "$output_file" \
+    "$url"
+}
+
+resolve_stable_release() {
+  local canonical_api latest_json asset_json validated asset_url canonical_source=0
+  canonical_api="https://api.github.com/repos/irrigationreal/monika/releases/latest"
+  if [ "$STABLE_RELEASE_API_URL" = "$canonical_api" ]; then
+    canonical_source=1
+    STABLE_RELEASE_TOKEN="${GITHUB_TOKEN:-}"
+  else
+    case "$STABLE_RELEASE_API_URL" in
+      https://*) ;;
+      *) tempfail "custom stable release API URL must use HTTPS" ;;
+    esac
+    [ -n "$STABLE_RELEASE_TOKEN" ] || \
+      tempfail "custom stable release API requires MONIKA_STABLE_RELEASE_TOKEN; GITHUB_TOKEN is never sent to custom URLs"
+  fi
+
+  STABLE_METADATA_DIR="$(mktemp -d)"
+  latest_json="$STABLE_METADATA_DIR/latest.json"
+  asset_json="$STABLE_METADATA_DIR/stable-manifests.json"
+  release_curl "$latest_json" "$STABLE_RELEASE_API_URL" "application/vnd.github+json" || \
+    tempfail "stable release API is unavailable"
+
+  validated="$STABLE_METADATA_DIR/release-fields"
+  if ! python3 - "$latest_json" "$STABLE_RELEASE_API_URL" "$canonical_source" > "$validated" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+from urllib.parse import urlsplit
+
+def strict_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON field: {key}")
+        result[key] = value
+    return result
+
+try:
+    data = json.loads(Path(sys.argv[1]).read_text(), object_pairs_hook=strict_object)
+    api_url = urlsplit(sys.argv[2])
+    canonical = sys.argv[3] == "1"
+    if not isinstance(data, dict):
+        raise ValueError("latest-release response must be an object")
+    if data.get("draft") is not False or data.get("prerelease") is not False:
+        raise ValueError("latest release must be neither draft nor prerelease")
+    tag = data.get("tag_name")
+    commit = data.get("target_commitish")
+    if not isinstance(tag, str) or not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z._-]{0,127}", tag):
+        raise ValueError("release tag is invalid")
+    if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ValueError("release target_commitish must be a full lowercase commit SHA")
+    assets = data.get("assets")
+    if not isinstance(assets, list):
+        raise ValueError("release assets must be an array")
+    matches = [asset for asset in assets if isinstance(asset, dict) and asset.get("name") == "stable-manifests.json"]
+    if len(matches) != 1:
+        raise ValueError("release must contain exactly one stable-manifests.json asset")
+    asset_url = matches[0].get("url")
+    if not isinstance(asset_url, str):
+        raise ValueError("stable manifest asset URL is missing")
+    parsed_asset = urlsplit(asset_url)
+    if parsed_asset.scheme != "https" or not parsed_asset.netloc or parsed_asset.username or parsed_asset.password:
+        raise ValueError("stable manifest asset URL must be HTTPS without userinfo")
+    if (parsed_asset.scheme, parsed_asset.hostname, parsed_asset.port) != (api_url.scheme, api_url.hostname, api_url.port):
+        raise ValueError("stable manifest asset URL must use the release API origin")
+    if canonical and not re.fullmatch(r"/repos/irrigationreal/monika/releases/assets/[1-9][0-9]*", parsed_asset.path):
+        raise ValueError("canonical stable manifest asset URL is invalid")
+    for value in (tag, commit, asset_url):
+        if "\n" in value or "\r" in value:
+            raise ValueError("release fields must not contain line breaks")
+    print(tag)
+    print(commit)
+    print(asset_url)
+except Exception as exc:
+    print(f"stable release metadata invalid: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+  then
+    tempfail "stable latest-release metadata failed validation"
+  fi
+  {
+    IFS= read -r STABLE_RELEASE_TAG
+    IFS= read -r STABLE_RELEASE_COMMIT
+    IFS= read -r asset_url
+  } < "$validated"
+
+  release_curl "$asset_json" "$asset_url" "application/octet-stream" || \
+    tempfail "stable-manifests.json is unavailable"
+  validated="$STABLE_METADATA_DIR/contract-fields"
+  if ! python3 - "$asset_json" "$STABLE_RELEASE_TAG" "$STABLE_RELEASE_COMMIT" > "$validated" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+MONIKA_REPOSITORY = "ghcr.io/irrigationreal/monika"
+FORUM_REPOSITORY = "ghcr.io/irrigationreal/monika-forum"
+
+def strict_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON field: {key}")
+        result[key] = value
+    return result
+
+try:
+    data = json.loads(Path(sys.argv[1]).read_text(), object_pairs_hook=strict_object)
+    if not isinstance(data, dict) or set(data) != {"schemaVersion", "deploymentContractVersion", "stableTag", "commit", "images"}:
+        raise ValueError("asset has unknown or missing top-level fields")
+    if type(data["schemaVersion"]) is not int or data["schemaVersion"] != 1:
+        raise ValueError("schemaVersion must equal 1")
+    if type(data["deploymentContractVersion"]) is not int or data["deploymentContractVersion"] != 1:
+        raise ValueError("deploymentContractVersion must equal 1")
+    if data["stableTag"] != sys.argv[2]:
+        raise ValueError("stableTag does not match the latest release")
+    if data["commit"] != sys.argv[3] or not re.fullmatch(r"[0-9a-f]{40}", data["commit"]):
+        raise ValueError("commit does not match the latest release")
+    images = data["images"]
+    if not isinstance(images, dict) or set(images) != {"monika", "forum"}:
+        raise ValueError("images must contain exactly monika and forum")
+    expected = {"monika": MONIKA_REPOSITORY, "forum": FORUM_REPOSITORY}
+    output = []
+    for name in ("monika", "forum"):
+        image = images[name]
+        if not isinstance(image, dict) or set(image) != {"repository", "manifestDigest"}:
+            raise ValueError(f"{name} image has unknown or missing fields")
+        if image["repository"] != expected[name]:
+            raise ValueError(f"{name} repository is not canonical")
+        digest = image["manifestDigest"]
+        if not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+            raise ValueError(f"{name} manifestDigest is invalid")
+        output.append(f"{image['repository']}@{digest}")
+    print(*output, sep="\n")
+except Exception as exc:
+    print(f"stable manifest contract invalid: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+  then
+    tempfail "stable-manifests.json failed validation"
+  fi
+  {
+    IFS= read -r MONIKA_IMAGE
+    IFS= read -r MONIKA_FORUM_IMAGE
+  } < "$validated"
+  export MONIKA_IMAGE MONIKA_FORUM_IMAGE
+  echo "resolved stable release $STABLE_RELEASE_TAG at $STABLE_RELEASE_COMMIT"
+}
+
 release_deploy_guards() {
+  if [ -n "$STABLE_METADATA_DIR" ]; then
+    rm -rf "$STABLE_METADATA_DIR"
+  fi
   if [ "$DRAIN_STARTED" = "1" ] && [ "$CANCEL_DRAIN_ON_EXIT" = "1" ]; then
     curl -fsS --max-time "$FORUM_CURL_MAX_TIME_SECONDS" -X POST "$AGENTD_URL/v1/admin/drain/cancel" >/dev/null 2>&1 || true
   fi
@@ -292,6 +501,61 @@ container_image_id() {
 image_id() {
   local image="$1"
   docker image inspect -f '{{.Id}}' "$image" 2>/dev/null || true
+}
+
+image_revision() {
+  local image="$1" revision
+  revision="$(docker image inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image" 2>/dev/null || true)"
+  [ "$revision" != "<no value>" ] || revision=""
+  printf '%s' "$revision"
+}
+
+container_revision() {
+  local service="$1" cid revision
+  cid="$(compose ps -q "$service" 2>/dev/null || true)"
+  if [ -z "$cid" ]; then
+    return 0
+  fi
+  revision="$(docker inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$cid" 2>/dev/null || true)"
+  [ "$revision" != "<no value>" ] || revision=""
+  printf '%s' "$revision"
+}
+
+stable_revision_guards() {
+  local monika_target_revision forum_target_revision service running_revision
+  monika_target_revision="$(image_revision "$MONIKA_IMAGE")"
+  forum_target_revision="$(image_revision "$MONIKA_FORUM_IMAGE")"
+  if [ "$monika_target_revision" != "$STABLE_RELEASE_COMMIT" ] || \
+     [ "$forum_target_revision" != "$STABLE_RELEASE_COMMIT" ]; then
+    tempfail "stable image OCI revision labels do not match release commit $STABLE_RELEASE_COMMIT"
+  fi
+
+  if [ "${MONIKA_DEPLOY_ALLOW_STABLE_MIGRATION:-0}" = "1" ]; then
+    echo "stable migration acknowledgement accepted for this deploy attempt"
+    return 0
+  fi
+
+  for service in monika forum; do
+    running_revision="$(container_revision "$service")"
+    # No running container is a fresh-install path. Exact revision equality and
+    # an ancestor relationship are safe forward advances.
+    [ -n "$running_revision" ] || {
+      if [ -z "$(compose ps -q "$service" 2>/dev/null || true)" ]; then
+        continue
+      fi
+      tempfail "$service running image revision is missing; retry once with MONIKA_DEPLOY_ALLOW_STABLE_MIGRATION=1 after review"
+    }
+    if [ "$running_revision" = "$STABLE_RELEASE_COMMIT" ]; then
+      continue
+    fi
+    if [[ "$running_revision" =~ ^[0-9a-f]{40}$ ]] && \
+       git cat-file -e "${running_revision}^{commit}" 2>/dev/null && \
+       git cat-file -e "${STABLE_RELEASE_COMMIT}^{commit}" 2>/dev/null && \
+       git merge-base --is-ancestor "$running_revision" "$STABLE_RELEASE_COMMIT" 2>/dev/null; then
+      continue
+    fi
+    tempfail "$service running revision $running_revision is not a known ancestor of stable $STABLE_RELEASE_COMMIT; retry once with MONIKA_DEPLOY_ALLOW_STABLE_MIGRATION=1 after review"
+  done
 }
 
 run_as_backup_reader() {
@@ -585,8 +849,15 @@ cd "$ROOT"
 require_git_current
 
 if [ "$MODE" = "deploy" ]; then
+  configure_image_selection
   ensure_public_ingress
+  if [ "$RELEASE_CHANNEL" = "stable" ] && [ "$EXPLICIT_IMAGE_OVERRIDES" != "1" ]; then
+    resolve_stable_release
+  fi
   pull_images
+  if [ "$RELEASE_CHANNEL" = "stable" ] && [ "$EXPLICIT_IMAGE_OVERRIDES" != "1" ]; then
+    stable_revision_guards
+  fi
   if ! update_needed; then
     exit 0
   fi

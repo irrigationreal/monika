@@ -56,8 +56,21 @@ release rather than promoting stale artifacts.
 
 Eligible releases promote the exact candidate manifest digests to a
 `YYYY.MM.DD` tag derived from the coordinated candidate publication date in UTC,
-as well as `latest`, then create a GitHub release at the candidate commit. The
-GitHub release publication time separately records when stable promotion
+as well as `latest`, then create a GitHub release at the candidate commit. Beginning
+with the next stable release after this contract ships, the release also attaches
+`stable-manifests.json`. There is intentionally no backfill or fallback for older
+releases: stable autodeploy becomes usable when the first release carrying this
+asset is published.
+
+The asset is the machine-readable coordinated deployment authority. Schema version
+1 and deployment contract version 1 bind the stable tag and full source commit to
+the canonical repositories `ghcr.io/irrigationreal/monika` and
+`ghcr.io/irrigationreal/monika-forum` and the exact `sha256` manifest digests already
+verified and promoted by the workflow. Consumers deploy those immutable digest
+references; rolling `latest` remains a convenience tag, not a coordinated channel
+or artifact authority.
+
+The GitHub release publication time separately records when stable promotion
 occurred. The first automated stable release says `Initial stable release` rather
 than manufacturing a historical changelog. Later releases use GitHub's generated
 release notes to list changes since the previous stable tag.
@@ -65,9 +78,22 @@ release notes to list changes since the previous stable tag.
 The workflow does not rebuild images during promotion. OCI registries cannot
 atomically update tags across two packages, so the workflow publishes and
 verifies both date tags before moving either `latest` tag. Every operation is
-idempotent: a registry or GitHub failure can be rerun safely, and the GitHub
-release is created only after both versioned and rolling tags verify against the
-recorded candidate digests.
+idempotent: a registry or GitHub failure can be rerun safely. The workflow creates
+or resumes a commit-matched draft release, uploads and downloads the stable manifest
+to verify it byte-for-byte, and publishes only after both versioned and rolling tags
+verify against the recorded candidate digests. A failed asset upload therefore leaves
+a repairable draft rather than a published release that stable consumers cannot use.
+
+## Stable autodeploy consumer contract
+
+`scripts/deploy-if-safe` keeps `main` as its default and opts into this contract only
+with `MONIKA_RELEASE_CHANNEL=stable`. It resolves GitHub's latest non-draft,
+non-prerelease release rather than consulting Git refs, strictly validates the
+asset, pulls both digest references, and checks each image's OCI revision label
+against the release commit. Missing or malformed metadata defers before runtime
+quiescence. See [`autodeploy.md`](autodeploy.md) for scheduler configuration,
+credential boundaries, explicit rollback overrides, and the one-shot migration
+guard.
 
 ## Manual operation
 

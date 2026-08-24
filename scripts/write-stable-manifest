@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "$#" -ne 6 ]; then
+  echo "usage: $0 OUTPUT STABLE_TAG COMMIT MONIKA_REPOSITORY MONIKA_DIGEST FORUM_DIGEST" >&2
+  exit 64
+fi
+
+OUTPUT=$1
+STABLE_TAG=$2
+COMMIT=$3
+MONIKA_REPOSITORY=$4
+MONIKA_DIGEST=$5
+FORUM_DIGEST=$6
+FORUM_REPOSITORY="${MONIKA_REPOSITORY}-forum"
+
+if ! [[ "$STABLE_TAG" =~ ^[0-9A-Za-z][0-9A-Za-z._-]{0,127}$ ]] ||
+   ! [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] ||
+   ! [[ "$MONIKA_REPOSITORY" =~ ^ghcr\.io/[a-z0-9._-]+/[a-z0-9._-]+$ ]] ||
+   ! [[ "$MONIKA_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] ||
+   ! [[ "$FORUM_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+  echo "invalid stable manifest input" >&2
+  exit 64
+fi
+
+jq -n \
+  --arg stableTag "$STABLE_TAG" \
+  --arg commit "$COMMIT" \
+  --arg monikaRepository "$MONIKA_REPOSITORY" \
+  --arg forumRepository "$FORUM_REPOSITORY" \
+  --arg monikaDigest "$MONIKA_DIGEST" \
+  --arg forumDigest "$FORUM_DIGEST" \
+  '{
+    schemaVersion: 1,
+    deploymentContractVersion: 1,
+    stableTag: $stableTag,
+    commit: $commit,
+    images: {
+      monika: {
+        repository: $monikaRepository,
+        manifestDigest: $monikaDigest
+      },
+      forum: {
+        repository: $forumRepository,
+        manifestDigest: $forumDigest
+      }
+    }
+  }' > "$OUTPUT"

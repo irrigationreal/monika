@@ -54,6 +54,7 @@ jobs:
               'tests/' \
               '.github/workflows/ci-monika-container.yml' \
               '.github/workflows/image-monika.yml' \
+              '.github/workflows/release-stable.yml' \
             | grep -v '^tests/smoke/backup-doc-contract.sh$' \
             | awk '$0 == "THIRD_PARTY_NOTICES.md" || $0 !~ /\.md$/' \
             | grep -q .; then
@@ -75,9 +76,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 2
 
       - name: Check deploy drain lifecycle
         run: tests/smoke/deploy-if-safe-drain-lifecycle.sh
+
+      - name: Check coordinated stable release channel
+        run: tests/smoke/stable-release-channel.sh
 
       - name: Check Compose agentd port semantics
         run: tests/smoke/compose-agentd-port.sh
