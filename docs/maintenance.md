@@ -51,8 +51,13 @@ the exact version in:
 ```text
 Containerfile
 services/agentd/package.json
+config/settings.json
 tests/smoke/monika-runtime.sh
 ```
+
+`config/settings.json` records the bundled changelog acknowledgement so a rebuilt
+runtime does not present already-reviewed release notes as an unreviewed local
+state change.
 
 Regenerate the frozen agentd lockfile with the repository's pnpm version:
 

@@ -231,8 +231,8 @@ fi
 pass "OCI license label is AGPL-3.0-or-later"
 
 PI_VERSION="$(docker exec "$CONTAINER_NAME" pi --version 2>&1)"
-if [ "$PI_VERSION" != "0.82.1" ]; then
-  echo "Expected Pi 0.82.1, got: $PI_VERSION"
+if [ "$PI_VERSION" != "0.84.3" ]; then
+  echo "Expected Pi 0.84.3, got: $PI_VERSION"
   exit 1
 fi
 pass "pi CLI pin active: ${PI_VERSION}"
@@ -481,11 +481,29 @@ fi
 pass "pnpm dependency cooldown active and fail-closed: 10 days"
 
 AGENT_BROWSER_VERSION="$(docker exec "$CONTAINER_NAME" agent-browser --version)"
-if [ "$AGENT_BROWSER_VERSION" != "agent-browser 0.31.1" ]; then
-  echo "Expected agent-browser 0.31.1, got: $AGENT_BROWSER_VERSION"
+if [ "$AGENT_BROWSER_VERSION" != "agent-browser 0.34.0" ]; then
+  echo "Expected agent-browser 0.34.0, got: $AGENT_BROWSER_VERSION"
   exit 1
 fi
 pass "agent-browser pin active: ${AGENT_BROWSER_VERSION}"
+
+docker exec "$CONTAINER_NAME" sh -c '
+  set -eu
+  node -e '\''require("node:http").createServer((_req, res) => { res.setHeader("content-type", "text/html"); res.end("<!doctype html><title>Browser smoke</title><main>runtime browser ready</main>"); }).listen(47831, "127.0.0.1")'\'' &
+  browser_fixture_pid=$!
+  trap '\''agent-browser close >/dev/null 2>&1 || true; kill "$browser_fixture_pid" >/dev/null 2>&1 || true'\'' EXIT
+  for _attempt in 1 2 3 4 5; do
+    curl -fsS http://127.0.0.1:47831/ >/dev/null 2>&1 && break
+    sleep 0.2
+  done
+  curl -fsS http://127.0.0.1:47831/ >/dev/null
+  agent-browser open http://127.0.0.1:47831/ >/dev/null
+  test "$(agent-browser get title)" = "Browser smoke"
+  agent-browser get text body | grep -q "runtime browser ready"
+  agent-browser screenshot /tmp/browser-smoke.png >/dev/null
+  test -s /tmp/browser-smoke.png
+'
+pass "agent-browser launches image-owned Chromium and completes page, text, and screenshot operations"
 
 RG_VERSION="$(docker exec "$CONTAINER_NAME" sh -lc 'rg --version | head -n 1')"
 FD_VERSION="$(docker exec "$CONTAINER_NAME" fd --version)"
