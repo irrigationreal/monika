@@ -205,11 +205,19 @@ function hasHeader(headers, wanted) {
 }
 
 function requestHeaders(auth, protocol, { json = true } = {}) {
-  const headers = { Accept: "application/json", ...(json ? { "Content-Type": "application/json" } : {}), ...(auth?.headers ?? {}) };
-  if (auth?.apiKey && !hasHeader(headers, "authorization") && !hasHeader(headers, "x-api-key")) {
+  const resolvedHeaders = auth?.headers ?? {};
+  const headers = { Accept: "application/json", ...(json ? { "Content-Type": "application/json" } : {}) };
+  for (const [name, value] of Object.entries(resolvedHeaders)) {
+    const existing = Object.keys(headers).find((header) => header.toLowerCase() === name.toLowerCase());
+    if (existing) delete headers[existing];
+    // Pi 0.84 preserves provider-owned null deletion markers. Native fetch
+    // cannot receive them, but their presence must still suppress fallback auth.
+    if (value !== null) headers[name] = value;
+  }
+  if (auth?.apiKey && !hasHeader(resolvedHeaders, "authorization") && !hasHeader(resolvedHeaders, "x-api-key")) {
     if (protocol === "anthropic-messages") {
       headers["x-api-key"] = auth.apiKey;
-      if (!hasHeader(headers, "anthropic-version")) headers["anthropic-version"] = "2023-06-01";
+      if (!hasHeader(resolvedHeaders, "anthropic-version")) headers["anthropic-version"] = "2023-06-01";
     } else {
       headers.Authorization = `Bearer ${auth.apiKey}`;
     }

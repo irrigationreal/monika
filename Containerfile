@@ -65,7 +65,7 @@ ENV AGENT_BROWSER_EXECUTABLE_PATH=/opt/agent-browser/chrome
 # Pi coding agent — pinned version. Pi releases are deliberately exempt from
 # the cooldown because coordinated @earendil-works updates are reviewed and
 # adopted explicitly; the exact version keeps the resulting image reproducible.
-RUN npm install -g --min-release-age=0 @earendil-works/pi-coding-agent@0.82.1
+RUN npm install -g --min-release-age=0 @earendil-works/pi-coding-agent@0.84.3
 
 # Keep every pi-subagents entry point—including interactive Pi sessions—on the
 # same isolated child-session and lifecycle roots. Agentd repeats these values
@@ -96,7 +96,7 @@ ENV AGENTLOGS_CLI_PATH=/usr/local/bin/agentlogs
 # by Chrome for Testing, so use Debian's Chromium package there instead. Expose
 # either browser via a stable executable path that runtime sessions use explicitly.
 RUN mkdir -p "$AGENT_BROWSER_INSTALL_HOME" && \
-    npm install -g agent-browser@0.31.1 && \
+    npm install -g agent-browser@0.34.0 && \
     if [ "$(dpkg --print-architecture)" = "arm64" ]; then \
       apt-get update && \
       apt-get install -y --no-install-recommends chromium && \

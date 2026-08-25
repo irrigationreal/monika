@@ -196,6 +196,34 @@ for (const fixture of protocolFixtures) {
   });
 }
 
+test("native fetch honors Pi provider header deletion markers without serializing null", async () => {
+  const models = [model("grok", "grok-model"), model("codex", "codex-model")];
+  const calls = [];
+  const auth = {
+    ok: true,
+    apiKey: "placeholder-key-must-not-be-sent",
+    headers: { Authorization: null, "x-gateway-auth": "resolved-header" },
+  };
+  const result = await runWebSearch({ query: "nullable headers" }, {
+    order: ["native"], env: {}, modelRegistry: registry(models, auth),
+    fetch: async (url, init) => {
+      calls.push({ url, init });
+      for (const value of Object.values(init.headers)) assert.notEqual(value, null);
+      assert.equal(init.headers.Authorization, undefined);
+      assert.equal(init.headers["x-gateway-auth"], "resolved-header");
+      if (url.endsWith("/api/pool/models")) {
+        return responseJson({ schema_version: 1, models: [catalogRoute("grok", "grok-model", "openai-responses", "/v1/responses", "web_search")] });
+      }
+      return responseJson({ output: [
+        { type: "web_search_call", action: { sources: [{ url: "https://source.example/", title: "source" }] } },
+        { type: "message", content: [{ type: "output_text", text: "answer [source](https://source.example/)" }] },
+      ] });
+    },
+  });
+  assert.equal(result.provider, "native");
+  assert.equal(calls.length, 2);
+});
+
 test("catalog discovery retries another configured provider credential after auth rejection", async () => {
   const models = [model("grok", "grok-model"), model("codex", "codex-model")];
   const catalogAuthHeaders = [];
