@@ -207,6 +207,9 @@ async function runTask(cliArgs) {
     HOME: path.join(scratchDir, "home"),
     TMPDIR: path.join(scratchDir, "tmp"),
     XDG_CACHE_HOME: path.join(scratchDir, "cache"),
+    // Runner archival is explicit. Default no-session jobs keep persona, recall,
+    // and memory tools without writing an untraceable `ephemeral` transcript.
+    PI_STATEFUL_MEMORY_SHUTDOWN_SAVE_MODE: saveSession ? "durable" : "disabled",
   };
 
   const args = ["--print"];

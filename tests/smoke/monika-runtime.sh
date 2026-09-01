@@ -29,6 +29,7 @@ fi
 # mandatory image smoke never contacts an external provider or SSH host.
 node --experimental-default-type=module --test \
   "$SCRIPT_DIR/../agent-runner.test.mjs" \
+  "$SCRIPT_DIR/../runtime-supervision.test.mjs" \
   "$SCRIPT_DIR/../stateful-memory/lifecycle.test.js" \
   "$SCRIPT_DIR/../ssh-lock.test.mjs" \
   "$SCRIPT_DIR/../ssh-relocate.test.mjs" \
@@ -223,75 +224,125 @@ pass "memstore socket ready: $MEMSTORE_SOCKET"
 pass "agentd health endpoint ready after ${ready_after}s"
 endsection
 
-section "One-shot runner exits after stateful-memory shutdown"
-RUNNER_CONTAINER="monika-runner-smoke-$$"
+section "One-shot runner lifecycle and durable archival"
 RUNNER_ROOT="$SMOKE_TMP_DIR/runner"
-mkdir -p \
-  "$RUNNER_ROOT/task" \
-  "$RUNNER_ROOT/workspace" \
-  "$RUNNER_ROOT/outputs" \
-  "$RUNNER_ROOT/scratch" \
-  "$RUNNER_ROOT/data"
+mkdir -p "$RUNNER_ROOT/task" "$RUNNER_ROOT/workspace"
 cat >"$RUNNER_ROOT/task/prompt.md" <<'RUNNER_PROMPT'
 Inspect this disposable runner using only the supplied context and return OK. This
-prompt is deliberately longer than the stateful-memory transcript threshold so the
-awaited shutdown hook submits its normal session save before closing its client.
-Keep the final response to exactly the two uppercase letters OK and nothing else.
+prompt is deliberately longer than the stateful-memory transcript threshold so save
+policy is exercised. Keep the final response to exactly the two uppercase letters OK.
 RUNNER_PROMPT
 
-docker run --rm \
-  --name "$RUNNER_CONTAINER" \
-  --network "$SMOKE_NETWORK" \
-  -e AGENT_RUNNER_MODE=1 \
-  -e MONIKA_AGENTD_ENABLED=0 \
-  -e MONIKA_LOG_TO_STDERR=1 \
-  -e RUNNER_TASK_FILE=/task/prompt.md \
-  -e RUNNER_OUTPUT_DIR=/outputs \
-  -e RUNNER_WORKSPACE=/workspace \
-  -e RUNNER_SCRATCH_DIR=/scratch \
-  -e RUNNER_TIMEOUT_SECONDS=20 \
-  -e PI_MODEL=mock-openai/schema-smoke \
-  -v "$RUNNER_ROOT/task:/task:ro" \
-  -v "$RUNNER_ROOT/workspace:/workspace:ro" \
-  -v "$RUNNER_ROOT/outputs:/outputs" \
-  -v "$RUNNER_ROOT/scratch:/scratch" \
-  -v "$RUNNER_ROOT/data:/data" \
-  -v "$SMOKE_RUNTIME_SECRETS:/runtime/secrets:ro" \
-  "$IMAGE" /app/bin/agent-runner.mjs run
+run_runner_smoke() {
+  local name="$1"
+  local save_session="$2"
+  local root="$RUNNER_ROOT/$name"
+  mkdir -p "$root/outputs" "$root/scratch" "$root/data"
+  RUNNER_CONTAINER="monika-runner-${name}-$$"
+  local args=(
+    run --name "$RUNNER_CONTAINER" --network "$SMOKE_NETWORK"
+    -e AGENT_RUNNER_MODE=1 -e MONIKA_AGENTD_ENABLED=0 -e MONIKA_LOG_TO_STDERR=1
+    -e RUNNER_TASK_FILE=/task/prompt.md -e RUNNER_OUTPUT_DIR=/outputs
+    -e RUNNER_WORKSPACE=/workspace -e RUNNER_SCRATCH_DIR=/scratch
+    -e RUNNER_TIMEOUT_SECONDS=20 -e PI_MODEL=mock-openai/schema-smoke
+    -v "$RUNNER_ROOT/task:/task:ro" -v "$RUNNER_ROOT/workspace:/workspace:ro"
+    -v "$root/outputs:/outputs" -v "$root/scratch:/scratch" -v "$root/data:/data"
+    -v "$SMOKE_RUNTIME_SECRETS:/runtime/secrets:ro"
+  )
+  if [ "$save_session" = "1" ]; then
+    args+=( -e RUNNER_SAVE_SESSION=1 )
+  fi
+  docker "${args[@]}" "$IMAGE" /app/bin/agent-runner.mjs run
 
-node - "$RUNNER_ROOT/outputs/result.json" <<'NODE_RUNNER_RESULT'
+  node - "$root/outputs/result.json" "$save_session" <<'NODE_RUNNER_RESULT'
 const fs = require('node:fs');
 const result = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-if (result.ok !== true) throw new Error(`runner result was not successful: ${JSON.stringify(result)}`);
-if (result.exitCode !== 0) throw new Error(`runner exit code was ${result.exitCode}`);
-if (result.timedOut !== false) throw new Error(`runner timed out: ${JSON.stringify(result)}`);
-if (result.timeoutSeconds !== 20) throw new Error(`runner timeout contract changed: ${result.timeoutSeconds}`);
+if (result.ok !== true || result.exitCode !== 0 || result.timedOut !== false) {
+  throw new Error(`runner result was not successful: ${JSON.stringify(result)}`);
+}
+if (Boolean(result.sessionDir) !== (process.argv[3] === '1')) {
+  throw new Error(`runner session contract changed: ${JSON.stringify(result)}`);
+}
 NODE_RUNNER_RESULT
-if ! grep -qx 'OK' "$RUNNER_ROOT/outputs/stdout.txt"; then
-  echo "runner stdout was not exactly OK"
-  cat "$RUNNER_ROOT/outputs/stdout.txt"
+  grep -qx 'OK' "$root/outputs/stdout.txt"
+  ! grep -Fq '/scratch/home/.pi/stateful-memory' "$root/outputs/stderr.txt"
+  ! grep -Eq 'Extension error .*stateful-memory|\[stateful-memory\] memstore connection failed' "$root/outputs/stderr.txt"
+  docker logs "$RUNNER_CONTAINER" >"$root/container.log" 2>&1
+  grep -q '\[monika\] Shutting down' "$root/container.log"
+  grep -q 'shutting down...' "$root/container.log"
+}
+
+run_runner_smoke default 0
+if grep -q '\[save\] completed' "$RUNNER_ROOT/default/container.log" || [ -e "$RUNNER_ROOT/default/data/memstore/origin-map.json" ]; then
+  echo "default no-session runner unexpectedly archived its transcript"
   exit 1
 fi
-if grep -Fq '/scratch/home/.pi/stateful-memory' "$RUNNER_ROOT/outputs/stderr.txt"; then
-  echo "runner resolved stateful-memory persona beneath disposable HOME"
-  cat "$RUNNER_ROOT/outputs/stderr.txt"
-  exit 1
-fi
-if grep -Eq 'Extension error .*stateful-memory|\[stateful-memory\] memstore connection failed' "$RUNNER_ROOT/outputs/stderr.txt"; then
-  echo "runner stateful-memory extension did not complete cleanly"
-  cat "$RUNNER_ROOT/outputs/stderr.txt"
-  exit 1
-fi
-# The mock provider rejects requests without the recall tool. Together with the
-# clean memstore diagnostic above, the successful response proves ambient
-# stateful-memory loaded and connected before its shutdown cleanup was exercised.
-if docker inspect "$RUNNER_CONTAINER" >/dev/null 2>&1; then
-  echo "one-shot runner container remained after successful completion"
-  exit 1
-fi
-pass "actual agent-runner completed before timeout with bundled stateful-memory"
-pass "runner used image-owned persona paths and wrote successful result metadata"
+docker rm "$RUNNER_CONTAINER" >/dev/null
 RUNNER_CONTAINER=""
+pass "default runner retained stateful-memory without automatic transcript archival"
+
+run_runner_smoke saved 1
+grep -q '\[save\] completed for /outputs/sessions/' "$RUNNER_ROOT/saved/container.log"
+node - "$RUNNER_ROOT/saved/data/memstore/origin-map.json" <<'NODE_RUNNER_ORIGIN'
+const fs = require('node:fs');
+const origins = Object.keys(JSON.parse(fs.readFileSync(process.argv[2], 'utf8')));
+if (origins.length !== 1 || !origins[0].startsWith('/outputs/sessions/') || origins[0] === 'ephemeral') {
+  throw new Error(`unexpected durable runner origins: ${JSON.stringify(origins)}`);
+}
+NODE_RUNNER_ORIGIN
+test -n "$(find "$RUNNER_ROOT/saved/outputs/sessions" -type f -name '*.jsonl' -print -quit)"
+docker rm "$RUNNER_CONTAINER" >/dev/null
+RUNNER_CONTAINER=""
+pass "save-session runner waited for exact durable archival and used its Pi session path"
+
+RUNNER_CONTAINER="monika-command-status-$$"
+set +e
+docker run --name "$RUNNER_CONTAINER" -e MONIKA_AGENTD_ENABLED=0 "$IMAGE" sh -c 'exit 23' >/dev/null 2>&1
+command_exit=$?
+set -e
+if [ "$command_exit" -ne 23 ]; then
+  echo "entrypoint did not preserve foreground exit status: $command_exit"
+  exit 1
+fi
+docker logs "$RUNNER_CONTAINER" 2>&1 | grep -q 'shutting down...'
+docker rm "$RUNNER_CONTAINER" >/dev/null
+
+RUNNER_CONTAINER="monika-command-signal-$$"
+docker run -d --name "$RUNNER_CONTAINER" -e MONIKA_AGENTD_ENABLED=0 "$IMAGE" sleep 30 >/dev/null
+for _ in {1..60}; do
+  docker exec "$RUNNER_CONTAINER" test -S /tmp/memstore.sock 2>/dev/null && break
+  sleep 0.1
+done
+docker kill --signal TERM "$RUNNER_CONTAINER" >/dev/null
+signal_exit="$(docker wait "$RUNNER_CONTAINER")"
+if [ "$signal_exit" -ne 143 ]; then
+  echo "entrypoint did not preserve forwarded SIGTERM status: $signal_exit"
+  exit 1
+fi
+docker logs "$RUNNER_CONTAINER" 2>&1 | grep -q 'shutting down...'
+docker rm "$RUNNER_CONTAINER" >/dev/null
+
+RUNNER_CONTAINER="monika-command-essential-$$"
+docker run -d --name "$RUNNER_CONTAINER" -e MONIKA_AGENTD_ENABLED=0 "$IMAGE" sleep 30 >/dev/null
+for _ in {1..60}; do
+  docker exec "$RUNNER_CONTAINER" test -S /tmp/memstore.sock 2>/dev/null && break
+  sleep 0.1
+done
+MEMSTORE_COMMAND_PID="$(docker exec "$RUNNER_CONTAINER" sh -lc 'for proc in /proc/[0-9]*; do [ "$(cat "$proc/comm" 2>/dev/null)" = memstore ] && { basename "$proc"; break; }; done')"
+if [ -z "$MEMSTORE_COMMAND_PID" ]; then
+  echo "could not locate memstore PID in command-mode supervision container"
+  exit 1
+fi
+docker exec "$RUNNER_CONTAINER" kill "$MEMSTORE_COMMAND_PID"
+essential_exit="$(docker wait "$RUNNER_CONTAINER")"
+if [ "$essential_exit" -eq 0 ]; then
+  echo "foreground command mode ignored essential memstore death"
+  exit 1
+fi
+docker logs "$RUNNER_CONTAINER" 2>&1 | grep -q 'essential child memstore exited while foreground command was running'
+docker rm "$RUNNER_CONTAINER" >/dev/null
+RUNNER_CONTAINER=""
+pass "PID 1 preserved command exit/signal status, monitored essentials, and stopped memstore gracefully"
 endsection
 
 section "Runtime checks"

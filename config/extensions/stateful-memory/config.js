@@ -31,6 +31,9 @@ const DEFAULT_CONFIG = {
   topicPersistenceCount: 3,
   topicPreviousMessageMaxChars: 500,
   memstoreSocketPath: null,
+  shutdownSaveMode: "enqueue",
+  shutdownSaveTimeoutMs: 30_000,
+  shutdownSavePollMs: 50,
 };
 
 const CONFIG_FILENAME = ".pi/stateful-memory.json";
@@ -124,6 +127,13 @@ export async function loadConfig(cwd) {
       ? Number(process.env.PI_STATEFUL_MEMORY_RECALL_MAX_CHARS)
       : undefined,
     topicsFile: process.env.PI_STATEFUL_MEMORY_TOPICS_FILE,
+    shutdownSaveMode: process.env.PI_STATEFUL_MEMORY_SHUTDOWN_SAVE_MODE,
+    shutdownSaveTimeoutMs: process.env.PI_STATEFUL_MEMORY_SHUTDOWN_SAVE_TIMEOUT_MS
+      ? Number(process.env.PI_STATEFUL_MEMORY_SHUTDOWN_SAVE_TIMEOUT_MS)
+      : undefined,
+    shutdownSavePollMs: process.env.PI_STATEFUL_MEMORY_SHUTDOWN_SAVE_POLL_MS
+      ? Number(process.env.PI_STATEFUL_MEMORY_SHUTDOWN_SAVE_POLL_MS)
+      : undefined,
   };
 
   const merged = {
@@ -134,6 +144,15 @@ export async function loadConfig(cwd) {
       Object.entries(envConfig).filter(([, value]) => value !== undefined)
     ),
   };
+
+  if (!["disabled", "enqueue", "durable"].includes(merged.shutdownSaveMode)) {
+    throw new Error("shutdownSaveMode must be disabled, enqueue, or durable");
+  }
+  for (const key of ["shutdownSaveTimeoutMs", "shutdownSavePollMs"]) {
+    if (!Number.isFinite(merged[key]) || merged[key] <= 0) {
+      throw new Error(`${key} must be a positive number`);
+    }
+  }
 
   return resolveConfigPaths({ config: merged });
 }

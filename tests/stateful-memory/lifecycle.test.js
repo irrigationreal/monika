@@ -8,6 +8,7 @@ import {
   loadConfig,
   resolveGlobalConfigPath,
 } from "../../config/extensions/stateful-memory/config.js";
+import { waitForSaveJob } from "../../config/extensions/stateful-memory/memstore-client.js";
 import { shutdownStatefulMemory } from "../../config/extensions/stateful-memory/shutdown.js";
 
 async function withConfigEnv(env, callback) {
@@ -54,6 +55,27 @@ test("global config uses PI_CODING_AGENT_DIR instead of disposable HOME", async 
   });
 });
 
+test("runner shutdown save policy is explicit and validated", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "monika-stateful-save-policy-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.mkdir(root, { recursive: true });
+
+  await withConfigEnv({
+    PI_STATEFUL_MEMORY_SHUTDOWN_SAVE_MODE: "durable",
+    PI_STATEFUL_MEMORY_SHUTDOWN_SAVE_TIMEOUT_MS: "1234",
+    PI_STATEFUL_MEMORY_SHUTDOWN_SAVE_POLL_MS: "17",
+  }, async () => {
+    const config = await loadConfig(root);
+    assert.equal(config.shutdownSaveMode, "durable");
+    assert.equal(config.shutdownSaveTimeoutMs, 1234);
+    assert.equal(config.shutdownSavePollMs, 17);
+  });
+
+  await withConfigEnv({ PI_STATEFUL_MEMORY_SHUTDOWN_SAVE_MODE: "invalid" }, async () => {
+    await assert.rejects(loadConfig(root), /shutdownSaveMode/);
+  });
+});
+
 test("global config falls back to HOME/.pi/agent at load time", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "monika-stateful-home-config-"));
   const home = path.join(root, "home");
@@ -74,6 +96,50 @@ test("global config falls back to HOME/.pi/agent at load time", async (t) => {
     assert.equal(config.baseDir, baseDir);
     assert.equal(config.factsFile, path.join(baseDir, "FACTS.md"));
   });
+});
+
+test("exact save waiting succeeds only at durable terminal status", async () => {
+  const statuses = [
+    { status: "queued" },
+    { status: "adding" },
+    { status: "done", result_entry_id: 42 },
+  ];
+  const result = await waitForSaveJob("save-1", {
+    getStatus: async () => statuses.shift(),
+    sleep: async () => {},
+    now: () => 0,
+  });
+  assert.equal(result.result_entry_id, 42);
+});
+
+test("exact save waiting surfaces failure, unknown jobs, and timeout", async () => {
+  await assert.rejects(
+    waitForSaveJob("save-failed", { getStatus: async () => ({ status: "failed", error: "disk full" }) }),
+    /disk full/,
+  );
+  await assert.rejects(
+    waitForSaveJob("save-missing", { getStatus: async () => ({ status: "unknown" }) }),
+    /unknown/,
+  );
+  let clock = 0;
+  await assert.rejects(
+    waitForSaveJob("save-slow", {
+      getStatus: async () => ({ status: "queued" }),
+      timeoutMs: 10,
+      pollMs: 50,
+      now: () => clock,
+      sleep: async (ms) => { clock += ms; },
+    }),
+    /timed out/,
+  );
+  await assert.rejects(
+    waitForSaveJob("save-stalled-rpc", {
+      getStatus: async () => new Promise(() => {}),
+      timeoutMs: 10,
+      pollMs: 50,
+    }),
+    /timed out/,
+  );
 });
 
 for (const summarizeFails of [false, true]) {
@@ -101,6 +167,19 @@ for (const summarizeFails of [false, true]) {
     assert.equal(client, null);
   });
 }
+
+test("session shutdown preserves save failure when close also throws", async () => {
+  let client = { close() { throw new Error("fixture close failure"); } };
+  await assert.rejects(
+    shutdownStatefulMemory({
+      summarize: async () => { throw new Error("fixture save failure"); },
+      getClient: () => client,
+      clearClient: () => { client = null; },
+    }),
+    /fixture save failure/,
+  );
+  assert.equal(client, null);
+});
 
 test("session shutdown clears the memstore client when close throws", async () => {
   let client = {

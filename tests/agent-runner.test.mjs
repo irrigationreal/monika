@@ -39,7 +39,7 @@ async function fixture(t, prefix) {
 }
 
 async function makeCaptureExecutable(file, envName) {
-  await fs.writeFile(file, `#!/usr/bin/env node\nconst fs = require("node:fs");\nfs.writeFileSync(process.env.${envName}, JSON.stringify(process.argv.slice(2)));\nprocess.stdout.write("OK\\n");\n`);
+  await fs.writeFile(file, `#!/usr/bin/env node\nconst fs = require("node:fs");\nfs.writeFileSync(process.env.${envName}, JSON.stringify({ args: process.argv.slice(2), shutdownSaveMode: process.env.PI_STATEFUL_MEMORY_SHUTDOWN_SAVE_MODE }));\nprocess.stdout.write("OK\\n");\n`);
   await fs.chmod(file, 0o755);
 }
 
@@ -72,7 +72,9 @@ test("agent-runner preserves full resource discovery by default", async (t) => {
   });
 
   assert.equal(result.code, 0, result.stderr);
-  const args = JSON.parse(await fs.readFile(capture, "utf8"));
+  const captured = JSON.parse(await fs.readFile(capture, "utf8"));
+  const args = captured.args;
+  assert.equal(captured.shutdownSaveMode, "disabled");
   for (const flag of ISOLATION_FLAGS) assert.ok(!args.includes(flag), `${flag} enabled by default`);
   const metadata = JSON.parse(await fs.readFile(path.join(outputDir, "result.json"), "utf8"));
   assert.equal(metadata.ok, true);
@@ -106,8 +108,40 @@ test("agent-runner maps opt-in resource isolation environment flags to Pi", asyn
   });
 
   assert.equal(result.code, 0, result.stderr);
-  const args = JSON.parse(await fs.readFile(capture, "utf8"));
+  const captured = JSON.parse(await fs.readFile(capture, "utf8"));
+  const args = captured.args;
+  assert.equal(captured.shutdownSaveMode, "disabled");
   for (const flag of ISOLATION_FLAGS) assert.ok(args.includes(flag), `${flag} was not forwarded`);
+});
+
+ test("save-session runner requests durable archival with a real session path", async (t) => {
+  const root = await fixture(t, "monika-agent-runner-save-session-");
+  const binDir = path.join(root, "bin");
+  const capture = path.join(root, "pi-args.json");
+  await fs.mkdir(binDir);
+  await makeCaptureExecutable(path.join(binDir, "pi"), "FAKE_PI_CAPTURE");
+
+  const result = await run(process.execPath, [RUNNER, "run", "Return OK."], {
+    cwd: root,
+    env: {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_PI_CAPTURE: capture,
+      RUNNER_OUTPUT_DIR: path.join(root, "outputs"),
+      RUNNER_SCRATCH_DIR: path.join(root, "scratch"),
+      RUNNER_WORKSPACE: root,
+      RUNNER_TIMEOUT_SECONDS: "5",
+      RUNNER_SAVE_SESSION: "1",
+      PI_MODEL: "",
+      PI_TOOLS: "",
+    },
+  });
+
+  assert.equal(result.code, 0, result.stderr);
+  const captured = JSON.parse(await fs.readFile(capture, "utf8"));
+  assert.equal(captured.shutdownSaveMode, "durable");
+  assert.ok(captured.args.includes("--session-dir"));
+  assert.ok(!captured.args.includes("--no-session"));
 });
 
 test("wrapper maps resource isolation options to runner environment", async (t) => {
@@ -144,7 +178,8 @@ test("wrapper maps resource isolation options to runner environment", async (t) 
   });
 
   assert.equal(result.code, 0, result.stderr);
-  const args = JSON.parse(await fs.readFile(capture, "utf8"));
+  const captured = JSON.parse(await fs.readFile(capture, "utf8"));
+  const args = captured.args;
   const expectedEnv = [
     "RUNNER_NO_EXTENSIONS=1",
     "RUNNER_NO_SKILLS=1",

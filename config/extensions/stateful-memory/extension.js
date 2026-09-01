@@ -370,7 +370,7 @@ export default function (pi) {
    * Save the current session transcript to memstore.
    * Captures transcript synchronously, then writes to memstore.
    */
-  async function summarizeCurrentSession(ctx, { reason } = {}) {
+  async function summarizeCurrentSession(ctx, { reason, durable = false } = {}) {
     await ensureSessionState(ctx);
 
     const sessionPath = ctx.sessionManager.getSessionFile() ?? store.sessionPath;
@@ -386,8 +386,11 @@ export default function (pi) {
       });
     }
 
-    // Skip empty or trivial sessions (less than 200 chars of content)
-    if (!transcript || transcript.length < 200) {
+    // Interactive sessions skip trivial transcripts. Durable archival was
+    // explicitly requested and must either persist every non-empty transcript
+    // or fail rather than silently claiming success without an archive.
+    if (!transcript || (!durable && transcript.length < 200)) {
+      if (durable) throw new Error("durable session archive has no transcript content");
       if (ctx.hasUI) ctx.ui.notify("Session too short to save.", "info");
       return null;
     }
@@ -412,6 +415,13 @@ export default function (pi) {
         tags,
         depth: isForkSession ? 3 : 2,
       });
+      if (durable) {
+        if (!result?.job_id) throw new Error("memstore save submission returned no job id");
+        await memstoreClient.waitForSave(result.job_id, {
+          timeoutMs: config.shutdownSaveTimeoutMs,
+          pollMs: config.shutdownSavePollMs,
+        });
+      }
 
       // Update recency index (no entry ID — proxy manages that via origin map)
       try {
@@ -434,8 +444,9 @@ export default function (pi) {
       }
       return result;
     } catch (err) {
-      console.error("[stateful-memory] Failed to submit save:", err.message);
-      if (ctx.hasUI) ctx.ui.notify("Session save failed to submit.", "warning");
+      console.error("[stateful-memory] Failed to save session:", err.message);
+      if (ctx.hasUI) ctx.ui.notify("Session save failed.", "warning");
+      if (durable) throw err;
       return null;
     }
   }
@@ -620,11 +631,25 @@ export default function (pi) {
   // shutdown summary; fork sessions get their own independent lifecycle.
 
   pi.on("session_shutdown", async (_event, ctx) => {
-    await shutdownStatefulMemory({
-      summarize: () => summarizeCurrentSession(ctx, { reason: "session-shutdown" }),
-      getClient: () => memstoreClient,
-      clearClient: () => { memstoreClient = null; },
-    });
+    const saveMode = config?.shutdownSaveMode ?? "enqueue";
+    try {
+      await shutdownStatefulMemory({
+        summarize: saveMode === "disabled"
+          ? async () => null
+          : () => summarizeCurrentSession(ctx, {
+              reason: "session-shutdown",
+              durable: saveMode === "durable",
+            }),
+        getClient: () => memstoreClient,
+        clearClient: () => { memstoreClient = null; },
+      });
+    } catch (error) {
+      // Pi reports extension shutdown errors but otherwise preserves the model
+      // turn's successful print-mode status. Durable archival is part of the
+      // runner contract, so make that failure visible to its parent process.
+      if (saveMode === "durable") process.exitCode = 1;
+      throw error;
+    }
   });
 
   // ── Tools ─────────────────────────────────────────────────────────────

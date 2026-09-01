@@ -40,7 +40,10 @@ continues to honor `MEMSTORE_SOCKET` and an explicitly configured internal
 `MONIKA_AGENTD_PORT`. Public `/healthz`
 remains liveness-only. If agentd or memstore exits unexpectedly, PID 1 stops the
 sibling and exits nonzero so `restart: unless-stopped` can recover the complete
-runtime instead of leaving a partially alive container.
+runtime instead of leaving a partially alive container. When the image is invoked
+with an explicit command (including runner mode), PID 1 does not `exec` away this
+ownership: it forwards SIGTERM/SIGINT, preserves the foreground command status, and
+gracefully terminates and waits for memstore after the command completes.
 
 Open interactive Pi inside the runtime:
 
@@ -107,7 +110,10 @@ contracts documented in [`backups.md`](backups.md).
 ### Canonical and derived state
 
 Pi JSONL sessions are canonical conversation history. Memstore contains searchable
-normalized transcripts and observations. Forum SQLite contains a projection of Pi
+normalized transcripts and observations. Default no-session runner jobs retain recall
+and explicit observation tools but do not automatically archive their transcript.
+`RUNNER_SAVE_SESSION=true` creates canonical JSONL and waits for the exact memstore
+archive job to commit before shutdown. Forum SQLite contains a projection of Pi
 history plus forum-native metadata. Restoring only a derived database is not a
 substitute for restoring canonical sessions.
 

@@ -111,13 +111,17 @@ is not a second conversation store. Loaded conversations resolve and validate th
 known canonical JSONL path directly; historical archive enumeration is reserved for
 explicit discovery, never the normal dispatch path. PID 1 supervises agentd and
 memstore as essential children and fails the container if either exits unexpectedly.
+For an explicit foreground command, PID 1 remains the supervisor: it forwards
+termination, preserves the command status, then gracefully stops runtime children.
 See [`services/agentd/README.md`](../services/agentd/README.md).
 
 ### memstore and stateful-memory
 
 The stateful-memory extension assembles persona and current context, routes topic
 addenda, enriches a session from previous experience, exposes bounded recall and
-observation tools, saves normalized transcripts, and runs sleep.
+observation tools, saves normalized transcripts, and runs sleep. Transcript archival
+is policy-driven: interactive shutdown enqueues quickly, default no-session runners do
+not auto-archive, and save-session runners wait for the exact archive job to commit.
 
 Memstore is its container-owned SQLite FTS5 backend. It indexes normalized session
 transcripts and append-only entity observations. Memstore makes experience

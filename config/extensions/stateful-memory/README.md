@@ -39,10 +39,23 @@ Pi-subagents children do not load this extension, so they never submit child
 transcripts to memstore and do not expose `remember_session` or other memory tools.
 
 On session close or switch, the full session transcript is normalized (tool calls
-stripped, text extracted) and submitted to memstore via `proxy/submit_save`. This
-returns instantly (~1ms) — memstore queues the job and processes it in the background.
-On final session shutdown, the extension closes its client after the submission attempt
-so print-mode Pi processes do not retain the Unix socket and remain alive.
+stripped, text extracted) and submitted to memstore via `proxy/submit_save`. Interactive
+sessions use the default `enqueue` shutdown policy: submission returns quickly and
+memstore processes the job in the background. On final shutdown, the extension closes
+its client after the configured save policy completes so print-mode Pi processes do not
+retain the Unix socket.
+
+`shutdownSaveMode` controls final shutdown only:
+
+- `disabled` skips automatic transcript archival while retaining persona, recall, and
+  explicit memory tools;
+- `enqueue` preserves normal interactive quick-enqueue behavior;
+- `durable` polls `proxy/save_status` for the exact submitted job and returns only after
+  its database transaction and origin map have committed, or throws on failure/timeout.
+
+Runner mode sets `disabled` for default `--no-session` jobs and `durable` when
+`RUNNER_SAVE_SESSION=true`. This is passed as ordinary stateful-memory configuration;
+the extension does not contain runner-mode branching.
 
 The save flow:
 
@@ -94,11 +107,18 @@ starts, so a disposable runner `HOME` does not hide the image-owned Pi configura
 | `dreamsDir` | Dream journal directory |
 | `topicsFile` | Topic index (PERSONALITY_MATRIX.md) |
 | `memstoreSocketPath` | Unix socket for memstore (default: `$XDG_RUNTIME_DIR/memstore.sock`) |
+| `shutdownSaveMode` | Final shutdown archival: `disabled`, `enqueue` (default), or `durable` |
+| `shutdownSaveTimeoutMs` | Maximum exact-job durability wait (default 30000ms) |
+| `shutdownSavePollMs` | Exact-job status poll interval (default 50ms) |
 | `recallSessionResults` | Session snippets returned by recall/enrichment (default 5) |
 | `recallObservationResults` | Observation results returned by recall/enrichment (default 3) |
 | `recallSearchMaxBytes` | Aggregate compact `recall` result budget (default 10000 bytes) |
 | `recallMaxSessionChars` | Default bounded `recall_session` excerpt (default 8000 characters; hard max 12000) |
 | `enrichmentMaxBytes` | Aggregate first-message enrichment budget (default 6000 bytes) |
+
+Environment overrides use `PI_STATEFUL_MEMORY_SHUTDOWN_SAVE_MODE`,
+`PI_STATEFUL_MEMORY_SHUTDOWN_SAVE_TIMEOUT_MS`, and
+`PI_STATEFUL_MEMORY_SHUTDOWN_SAVE_POLL_MS`. Invalid values fail configuration loading.
 
 ### Path resolution
 

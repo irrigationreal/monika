@@ -23,6 +23,45 @@ const DEFAULT_SOCKET_PATH =
 const REQUEST_TIMEOUT_MS = 60_000;
 const WRITE_TIMEOUT_MS = 180_000;  // add/delete can queue behind other ops
 
+export async function waitForSaveJob(jobId, {
+  getStatus,
+  timeoutMs = 30_000,
+  pollMs = 50,
+  now = () => Date.now(),
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+} = {}) {
+  const deadline = now() + timeoutMs;
+  const timeoutError = () => new Error(`memstore save timed out (${jobId}) after ${timeoutMs}ms`);
+  while (true) {
+    const remaining = deadline - now();
+    if (remaining <= 0) throw timeoutError();
+
+    // The ordinary RPC timeout may be longer than durable shutdown's
+    // configured deadline, so bound each status read by the remaining budget.
+    let statusTimer;
+    const statusTimeout = new Promise((_, reject) => {
+      statusTimer = setTimeout(() => reject(timeoutError()), remaining);
+    });
+    let job;
+    try {
+      job = await Promise.race([getStatus(jobId), statusTimeout]);
+    } finally {
+      clearTimeout(statusTimer);
+    }
+    if (job.status === "done") return job;
+    if (job.status === "failed") {
+      throw new Error(`memstore save failed (${jobId}): ${job.error || "unknown error"}`);
+    }
+    if (job.status === "unknown") {
+      throw new Error(`memstore save job is unknown (${jobId})`);
+    }
+
+    const delay = Math.min(pollMs, deadline - now());
+    if (delay <= 0) throw timeoutError();
+    await sleep(delay);
+  }
+}
+
 export class MemstoreClient {
   /** @type {string} */
   #socketPath;
@@ -120,6 +159,23 @@ export class MemstoreClient {
    */
   async queueStatus() {
     return this.#request("proxy/queue_status", {});
+  }
+
+  /**
+   * Get the exact state of a previously submitted save job.
+   * Terminal `done` means the database transaction and origin map are durable.
+   * @param {string} jobId
+   * @returns {Promise<{id: string, status: string, error?: string, result_entry_id?: number}>}
+   */
+  async saveStatus(jobId) {
+    return this.#request("proxy/save_status", { job_id: jobId });
+  }
+
+  async waitForSave(jobId, options = {}) {
+    return waitForSaveJob(jobId, {
+      ...options,
+      getStatus: (id) => this.saveStatus(id),
+    });
   }
 
   /**
