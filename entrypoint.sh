@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+# Kept as a separately testable primitive; the image installs it here.
+source /app/bin/runtime-supervision.sh
+
 monika_log() {
   if [ "${MONIKA_LOG_TO_STDERR:-}" = "1" ] || [ "${AGENT_RUNNER_MODE:-}" = "1" ]; then
     echo "$@" >&2
@@ -253,22 +256,25 @@ fi
 # ── Signal handling and essential-child supervision ──────
 stop_children() {
   local exit_status="$1"
+  local preserve_primary_status="${2:-0}"
   local agentd_status=0
   trap - SIGTERM SIGINT
   monika_log "[monika] Shutting down..."
-  # Agentd drains loaded sessions while memstore is still available. Preserve a
-  # canonical-close failure as the container result instead of calling it a
-  # graceful shutdown.
+  # Agentd drains loaded sessions while memstore is still available. In daemon
+  # mode a close failure is authoritative; command mode preserves the foreground
+  # command's status while still attempting every cleanup step.
   if [ -n "$AGENTD_PID" ]; then
     kill "$AGENTD_PID" 2>/dev/null || true
     set +e
     wait "$AGENTD_PID" 2>/dev/null
     agentd_status=$?
     set -e
-    if [ "$exit_status" -eq 0 ] && [ "$agentd_status" -ne 0 ]; then
+    if [ "$preserve_primary_status" -ne 1 ] && [ "$exit_status" -eq 0 ] && [ "$agentd_status" -ne 0 ]; then
       exit_status="$agentd_status"
     fi
   fi
+  # SIGTERM lets memstore finish an in-flight SQLite transaction, close its WAL,
+  # remove the socket, and return before PID 1 exits.
   kill "$MEMSTORE_PID" 2>/dev/null || true
   wait "$MEMSTORE_PID" 2>/dev/null || true
   exit "$exit_status"
@@ -278,8 +284,18 @@ trap cleanup SIGTERM SIGINT
 
 # ── Run command or keep alive ────────────────────────────
 if [ $# -gt 0 ]; then
-  # Command/runner mode intentionally preserves the historical exec contract.
-  exec "$@"
+  SUPERVISED_ESSENTIAL_PIDS="$MEMSTORE_PID${AGENTD_PID:+ $AGENTD_PID}"
+  export SUPERVISED_ESSENTIAL_PIDS
+  set +e
+  supervise_foreground_command "$@"
+  command_status=$?
+  set -e
+  if [ -n "${SUPERVISED_ESSENTIAL_EXIT_PID:-}" ]; then
+    child_name="memstore"
+    [ "$SUPERVISED_ESSENTIAL_EXIT_PID" = "$AGENTD_PID" ] && child_name="agentd"
+    monika_log "[monika] ERROR: essential child $child_name exited while foreground command was running (status=$command_status)"
+  fi
+  stop_children "$command_status" 1
 else
   monika_log "[monika] Running. Use 'docker exec -it monika pi' for interactive session."
   set +e

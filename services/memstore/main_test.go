@@ -61,6 +61,28 @@ func rpcCallOnScanner(t *testing.T, conn net.Conn, scanner *bufio.Scanner, msg m
 	return resp
 }
 
+func TestWriteFileAtomicDurable(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "origin-map.json")
+	if err := writeFileAtomicDurable(path, []byte("first"), 0644); err != nil {
+		t.Fatalf("initial durable write: %v", err)
+	}
+	if err := writeFileAtomicDurable(path, []byte("second"), 0644); err != nil {
+		t.Fatalf("replacement durable write: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read durable file: %v", err)
+	}
+	if string(got) != "second" {
+		t.Fatalf("unexpected durable content: %q", got)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, ".origin-map-*.tmp"))
+	if err != nil || len(matches) != 0 {
+		t.Fatalf("temporary files remained: %v, err=%v", matches, err)
+	}
+}
+
 func TestMemstore(t *testing.T) {
 	// Set up temp dirs
 	tmpDir := t.TempDir()
@@ -395,8 +417,30 @@ func TestMemstore(t *testing.T) {
 		t.Errorf("expected non-empty job_id")
 	}
 
-	// Wait for save to process
-	time.Sleep(500 * time.Millisecond)
+	// Wait for this exact save to become durable.
+	var exactSave map[string]any
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
+		resp = rpcCallOnScanner(t, conn, scanner, map[string]any{
+			"jsonrpc": "2.0", "id": 151, "method": "proxy/save_status",
+			"params": map[string]any{"job_id": jobID},
+		})
+		exactSave = resp["result"].(map[string]any)
+		if exactSave["status"] == "done" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if exactSave["status"] != "done" || exactSave["result_entry_id"].(float64) <= 0 {
+		t.Fatalf("expected exact save job to be durable, got %#v", exactSave)
+	}
+
+	resp = rpcCallOnScanner(t, conn, scanner, map[string]any{
+		"jsonrpc": "2.0", "id": 152, "method": "proxy/save_status",
+		"params": map[string]any{"job_id": "missing-job"},
+	})
+	if got := resp["result"].(map[string]any)["status"]; got != "unknown" {
+		t.Fatalf("expected unknown missing save job, got %v", got)
+	}
 
 	// Check queue status — should be empty now
 	resp = rpcCallOnScanner(t, conn, scanner, map[string]any{

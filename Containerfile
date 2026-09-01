@@ -205,7 +205,8 @@ RUN node -e "\
 VOLUME /data
 
 COPY bin/ /app/bin/
-RUN chmod +x /app/bin/agent-runner.mjs
+COPY scripts/runtime-supervision.sh /app/bin/runtime-supervision.sh
+RUN chmod +x /app/bin/agent-runner.mjs /app/bin/runtime-supervision.sh
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

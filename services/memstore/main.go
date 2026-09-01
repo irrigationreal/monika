@@ -159,6 +159,7 @@ type proxy struct {
 	dbMu     sync.Mutex // serializes writes
 
 	clientSeq atomic.Uint64
+	saveSeq   atomic.Uint64
 
 	// Save job queue
 	saveQueue       []*saveJob
@@ -166,6 +167,7 @@ type proxy struct {
 	saveNotify      chan struct{}
 	processingSave  bool
 	currentSaveJob  *saveJob
+	saveJobs        map[string]*saveJob
 	saveProcessorWg sync.WaitGroup
 	shutdownOnce    sync.Once
 
@@ -181,6 +183,7 @@ func newProxy(sockPath, dataDir string) *proxy {
 		sockPath:   sockPath,
 		dataDir:    dataDir,
 		saveNotify: make(chan struct{}, 1),
+		saveJobs:   make(map[string]*saveJob),
 		originMap:  make(map[string]int),
 		done:       make(chan struct{}),
 	}
@@ -1168,6 +1171,13 @@ func (p *proxy) handleClient(conn net.Conn) {
 			continue
 		}
 
+		// proxy/save_status
+		if method == "proxy/save_status" {
+			resp := p.handleSaveStatus(msg)
+			_, _ = conn.Write(append(resp, '\n'))
+			continue
+		}
+
 		// tools/call → route to handler
 		if method == "tools/call" {
 			resp := p.handleToolsCall(msg)
@@ -1246,7 +1256,7 @@ func (p *proxy) handleToolsCall(msg *rpcMessage) []byte {
 }
 
 // ---------------------------------------------------------------------------
-// Proxy commands: submit_save, queue_status
+// Proxy commands: submit_save, queue_status, save_status
 // ---------------------------------------------------------------------------
 
 func (p *proxy) handleSubmitSave(msg *rpcMessage) []byte {
@@ -1261,8 +1271,11 @@ func (p *proxy) handleSubmitSave(msg *rpcMessage) []byte {
 		_ = json.Unmarshal(raw, &params)
 	}
 
-	jobID := fmt.Sprintf("save_%d", time.Now().UnixMilli())
+	jobID := fmt.Sprintf("save_%d_%d", time.Now().UnixMilli(), p.saveSeq.Add(1))
 
+	if params.Tags == nil {
+		params.Tags = []string{}
+	}
 	job := &saveJob{
 		ID:     jobID,
 		Body:   params.Body,
@@ -1275,6 +1288,7 @@ func (p *proxy) handleSubmitSave(msg *rpcMessage) []byte {
 
 	p.saveMu.Lock()
 	p.saveQueue = append(p.saveQueue, job)
+	p.saveJobs[job.ID] = job
 	p.persistSaveQueue()
 	queueDepth := len(p.saveQueue)
 	p.saveMu.Unlock()
@@ -1336,6 +1350,36 @@ func (p *proxy) handleQueueStatus(msg *rpcMessage) []byte {
 	return b
 }
 
+func (p *proxy) handleSaveStatus(msg *rpcMessage) []byte {
+	var params struct {
+		JobID string `json:"job_id"`
+	}
+	if raw := msg.params(); raw != nil {
+		_ = json.Unmarshal(raw, &params)
+	}
+
+	p.saveMu.Lock()
+	job := p.saveJobs[params.JobID]
+	var result map[string]any
+	if job == nil {
+		result = map[string]any{"id": params.JobID, "status": "unknown"}
+	} else {
+		result = map[string]any{
+			"id": job.ID, "status": job.Status, "error": job.Error,
+			"result_entry_id": job.ResultEntryID,
+		}
+	}
+	p.saveMu.Unlock()
+
+	resp := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      json.RawMessage(msg.id()),
+		"result":  result,
+	}
+	b, _ := json.Marshal(resp)
+	return b
+}
+
 // ---------------------------------------------------------------------------
 // Save job processor
 // ---------------------------------------------------------------------------
@@ -1363,10 +1407,24 @@ func (p *proxy) processSaveJobs() {
 			if len(p.saveQueue) > 0 && p.saveQueue[0].ID == job.ID {
 				p.saveQueue = p.saveQueue[1:]
 			}
+			// Retain compact terminal metadata for the lifetime of this memstore
+			// process. Exact durability waiters must not observe `unknown` merely
+			// because unrelated saves completed first.
+			job.Body = ""
+			job.Title = ""
+			job.Tags = nil
 			p.persistSaveQueue()
 			p.saveMu.Unlock()
 		}
 	}
+}
+
+func (p *proxy) updateSaveJob(job *saveJob, status, errorMessage string, resultEntryID int) {
+	p.saveMu.Lock()
+	job.Status = status
+	job.Error = errorMessage
+	job.ResultEntryID = resultEntryID
+	p.saveMu.Unlock()
 }
 
 func (p *proxy) processOneJob(job *saveJob) {
@@ -1386,10 +1444,7 @@ func (p *proxy) processOneJob(job *saveJob) {
 	prevID, hasPrev := p.originMap[job.Origin]
 	p.originMapMu.Unlock()
 
-	job.Status = "adding"
-	if job.Tags == nil {
-		job.Tags = []string{}
-	}
+	p.updateSaveJob(job, "adding", "", 0)
 	tagsJSON, _ := json.Marshal(job.Tags)
 
 	// Delete + insert in a single transaction to avoid data loss on insert failure
@@ -1397,8 +1452,7 @@ func (p *proxy) processOneJob(job *saveJob) {
 	tx, txErr := p.db.Begin()
 	if txErr != nil {
 		p.dbMu.Unlock()
-		job.Status = "failed"
-		job.Error = txErr.Error()
+		p.updateSaveJob(job, "failed", txErr.Error(), 0)
 		log.Printf("[save] begin tx failed for %s: %v", job.Origin, txErr)
 		return
 	}
@@ -1414,16 +1468,14 @@ func (p *proxy) processOneJob(job *saveJob) {
 	if err != nil {
 		_ = tx.Rollback()
 		p.dbMu.Unlock()
-		job.Status = "failed"
-		job.Error = err.Error()
+		p.updateSaveJob(job, "failed", err.Error(), 0)
 		log.Printf("[save] add failed for %s: %v", job.Origin, err)
 		return
 	}
 
 	if txErr = tx.Commit(); txErr != nil {
 		p.dbMu.Unlock()
-		job.Status = "failed"
-		job.Error = txErr.Error()
+		p.updateSaveJob(job, "failed", txErr.Error(), 0)
 		log.Printf("[save] commit failed for %s: %v", job.Origin, txErr)
 		return
 	}
@@ -1432,11 +1484,15 @@ func (p *proxy) processOneJob(job *saveJob) {
 	newID, _ := result.LastInsertId()
 	p.originMapMu.Lock()
 	p.originMap[job.Origin] = int(newID)
-	p.saveOriginMap()
+	originMapErr := p.saveOriginMap()
 	p.originMapMu.Unlock()
+	if originMapErr != nil {
+		p.updateSaveJob(job, "failed", originMapErr.Error(), int(newID))
+		log.Printf("[save] origin map failed for %s: %v", job.Origin, originMapErr)
+		return
+	}
 
-	job.Status = "done"
-	job.ResultEntryID = int(newID)
+	p.updateSaveJob(job, "done", "", int(newID))
 	log.Printf("[save] completed for %s (entry %d)", job.Origin, newID)
 }
 
@@ -1453,12 +1509,51 @@ func (p *proxy) loadOriginMap() {
 	_ = json.Unmarshal(data, &p.originMap)
 }
 
-func (p *proxy) saveOriginMap() {
-	path := filepath.Join(p.dataDir, "origin-map.json")
-	data, _ := json.MarshalIndent(p.originMap, "", "  ")
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		log.Printf("[warn] failed to persist origin map: %v", err)
+func writeFileAtomicDurable(path string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".origin-map-*.tmp")
+	if err != nil {
+		return err
 	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+
+	if err = tmp.Chmod(mode); err == nil {
+		_, err = tmp.Write(data)
+	}
+	if err == nil {
+		err = tmp.Sync()
+	}
+	closeErr := tmp.Close()
+	if err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	if err = os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+
+	dirHandle, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	err = dirHandle.Sync()
+	closeErr = dirHandle.Close()
+	if err != nil {
+		return err
+	}
+	return closeErr
+}
+
+func (p *proxy) saveOriginMap() error {
+	path := filepath.Join(p.dataDir, "origin-map.json")
+	data, err := json.MarshalIndent(p.originMap, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeFileAtomicDurable(path, data, 0644)
 }
 
 func (p *proxy) loadSaveQueue() {
@@ -1468,6 +1563,11 @@ func (p *proxy) loadSaveQueue() {
 		return
 	}
 	_ = json.Unmarshal(data, &p.saveQueue)
+	for _, job := range p.saveQueue {
+		job.Status = "queued"
+		job.Error = ""
+		p.saveJobs[job.ID] = job
+	}
 }
 
 func (p *proxy) persistSaveQueue() {

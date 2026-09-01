@@ -120,8 +120,9 @@ nix-shell -p nodejs_22 --run \
 ```
 
 The lifecycle suite verifies global config follows `PI_CODING_AGENT_DIR` despite a
-disposable `HOME`, retains the documented HOME fallback, and closes the memstore
-client after shutdown save submission even when submission fails. The child-context
+disposable `HOME`, retains the documented HOME fallback, validates shutdown save
+policy, waits for exact durable job completion with bounded failure/timeout behavior,
+and closes the memstore client even when submission fails. The child-context
 suite verifies topic-only specialist prompts, the
 `monika-delegate` stable persona trio and first-person bounded-continuation framing,
 absence of ambient WAKE/FACTS/observations, read-only recall exclusively for the
@@ -141,13 +142,14 @@ nix-shell -p go gcc --run \
 Runner argument and wrapper mapping have provider-independent Node coverage:
 
 ```bash
-node --test tests/agent-runner.test.mjs
+node --test tests/agent-runner.test.mjs tests/runtime-supervision.test.mjs
 ```
 
-The suite proves full extension/skill/template/context discovery remains the default
-and that each opt-in isolation control reaches the corresponding Pi invocation.
-The container smoke test below separately exercises real print-mode shutdown with
-ambient stateful-memory.
+The suites prove full extension/skill/template/context discovery remains the default,
+each opt-in isolation control reaches Pi, no-session versus save-session archival
+policy is explicit, and foreground command exit/signal status is preserved. The
+container smoke separately exercises both runner archive policies, essential-child
+failure during command mode, and PID 1's graceful memstore shutdown with isolated data.
 
 ## SSH transport and relocation
 
@@ -185,7 +187,7 @@ The script verifies:
 1. the container starts with bundled `/app/.pi` state and ephemeral `/data`;
 2. memstore creates its Unix socket;
 3. agentd answers `/healthz`;
-4. the actual one-shot `agent-runner` completes before its short timeout with ambient stateful-memory, image-owned persona paths, isolated throwaway data, and successful result metadata;
+4. default and save-session one-shot runners complete before their short timeout with ambient stateful-memory and isolated data; the default writes no transcript archive, while save-session uses a real JSONL origin and waits for its exact durable save; PID 1 preserves foreground exit/signal status, treats essential-child death as fatal during command mode, and gracefully stops memstore;
 5. `pi --version` reports the repository's exact Pi pin;
 6. npm's 10-day dependency cooldown, pnpm 11.21.0 with fail-closed 10-day release-age enforcement, and the pinned agent-browser version are active;
 7. the reviewed pi-subagents 0.37.2 gitHead (`8063333661476ca48afbca826dc4aab8707c72d3`) is installed, the dedicated runtime/session/operator roots are global, the operator root exists with mode `0700`, unsafe relative or shared top-level operator-root overrides fail startup, a container runtime identity exists, durable pre-spawn launch/drain and artifact-finalization patches are present, forked children use per-run directories, `defaultExtensions=[]` and isolated child profiles are configured, and legacy force-tools/delegate extensions are absent;

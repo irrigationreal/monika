@@ -85,12 +85,22 @@ default:
 pi --print --no-session ...
 ```
 
-This keeps disposable jobs from lingering on session lifecycle behavior. If you need
-a Pi JSONL session for debugging/audit, opt in:
+The stateful-memory extension still loads in this mode: persona, recall enrichment,
+and explicit memory tools remain available. Automatic shutdown archival is disabled,
+so unrelated one-shot jobs never collide under an `ephemeral` origin. Explicit
+`remember` operations still persist to the isolated memstore selected for the run.
+
+If you need a Pi JSONL session for debugging/audit and want the completed transcript
+archived automatically, opt in:
 
 ```bash
 scripts/agent-runner run --task prompt.md --save-session
 ```
+
+With `--save-session`, stateful-memory submits the persisted Pi session path as the
+archive origin and waits for that exact memstore save job to finish durably before Pi
+exits. Save failure or the bounded durability timeout is reported as an extension
+shutdown error rather than treated as a completed archive.
 
 Runner mode also disables `agentd` by default because `agentd` is useful for the
 interactive/forum runtime, not for a short-lived foreground job. You can override
@@ -236,7 +246,9 @@ scripts/agent-runner run --task prompt.md --memory-dir runner-runtime/memory/rep
 ```
 
 Do not mount Monika's active live memstore into unrelated one-off jobs. Use a separate
-memory profile per job family if persistent memory is needed.
+memory profile per job family if persistent memory is needed. `--memory-dir` controls
+storage persistence only; it does not imply transcript archival. Add `--save-session`
+when automatic durable archival is intended.
 
 ## Wrapper reference
 
