@@ -233,6 +233,65 @@ prompt is deliberately longer than the stateful-memory transcript threshold so s
 policy is exercised. Keep the final response to exactly the two uppercase letters OK.
 RUNNER_PROMPT
 
+mkdir -p "$RUNNER_ROOT/git/outputs" "$RUNNER_ROOT/git/scratch" "$RUNNER_ROOT/git/data" "$RUNNER_ROOT/git/fixture"
+cat >"$RUNNER_ROOT/git/fixture/pi" <<'RUNNER_FAKE_PI'
+#!/bin/sh
+git config --global user.name
+git config --global --get-all safe.directory
+RUNNER_FAKE_PI
+chmod +x "$RUNNER_ROOT/git/fixture/pi"
+RUNNER_CONTAINER="monika-runner-git-$$"
+docker run --rm --name "$RUNNER_CONTAINER" \
+  -e AGENT_RUNNER_MODE=1 -e MONIKA_AGENTD_ENABLED=0 -e GIT_USER_NAME='Runner Smoke' \
+  -e RUNNER_TASK_FILE=/task/prompt.md -e RUNNER_OUTPUT_DIR=/outputs \
+  -e RUNNER_WORKSPACE=/workspace -e RUNNER_SCRATCH_DIR=/scratch \
+  -e RUNNER_TIMEOUT_SECONDS=10 \
+  -e PATH=/fixture:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  -v "$RUNNER_ROOT/task:/task:ro" -v "$RUNNER_ROOT/workspace:/workspace:ro" \
+  -v "$RUNNER_ROOT/git/outputs:/outputs" -v "$RUNNER_ROOT/git/scratch:/scratch" \
+  -v "$RUNNER_ROOT/git/data:/data" -v "$RUNNER_ROOT/git/fixture:/fixture:ro" \
+  "$IMAGE" /app/bin/agent-runner.mjs run
+if ! grep -qx 'Runner Smoke' "$RUNNER_ROOT/git/outputs/stdout.txt" ||
+  ! grep -qx '\*' "$RUNNER_ROOT/git/outputs/stdout.txt"; then
+  echo "runner scratch HOME hid runtime Git identity or safe.directory"
+  cat "$RUNNER_ROOT/git/outputs/stdout.txt"
+  exit 1
+fi
+RUNNER_CONTAINER=""
+pass "runner scratch HOME retained runtime-global Git configuration"
+
+WRAPPER_OUTPUT="$RUNNER_ROOT/wrapper-output"
+WRAPPER_FIXTURE="$RUNNER_ROOT/wrapper-fixture"
+mkdir -p "$WRAPPER_OUTPUT" "$WRAPPER_FIXTURE"
+printf 'caller-owned\n' >"$WRAPPER_OUTPUT/sentinel.txt"
+cat >"$WRAPPER_FIXTURE/pi" <<'RUNNER_CLEANUP_PI'
+#!/bin/sh
+mkdir -p "$HOME/root-only"
+printf 'root-owned\n' >"$HOME/root-only/secret.txt"
+chmod 000 "$HOME/root-only"
+printf 'OK\n'
+RUNNER_CLEANUP_PI
+chmod +x "$WRAPPER_FIXTURE/pi"
+mkdir -p "$SCRIPT_DIR/../../runner-runtime/scratch"
+wrapper_scratch_before="$(find "$SCRIPT_DIR/../../runner-runtime/scratch" -mindepth 1 -maxdepth 1 -type d | wc -l)"
+"$SCRIPT_DIR/../../scripts/agent-runner" run \
+  --task "$RUNNER_ROOT/task/prompt.md" \
+  --workspace "$RUNNER_ROOT/workspace" \
+  --output-dir "$WRAPPER_OUTPUT" \
+  --cleanup always \
+  --image "$IMAGE" \
+  --extra-docker-arg -v \
+  --extra-docker-arg "$WRAPPER_FIXTURE:/fixture:ro" \
+  --extra-docker-arg -e \
+  --extra-docker-arg PATH=/fixture:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+test "$(cat "$WRAPPER_OUTPUT/sentinel.txt")" = caller-owned
+wrapper_scratch_after="$(find "$SCRIPT_DIR/../../runner-runtime/scratch" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)"
+if [ "$wrapper_scratch_after" -ne "$wrapper_scratch_before" ]; then
+  echo "runner wrapper left scratch after cleanup=always"
+  exit 1
+fi
+pass "wrapper preserved explicit output and removed root-owned runner scratch"
+
 run_runner_smoke() {
   local name="$1"
   local save_session="$2"

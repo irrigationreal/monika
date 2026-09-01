@@ -39,7 +39,7 @@ async function fixture(t, prefix) {
 }
 
 async function makeCaptureExecutable(file, envName) {
-  await fs.writeFile(file, `#!/usr/bin/env node\nconst fs = require("node:fs");\nfs.writeFileSync(process.env.${envName}, JSON.stringify({ args: process.argv.slice(2), shutdownSaveMode: process.env.PI_STATEFUL_MEMORY_SHUTDOWN_SAVE_MODE }));\nprocess.stdout.write("OK\\n");\n`);
+  await fs.writeFile(file, `#!/usr/bin/env node\nconst fs = require("node:fs");\nfs.writeFileSync(process.env.${envName}, JSON.stringify({ args: process.argv.slice(2), shutdownSaveMode: process.env.PI_STATEFUL_MEMORY_SHUTDOWN_SAVE_MODE, gitConfigGlobal: process.env.GIT_CONFIG_GLOBAL }));\nprocess.stdout.write("OK\\n");\n`);
   await fs.chmod(file, 0o755);
 }
 
@@ -114,7 +114,37 @@ test("agent-runner maps opt-in resource isolation environment flags to Pi", asyn
   for (const flag of ISOLATION_FLAGS) assert.ok(args.includes(flag), `${flag} was not forwarded`);
 });
 
- test("save-session runner requests durable archival with a real session path", async (t) => {
+test("runner preserves explicit global Git config while HOME is disposable", async (t) => {
+  const root = await fixture(t, "monika-agent-runner-git-config-");
+  const binDir = path.join(root, "bin");
+  const capture = path.join(root, "pi-args.json");
+  const gitConfig = path.join(root, "operator.gitconfig");
+  await fs.mkdir(binDir);
+  await fs.writeFile(gitConfig, "[user]\n\tname = Runner Test\n");
+  await makeCaptureExecutable(path.join(binDir, "pi"), "FAKE_PI_CAPTURE");
+
+  const result = await run(process.execPath, [RUNNER, "run", "Return OK."], {
+    cwd: root,
+    env: {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_PI_CAPTURE: capture,
+      GIT_CONFIG_GLOBAL: gitConfig,
+      RUNNER_OUTPUT_DIR: path.join(root, "outputs"),
+      RUNNER_SCRATCH_DIR: path.join(root, "scratch"),
+      RUNNER_WORKSPACE: root,
+      RUNNER_TIMEOUT_SECONDS: "5",
+      PI_MODEL: "",
+      PI_TOOLS: "",
+    },
+  });
+
+  assert.equal(result.code, 0, result.stderr);
+  const captured = JSON.parse(await fs.readFile(capture, "utf8"));
+  assert.equal(captured.gitConfigGlobal, gitConfig);
+});
+
+test("save-session runner requests durable archival with a real session path", async (t) => {
   const root = await fixture(t, "monika-agent-runner-save-session-");
   const binDir = path.join(root, "bin");
   const capture = path.join(root, "pi-args.json");
@@ -190,4 +220,36 @@ test("wrapper maps resource isolation options to runner environment", async (t) 
 
   const scratchMount = args.find((arg) => arg.endsWith(":/scratch"));
   assert.ok(scratchMount?.startsWith(`${testRepo}/runner-runtime/scratch/`));
+});
+
+test("cleanup always preserves caller-owned explicit output and removes runner scratch", async (t) => {
+  const root = await fixture(t, "monika-agent-runner-cleanup-");
+  const testRepo = path.join(root, "repo");
+  const testWrapper = path.join(testRepo, "scripts", "agent-runner");
+  const fakeDocker = path.join(root, "fake-docker");
+  const capture = path.join(root, "docker-args.json");
+  const task = path.join(root, "prompt.md");
+  const outputDir = path.join(root, "caller-output");
+  const sentinel = path.join(outputDir, "sentinel.txt");
+  await fs.mkdir(path.dirname(testWrapper), { recursive: true });
+  await fs.mkdir(outputDir);
+  await fs.copyFile(WRAPPER, testWrapper);
+  await makeCaptureExecutable(fakeDocker, "FAKE_DOCKER_CAPTURE");
+  await fs.writeFile(task, "Return OK.\n");
+  await fs.writeFile(sentinel, "keep me\n");
+
+  const result = await run("bash", [
+    testWrapper, "run", "--task", task, "--workspace", root,
+    "--output-dir", outputDir, "--cleanup", "always",
+  ], {
+    cwd: testRepo,
+    env: { ...process.env, AGENT_RUNNER_DOCKER: fakeDocker, FAKE_DOCKER_CAPTURE: capture },
+  });
+
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(await fs.readFile(sentinel, "utf8"), "keep me\n");
+  const args = JSON.parse(await fs.readFile(capture, "utf8")).args;
+  const scratchMount = args.find((arg) => arg.endsWith(":/scratch"));
+  assert.ok(scratchMount);
+  await assert.rejects(fs.access(scratchMount.slice(0, -":/scratch".length)));
 });

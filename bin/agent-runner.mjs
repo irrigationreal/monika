@@ -207,6 +207,14 @@ async function runTask(cliArgs) {
     HOME: path.join(scratchDir, "home"),
     TMPDIR: path.join(scratchDir, "tmp"),
     XDG_CACHE_HOME: path.join(scratchDir, "cache"),
+    // Entrypoint prepares runtime Git identity and safe.directory under /app.
+    // Keep that config visible after HOME moves to disposable scratch, while an
+    // explicit operator-provided GIT_CONFIG_GLOBAL remains authoritative.
+    ...(process.env.GIT_CONFIG_GLOBAL
+      ? {}
+      : existsSync("/app/.gitconfig")
+        ? { GIT_CONFIG_GLOBAL: "/app/.gitconfig" }
+        : {}),
     // Runner archival is explicit. Default no-session jobs keep persona, recall,
     // and memory tools without writing an untraceable `ephemeral` transcript.
     PI_STATEFUL_MEMORY_SHUTDOWN_SAVE_MODE: saveSession ? "durable" : "disabled",

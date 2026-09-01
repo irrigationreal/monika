@@ -72,8 +72,11 @@ Each run writes:
 | `/outputs/artifacts/` | Task-specific files the prompt asks the agent to create. |
 | `/outputs/sessions/` | Optional Pi session logs when `--save-session` is used. |
 
-Generated output directories are deleted on success by default. Use `--keep-output`,
-`--output-dir`, or `--cleanup never` when you want to preserve successful run data.
+Runner-generated output directories are deleted on success by default. Use
+`--keep-output` or `--cleanup never` to preserve them; explicit `--cleanup always`
+takes precedence over `--keep-output` for runner-generated paths. An explicit
+`--output-dir` is caller-owned and is never recursively deleted, including with
+`--cleanup always`. Runner-owned scratch follows the cleanup policy independently.
 Failed runs are preserved by default.
 
 ## Runtime behavior
@@ -105,6 +108,11 @@ shutdown error rather than treated as a completed archive.
 Runner mode also disables `agentd` by default because `agentd` is useful for the
 interactive/forum runtime, not for a short-lived foreground job. You can override
 that with an explicit Docker env override if you are testing agentd-specific behavior.
+
+The runner keeps its home, cache, and temporary files under disposable scratch. Git's
+runtime-global configuration remains explicit through `GIT_CONFIG_GLOBAL`, so identity,
+signing settings, and the entrypoint's `safe.directory` policy remain visible despite
+the scratch `HOME`. An operator-provided `GIT_CONFIG_GLOBAL` always takes precedence.
 
 ## Timeout and cleanup
 
