@@ -17,6 +17,7 @@ import {
   selectTopics,
 } from "./topic-router.js";
 import { MemstoreClient } from "./memstore-client.js";
+import { shutdownStatefulMemory } from "./shutdown.js";
 import {
   buildRelevantExcerpt,
   isDelegateSession,
@@ -619,7 +620,11 @@ export default function (pi) {
   // shutdown summary; fork sessions get their own independent lifecycle.
 
   pi.on("session_shutdown", async (_event, ctx) => {
-    await summarizeCurrentSession(ctx, { reason: "session-shutdown" });
+    await shutdownStatefulMemory({
+      summarize: () => summarizeCurrentSession(ctx, { reason: "session-shutdown" }),
+      getClient: () => memstoreClient,
+      clearClient: () => { memstoreClient = null; },
+    });
   });
 
   // ── Tools ─────────────────────────────────────────────────────────────

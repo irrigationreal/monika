@@ -107,17 +107,22 @@ uses provider credentials or live network services.
 
 ## Stateful-memory tests
 
-Progressive recall selection, excerpt bounds, pagination, enrichment budgets, and
-pi-subagents child context boundaries have provider-independent Node tests:
+Progressive recall selection, excerpt bounds, pagination, enrichment budgets,
+stateful-memory configuration/shutdown, and pi-subagents child context boundaries
+have provider-independent Node tests:
 
 ```bash
 nix-shell -p nodejs_22 --run \
   'node --experimental-default-type=module --test \
     tests/stateful-memory/recall-utils.test.js \
-    tests/stateful-memory/child-context.test.js'
+    tests/stateful-memory/child-context.test.js \
+    tests/stateful-memory/lifecycle.test.js'
 ```
 
-The child-context suite verifies topic-only specialist prompts, the
+The lifecycle suite verifies global config follows `PI_CODING_AGENT_DIR` despite a
+disposable `HOME`, retains the documented HOME fallback, and closes the memstore
+client after shutdown save submission even when submission fails. The child-context
+suite verifies topic-only specialist prompts, the
 `monika-delegate` stable persona trio and first-person bounded-continuation framing,
 absence of ambient WAKE/FACTS/observations, read-only recall exclusively for the
 Monika delegate, the Terra/Sol profile policy, parent delegation guidance, explicit
@@ -130,6 +135,19 @@ supersession/retraction:
 nix-shell -p go gcc --run \
   'cd services/memstore && CGO_ENABLED=1 go test -tags fts5 ./...'
 ```
+
+## Agent runner tests
+
+Runner argument and wrapper mapping have provider-independent Node coverage:
+
+```bash
+node --test tests/agent-runner.test.mjs
+```
+
+The suite proves full extension/skill/template/context discovery remains the default
+and that each opt-in isolation control reaches the corresponding Pi invocation.
+The container smoke test below separately exercises real print-mode shutdown with
+ambient stateful-memory.
 
 ## SSH transport and relocation
 
@@ -167,19 +185,20 @@ The script verifies:
 1. the container starts with bundled `/app/.pi` state and ephemeral `/data`;
 2. memstore creates its Unix socket;
 3. agentd answers `/healthz`;
-4. `pi --version` reports the repository's exact Pi pin;
-5. npm's 10-day dependency cooldown, pnpm 11.21.0 with fail-closed 10-day release-age enforcement, and the pinned agent-browser version are active;
-6. the reviewed pi-subagents 0.37.2 gitHead (`8063333661476ca48afbca826dc4aab8707c72d3`) is installed, the dedicated runtime/session/operator roots are global, the operator root exists with mode `0700`, unsafe relative or shared top-level operator-root overrides fail startup, a container runtime identity exists, durable pre-spawn launch/drain and artifact-finalization patches are present, forked children use per-run directories, `defaultExtensions=[]` and isolated child profiles are configured, and legacy force-tools/delegate extensions are absent;
-7. interactive project-trust state is linked into persistent `/data`;
-8. agentd sends a complete Pi turn to a local OpenAI Responses fixture, which requires `pi_run`, `browser`, `web_search`, `subagent`, `subagent_wait`, and `subagent_supervisor` while rejecting the legacy `delegate` tool;
-9. every strict function schema in the serialized request satisfies OpenAI's
+4. the actual one-shot `agent-runner` completes before its short timeout with ambient stateful-memory, image-owned persona paths, isolated throwaway data, and successful result metadata;
+5. `pi --version` reports the repository's exact Pi pin;
+6. npm's 10-day dependency cooldown, pnpm 11.21.0 with fail-closed 10-day release-age enforcement, and the pinned agent-browser version are active;
+7. the reviewed pi-subagents 0.37.2 gitHead (`8063333661476ca48afbca826dc4aab8707c72d3`) is installed, the dedicated runtime/session/operator roots are global, the operator root exists with mode `0700`, unsafe relative or shared top-level operator-root overrides fail startup, a container runtime identity exists, durable pre-spawn launch/drain and artifact-finalization patches are present, forked children use per-run directories, `defaultExtensions=[]` and isolated child profiles are configured, and legacy force-tools/delegate extensions are absent;
+8. interactive project-trust state is linked into persistent `/data`;
+9. agentd sends a complete Pi turn to a local OpenAI Responses fixture, which requires `pi_run`, `browser`, `web_search`, `subagent`, `subagent_wait`, `subagent_supervisor`, and stateful-memory's `recall` tool while rejecting the legacy `delegate` tool;
+10. every strict function schema in the serialized request satisfies OpenAI's
    `additionalProperties: false` and required-property rules;
-10. an interactive Pi ownership lease evicts an idle agentd runtime, blocks forum reopen and deployment, heartbeats, and releases cleanly;
-11. agentd quiescence reports the reloaded idle conversation and deploy drain closes it;
-12. a replacement container sharing only isolated `/data` restores that drain, rejects new work, and becomes healthy only after cancellation clears the durable state;
-13. `scripts/deploy-if-safe --backup-only` can acquire/cancel mock forum deployment admission and create and verify an isolated runtime capsule backup;
-14. the container stops cleanly on SIGTERM;
-15. isolated second runtimes exit nonzero and reap their sibling when either agentd or memstore dies unexpectedly.
+11. an interactive Pi ownership lease evicts an idle agentd runtime, blocks forum reopen and deployment, heartbeats, and releases cleanly;
+12. agentd quiescence reports the reloaded idle conversation and deploy drain closes it;
+13. a replacement container sharing only isolated `/data` restores that drain, rejects new work, and becomes healthy only after cancellation clears the durable state;
+14. `scripts/deploy-if-safe --backup-only` can acquire/cancel mock forum deployment admission and create and verify an isolated runtime capsule backup;
+15. the container stops cleanly on SIGTERM;
+16. isolated second runtimes exit nonzero and reap their sibling when either agentd or memstore dies unexpectedly.
 
 The model fixture runs in a second throwaway container on an isolated Docker
 network. It exercises Pi's real extension loading, tool serialization, provider

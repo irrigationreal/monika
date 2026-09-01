@@ -32,6 +32,10 @@ Environment:
   RUNNER_TIMEOUT_SECONDS       Max pi runtime in seconds; 0 disables timeout (default: ${DEFAULT_TIMEOUT_SECONDS})
   RUNNER_SAVE_SESSION          Save a pi session under <output>/sessions when true (default: false)
   RUNNER_NO_TOOLS              Disable all pi tools when true (default: false)
+  RUNNER_NO_EXTENSIONS         Disable extension discovery when true (default: false)
+  RUNNER_NO_SKILLS             Disable skill discovery when true (default: false)
+  RUNNER_NO_PROMPT_TEMPLATES   Disable prompt-template discovery when true (default: false)
+  RUNNER_NO_CONTEXT_FILES      Disable context-file discovery when true (default: false)
   PI_MODEL                     Optional pi model selector
   PI_TOOLS                     Optional comma-separated pi tool allowlist
   PI_SESSION_DIR               Session directory when RUNNER_SAVE_SESSION=true (default: <output>/sessions)
@@ -181,6 +185,10 @@ async function runTask(cliArgs) {
     ? process.env.PI_SESSION_DIR || path.join(outputDir, "sessions")
     : null;
   const noTools = envFlag("RUNNER_NO_TOOLS", false);
+  const noExtensions = envFlag("RUNNER_NO_EXTENSIONS", false);
+  const noSkills = envFlag("RUNNER_NO_SKILLS", false);
+  const noPromptTemplates = envFlag("RUNNER_NO_PROMPT_TEMPLATES", false);
+  const noContextFiles = envFlag("RUNNER_NO_CONTEXT_FILES", false);
   const tools = process.env.PI_TOOLS?.trim() || "";
 
   if (noTools && tools) {
@@ -211,6 +219,10 @@ async function runTask(cliArgs) {
   if (process.env.PI_MODEL?.trim()) args.push("--model", process.env.PI_MODEL.trim());
   if (noTools) args.push("--no-tools");
   if (tools) args.push("--tools", tools);
+  if (noExtensions) args.push("--no-extensions");
+  if (noSkills) args.push("--no-skills");
+  if (noPromptTemplates) args.push("--no-prompt-templates");
+  if (noContextFiles) args.push("--no-context-files");
 
   const systemPrompt = (await maybeRead(systemPromptFile)).trim();
   if (systemPrompt) args.push("--append-system-prompt", systemPrompt);

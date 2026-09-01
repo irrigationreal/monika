@@ -25,6 +25,10 @@ Options:
   --save-session           Save a pi session under /outputs/sessions (default: off)
   --no-tools               Disable all pi tools
   --tools LIST             Comma-separated pi tool allowlist, e.g. read,grep,find,ls
+  --no-extensions          Disable Pi extension discovery
+  --no-skills              Disable Pi skill discovery
+  --no-prompt-templates    Disable Pi prompt-template discovery
+  --no-context-files       Disable Pi context-file discovery
   --image IMAGE            Runner image (default: monika:dev)
   --extra-docker-arg ARG   Pass an extra argument to docker run; can be repeated
 
@@ -85,6 +89,10 @@ timeout_seconds="1800"
 save_session=0
 no_tools=0
 tools=""
+no_extensions=0
+no_skills=0
+no_prompt_templates=0
+no_context_files=0
 extra_docker_args=()
 
 while [[ $# -gt 0 ]]; do
@@ -105,6 +113,10 @@ while [[ $# -gt 0 ]]; do
     --save-session) save_session=1; shift ;;
     --no-tools) no_tools=1; shift ;;
     --tools) tools="${2:-}"; shift 2 ;;
+    --no-extensions) no_extensions=1; shift ;;
+    --no-skills) no_skills=1; shift ;;
+    --no-prompt-templates) no_prompt_templates=1; shift ;;
+    --no-context-files) no_context_files=1; shift ;;
     --image) image="${2:-}"; shift 2 ;;
     --extra-docker-arg) extra_docker_args+=("${2:-}"); shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -181,6 +193,18 @@ if [[ "$no_tools" -eq 1 ]]; then
 fi
 if [[ -n "$tools" ]]; then
   docker_args+=( -e PI_TOOLS="$tools" )
+fi
+if [[ "$no_extensions" -eq 1 ]]; then
+  docker_args+=( -e RUNNER_NO_EXTENSIONS=1 )
+fi
+if [[ "$no_skills" -eq 1 ]]; then
+  docker_args+=( -e RUNNER_NO_SKILLS=1 )
+fi
+if [[ "$no_prompt_templates" -eq 1 ]]; then
+  docker_args+=( -e RUNNER_NO_PROMPT_TEMPLATES=1 )
+fi
+if [[ "$no_context_files" -eq 1 ]]; then
+  docker_args+=( -e RUNNER_NO_CONTEXT_FILES=1 )
 fi
 if [[ -n "$system_file" ]]; then
   abs_system="$(abs_path "$system_file")"

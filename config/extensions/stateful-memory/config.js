@@ -34,12 +34,15 @@ const DEFAULT_CONFIG = {
 };
 
 const CONFIG_FILENAME = ".pi/stateful-memory.json";
-const GLOBAL_CONFIG_PATH = path.join(
-  os.homedir(),
-  ".pi",
-  "agent",
-  "stateful-memory.json"
-);
+const GLOBAL_CONFIG_FILENAME = "stateful-memory.json";
+
+export function resolveGlobalConfigPath(env = process.env) {
+  const configuredAgentDir = env.PI_CODING_AGENT_DIR?.trim();
+  const agentDir = configuredAgentDir
+    ? path.resolve(configuredAgentDir)
+    : path.join(env.HOME || os.homedir(), ".pi", "agent");
+  return path.join(agentDir, GLOBAL_CONFIG_FILENAME);
+}
 
 async function readConfigFile(configPath) {
   try {
@@ -85,8 +88,9 @@ function resolveConfigPaths({ config }) {
 
 export async function loadConfig(cwd) {
   const configPath = path.resolve(cwd, CONFIG_FILENAME);
+  const globalConfigPath = resolveGlobalConfigPath();
   const [globalConfig, fileConfig] = await Promise.all([
-    readConfigFile(GLOBAL_CONFIG_PATH),
+    readConfigFile(globalConfigPath),
     readConfigFile(configPath),
   ]);
 
@@ -143,4 +147,4 @@ export function resolvePath(cwd, targetPath) {
     : path.resolve(cwd, targetPath);
 }
 
-export { DEFAULT_CONFIG, CONFIG_FILENAME, GLOBAL_CONFIG_PATH };
+export { DEFAULT_CONFIG, CONFIG_FILENAME };

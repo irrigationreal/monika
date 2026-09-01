@@ -25,9 +25,11 @@ if [ -z "$IMAGE" ]; then
   exit 2
 fi
 
-# Deterministic SSH checks use pure state/fake transports; mandatory image
-# smoke never contacts an external SSH host.
-node --test \
+# Deterministic runner/stateful-memory and SSH checks use pure local fixtures;
+# mandatory image smoke never contacts an external provider or SSH host.
+node --experimental-default-type=module --test \
+  "$SCRIPT_DIR/../agent-runner.test.mjs" \
+  "$SCRIPT_DIR/../stateful-memory/lifecycle.test.js" \
   "$SCRIPT_DIR/../ssh-lock.test.mjs" \
   "$SCRIPT_DIR/../ssh-relocate.test.mjs" \
   "$SCRIPT_DIR/../ssh-search-transport.test.mjs"
@@ -51,6 +53,7 @@ SMOKE_TMP_DIR=""
 SMOKE_RUNTIME_DATA=""
 MOCK_FORUM_PID=""
 MOCK_MODEL_CONTAINER=""
+RUNNER_CONTAINER=""
 SUPERVISION_CONTAINER=""
 SMOKE_NETWORK=""
 
@@ -82,12 +85,20 @@ cleanup() {
       docker logs "$MOCK_MODEL_CONTAINER" 2>/dev/null || true
       endsection
     fi
+    if [ -n "$RUNNER_CONTAINER" ]; then
+      section "${RUNNER_CONTAINER} logs"
+      docker logs "$RUNNER_CONTAINER" 2>/dev/null || true
+      endsection
+    fi
   fi
   if [ -n "$MOCK_FORUM_PID" ]; then
     kill "$MOCK_FORUM_PID" >/dev/null 2>&1 || true
     wait "$MOCK_FORUM_PID" >/dev/null 2>&1 || true
   fi
   docker rm -fv "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  if [ -n "$RUNNER_CONTAINER" ]; then
+    docker rm -fv "$RUNNER_CONTAINER" >/dev/null 2>&1 || true
+  fi
   if [ -n "$SUPERVISION_CONTAINER" ]; then
     docker rm -fv "$SUPERVISION_CONTAINER" >/dev/null 2>&1 || true
   fi
@@ -210,6 +221,77 @@ if [ -z "$ready_after" ]; then
 fi
 pass "memstore socket ready: $MEMSTORE_SOCKET"
 pass "agentd health endpoint ready after ${ready_after}s"
+endsection
+
+section "One-shot runner exits after stateful-memory shutdown"
+RUNNER_CONTAINER="monika-runner-smoke-$$"
+RUNNER_ROOT="$SMOKE_TMP_DIR/runner"
+mkdir -p \
+  "$RUNNER_ROOT/task" \
+  "$RUNNER_ROOT/workspace" \
+  "$RUNNER_ROOT/outputs" \
+  "$RUNNER_ROOT/scratch" \
+  "$RUNNER_ROOT/data"
+cat >"$RUNNER_ROOT/task/prompt.md" <<'RUNNER_PROMPT'
+Inspect this disposable runner using only the supplied context and return OK. This
+prompt is deliberately longer than the stateful-memory transcript threshold so the
+awaited shutdown hook submits its normal session save before closing its client.
+Keep the final response to exactly the two uppercase letters OK and nothing else.
+RUNNER_PROMPT
+
+docker run --rm \
+  --name "$RUNNER_CONTAINER" \
+  --network "$SMOKE_NETWORK" \
+  -e AGENT_RUNNER_MODE=1 \
+  -e MONIKA_AGENTD_ENABLED=0 \
+  -e MONIKA_LOG_TO_STDERR=1 \
+  -e RUNNER_TASK_FILE=/task/prompt.md \
+  -e RUNNER_OUTPUT_DIR=/outputs \
+  -e RUNNER_WORKSPACE=/workspace \
+  -e RUNNER_SCRATCH_DIR=/scratch \
+  -e RUNNER_TIMEOUT_SECONDS=20 \
+  -e PI_MODEL=mock-openai/schema-smoke \
+  -v "$RUNNER_ROOT/task:/task:ro" \
+  -v "$RUNNER_ROOT/workspace:/workspace:ro" \
+  -v "$RUNNER_ROOT/outputs:/outputs" \
+  -v "$RUNNER_ROOT/scratch:/scratch" \
+  -v "$RUNNER_ROOT/data:/data" \
+  -v "$SMOKE_RUNTIME_SECRETS:/runtime/secrets:ro" \
+  "$IMAGE" /app/bin/agent-runner.mjs run
+
+node - "$RUNNER_ROOT/outputs/result.json" <<'NODE_RUNNER_RESULT'
+const fs = require('node:fs');
+const result = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+if (result.ok !== true) throw new Error(`runner result was not successful: ${JSON.stringify(result)}`);
+if (result.exitCode !== 0) throw new Error(`runner exit code was ${result.exitCode}`);
+if (result.timedOut !== false) throw new Error(`runner timed out: ${JSON.stringify(result)}`);
+if (result.timeoutSeconds !== 20) throw new Error(`runner timeout contract changed: ${result.timeoutSeconds}`);
+NODE_RUNNER_RESULT
+if ! grep -qx 'OK' "$RUNNER_ROOT/outputs/stdout.txt"; then
+  echo "runner stdout was not exactly OK"
+  cat "$RUNNER_ROOT/outputs/stdout.txt"
+  exit 1
+fi
+if grep -Fq '/scratch/home/.pi/stateful-memory' "$RUNNER_ROOT/outputs/stderr.txt"; then
+  echo "runner resolved stateful-memory persona beneath disposable HOME"
+  cat "$RUNNER_ROOT/outputs/stderr.txt"
+  exit 1
+fi
+if grep -Eq 'Extension error .*stateful-memory|\[stateful-memory\] memstore connection failed' "$RUNNER_ROOT/outputs/stderr.txt"; then
+  echo "runner stateful-memory extension did not complete cleanly"
+  cat "$RUNNER_ROOT/outputs/stderr.txt"
+  exit 1
+fi
+# The mock provider rejects requests without the recall tool. Together with the
+# clean memstore diagnostic above, the successful response proves ambient
+# stateful-memory loaded and connected before its shutdown cleanup was exercised.
+if docker inspect "$RUNNER_CONTAINER" >/dev/null 2>&1; then
+  echo "one-shot runner container remained after successful completion"
+  exit 1
+fi
+pass "actual agent-runner completed before timeout with bundled stateful-memory"
+pass "runner used image-owned persona paths and wrote successful result metadata"
+RUNNER_CONTAINER=""
 endsection
 
 section "Runtime checks"
