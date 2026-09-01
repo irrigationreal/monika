@@ -206,21 +206,18 @@ tests/smoke/deploy-if-safe-drain-lifecycle.sh
 
 The script verifies:
 
-1. a forum-only image update does not drain agentd;
-2. every applied update acquires forum admission, renews the same owned lease immediately before Compose, and fails
-   closed before Compose when that lease is lost or expired;
-3. Compose begins while the process-local forum marker exists; forum replacement clears it, replacement cancel is an
-   idempotent no-op, and Monika-only/backup-only explicitly cancel the surviving lease;
+1. the canonical Forum Compose dependency remains `service_healthy`, while a forum-only image update does not drain agentd;
+2. every applied update acquires forum admission, renews the same owned lease immediately before each replacement boundary, and fails closed before the affected replacement when that lease is lost or expired—including between the two stages of a joint update;
+3. Compose begins while the process-local forum marker exists; forum replacement clears it, replacement cancel is an idempotent no-op, and Monika-only/backup-only explicitly cancel the surviving lease;
 4. a monika image update starts drain before backup;
 5. the deploy script renews durable drain immediately before Compose runs;
 6. a Monika replacement is applied only while both the forum-admission and durable-drain markers exist;
-7. after Compose applies the update, agentd drain cancel and healthy/undrained proof precede bounded forum `/readyz`,
-   bounded forum admission cancel, `compose ps`, and pruning in that order;
-8. a readiness failure still attempts bounded best-effort forum cancellation through the exit trap;
-9. an exact admission `404` uses bounded legacy quiescence twice for the pre-admission rollout, while never claiming a lease.
+7. a joint update replaces Monika alone, cancels and proves agentd healthy, renews the still-running forum's admission lease, and only then replaces Forum alone—never passing both dependency-linked services to one Compose invocation;
+8. agentd drain cancel and healthy/undrained proof precede bounded forum `/readyz`, bounded forum admission cancel, `compose ps`, and pruning in that order;
+9. a readiness failure still attempts bounded best-effort forum cancellation through the exit trap, while a later no-image-change retry must prove `/readyz` instead of reporting false success;
+10. an exact admission `404` uses bounded legacy quiescence initially and before every replacement boundary—twice for one changed service or three times for a staged joint update—while never claiming a lease.
 
-This protects both the old stuck-drain failure and the forum quiescence-to-restart
-race, including release on success and failure.
+This protects the old stuck-drain failure, the joint-update Compose health-dependency cycle, and the forum quiescence-to-restart race, including release on success and failure.
 
 ### `smoke/stable-release-channel.sh`
 

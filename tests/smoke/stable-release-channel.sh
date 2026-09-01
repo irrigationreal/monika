@@ -162,6 +162,9 @@ case "$url" in
     [ "${FAIL_ASSET_API:-0}" != 1 ] || exit 22
     cp "$ASSET_FIXTURE" "$output"
     ;;
+  */readyz)
+    echo '{"ok":true}'
+    ;;
   */api/deploy/admission/acquire|*/v1/admin/quiescence)
     echo quiescence >> "$CALL_LOG"
     exit 22

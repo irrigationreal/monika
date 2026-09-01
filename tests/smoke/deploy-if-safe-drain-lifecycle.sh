@@ -3,6 +3,18 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRIPT="$ROOT_DIR/scripts/deploy-if-safe"
+COMPOSE_EXAMPLE="$ROOT_DIR/compose.yaml.example"
+
+python3 - "$COMPOSE_EXAMPLE" <<'PY'
+import pathlib
+import re
+import sys
+
+text = pathlib.Path(sys.argv[1]).read_text()
+forum = text.split("\n  forum:\n", 1)[1].split("\nnetworks:\n", 1)[0]
+if not re.search(r"\n    depends_on:\n      monika:\n        condition: service_healthy(?:\n|$)", forum):
+    raise SystemExit("canonical Forum Compose dependency must remain service_healthy")
+PY
 
 run_case() {
   local name="$1"
@@ -16,6 +28,7 @@ run_case() {
   local forum_wait_timeout_ms="${9:-30000}"
   local forum_renew_response="${10:-1}"
   local legacy_forum="${11:-0}"
+  local forum_renew_fail_at="${12:-0}"
   local tmp log bin deploy_root status
 
   tmp="$(mktemp -d)"
@@ -123,7 +136,12 @@ case "$url" in
     fi
     if [ -f "$FORUM_ADMISSION_MARKER" ]; then
       echo forum-renew >> "$CALL_LOG"
-      if [ "${FORUM_RENEW_RESPONSE:-1}" != "1" ]; then
+      renew_count=0
+      [ ! -f "$FORUM_RENEW_COUNT_FILE" ] || renew_count="$(cat "$FORUM_RENEW_COUNT_FILE")"
+      renew_count=$((renew_count + 1))
+      printf '%s\n' "$renew_count" > "$FORUM_RENEW_COUNT_FILE"
+      if [ "${FORUM_RENEW_RESPONSE:-1}" != "1" ] ||
+        { [ "${FORUM_RENEW_FAIL_AT:-0}" -gt 0 ] && [ "$renew_count" -eq "$FORUM_RENEW_FAIL_AT" ]; }; then
         rm -f "$FORUM_ADMISSION_MARKER"
         exit 22
       fi
@@ -181,6 +199,7 @@ SH
   DRAIN_MARKER="$tmp/drain-state" \
   REPLACEMENT_MARKER="$tmp/replacement" \
   FORUM_ADMISSION_MARKER="$tmp/forum-admission" \
+  FORUM_RENEW_COUNT_FILE="$tmp/forum-renew-count" \
   PATH="$bin:$PATH" \
   MONIKA_DEPLOY_ROOT="$deploy_root" \
   MONIKA_DEPLOY_COMPOSE_FILE="$deploy_root/compose.yaml" \
@@ -196,6 +215,7 @@ SH
   FORUM_READY="$forum_ready" \
   FORUM_ACQUIRE_RESPONSE="$forum_acquire_response" \
   FORUM_RENEW_RESPONSE="$forum_renew_response" \
+  FORUM_RENEW_FAIL_AT="$forum_renew_fail_at" \
   LEGACY_FORUM="$legacy_forum" \
   MONIKA_FORUM_ADMISSION_WAIT_TIMEOUT_MS="$forum_wait_timeout_ms" \
   MONIKA_FORUM_POST_DEPLOY_TIMEOUT_MS=1000 \
@@ -234,6 +254,36 @@ SH
     return 0
   fi
 
+  if [ "$name" = "joint-second-renewal-lost" ]; then
+    if [ "$status" -ne 75 ] ||
+      ! grep -Eq ' up -d --no-deps monika$' "$log" ||
+      grep -Eq ' up -d --no-deps forum$' "$log" ||
+      ! grep -q '^cancel$' "$log" ||
+      ! grep -q '/healthz' "$log" ||
+      [ "$(grep -c '^forum-renew$' "$log" || true)" -ne 2 ] ||
+      [ -e "$tmp/forum-admission" ]; then
+      echo "lost admission after Monika replacement must defer before Forum replacement" >&2
+      cat "$log" >&2
+      return 1
+    fi
+    rm -rf "$tmp"
+    return 0
+  fi
+
+  if [ "$name" = "no-update-readiness-failure" ]; then
+    if [ "$status" -eq 0 ] ||
+      ! grep -q '^ready$' "$log" ||
+      grep -Eq ' up -d --no-deps (monika|forum)$' "$log" ||
+      grep -q '^forum-acquire$' "$log" ||
+      grep -q 'docker image prune' "$log"; then
+      echo "no-update retry must fail rather than hide an unresolved readiness failure" >&2
+      cat "$log" >&2
+      return 1
+    fi
+    rm -rf "$tmp"
+    return 0
+  fi
+
   if [ "$forum_ready" != "1" ]; then
     if [ "$status" -eq 0 ] || ! grep -q '^ready$' "$log" || grep -q 'docker image prune' "$log"; then
       echo "failed forum readiness must fail deploy before image pruning" >&2
@@ -254,12 +304,30 @@ SH
   fi
 
   if [ "$legacy_forum" = "1" ]; then
-    if [ "$(grep -c '^forum-acquire$' "$log" || true)" -ne 2 ] ||
-      [ "$(grep -c '^legacy-quiescence$' "$log" || true)" -ne 2 ] ||
+    local expected_legacy_checks=2
+    [ "$name" != "joint-legacy-update" ] || expected_legacy_checks=3
+    if [ "$(grep -c '^forum-acquire$' "$log" || true)" -ne "$expected_legacy_checks" ] ||
+      [ "$(grep -c '^legacy-quiescence$' "$log" || true)" -ne "$expected_legacy_checks" ] ||
       ! grep -q '^up$' "$log" || [ -e "$tmp/forum-admission" ]; then
-      echo "legacy forum rollout must boundedly re-check quiescence before Compose without claiming an admission lease" >&2
+      echo "legacy forum rollout must boundedly re-check quiescence at every replacement boundary without claiming an admission lease" >&2
       cat "$log" >&2
       return 1
+    fi
+    if [ "$name" = "joint-legacy-update" ]; then
+      local monika_up_line forum_up_line cancel_line healthy_line last_legacy_line
+      monika_up_line="$(grep -nE ' up -d --no-deps monika$' "$log" | cut -d: -f1)"
+      forum_up_line="$(grep -nE ' up -d --no-deps forum$' "$log" | cut -d: -f1)"
+      cancel_line="$(grep -n '^cancel$' "$log" | tail -n 1 | cut -d: -f1)"
+      healthy_line="$(grep -n '/healthz' "$log" | tail -n 1 | cut -d: -f1)"
+      last_legacy_line="$(grep -n '^legacy-quiescence$' "$log" | tail -n 1 | cut -d: -f1)"
+      if [ "$monika_up_line" -ge "$cancel_line" ] ||
+        [ "$cancel_line" -ge "$healthy_line" ] ||
+        [ "$healthy_line" -ge "$last_legacy_line" ] ||
+        [ "$last_legacy_line" -ge "$forum_up_line" ]; then
+        echo "legacy joint rollout must stage Monika recovery before its final pre-Forum quiescence check" >&2
+        cat "$log" >&2
+        return 1
+      fi
     fi
     rm -rf "$tmp"
     return 0
@@ -351,6 +419,32 @@ SH
         return 1
       fi
       ;;
+    joint-update)
+      local monika_up_line forum_up_line cancel_line healthy_line
+      local -a renew_lines
+      monika_up_line="$(grep -nE ' up -d --no-deps monika$' "$log" | cut -d: -f1)"
+      forum_up_line="$(grep -nE ' up -d --no-deps forum$' "$log" | cut -d: -f1)"
+      cancel_line="$(grep -n '^cancel$' "$log" | tail -n 1 | cut -d: -f1)"
+      healthy_line="$(grep -n '/healthz' "$log" | tail -n 1 | cut -d: -f1)"
+      mapfile -t renew_lines < <(grep -n '^forum-renew$' "$log" | cut -d: -f1)
+      if [ -z "$monika_up_line" ] || [ -z "$forum_up_line" ] ||
+        [ "${#renew_lines[@]}" -ne 2 ] ||
+        [ "${renew_lines[0]}" -ge "$monika_up_line" ] ||
+        [ "$monika_up_line" -ge "$cancel_line" ] ||
+        [ "$cancel_line" -ge "$healthy_line" ] ||
+        [ "$healthy_line" -ge "${renew_lines[1]}" ] ||
+        [ "${renew_lines[1]}" -ge "$forum_up_line" ] ||
+        [ "$forum_up_line" -ge "$ready_line" ]; then
+        echo "joint deploy must replace Monika alone, cancel/prove agentd, renew admission, then replace Forum alone" >&2
+        cat "$log" >&2
+        return 1
+      fi
+      if grep -Eq ' up -d --no-deps monika .*forum| up -d --no-deps forum .*monika' "$log"; then
+        echo "joint deploy must not submit both dependency-linked services to one Compose invocation" >&2
+        cat "$log" >&2
+        return 1
+      fi
+      ;;
     no-update)
       if grep -Eq ' up -d --no-deps (monika|forum)$' "$log"; then
         echo "no-update ingress reconciliation must not touch application containers" >&2
@@ -362,6 +456,11 @@ SH
         cat "$log" >&2
         return 1
       fi
+      if ! grep -q '^ready$' "$log"; then
+        echo "no-update retry must still prove Forum ready before reporting success" >&2
+        cat "$log" >&2
+        return 1
+      fi
       ;;
   esac
 
@@ -370,12 +469,16 @@ SH
 
 run_case forum-only same same old-forum new-forum 1
 run_case monika-update old-monika new-monika same same 1
+run_case joint-update old-monika new-monika old-forum new-forum 1
+run_case joint-second-renewal-lost old-monika new-monika old-forum new-forum 0 1 1 30000 1 0 2
 run_case no-update same same same same 1
+run_case no-update-readiness-failure same same same same 0 0
 run_case no-ingress same same old-forum new-forum 0
 run_case forum-readiness-failure same same old-forum new-forum 0 0
 run_case forum-acquire-response-lost same same old-forum new-forum 0 1 0
 run_case forum-zero-wait same same old-forum new-forum 0 1 1 0
 run_case forum-renewal-lost same same old-forum new-forum 0 1 1 30000 0
 run_case legacy-forum-bootstrap same same old-forum new-forum 0 1 1 30000 1 1
+run_case joint-legacy-update old-monika new-monika old-forum new-forum 0 1 1 30000 1 1
 
 echo "deploy-if-safe drain lifecycle smoke passed"
