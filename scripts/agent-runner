@@ -240,22 +240,54 @@ set +e
 status=$?
 set -e
 
-should_delete=0
+delete_output=0
+delete_scratch=0
 case "$cleanup" in
-  always) should_delete=1 ;;
-  never) should_delete=0 ;;
+  always)
+    delete_scratch=1
+    # Explicit output directories are caller-owned and are never recursive
+    # cleanup targets, even when cleanup=always.
+    [[ "$explicit_output" -eq 0 ]] && delete_output=1
+    ;;
+  never) ;;
   on-success)
-    if [[ "$status" -eq 0 && "$keep_output" -eq 0 && "$explicit_output" -eq 0 ]]; then
-      should_delete=1
+    if [[ "$status" -eq 0 ]]; then
+      delete_scratch=1
+      if [[ "$keep_output" -eq 0 && "$explicit_output" -eq 0 ]]; then
+        delete_output=1
+      fi
     fi
     ;;
 esac
 
-if [[ "$should_delete" -eq 1 ]]; then
-  rm -rf "$abs_output" "$abs_scratch"
-else
-  echo "agent-runner output: $abs_output" >&2
-  echo "agent-runner scratch: $abs_scratch" >&2
-fi
+remove_runner_owned_path() {
+  local target="$1"
+  local parent name
+  parent="$(dirname "$target")"
+  name="$(basename "$target")"
+  if [[ -z "$name" || "$name" == "." || "$name" == ".." || "$parent" == "$target" ]]; then
+    echo "Refusing unsafe runner cleanup path: $target" >&2
+    return 1
+  fi
+
+  # Container tasks run as root and may create nested files the host user cannot
+  # remove. First use ordinary host cleanup; if bytes remain, remove exactly the
+  # mounted runner-owned child through the same image without starting entrypoint.
+  rm -rf -- "$target" 2>/dev/null || true
+  if [[ -e "$target" || -L "$target" ]]; then
+    "${docker_cmd[@]}" run --rm --entrypoint rm \
+      -v "$parent:/runner-cleanup" \
+      "$image" -rf -- "/runner-cleanup/$name"
+  fi
+  if [[ -e "$target" || -L "$target" ]]; then
+    echo "Runner cleanup did not remove: $target" >&2
+    return 1
+  fi
+}
+
+[[ "$delete_output" -eq 0 ]] || remove_runner_owned_path "$abs_output"
+[[ "$delete_scratch" -eq 0 ]] || remove_runner_owned_path "$abs_scratch"
+[[ "$delete_output" -eq 1 ]] || echo "agent-runner output: $abs_output" >&2
+[[ "$delete_scratch" -eq 1 ]] || echo "agent-runner scratch: $abs_scratch" >&2
 
 exit "$status"

@@ -147,7 +147,9 @@ node --test tests/agent-runner.test.mjs tests/runtime-supervision.test.mjs
 
 The suites prove full extension/skill/template/context discovery remains the default,
 each opt-in isolation control reaches Pi, no-session versus save-session archival
-policy is explicit, and foreground command exit/signal status is preserved. The
+policy is explicit, explicit output is never deleted, runner scratch cleanup remains
+bounded to runner-owned paths, runtime Git configuration survives scratch `HOME`, and
+foreground command exit/signal status is preserved. The
 container smoke separately exercises both runner archive policies, essential-child
 failure during command mode, and PID 1's graceful memstore shutdown with isolated data.
 
