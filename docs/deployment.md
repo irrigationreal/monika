@@ -298,8 +298,10 @@ Use `MONIKA_IMPORT_TAGS` to override the default `historical-import` tag.
 
 Manual Compose recreation can terminate active Pi work. Production updates should
 use the admission-aware contract: the host acquires the forum's expiring robot-work fence (which pauses/waits Pi sync
-and checks durable dispatch intent), then retains agentd drain through replacement. The forum admission and agentd drain
-are cancelled on completion or abort.
+and checks durable dispatch intent), then retains agentd drain through replacement. When both application images change,
+the host replaces Monika alone, cancels and proves the restored drain healthy, renews Forum admission, and only then
+replaces Forum; this preserves the template's healthy-agentd startup dependency without creating a circular Compose wait.
+The forum admission and agentd drain are cancelled on completion or abort.
 
 Autodeploy remains on `main` when `MONIKA_RELEASE_CHANNEL` is unset. Operators may
 opt into coordinated exact-digest stable releases by setting

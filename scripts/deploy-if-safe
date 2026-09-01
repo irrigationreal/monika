@@ -859,6 +859,9 @@ if [ "$MODE" = "deploy" ]; then
     stable_revision_guards
   fi
   if ! update_needed; then
+    # A prior replacement can have installed both target image IDs and then
+    # failed its readiness gate. Do not turn the next retry into false success.
+    wait_for_forum_ready_after_deploy
     exit 0
   fi
 fi
@@ -883,26 +886,31 @@ if [ "$MONIKA_UPDATE_NEEDED" = "1" ]; then
   drain_agentd
 fi
 
-APPLY_SERVICES=()
-if [ "$MONIKA_UPDATE_NEEDED" = "1" ]; then
-  APPLY_SERVICES+=(monika)
-fi
-if [ "$FORUM_UPDATE_NEEDED" = "1" ]; then
-  APPLY_SERVICES+=(forum)
-fi
-
 # Revalidate ownership and renew the process-local lease after backup/drain,
 # immediately before Compose receives control. Failure is closed: an expired or
 # replaced lease owner cannot proceed to container replacement.
 acquire_forum_admission
 
-# --no-deps is the safety boundary: a forum-only update cannot recreate Monika
-# because of unrelated Compose configuration drift.
-compose up -d --no-deps "${APPLY_SERVICES[@]}"
-# A Monika replacement starts in the inherited drained state. Cancel and prove
-# agentd health first; forum readiness intentionally depends on that undrained
-# backend. Forum-only replacements skip this step but still prove /readyz.
-wait_for_agentd_drain_cancel_after_deploy
+if [ "$MONIKA_UPDATE_NEEDED" = "1" ]; then
+  # Replace Monika independently. A replacement restores the durable drain and
+  # cannot satisfy its healthy-only Compose contract until this process regains
+  # control, cancels that drain, and proves the new agentd healthy/undrained.
+  compose up -d --no-deps monika
+  wait_for_agentd_drain_cancel_after_deploy
+fi
+
+if [ "$FORUM_UPDATE_NEEDED" = "1" ]; then
+  if [ "$MONIKA_UPDATE_NEEDED" = "1" ]; then
+    # The forum admission lease belongs to the still-running old forum process.
+    # Renew it after Monika startup before the second replacement boundary.
+    acquire_forum_admission
+  fi
+  # --no-deps is the safety boundary: a forum-only update cannot recreate
+  # Monika because of unrelated Compose configuration drift. For a joint update,
+  # agentd was already proved healthy above before Forum is replaced.
+  compose up -d --no-deps forum
+fi
+
 wait_for_forum_ready_after_deploy
 cancel_forum_admission
 compose ps "${STATUS_SERVICES[@]}"
