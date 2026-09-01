@@ -59,7 +59,7 @@ const server = http.createServer((req, res) => {
         .filter((tool) => tool.type === 'function' && typeof tool.name === 'string')
         .map((tool) => tool.name),
     );
-    const requiredTools = ['pi_run', 'browser', 'web_search', 'subagent', 'subagent_wait', 'subagent_supervisor'];
+    const requiredTools = ['pi_run', 'browser', 'web_search', 'subagent', 'subagent_wait', 'subagent_supervisor', 'recall'];
     const missingTools = requiredTools.filter((name) => !functionToolNames.has(name));
     if (missingTools.length > 0) {
       res.writeHead(400, { 'content-type': 'application/json' });

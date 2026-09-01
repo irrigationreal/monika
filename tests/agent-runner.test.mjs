@@ -1,0 +1,158 @@
+import assert from "node:assert/strict";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { spawn } from "node:child_process";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const RUNNER = path.join(REPO_ROOT, "bin", "agent-runner.mjs");
+const WRAPPER = path.join(REPO_ROOT, "scripts", "agent-runner");
+const ISOLATION_FLAGS = [
+  "--no-extensions",
+  "--no-skills",
+  "--no-prompt-templates",
+  "--no-context-files",
+];
+
+function run(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      encoding: "utf8",
+      ...options,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("error", reject);
+    child.on("close", (code, signal) => resolve({ code, signal, stdout, stderr }));
+  });
+}
+
+async function fixture(t, prefix) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  return root;
+}
+
+async function makeCaptureExecutable(file, envName) {
+  await fs.writeFile(file, `#!/usr/bin/env node\nconst fs = require("node:fs");\nfs.writeFileSync(process.env.${envName}, JSON.stringify(process.argv.slice(2)));\nprocess.stdout.write("OK\\n");\n`);
+  await fs.chmod(file, 0o755);
+}
+
+test("agent-runner preserves full resource discovery by default", async (t) => {
+  const root = await fixture(t, "monika-agent-runner-default-");
+  const binDir = path.join(root, "bin");
+  const outputDir = path.join(root, "outputs");
+  const scratchDir = path.join(root, "scratch");
+  const capture = path.join(root, "pi-args.json");
+  await fs.mkdir(binDir);
+  await makeCaptureExecutable(path.join(binDir, "pi"), "FAKE_PI_CAPTURE");
+
+  const result = await run(process.execPath, [RUNNER, "run", "Return OK."], {
+    cwd: root,
+    env: {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_PI_CAPTURE: capture,
+      RUNNER_OUTPUT_DIR: outputDir,
+      RUNNER_SCRATCH_DIR: scratchDir,
+      RUNNER_WORKSPACE: root,
+      RUNNER_TIMEOUT_SECONDS: "5",
+      PI_MODEL: "",
+      PI_TOOLS: "",
+      RUNNER_NO_EXTENSIONS: "",
+      RUNNER_NO_SKILLS: "",
+      RUNNER_NO_PROMPT_TEMPLATES: "",
+      RUNNER_NO_CONTEXT_FILES: "",
+    },
+  });
+
+  assert.equal(result.code, 0, result.stderr);
+  const args = JSON.parse(await fs.readFile(capture, "utf8"));
+  for (const flag of ISOLATION_FLAGS) assert.ok(!args.includes(flag), `${flag} enabled by default`);
+  const metadata = JSON.parse(await fs.readFile(path.join(outputDir, "result.json"), "utf8"));
+  assert.equal(metadata.ok, true);
+  assert.equal(metadata.timedOut, false);
+});
+
+test("agent-runner maps opt-in resource isolation environment flags to Pi", async (t) => {
+  const root = await fixture(t, "monika-agent-runner-isolated-");
+  const binDir = path.join(root, "bin");
+  const capture = path.join(root, "pi-args.json");
+  await fs.mkdir(binDir);
+  await makeCaptureExecutable(path.join(binDir, "pi"), "FAKE_PI_CAPTURE");
+
+  const result = await run(process.execPath, [RUNNER, "run", "Return OK."], {
+    cwd: root,
+    env: {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_PI_CAPTURE: capture,
+      RUNNER_OUTPUT_DIR: path.join(root, "outputs"),
+      RUNNER_SCRATCH_DIR: path.join(root, "scratch"),
+      RUNNER_WORKSPACE: root,
+      RUNNER_TIMEOUT_SECONDS: "5",
+      PI_MODEL: "",
+      PI_TOOLS: "",
+      RUNNER_NO_EXTENSIONS: "1",
+      RUNNER_NO_SKILLS: "true",
+      RUNNER_NO_PROMPT_TEMPLATES: "yes",
+      RUNNER_NO_CONTEXT_FILES: "on",
+    },
+  });
+
+  assert.equal(result.code, 0, result.stderr);
+  const args = JSON.parse(await fs.readFile(capture, "utf8"));
+  for (const flag of ISOLATION_FLAGS) assert.ok(args.includes(flag), `${flag} was not forwarded`);
+});
+
+test("wrapper maps resource isolation options to runner environment", async (t) => {
+  const root = await fixture(t, "monika-agent-runner-wrapper-");
+  const testRepo = path.join(root, "repo");
+  const testWrapper = path.join(testRepo, "scripts", "agent-runner");
+  const fakeDocker = path.join(root, "fake-docker");
+  const capture = path.join(root, "docker-args.json");
+  const task = path.join(root, "prompt.md");
+  const outputDir = path.join(root, "outputs");
+  await fs.mkdir(path.dirname(testWrapper), { recursive: true });
+  await fs.copyFile(WRAPPER, testWrapper);
+  await makeCaptureExecutable(fakeDocker, "FAKE_DOCKER_CAPTURE");
+  await fs.writeFile(task, "Return OK.\n");
+
+  const result = await run("bash", [
+    testWrapper,
+    "run",
+    "--task", task,
+    "--workspace", root,
+    "--output-dir", outputDir,
+    "--cleanup", "never",
+    "--no-extensions",
+    "--no-skills",
+    "--no-prompt-templates",
+    "--no-context-files",
+  ], {
+    cwd: REPO_ROOT,
+    env: {
+      ...process.env,
+      AGENT_RUNNER_DOCKER: fakeDocker,
+      FAKE_DOCKER_CAPTURE: capture,
+    },
+  });
+
+  assert.equal(result.code, 0, result.stderr);
+  const args = JSON.parse(await fs.readFile(capture, "utf8"));
+  const expectedEnv = [
+    "RUNNER_NO_EXTENSIONS=1",
+    "RUNNER_NO_SKILLS=1",
+    "RUNNER_NO_PROMPT_TEMPLATES=1",
+    "RUNNER_NO_CONTEXT_FILES=1",
+  ];
+  for (const value of expectedEnv) assert.ok(args.includes(value), `${value} was not passed to Docker`);
+
+  const scratchMount = args.find((arg) => arg.endsWith(":/scratch"));
+  assert.ok(scratchMount?.startsWith(`${testRepo}/runner-runtime/scratch/`));
+});

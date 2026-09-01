@@ -137,6 +137,23 @@ Tool allowlists are capability/reproducibility controls, not complete containmen
 If shell or write tools are available, the agent can perform broad side effects
 within the mounted filesystem and network environment.
 
+Pi extensions, skills, prompt templates, and context files remain enabled by default.
+For a workload that needs a more sterile resource set, disable discovery explicitly:
+
+```bash
+scripts/agent-runner run \
+  --task runner/examples/basic/prompt.md \
+  --no-extensions \
+  --no-skills \
+  --no-prompt-templates \
+  --no-context-files
+```
+
+These options map directly to Pi's matching isolation flags. They are independent,
+so a job can disable only the resource categories it does not need. In particular,
+`--no-extensions` disables bundled stateful-memory and other ambient extensions;
+it is an opt-in compatibility control, not the runner default.
+
 ### Browser and search
 
 The image is browser/search-capable. Search credentials can be provided through the
@@ -243,6 +260,10 @@ Options:
   --save-session           Save a pi session under /outputs/sessions (default: off)
   --no-tools               Disable all pi tools
   --tools LIST             Comma-separated pi tool allowlist, e.g. read,grep,find,ls
+  --no-extensions          Disable Pi extension discovery
+  --no-skills              Disable Pi skill discovery
+  --no-prompt-templates    Disable Pi prompt-template discovery
+  --no-context-files       Disable Pi context-file discovery
   --image IMAGE            Runner image (default: monika:dev)
   --extra-docker-arg ARG   Pass an extra argument to docker run; can be repeated
 ```

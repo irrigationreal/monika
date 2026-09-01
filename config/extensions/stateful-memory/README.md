@@ -41,6 +41,8 @@ transcripts to memstore and do not expose `remember_session` or other memory too
 On session close or switch, the full session transcript is normalized (tool calls
 stripped, text extracted) and submitted to memstore via `proxy/submit_save`. This
 returns instantly (~1ms) — memstore queues the job and processes it in the background.
+On final session shutdown, the extension closes its client after the submission attempt
+so print-mode Pi processes do not retain the Unix socket and remain alive.
 
 The save flow:
 
@@ -75,7 +77,10 @@ it can be rebuilt from memstore. It lives at `~/.pi/stateful-memory/entity-index
 
 ## Configuration
 
-Config is loaded from `~/.pi/agent/stateful-memory.json` with defaults from `config.js`.
+Config is loaded from `$PI_CODING_AGENT_DIR/stateful-memory.json` when
+`PI_CODING_AGENT_DIR` is set, otherwise from `~/.pi/agent/stateful-memory.json`,
+with defaults from `config.js`. The path is resolved when each configuration load
+starts, so a disposable runner `HOME` does not hide the image-owned Pi configuration.
 
 ### Key config values
 
@@ -97,9 +102,10 @@ Config is loaded from `~/.pi/agent/stateful-memory.json` with defaults from `con
 
 ### Path resolution
 
-Config keys from the global config file resolve relative to `~/.pi/agent/`. Use absolute
-paths to avoid cwd-relative surprises. The `PATH_KEYS` array in `config.js` controls
-which keys get path-resolved.
+Relative stateful-memory paths resolve against `baseDir`, not the directory containing
+the global config file. Use an absolute `baseDir` for image-owned or persistent persona
+state so changing the working directory or runner `HOME` cannot redirect it. The
+`PATH_KEYS` array in `config.js` controls which keys get path-resolved.
 
 ## Tools
 
