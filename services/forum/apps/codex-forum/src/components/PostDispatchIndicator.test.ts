@@ -50,6 +50,25 @@ describe('PostDispatchIndicator', () => {
     expect(wrapper.text()).not.toContain('secret other error');
   });
 
+  it('exposes terminal retry with loading and error feedback', async () => {
+    const failedProjection = {
+      ...projection,
+      current: [{ ...projection.current[0]!, status: 'failed' as const, nextAttemptAt: null }],
+    };
+    const wrapper = mount(PostDispatchIndicator, {
+      props: { postId: 'post-1', projection: failedProjection, retrying: false, retryError: 'Retry was fenced' },
+    });
+    const retry = wrapper.get('button');
+    expect(retry.text()).toBe('Retry');
+    expect(wrapper.get('[role="alert"]').text()).toContain('Retry was fenced');
+    await retry.trigger('click');
+    expect(wrapper.emitted('retry')).toEqual([['post-1']]);
+
+    await wrapper.setProps({ retrying: true });
+    expect(wrapper.get('button').text()).toBe('Retrying…');
+    expect(wrapper.get('button').attributes('disabled')).toBeDefined();
+  });
+
   it('renders nothing after current delayed state is cleared', () => {
     const wrapper = mount(PostDispatchIndicator, {
       props: { postId: 'post-1', projection: { ...projection, current: [] } },

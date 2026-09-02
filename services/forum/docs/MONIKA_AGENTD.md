@@ -26,5 +26,8 @@ CODEX_FORUM_UPLOADS_DIR=/forum/uploads
 CODEX_WORK_DIR=/workspace
 ```
 
-Pi JSONL remains canonical. Forum SQLite is projection and forum-native metadata,
-never an alternate agent or memory store.
+Pi JSONL remains canonical. Forum SQLite is projection and forum-native metadata, never an alternate agent or memory
+store. Agentd's optional `dispatch_acceptance: "not_accepted"` error marker is the only proof that a dispatch failed
+before acceptance. A separate `dispatch_retry: "safe"` marker identifies draining as safe for exact-identity automatic
+retry; other marked setup/dependency failures are terminal/manual. Markerless 5xx/network failures retain ambiguous
+exact-identity retry indefinitely. HTTP status alone never authorizes canonical-link or creation-ledger cleanup.

@@ -46,8 +46,154 @@ MEMSTORE_SOCKET="${MEMSTORE_SOCKET:-/tmp/memstore.sock}"
 export MEMSTORE_SOCKET
 export HOME="${MONIKA_HOME:-/app}"
 monika_log "[monika] Standalone mode: container-owned Pi runtime"
+
+# Validate package custody roots before creating or changing any runtime path.
+# Canonicalizing the deepest existing parent also catches overlap hidden behind
+# symlinked path components when a configured leaf does not exist yet.
+PI_PACKAGE_STATE_DIR="${PI_PACKAGE_STATE_DIR:-/data/pi-agent-packages}"
+PI_PACKAGE_SEED_DIR="${PI_PACKAGE_SEED_DIR:-/opt/monika/pi-agent-seed}"
+PI_PACKAGE_STATE_DIR="$(node - "$PI_CODING_AGENT_DIR" "$PI_PACKAGE_STATE_DIR" "$PI_PACKAGE_SEED_DIR" <<'NODE_PI_ROOTS'
+const fs = require('node:fs');
+const path = require('node:path');
+const roots = process.argv.slice(2);
+if (roots.some((root) => !path.isAbsolute(root))) throw new Error('Pi agent, package-state, and seed roots must be absolute paths');
+function canonical(root) {
+  const lexical = path.resolve(root);
+  let existing = lexical;
+  const suffix = [];
+  while (!fs.existsSync(existing)) {
+    const parent = path.dirname(existing);
+    if (parent === existing) break;
+    suffix.unshift(path.basename(existing));
+    existing = parent;
+  }
+  const base = fs.realpathSync.native(existing);
+  return path.join(base, ...suffix);
+}
+const canonicalRoots = roots.map(canonical);
+const state = canonicalRoots[1];
+if (state === path.parse(state).root || path.dirname(state) === path.parse(state).root) {
+  throw new Error('PI_PACKAGE_STATE_DIR must be a dedicated subtree');
+}
+function overlaps(left, right) {
+  const relative = path.relative(left, right);
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+}
+for (let left = 0; left < canonicalRoots.length; left++) {
+  for (let right = left + 1; right < canonicalRoots.length; right++) {
+    if (overlaps(canonicalRoots[left], canonicalRoots[right]) || overlaps(canonicalRoots[right], canonicalRoots[left])) {
+      throw new Error(`Pi package custody roots must not overlap: ${roots[left]} and ${roots[right]}`);
+    }
+  }
+}
+process.stdout.write(state);
+NODE_PI_ROOTS
+)" || {
+  monika_log "[monika] ERROR: invalid Pi package custody roots"
+  exit 1
+}
+export PI_PACKAGE_STATE_DIR
+
 mkdir -p "$MEMSTORE_DATA_DIR" /data/sessions /app/.config /app/.ssh /app/.gnupg "$PI_CODING_AGENT_DIR"
 install -d -m 0700 -- "$PI_SUBAGENT_OPERATOR_ROOT"
+
+# Pi owns package installation, while the deployment owns the resulting package
+# choices and install trees. Rebuild settings from current image defaults on every
+# start, retaining only the persistent packages array. First boot atomically seeds
+# npm/git state from the image. Refuse unexpected path types rather than deleting
+# or replacing them silently.
+node - "$PI_CODING_AGENT_DIR" "$PI_PACKAGE_STATE_DIR" "$PI_PACKAGE_SEED_DIR" <<'NODE_PI_PACKAGES'
+const fs = require('node:fs');
+const path = require('node:path');
+const { randomUUID } = require('node:crypto');
+const [agentDir, stateDir, seedDir] = process.argv.slice(2);
+
+function fail(message) {
+  throw new Error(`Pi package state initialization failed: ${message}`);
+}
+function readObject(file, label) {
+  let parsed;
+  try { parsed = JSON.parse(fs.readFileSync(file, 'utf8')); }
+  catch (error) { fail(`${label} is not valid JSON: ${error.message}`); }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) fail(`${label} must contain a JSON object`);
+  return parsed;
+}
+function validateDirectory(name) {
+  const destination = path.join(stateDir, name);
+  const source = path.join(seedDir, name);
+  if (!fs.statSync(source).isDirectory()) fail(`image seed ${source} is not a directory`);
+  try {
+    const existing = fs.lstatSync(destination);
+    if (!existing.isDirectory() || existing.isSymbolicLink()) fail(`unexpected path at ${destination}`);
+    return true;
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    return false;
+  }
+}
+function initializeDirectory(name) {
+  const destination = path.join(stateDir, name);
+  const source = path.join(seedDir, name);
+  if (fs.existsSync(destination)) return;
+
+  const temporary = `${destination}.tmp.${randomUUID()}`;
+  try {
+    fs.cpSync(source, temporary, { recursive: true, errorOnExist: true, force: false });
+    fs.renameSync(temporary, destination);
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
+}
+function validateManagedLink(name) {
+  const destination = path.join(agentDir, name);
+  const target = path.join(stateDir, name);
+  try {
+    const existing = fs.lstatSync(destination);
+    if (existing.isSymbolicLink() && path.resolve(agentDir, fs.readlinkSync(destination)) === target) return true;
+    fail(`unexpected path at ${destination}; expected a link to ${target}`);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    return false;
+  }
+}
+function linkManagedPath(name) {
+  if (!validateManagedLink(name)) fs.symlinkSync(path.join(stateDir, name), path.join(agentDir, name));
+}
+
+fs.mkdirSync(stateDir, { recursive: true });
+const stateStat = fs.lstatSync(stateDir);
+if (!stateStat.isDirectory() || stateStat.isSymbolicLink()) fail(`unexpected package state root ${stateDir}`);
+const defaults = readObject(path.join(seedDir, 'settings.json'), 'image settings defaults');
+const settingsPath = path.join(stateDir, 'settings.json');
+let packages = defaults.packages;
+try {
+  const settingsStat = fs.lstatSync(settingsPath);
+  if (!settingsStat.isFile() || settingsStat.isSymbolicLink()) fail(`unexpected path at ${settingsPath}`);
+  packages = readObject(settingsPath, 'persistent settings').packages;
+} catch (error) {
+  if (error.code !== 'ENOENT') throw error;
+}
+const validPackage = (entry) =>
+  (typeof entry === 'string' && entry.trim().length > 0) ||
+  (entry !== null && typeof entry === 'object' && !Array.isArray(entry) &&
+    typeof entry.source === 'string' && entry.source.trim().length > 0);
+if (!Array.isArray(packages) || packages.some((entry) => !validPackage(entry))) {
+  fail('persistent packages must contain nonempty sources in string or object form');
+}
+// Complete path validation before changing any persistent or image-owned entry.
+for (const name of ['npm', 'git']) validateDirectory(name);
+for (const name of ['settings.json', 'npm', 'git']) validateManagedLink(name);
+const temporarySettings = `${settingsPath}.tmp.${randomUUID()}`;
+try {
+  fs.writeFileSync(temporarySettings, `${JSON.stringify({ ...defaults, packages }, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
+  fs.renameSync(temporarySettings, settingsPath);
+} finally {
+  fs.rmSync(temporarySettings, { force: true });
+}
+initializeDirectory('npm');
+initializeDirectory('git');
+for (const name of ['settings.json', 'npm', 'git']) linkManagedPath(name);
+NODE_PI_PACKAGES
 
 # One identity per container lifetime lets agentd distinguish a surviving runner
 # after an agentd-only restart from a process destroyed by container replacement.
@@ -58,9 +204,13 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const file = process.argv[2];
 fs.mkdirSync(path.dirname(file), { recursive: true });
-const tmp = `${file}.${process.pid}.tmp`;
-fs.writeFileSync(tmp, `${JSON.stringify({ version: 1, id: crypto.randomUUID(), createdAt: Date.now() })}\n`, { mode: 0o644 });
-fs.renameSync(tmp, file);
+const tmp = `${file}.tmp.${crypto.randomUUID()}`;
+try {
+  fs.writeFileSync(tmp, `${JSON.stringify({ version: 1, id: crypto.randomUUID(), createdAt: Date.now() })}\n`, { mode: 0o644, flag: 'wx' });
+  fs.renameSync(tmp, file);
+} finally {
+  fs.rmSync(tmp, { force: true });
+}
 NODE
 
 # ── AgentLogs runtime state ──────────────────────────────

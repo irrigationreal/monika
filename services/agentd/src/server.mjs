@@ -44,7 +44,7 @@ import {
 } from "./session-export.mjs";
 import {
   advanceDispatchFence,
-  dispatchPreflightHandler,
+  createDispatchPreflightGate,
   inspectDispatch,
   prepareDispatch,
   readDispatchFence,
@@ -54,6 +54,7 @@ import { SessionOwnershipRegistry } from "./session-ownership.mjs";
 import { SessionOperationCoordinator, withForumMutableSessionOperation } from './session-operation.mjs';
 import { endResponse, isClientDisconnect, responseWritable, runAfterRequestBody, writeJson, writeSse } from './http-safety.mjs';
 import { DurableDrainState } from './drain-state.mjs';
+import { DispatchNotAcceptedError, notAcceptedBody } from './dispatch-acceptance.mjs';
 import { runBoundedShutdown, runCanonicalShutdownCleanup } from './shutdown.mjs';
 import { createActiveThreadHealthCache, createSubagentHealthCache } from './health-state.mjs';
 import { PresentationDtoCache } from './presentation-cache.mjs';
@@ -359,11 +360,8 @@ function conflict(res, err) {
     ...(err.details && typeof err.details === "object" ? err.details : {}),
   });
 }
-function serverError(res, err) {
-  json(res, 500, {
-    error: "internal_error",
-    message: err instanceof Error ? err.message : String(err),
-  });
+function notAccepted(res, status, body, options) {
+  return json(res, status, notAcceptedBody(body, options));
 }
 
 function unavailable(res, message) {
@@ -2468,24 +2466,28 @@ const server = http.createServer(async (req, res) => {
 
     if (method === "POST" && url.pathname === "/v1/conversations") {
       if (draining)
-        return unavailable(res, "agentd is draining for deployment");
-      const body = await readBody(req);
+        return notAccepted(res, 503, { error: "unavailable", message: "agentd is draining for deployment" }, { safeRetry: true });
       try {
+        const body = await readBody(req);
         const conv = await createConversation(body);
         return json(res, 200, { conversation: conversationRecord(conv) });
       } catch (error) {
-        if (error instanceof TypeError) return badRequest(res, error.message);
-        throw error;
+        if (error instanceof TypeError) return notAccepted(res, 400, { error: "bad_request", message: error.message });
+        throw new DispatchNotAcceptedError(error);
       }
     }
 
     if (method === "POST" && url.pathname === "/v1/conversations/open") {
       if (draining)
-        return unavailable(res, "agentd is draining for deployment");
-      const body = await readBody(req);
-      const conv = await openConversation(body);
-      if (!conv) return notFound(res);
-      return json(res, 200, { conversation: conversationRecord(conv) });
+        return notAccepted(res, 503, { error: "unavailable", message: "agentd is draining for deployment" }, { safeRetry: true });
+      try {
+        const body = await readBody(req);
+        const conv = await openConversation(body);
+        if (!conv) return notAccepted(res, 404, { error: "not_found" });
+        return json(res, 200, { conversation: conversationRecord(conv) });
+      } catch (error) {
+        throw new DispatchNotAcceptedError(error);
+      }
     }
 
     const forkAckMatch = url.pathname.match(/^\/v1\/forum-forks\/([^/]+)\/ack$/);
@@ -2505,7 +2507,10 @@ const server = http.createServer(async (req, res) => {
     if (convMatch) {
       const conv = conversations.get(decodeURIComponent(convMatch[1]));
       const tail = convMatch[2] ?? "";
-      if (!conv) return notFound(res);
+      if (!conv) {
+        if (method === 'POST' && tail === 'messages') return notAccepted(res, 404, { error: 'not_found' });
+        return notFound(res);
+      }
       if (method === "GET" && tail === "")
         return json(res, 200, { conversation: conversationRecord(conv) });
       if (method === "GET" && tail === "history")
@@ -2604,10 +2609,14 @@ const server = http.createServer(async (req, res) => {
       if (method === 'POST' && tail === 'messages') {
         // Consume the finite body before waiting behind canonical session work.
         // A timed-out client must not leave a dead stream for a later holder.
-        return await runAfterRequestBody(req, readBody, async (body) =>
-          withMutableSessionOperation(conv.piSessionId, async () => {
-        if (draining) return unavailable(res, 'agentd is draining for deployment');
-        if (conv.takeoverPending) return json(res, 409, { error: 'session_takeover_pending' });
+        // Pi's preflight callback is the acceptance boundary. Failures before it
+        // are marked not accepted; execution failures after it are asynchronous.
+        let promptInvoked = false;
+        try {
+          return await runAfterRequestBody(req, readBody, async (body) =>
+            withMutableSessionOperation(conv.piSessionId, async () => {
+        if (draining) return notAccepted(res, 503, { error: 'unavailable', message: 'agentd is draining for deployment' }, { safeRetry: true });
+        if (conv.takeoverPending) return notAccepted(res, 409, { error: 'session_takeover_pending' });
         const initialLease = sessionOwnership.get(conv.piSessionId);
         if (initialLease) throw new SessionOwnershipConflict(conv.piSessionId, initialLease);
         incrementPendingMutations(conv);
@@ -2617,7 +2626,7 @@ const server = http.createServer(async (req, res) => {
           if (branch?.branch_conflict) throw new SessionBranchConflict(conv.piSessionId, branch);
           if (branch?.external_advance) throw new SessionExternalAdvance(conv.piSessionId, branch);
           if (body.provenance?.origin === 'forum' && body.generation === undefined) {
-            return badRequest(res, 'forum dispatch generation is required');
+            return notAccepted(res, 400, { error: 'bad_request', message: 'forum dispatch generation is required' });
           }
           const messageId = body.message_id ?? randomUUID();
           const dispatchId = body.dispatch_id ?? messageId;
@@ -2626,15 +2635,15 @@ const server = http.createServer(async (req, res) => {
             generation = resolveDispatchGeneration(conv.session.sessionManager, body.generation);
             inspected = inspectDispatch(conv.session.sessionManager, { dispatchId, generation });
           }
-          catch (err) { return badRequest(res, err instanceof Error ? err.message : String(err)); }
+          catch (err) { return notAccepted(res, 400, { error: 'bad_request', message: err instanceof Error ? err.message : String(err) }); }
           if (inspected.status === 'duplicate') return json(res, 200, { message_id: messageId, turn_id: messageId, thread_id: conv.id, compacted: false, deduplicated: true });
-          if (inspected.status === 'stale') return json(res, 409, { error: 'stale_dispatch_generation', generation: inspected.generation });
+          if (inspected.status === 'stale') return notAccepted(res, 409, { error: 'stale_dispatch_generation', generation: inspected.generation });
           const baseText = textFromContent(body.content);
           let provenance;
           try {
             provenance = normalizeForumProvenance(body.provenance);
           } catch (err) {
-            return badRequest(res, err instanceof Error ? err.message : String(err));
+            return notAccepted(res, 400, { error: 'bad_request', message: err instanceof Error ? err.message : String(err) });
           }
           // Complete every fallible request preparation step first. Durable
           // at-most-once acceptance is recorded by Pi's successful preflight
@@ -2655,27 +2664,39 @@ const server = http.createServer(async (req, res) => {
           );
           const { inspection, prepared } = preparedOutcome;
           if (!prepared && inspection.status === 'duplicate') return json(res, 200, { message_id: messageId, turn_id: messageId, thread_id: conv.id, compacted: false, deduplicated: true });
-          if (!prepared && inspection.status === 'stale') return json(res, 409, { error: 'stale_dispatch_generation', generation: inspection.generation });
+          if (!prepared && inspection.status === 'stale') return notAccepted(res, 409, { error: 'stale_dispatch_generation', generation: inspection.generation });
           const { attachmentPrompt, text, mode } = prepared;
           if (inspection.status === 'duplicate') return json(res, 200, { message_id: messageId, turn_id: messageId, thread_id: conv.id, compacted: false, deduplicated: true });
-          if (inspection.status === 'stale') return json(res, 409, { error: 'stale_dispatch_generation', generation: inspection.generation });
+          if (inspection.status === 'stale') return notAccepted(res, 409, { error: 'stale_dispatch_generation', generation: inspection.generation });
           const dispatch = registerDispatch(conv, {
             turnId: messageId,
             dispatchMode: mode,
             text,
             provenance,
           });
+          const preflight = createDispatchPreflightGate(
+            conv.session.sessionManager,
+            { dispatchId, generation },
+            (accepted) => { dispatch.accepted = accepted; },
+          );
           const promptOptions = {
             source: 'api',
             streamingBehavior: mode === 'steer' ? 'steer' : 'followUp',
-            preflightResult: dispatchPreflightHandler(
-              conv.session.sessionManager,
-              { dispatchId, generation },
-              (accepted) => { dispatch.accepted = accepted; },
-            ),
+            preflightResult: preflight.preflightResult,
             ...(attachmentPrompt.images.length > 0 ? { images: attachmentPrompt.images } : {}),
           };
+          promptInvoked = true;
           const promptPromise = conv.session.prompt(text, promptOptions);
+          try {
+            // HTTP success is the durable acceptance boundary, not merely the
+            // point at which the async Pi prompt method was invoked.
+            await preflight.accepted;
+          } catch (error) {
+            await promptPromise.catch(() => {});
+            dispatch.accepted = false;
+            discardDispatch(conv, dispatch);
+            throw new DispatchNotAcceptedError(error);
+          }
           if (!conv.sessionFileObserved && existsSync(conv.sessionPath)) conv.sessionFileObserved = true;
           mutationTransferredToPrompt = true;
           void (async () => {
@@ -2697,8 +2718,13 @@ const server = http.createServer(async (req, res) => {
         } finally {
           if (!mutationTransferredToPrompt) decrementPendingMutations(conv);
         }
-          })
-        );
+            })
+          );
+        } catch (error) {
+          if (error instanceof DispatchNotAcceptedError) throw error;
+          if (!promptInvoked) throw new DispatchNotAcceptedError(error);
+          throw error;
+        }
       }
       if (method === 'POST' && tail === 'interrupt') {
         const body = await readBody(req);
@@ -2737,10 +2763,13 @@ const server = http.createServer(async (req, res) => {
     }
 
     return notFound(res);
-  } catch (err) {
-    if (err instanceof SyntaxError) return badRequest(res, err.message);
+  } catch (caught) {
+    const dispatchNotAccepted = caught instanceof DispatchNotAcceptedError;
+    const err = dispatchNotAccepted ? caught.cause : caught;
+    const errorJson = (status, body) => json(res, status, dispatchNotAccepted ? notAcceptedBody(body) : body);
+    if (err instanceof SyntaxError) return errorJson(400, { error: 'bad_request', message: err.message });
     if (err instanceof SessionOwnershipConflict) {
-      return json(res, 409, {
+      return errorJson(409, {
         error: "session_owned_by_cli",
         session_id: err.sessionId,
         lease: sessionOwnership.describe(err.sessionId),
@@ -2748,7 +2777,7 @@ const server = http.createServer(async (req, res) => {
       });
     }
     if (err instanceof SessionBranchConflict) {
-      return json(res, 409, {
+      return errorJson(409, {
         error: "session_branch_conflict",
         session_id: err.sessionId,
         active_branch: err.branch,
@@ -2756,19 +2785,25 @@ const server = http.createServer(async (req, res) => {
       });
     }
     if (err instanceof SessionExternalAdvance) {
-      return json(res, 409, {
+      return errorJson(409, {
         error: 'session_external_advance',
         session_id: err.sessionId,
         active_branch: err.branch,
         message: err.message,
       });
     }
-    if (err instanceof ForumForkConflictError) return conflict(res, err);
+    if (err instanceof ForumForkConflictError) {
+      return errorJson(409, {
+        error: err.code ?? 'conflict',
+        message: err.message,
+        ...(err.details && typeof err.details === 'object' ? err.details : {}),
+      });
+    }
     if (err instanceof ForumCreationConflictError) {
-      return json(res, 409, { error: err.code, message: err.message });
+      return errorJson(409, { error: err.code, message: err.message });
     }
     if (err instanceof SessionResolutionError) {
-      return json(res, err.code === 'session_not_found' ? 404 : 409, {
+      return errorJson(err.code === 'session_not_found' ? 404 : 409, {
         error: err.code,
         message: err.message,
       });
@@ -2778,7 +2813,10 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     console.error('[agentd]', err);
-    return serverError(res, err);
+    return errorJson(500, {
+      error: 'internal_error',
+      message: err instanceof Error ? err.message : String(err),
+    });
   }
 });
 

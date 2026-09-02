@@ -44,6 +44,7 @@ services/agentd/
 ├── src/
 │   ├── server.mjs                 HTTP/SSE service and Pi runtime ownership
 │   ├── drain-state.mjs            Durable deploy-drain lease state
+│   ├── dispatch-acceptance.mjs    Pre-acceptance failure marker vocabulary
 │   ├── session-resolution.mjs     Direct canonical-path validation
 │   ├── http-safety.mjs            Disconnect-safe HTTP/SSE writes
 │   ├── compaction-operation.mjs   Idempotent canonical compaction recognition
@@ -197,6 +198,16 @@ Client disconnects are request-transport events, not canonical turn cancellation
 Finite bodies are consumed before session-operation waits, disconnected responses
 and SSE subscribers are discarded safely, and an already accepted prompt continues
 to canonical settlement for idempotent retry.
+
+Error JSON may include the backward-compatible marker
+`dispatch_acceptance: "not_accepted"` only when agentd can prove the request failed
+before prompt dispatch acceptance. Conversation create/open initialization and
+synchronous `POST .../messages` failures before Pi's `preflightResult(true)` are
+marked, and HTTP 200 waits until that callback has durably recorded acceptance.
+Draining responses additionally carry `dispatch_retry: "safe"`, explicitly allowing
+the same durable identity to retry. Other marked failures require manual retry.
+After acceptance, execution remains asynchronous and failures/transport loss remain
+markerless and ambiguous; clients must not infer acceptance certainty from status alone.
 
 Quiescence reports active turns, loaded conversations, interactive ownership,
 memstore save state, subagent execution, uncertain remote effects, and whether a

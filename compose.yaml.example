@@ -54,6 +54,7 @@ services:
     environment:
       HOME: /app
       PI_CODING_AGENT_DIR: /app/.pi/agent
+      PI_OFFLINE: "1"
       PI_SUBAGENT_EXECUTION_TARGET_ROOT: /runtime/secrets/ssh/targets
       PI_SUBAGENT_SSH_LOCK_EXTENSION: /app/.pi/agent/extensions/ssh.ts
       MONIKA_SSH_LOCK_DESCRIPTOR: ${MONIKA_SSH_LOCK_DESCRIPTOR:-}

@@ -1125,9 +1125,6 @@ export function registerForumRoutes({
     }
     requireTopicVisible(post.topic_id, request);
 
-    if (post.author_id !== user.identityId) {
-      throw app.httpErrors.forbidden('Only the post author can dispatch this post');
-    }
     if (post.deleted_at) {
       throw app.httpErrors.badRequest('post has been deleted');
     }
@@ -1141,6 +1138,11 @@ export function registerForumRoutes({
       throw app.httpErrors.notFound('forum not found');
     }
     const identity = store.getIdentity(user.identityId);
+    const existingDispatch = store.getPostDispatchByPost(postId);
+    const terminalRetry = existingDispatch?.status === 'failed';
+    if (post.author_id !== user.identityId && !(terminalRetry && identity?.kind === 'admin')) {
+      throw app.httpErrors.forbidden('Only the post author can dispatch this post');
+    }
     if (!canPostTopic(topic, forum, identity)) {
       throw app.httpErrors.forbidden('Posting not allowed in this topic');
     }
@@ -1149,6 +1151,16 @@ export function registerForumRoutes({
     }
     if (store.hasCompactionFence(topic.id)) {
       throw app.httpErrors.conflict('Dispatch is unavailable while conversation compaction is in progress');
+    }
+
+    if (terminalRetry) {
+      store.assertRobotWorkAdmission();
+      const retried = store.retryTerminalPostDispatch(existingDispatch.id);
+      if (!retried) {
+        throw app.httpErrors.conflict('Failed dispatch is no longer current or retryable');
+      }
+      postDispatchService?.wake();
+      return { ok: true, dispatched: true, post: serializePost(store.getPost(postId)!) };
     }
 
     const robotMode = resolveRobotMode(topic.robot_mode);

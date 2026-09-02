@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { EchsClient, EchsTransportError } from './echsClient';
+import { EchsClient, EchsDispatchNotAcceptedError, EchsTransportError } from './echsClient';
 
 describe('EchsClient transport errors', () => {
   afterEach(() => {
@@ -21,6 +21,52 @@ describe('EchsClient transport errors', () => {
       retryable: true,
       status: 503,
     });
+  });
+
+  it('types a marked pre-acceptance failure separately even when it is 5xx', async () => {
+    const client = new EchsClient({ baseUrl: 'http://agentd.invalid' });
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          Response.json({ error: 'internal_error', dispatch_acceptance: 'not_accepted' }, { status: 500 })
+        )
+    );
+
+    const error = await client.getSubagentWorkload().catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(EchsDispatchNotAcceptedError);
+    expect(error).toMatchObject({ status: 500, retryable: false });
+    expect(error).not.toBeInstanceOf(EchsTransportError);
+  });
+
+  it('retains only the explicit safe-retry marker on a not-accepted error', async () => {
+    const client = new EchsClient({ baseUrl: 'http://agentd.invalid' });
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          Response.json(
+            { error: 'unavailable', dispatch_acceptance: 'not_accepted', dispatch_retry: 'safe' },
+            { status: 503 }
+          )
+        )
+    );
+
+    await expect(client.getSubagentWorkload()).rejects.toMatchObject({
+      name: 'EchsDispatchNotAcceptedError',
+      retryable: true,
+      safeRetry: true,
+      status: 503,
+    });
+  });
+
+  it('keeps an unmarked 5xx ambiguous even when its payload resembles a dispatch error', async () => {
+    const client = new EchsClient({ baseUrl: 'http://agentd.invalid' });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ error: 'internal_error' }, { status: 500 })));
+
+    await expect(client.getSubagentWorkload()).rejects.toBeInstanceOf(EchsTransportError);
   });
 
   it('keeps definite 4xx application rejection distinct from transport outage', async () => {

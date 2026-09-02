@@ -83,8 +83,10 @@ charts, and sortable client pagination without a model provider or live session.
 The reviewed pi-subagents patch wraps its unit,
 integration, and E2E scripts in a fresh HOME, temp runtime/results/session root,
 and runtime-instance path, so package tests cannot touch deployment state. Forum
-tests cover loaded-only startup reattachment, dispatch-generation
-retry/cancellation fencing, bounded uncertain stop results, canonical unloaded-parent
+tests cover typed marked-versus-markerless agentd failures, terminal lifecycle
+classification with manual retry, preserved indefinite exact-identity transport
+retries, loaded-only startup reattachment, dispatch-generation retry/cancellation
+fencing, bounded uncertain stop results, canonical unloaded-parent
 stop, no-Continue gating, text-only interrupted-trace freezing, and dashboard
 blocker/delivery/history grouping.
 
@@ -190,7 +192,7 @@ The script verifies:
 2. memstore creates its Unix socket;
 3. agentd answers `/healthz`;
 4. default and save-session one-shot runners complete before their short timeout with ambient stateful-memory and isolated data; the default writes no transcript archive, while save-session uses a real JSONL origin and waits for its exact durable save; PID 1 preserves foreground exit/signal status, treats essential-child death as fatal during command mode, and gracefully stops memstore;
-5. `pi --version` reports the repository's exact Pi pin;
+5. `pi --version` reports the repository's exact Pi pin; ordinary startup has `PI_OFFLINE=1`; settings/npm/git are linked to isolated `/data/pi-agent-packages`; overlapping custody roots fail before initialization; image defaults, browser seed, nutrient-skills absence, deterministic local failed-install immutability, object-form package filters, stale temp siblings, and Pi-managed listing/loading after replacement are verified;
 6. npm's 10-day dependency cooldown, pnpm 11.21.0 with fail-closed 10-day release-age enforcement, and the pinned agent-browser version are active;
 7. the reviewed pi-subagents 0.37.2 gitHead (`8063333661476ca48afbca826dc4aab8707c72d3`) is installed, the dedicated runtime/session/operator roots are global, the operator root exists with mode `0700`, unsafe relative or shared top-level operator-root overrides fail startup, a container runtime identity exists, durable pre-spawn launch/drain and artifact-finalization patches are present, forked children use per-run directories, `defaultExtensions=[]` and isolated child profiles are configured, and legacy force-tools/delegate extensions are absent;
 8. interactive project-trust state is linked into persistent `/data`;
@@ -199,7 +201,7 @@ The script verifies:
    `additionalProperties: false` and required-property rules;
 11. an interactive Pi ownership lease evicts an idle agentd runtime, blocks forum reopen and deployment, heartbeats, and releases cleanly;
 12. agentd quiescence reports the reloaded idle conversation and deploy drain closes it;
-13. a replacement container sharing only isolated `/data` restores that drain, rejects new work, and becomes healthy only after cancellation clears the durable state;
+13. a replacement container sharing only isolated `/data` restores that drain and Pi package state, reapplies image-owned non-package defaults, rejects new work, and becomes healthy only after cancellation clears the durable drain state;
 14. `scripts/deploy-if-safe --backup-only` can acquire/cancel mock forum deployment admission and create and verify an isolated runtime capsule backup;
 15. the container stops cleanly on SIGTERM;
 16. isolated second runtimes exit nonzero and reap their sibling when either agentd or memstore dies unexpectedly.

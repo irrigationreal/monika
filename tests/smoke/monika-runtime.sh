@@ -45,6 +45,12 @@ if docker run --rm -e PI_SUBAGENT_OPERATOR_ROOT=/data/operator/.. "$IMAGE" true 
   echo "runtime accepted a shared top-level operator root"
   exit 1
 fi
+for invalid_package_root in /app/.pi/agent /app/.pi/agent/packages /opt/monika; do
+  if docker run --rm -e MONIKA_AGENTD_ENABLED=0 -e PI_PACKAGE_STATE_DIR="$invalid_package_root" "$IMAGE" true >/dev/null 2>&1; then
+    echo "runtime accepted overlapping Pi package root: $invalid_package_root"
+    exit 1
+  fi
+done
 
 CONTAINER_NAME="${MONIKA_SMOKE_CONTAINER:-monika-smoke-$$}"
 AGENTD_CONTAINER_PORT="7724"
@@ -363,7 +369,8 @@ if [ "$command_exit" -ne 23 ]; then
   echo "entrypoint did not preserve foreground exit status: $command_exit"
   exit 1
 fi
-docker logs "$RUNNER_CONTAINER" 2>&1 | grep -q 'shutting down...'
+command_logs="$(docker logs "$RUNNER_CONTAINER" 2>&1)"
+grep -q 'shutting down...' <<<"$command_logs"
 docker rm "$RUNNER_CONTAINER" >/dev/null
 
 RUNNER_CONTAINER="monika-command-signal-$$"
@@ -378,7 +385,8 @@ if [ "$signal_exit" -ne 143 ]; then
   echo "entrypoint did not preserve forwarded SIGTERM status: $signal_exit"
   exit 1
 fi
-docker logs "$RUNNER_CONTAINER" 2>&1 | grep -q 'shutting down...'
+command_logs="$(docker logs "$RUNNER_CONTAINER" 2>&1)"
+grep -q 'shutting down...' <<<"$command_logs"
 docker rm "$RUNNER_CONTAINER" >/dev/null
 
 RUNNER_CONTAINER="monika-command-essential-$$"
@@ -398,7 +406,8 @@ if [ "$essential_exit" -eq 0 ]; then
   echo "foreground command mode ignored essential memstore death"
   exit 1
 fi
-docker logs "$RUNNER_CONTAINER" 2>&1 | grep -q 'essential child memstore exited while foreground command was running'
+command_logs="$(docker logs "$RUNNER_CONTAINER" 2>&1)"
+grep -q 'essential child memstore exited while foreground command was running' <<<"$command_logs"
 docker rm "$RUNNER_CONTAINER" >/dev/null
 RUNNER_CONTAINER=""
 pass "PID 1 preserved command exit/signal status, monitored essentials, and stopped memstore gracefully"
@@ -428,6 +437,65 @@ if [ "$PI_VERSION" != "0.84.3" ]; then
   exit 1
 fi
 pass "pi CLI pin active: ${PI_VERSION}"
+
+PI_OFFLINE_DEFAULT="$(docker exec "$CONTAINER_NAME" sh -c 'printf %s "${PI_OFFLINE:-}"')"
+if [ "$PI_OFFLINE_DEFAULT" != "1" ]; then
+  echo "Expected ordinary Pi startup to default PI_OFFLINE=1, got: ${PI_OFFLINE_DEFAULT:-<unset>}"
+  exit 1
+fi
+for managed in settings.json npm git; do
+  target="$(docker exec "$CONTAINER_NAME" readlink "/app/.pi/agent/$managed")"
+  if [ "$target" != "/data/pi-agent-packages/$managed" ]; then
+    echo "Expected persistent Pi package link for $managed, got: ${target:-<not a symlink>}"
+    exit 1
+  fi
+done
+docker exec "$CONTAINER_NAME" test -d /data/pi-agent-packages/npm/node_modules/pi-agent-browser
+docker exec -i "$CONTAINER_NAME" node - <<'NODE_PI_PACKAGE_DEFAULTS'
+const fs = require('node:fs');
+const settings = JSON.parse(fs.readFileSync('/app/.pi/agent/settings.json', 'utf8'));
+if (!settings.packages.includes('npm:pi-agent-browser@0.1.0')) throw new Error('browser package choice missing');
+if (!settings.packages.includes('/opt/pi-subagents')) throw new Error('local pi-subagents package choice missing');
+const sourceOf = (entry) => typeof entry === 'string' ? entry : entry?.source;
+if (settings.packages.some((entry) => sourceOf(entry)?.includes('nutrient-skills'))) throw new Error('nutrient-skills remains configured');
+NODE_PI_PACKAGE_DEFAULTS
+pass "Pi settings/npm/git package state is persistent, browser is seeded, and nutrient-skills is absent"
+
+settings_before_failed_install="$(docker exec "$CONTAINER_NAME" sha256sum /app/.pi/agent/settings.json | awk '{print $1}')"
+if docker exec "$CONTAINER_NAME" pi install /data/pi-package-source-that-does-not-exist >/dev/null 2>&1; then
+  echo "nonexistent local explicit install unexpectedly succeeded"
+  exit 1
+fi
+settings_after_failed_install="$(docker exec "$CONTAINER_NAME" sha256sum /app/.pi/agent/settings.json | awk '{print $1}')"
+if [ "$settings_before_failed_install" != "$settings_after_failed_install" ]; then
+  echo "failed Pi install mutated persistent settings"
+  exit 1
+fi
+pass "failed explicit Pi install leaves package choices unchanged"
+
+# Add a local package through Pi itself, then alter a non-package setting. The
+# replacement-container check below proves package custody survives while image
+# defaults are authoritatively restored.
+docker exec "$CONTAINER_NAME" sh -eu -c '
+  mkdir -p /data/pi-package-smoke
+  printf "%s\n" '\''{"name":"pi-package-persistence-smoke","version":"1.0.0","pi":{"extensions":["extension.js"]}}'\'' > /data/pi-package-smoke/package.json
+  cat > /data/pi-package-smoke/extension.js <<'\''EOF_PI_PACKAGE_EXTENSION'\''
+import { writeFileSync } from "node:fs";
+export default function persistenceSmoke(pi) {
+  pi.registerCommand("persistence-smoke", {
+    description: "prove the filtered persistent package loaded",
+    handler: async () => writeFileSync("/data/pi-package-smoke-loaded", "loaded\n"),
+  });
+}
+EOF_PI_PACKAGE_EXTENSION
+  pi install /data/pi-package-smoke
+  touch /app/.pi/agent/npm/.persistence-smoke /app/.pi/agent/git/.persistence-smoke
+  for stale_pid in $(seq 1 128); do
+    touch "/data/pi-agent-packages/settings.json.tmp.$stale_pid" "/data/pi-agent-packages/npm.tmp.$stale_pid"
+  done
+  node -e '\''const fs=require("fs"); const path=require("path"); const file="/app/.pi/agent/settings.json"; const settings=JSON.parse(fs.readFileSync(file,"utf8")); const index=settings.packages.findIndex((entry)=>{const source=typeof entry==="string"?entry:entry?.source; return typeof source==="string" && path.resolve("/app/.pi/agent",source)==="/data/pi-package-smoke";}); if(index<0) throw new Error("installed smoke package missing"); settings.packages[index]={source:"../../../data/pi-package-smoke",extensions:["extension.js"],skills:[],prompts:[],themes:[]}; settings.defaultModel="must-be-reset-on-recreation"; fs.writeFileSync(file, JSON.stringify(settings,null,2)+"\n");'\''
+'
+pass "Pi-managed package state prepared for replacement-container persistence check"
 
 # Validate the exact image-owned JavaScript extension copies before exercising
 # either Pi loading path. A malformed ambient extension otherwise remains
@@ -880,7 +948,31 @@ if [ -e "$SMOKE_RUNTIME_DATA/agentd-drain-state.json" ]; then
   echo "drain cancellation did not clear durable state"
   exit 1
 fi
-pass "replacement restored the deploy drain, rejected work, and cleared it on cancellation"
+docker exec "$CONTAINER_NAME" test -f /app/.pi/agent/npm/.persistence-smoke
+docker exec "$CONTAINER_NAME" test -f /app/.pi/agent/git/.persistence-smoke
+docker exec -i "$CONTAINER_NAME" node - <<'NODE_PI_PACKAGE_RECREATION'
+const fs = require('node:fs');
+const path = require('node:path');
+const settings = JSON.parse(fs.readFileSync('/app/.pi/agent/settings.json', 'utf8'));
+if (settings.defaultModel !== 'gpt-5.6-sol') throw new Error('image-owned settings defaults were not restored');
+const packageEntry = settings.packages.find((entry) => {
+  const source = typeof entry === 'string' ? entry : entry?.source;
+  return typeof source === 'string' && path.resolve('/app/.pi/agent', source) === '/data/pi-package-smoke';
+});
+if (!packageEntry || typeof packageEntry !== 'object') throw new Error('object-form deployment package choice was lost');
+if (JSON.stringify(packageEntry.extensions) !== JSON.stringify(['extension.js'])) throw new Error('package extension filter was lost');
+if (!Array.isArray(packageEntry.skills) || !Array.isArray(packageEntry.prompts) || !Array.isArray(packageEntry.themes)) {
+  throw new Error('package resource filters were lost');
+}
+NODE_PI_PACKAGE_RECREATION
+package_list="$(docker exec "$CONTAINER_NAME" pi list)"
+printf '%s\n' "$package_list" | grep -F '/data/pi-package-smoke (filtered)' >/dev/null
+rm -f "$SMOKE_RUNTIME_DATA/pi-package-smoke-loaded"
+docker exec "$CONTAINER_NAME" pi -p /persistence-smoke >/dev/null
+test -f "$SMOKE_RUNTIME_DATA/pi-package-smoke-loaded"
+test -f "$SMOKE_RUNTIME_DATA/pi-agent-packages/settings.json.tmp.1"
+test -f "$SMOKE_RUNTIME_DATA/pi-agent-packages/npm.tmp.1"
+pass "replacement preserved filtered Pi package listing/loading and ignored stale temp siblings while refreshing image defaults"
 endsection
 
 section "Redeploy backup smoke"

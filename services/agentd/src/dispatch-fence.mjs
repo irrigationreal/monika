@@ -48,12 +48,45 @@ export function acceptDispatch(sessionManager, { dispatchId, generation }) {
 
 export function dispatchPreflightHandler(sessionManager, input, onResult) {
   return (accepted) => {
-    onResult?.(accepted);
-    if (!accepted) return;
+    if (!accepted) {
+      onResult?.(false);
+      return;
+    }
     const outcome = acceptDispatch(sessionManager, input);
     if (outcome.status !== 'accepted') {
       throw new Error(`dispatch preflight acceptance failed: ${outcome.status}`);
     }
+    onResult?.(true);
+  };
+}
+
+export function createDispatchPreflightGate(sessionManager, input, onResult) {
+  let settled = false;
+  let resolveAccepted;
+  let rejectAccepted;
+  const accepted = new Promise((resolve, reject) => {
+    resolveAccepted = resolve;
+    rejectAccepted = reject;
+  });
+  const handle = dispatchPreflightHandler(sessionManager, input, (didAccept) => {
+    if (settled) return;
+    settled = true;
+    onResult?.(didAccept);
+    if (didAccept) resolveAccepted();
+    else rejectAccepted(new Error('Pi dispatch preflight was not accepted'));
+  });
+  return {
+    accepted,
+    preflightResult(didAccept) {
+      if (settled) return;
+      try {
+        handle(didAccept);
+      } catch (error) {
+        settled = true;
+        rejectAccepted(error);
+        throw error;
+      }
+    },
   };
 }
 

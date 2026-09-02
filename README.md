@@ -72,9 +72,10 @@ runtime. Memstore indexes normalized transcripts and entity observations; it is
 memory infrastructure, not conversation authority. Forum SQLite stores a
 projection of canonical sessions plus forum-specific metadata and UI state.
 
-The image owns the software and bundled defaults. Mutable deployment state lives
-explicitly under the gitignored `runtime/` directory so rebuilding the runtime
-does not erase sessions, memory, persona, credentials, or forum state.
+The image owns the software, extensions/agents, and settings defaults. Mutable
+deployment state lives explicitly under the gitignored `runtime/` directory so
+rebuilding the runtime does not erase sessions, memory, persona, credentials,
+forum state, or Pi-managed package choices and install trees.
 
 ## Quick start
 
@@ -111,7 +112,7 @@ Monika/
 │   ├── agents/               Explicit specialist and identity-bearing profiles
 │   ├── extensions/           Bundled Pi extensions and focused extension docs
 │   ├── persona/              Bundled default persona and topic addenda
-│   └── settings.json         Pi packages and runtime defaults
+│   └── settings.json         Image settings defaults and initial Pi packages
 │
 ├── services/
 │   ├── agentd/               Pi-backed HTTP/SSE runtime daemon

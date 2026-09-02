@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { SessionManager } from '@earendil-works/pi-coding-agent';
-import { acceptDispatch, advanceDispatchFence, dispatchPreflightHandler, inspectDispatch, prepareDispatch, readDispatchFence, resolveDispatchGeneration } from '../src/dispatch-fence.mjs';
+import { acceptDispatch, advanceDispatchFence, createDispatchPreflightGate, dispatchPreflightHandler, inspectDispatch, prepareDispatch, readDispatchFence, resolveDispatchGeneration } from '../src/dispatch-fence.mjs';
 
 function manager() { return SessionManager.inMemory('/tmp/dispatch-fence-test'); }
 
@@ -36,6 +36,24 @@ test('preparation and rejected Pi preflight leave a dispatch retryable', async (
   assert.equal(duplicatePreparationCalls, 0);
 });
 
+test('preflight gate resolves only after Pi durably accepts and rejects false', async () => {
+  const acceptedManager = manager();
+  const accepted = createDispatchPreflightGate(acceptedManager, { dispatchId: 'gate-accepted', generation: 0 });
+  let settled = false;
+  accepted.accepted.then(() => { settled = true; });
+  await Promise.resolve();
+  assert.equal(settled, false);
+  accepted.preflightResult(true);
+  await accepted.accepted;
+  assert.equal(inspectDispatch(acceptedManager, { dispatchId: 'gate-accepted', generation: 0 }).status, 'duplicate');
+
+  const rejectedManager = manager();
+  const rejected = createDispatchPreflightGate(rejectedManager, { dispatchId: 'gate-rejected', generation: 0 });
+  rejected.preflightResult(false);
+  await assert.rejects(rejected.accepted, /not accepted/);
+  assert.equal(inspectDispatch(rejectedManager, { dispatchId: 'gate-rejected', generation: 0 }).status, 'ready');
+});
+
 test('preflight acceptance fails closed when durable acceptance cannot be written', () => {
   const sessionManager = manager();
   sessionManager.appendCustomEntry = () => { throw new Error('disk unavailable'); };
@@ -46,7 +64,7 @@ test('preflight acceptance fails closed when durable acceptance cannot be writte
     (accepted) => outcomes.push(accepted),
   );
   assert.throws(() => preflight(true), /disk unavailable/);
-  assert.deepEqual(outcomes, [true]);
+  assert.deepEqual(outcomes, []);
   assert.equal(readDispatchFence(sessionManager.getBranch()).accepted.has('dispatch-write-failure'), false);
 });
 

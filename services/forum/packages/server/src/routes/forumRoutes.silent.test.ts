@@ -171,6 +171,87 @@ describe('Forum routes silent posts', () => {
     createDispatch.mockRestore();
   });
 
+  it('lets the author and an admin manually retry a current terminal post dispatch across admission', async () => {
+    const { app, postDispatchService } = await buildApp();
+    const forum = store.createForum('Forum', null, null, null, null, 'active', 'public');
+    const author = store.createIdentityWithPassword('Author', 'human', 'pw-hash', 'author');
+    const admin = store.createIdentityWithPassword('Admin', 'admin', 'pw-hash', 'admin');
+    store.createAuthSession('author-token', author.id);
+    store.createAuthSession('admin-token', admin.id);
+    const { topic, post } = store.createTopic({
+      forumId: forum.id,
+      title: 'Topic',
+      body: 'opening',
+      authorId: author.id,
+    });
+    const session = store.ensureSession({ topicId: topic.id });
+    const dispatch = store.createPostDispatch({ topicId: topic.id, postId: post.id, sessionId: session.id });
+    const firstClaim = store.claimPostDispatch(dispatch.id, dispatch)!;
+    store.markPostDispatchFailed(dispatch.id, firstClaim.claim_token!, 'setup failed');
+
+    const authorRetry = await app.inject({
+      method: 'POST',
+      url: `/posts/${post.id}/dispatch`,
+      headers: { authorization: 'Bearer author-token' },
+      payload: {},
+    });
+    expect(authorRetry.statusCode).toBe(200);
+    expect(store.getPostDispatch(dispatch.id)?.status).toBe('pending');
+
+    const secondClaim = store.claimPostDispatch(dispatch.id, store.getPostDispatch(dispatch.id)!)!;
+    store.markPostDispatchFailed(dispatch.id, secondClaim.claim_token!, 'setup failed again');
+    store.setRobotWorkAdmissionGuard(() => {
+      throw Object.assign(new Error('Robot work admission is temporarily closed for deployment'), {
+        statusCode: 503,
+        retryAfter: 1,
+      });
+    });
+    const fencedAdminRetry = await app.inject({
+      method: 'POST',
+      url: `/posts/${post.id}/dispatch`,
+      headers: { authorization: 'Bearer admin-token' },
+      payload: {},
+    });
+    expect(fencedAdminRetry.statusCode).toBe(503);
+    expect(store.getPostDispatch(dispatch.id)?.status).toBe('failed');
+
+    store.setRobotWorkAdmissionGuard(null);
+    const adminRetry = await app.inject({
+      method: 'POST',
+      url: `/posts/${post.id}/dispatch`,
+      headers: { authorization: 'Bearer admin-token' },
+      payload: {},
+    });
+    expect(adminRetry.statusCode).toBe(200);
+    expect(store.getPostDispatch(dispatch.id)?.status).toBe('pending');
+    expect(postDispatchService.wake).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves author-only semantics for ordinary nonterminal dispatch calls', async () => {
+    const { app } = await buildApp();
+    const forum = store.createForum('Forum', null, null, null, null, 'active', 'public');
+    const author = store.createIdentityWithPassword('Author', 'human', 'pw-hash', 'author');
+    const other = store.createIdentityWithPassword('Other', 'admin', 'pw-hash', 'admin');
+    store.createAuthSession('other-token', other.id);
+    const { topic, post } = store.createTopic({
+      forumId: forum.id,
+      title: 'Topic',
+      body: 'opening',
+      authorId: author.id,
+    });
+    const session = store.ensureSession({ topicId: topic.id });
+    const dispatch = store.createPostDispatch({ topicId: topic.id, postId: post.id, sessionId: session.id });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/posts/${post.id}/dispatch`,
+      headers: { authorization: 'Bearer other-token' },
+      payload: {},
+    });
+    expect(response.statusCode).toBe(403);
+    expect(store.getPostDispatch(dispatch.id)?.status).toBe('pending');
+  });
+
   it('creates silent topics without dispatching the robot', async () => {
     const { app, codex } = await buildApp();
 

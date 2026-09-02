@@ -37,7 +37,7 @@ including:
 
 - `scripts/install-pi-subagents` and `config/pi-subagents-*.patch`;
 - `Containerfile` for image-installed tools;
-- `config/settings.json` for Pi packages;
+- `config/settings.json` for image settings defaults and initial Pi packages;
 - service `package.json` files and lockfiles.
 
 Do not duplicate exact hashes or versions in overview documentation. Update the pin,
@@ -57,7 +57,52 @@ tests/smoke/monika-runtime.sh
 
 `config/settings.json` records the bundled changelog acknowledgement so a rebuilt
 runtime does not present already-reviewed release notes as an unreviewed local
-state change.
+state change. It is the source of image defaults and first-boot package choices;
+a deployment's current `packages` array and Pi-managed `npm/`/`git/` trees live
+under `/data/pi-agent-packages`. Startup reapplies image defaults while retaining
+that array. The reviewed browser package seed must be produced by Pi's own exact
+`pi install` operation in `Containerfile`, not by a custom installer.
+
+`PI_OFFLINE=1` on normal Pi and agentd startup gates automatic package resolution
+and update checks. It does not authorize or block an explicit `pi install`.
+Administrator maintenance commands still set `PI_OFFLINE=0` explicitly as a record
+of online-maintenance intent:
+
+```bash
+docker exec -it -e PI_OFFLINE=0 monika pi install npm:package@1.2.3
+docker exec -it -e PI_OFFLINE=0 -e GIT_TERMINAL_PROMPT=0 monika \
+  pi install git:github.com/owner/repository@<commit>
+docker exec -it -e PI_OFFLINE=0 monika pi update --extensions
+docker exec -it -e PI_OFFLINE=0 monika pi remove npm:package
+```
+
+Keep Git terminal prompting disabled unless a reviewed private-package credential
+path was configured deliberately. An unexpected credential challenge must fail the
+maintenance command rather than block an interactive Pi or agentd process.
+
+Run package maintenance only at forum/agentd quiescence and recreate Monika through
+the safe deployment path immediately afterward. Existing loaded conversations retain
+the resources they started with; they do not hot-reload changed packages. Do not use
+a second container against the live runtime state to work around this boundary.
+
+Do not edit the persistent settings file as a substitute for Pi package commands;
+Pi intentionally persists a package choice only after installation succeeds.
+`pi update --extensions` can refresh floating sources, but it does not rotate an
+exact npm pin. Upgrade pinned packages—including `pi-agent-browser`—with an exact
+command such as `pi install npm:pi-agent-browser@NEW_VERSION`.
+
+When upgrading a deployment created before package-state persistence, inventory
+its old container-layer settings and installed package choices before discarding
+the old container. Those disposable choices cannot migrate automatically. The
+runtime no longer includes `nutrient-skills` by default; reinstall it only if an
+administrator explicitly wants and reviews an exact source. Reinstall every
+desired pin through Pi after the new runtime starts.
+
+Before changing packages, back up the complete `/data/pi-agent-packages` tree. A
+rollback must restore its `settings.json`, `npm/`, and `git/` from the same backup
+while the runtime is stopped. Retain the pre-maintenance backup until the package
+has loaded successfully after a container recreation; partial rollback can pair
+settings with incompatible install trees.
 
 Regenerate the frozen agentd lockfile with the repository's pnpm version:
 

@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { migrate } from '../db';
 import { EchsBridge } from '../echsBridge';
-import { EchsTransportError } from '../echsClient';
+import { EchsDispatchNotAcceptedError, EchsTransportError } from '../echsClient';
 import { ForumStore } from '../store';
 import { PostDispatchService, transportRetryAtForAttempt } from './postDispatchService';
 
@@ -59,8 +59,9 @@ describe('durable post dispatch recovery fence', () => {
 
   it('uses deterministic progressive transport retry delays capped at five minutes', () => {
     const now = Date.parse('2025-01-01T00:00:00.000Z');
-    expect([1, 2, 3, 4, 99].map((attempt) => Date.parse(transportRetryAtForAttempt(attempt, now)) - now))
-      .toEqual([30_000, 60_000, 120_000, 300_000, 300_000]);
+    expect([1, 2, 3, 4, 99].map((attempt) => Date.parse(transportRetryAtForAttempt(attempt, now)) - now)).toEqual([
+      30_000, 60_000, 120_000, 300_000, 300_000,
+    ]);
   });
 
   it('records immutable claim and terminal attempt events', () => {
@@ -68,7 +69,8 @@ describe('durable post dispatch recovery fence', () => {
     const dispatch = store.createPostDispatch({ topicId: topic.id, sessionId: session.id, postId: post.id });
     const claimed = store.claimPostDispatch(dispatch.id, dispatch)!;
     store.markPostDispatchFailed(dispatch.id, claimed.claim_token!, 'network reset', {
-      retryAt: '2030-01-01T00:00:00.000Z', classification: 'transport',
+      retryAt: '2030-01-01T00:00:00.000Z',
+      classification: 'transport',
     });
     const before = store.listPostDispatchAttempts([dispatch.id]);
     expect(before.map((attempt) => attempt.event)).toEqual(['retry_scheduled', 'claimed']);
@@ -616,6 +618,52 @@ describe('durable post dispatch recovery fence', () => {
     expect(store.getPiSessionLinkByTopic(topic.id)?.pi_session_id).toBe('missing-pi');
   });
 
+  it('rethrows a typed not-accepted 404 before conversation recovery', async () => {
+    const { topic, session, post } = fixture();
+    store.upsertPiSessionLink({
+      piSessionId: 'pi-linked',
+      piSessionPath: '/tmp/pi-linked.jsonl',
+      topicId: topic.id,
+      sessionId: session.id,
+      cwd: '/tmp',
+      kind: 'normal',
+      metadata: { source: 'forum-created' },
+    });
+    store.setSessionAgentThread(session.id, 'echs', 'conversation-1');
+    const bridge = new EchsBridge(store, { emit: vi.fn(), subscribe: vi.fn() } as any, {
+      model: 'model',
+      workDir: '/tmp',
+      echs: { baseUrl: 'http://agentd.invalid' },
+    });
+    vi.spyOn(bridge as any, 'ensureSubscribed').mockResolvedValue(undefined);
+    vi.spyOn((bridge as any).client, 'getConversation').mockResolvedValue({
+      conversation_id: 'conversation-1',
+      session_id: 'pi-linked',
+      session_path: '/tmp/pi-linked.jsonl',
+      activity: 'idle',
+      cwd: '/tmp',
+    });
+    const enqueue = vi.spyOn((bridge as any).client, 'enqueueConversationMessage').mockRejectedValue(
+      new EchsDispatchNotAcceptedError('ECHS 404: package initialization failed', 404, {
+        dispatch_acceptance: 'not_accepted',
+      })
+    );
+    const open = vi.spyOn((bridge as any).client, 'openConversation');
+    const create = vi.spyOn((bridge as any).client, 'createConversation');
+
+    await expect(
+      bridge.dispatchPostToAgent(topic.id, post.id, {
+        dispatchId: 'dispatch-typed-404',
+        generation: 0,
+        contributorPostIds: [post.id],
+        origin: store.resolveUtteranceOrigin(post.id),
+      })
+    ).rejects.toBeInstanceOf(EchsDispatchNotAcceptedError);
+    expect(enqueue).toHaveBeenCalledOnce();
+    expect(open).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it('keeps an agentd transport outage pending beyond the ordinary attempt budget and resumes exact identity', async () => {
     const { topic, session, post } = fixture();
     const dispatch = store.createPostDispatch({ topicId: topic.id, sessionId: session.id, postId: post.id });
@@ -648,6 +696,63 @@ describe('durable post dispatch recovery fence', () => {
     ).toBe(true);
   });
 
+  it('retries explicitly safe pre-acceptance draining failures indefinitely as lifecycle work', async () => {
+    const { topic, session, post } = fixture();
+    const dispatch = store.createPostDispatch({ topicId: topic.id, sessionId: session.id, postId: post.id });
+    const agent = {
+      dispatchPostToAgent: vi.fn(async () => {
+        throw new EchsDispatchNotAcceptedError(
+          'ECHS 503: draining',
+          503,
+          { dispatch_acceptance: 'not_accepted', dispatch_retry: 'safe' },
+          true
+        );
+      }),
+    };
+    const service = new PostDispatchService(store, agent as any);
+
+    for (let index = 0; index < 7; index += 1) {
+      await processOnce(service);
+      expect(store.getPostDispatch(dispatch.id)).toMatchObject({ status: 'pending' });
+      db.prepare('update post_dispatches set next_attempt_at = ? where id = ?').run(
+        new Date(0).toISOString(),
+        dispatch.id
+      );
+    }
+    expect(agent.dispatchPostToAgent).toHaveBeenCalledTimes(7);
+    expect(store.listPostDispatchAttempts([dispatch.id])).toEqual(
+      expect.arrayContaining([expect.objectContaining({ event: 'retry_scheduled', classification: 'lifecycle' })])
+    );
+  });
+
+  it('makes a marked pre-acceptance failure terminal lifecycle work without deleting the post', async () => {
+    const { topic, session, post } = fixture();
+    const dispatch = store.createPostDispatch({ topicId: topic.id, sessionId: session.id, postId: post.id });
+    const agent = {
+      dispatchPostToAgent: vi.fn(async () => {
+        throw new EchsDispatchNotAcceptedError('ECHS 500: initialization failed', 500, {
+          dispatch_acceptance: 'not_accepted',
+        });
+      }),
+    };
+    const service = new PostDispatchService(store, agent as any);
+
+    await processOnce(service);
+    await processOnce(service);
+
+    expect(agent.dispatchPostToAgent).toHaveBeenCalledOnce();
+    expect(store.getPost(post.id)).not.toBeNull();
+    expect(store.getPostDispatch(dispatch.id)).toMatchObject({
+      status: 'failed',
+      next_attempt_at: null,
+    });
+    expect(store.listPostDispatchAttempts([dispatch.id])).toEqual(
+      expect.arrayContaining([expect.objectContaining({ event: 'terminal_failure', classification: 'lifecycle' })])
+    );
+
+    expect(store.retryTerminalPostDispatch(dispatch.id)?.status).toBe('pending');
+  });
+
   it('keeps definite application failures terminal after the ordinary attempt budget', async () => {
     const { topic, session, post } = fixture();
     const dispatch = store.createPostDispatch({ topicId: topic.id, sessionId: session.id, postId: post.id });
@@ -674,10 +779,13 @@ describe('durable post dispatch recovery fence', () => {
     store.retryTerminalPostDispatch(dispatch.id);
     const second = store.claimPostDispatch(dispatch.id, store.getPostDispatch(dispatch.id)!)!;
 
-    expect(store.listPostDispatchAttempts([dispatch.id])
-      .filter((attempt) => attempt.event === 'claimed')
-      .map((attempt) => attempt.attempt_number)
-      .sort()).toEqual([1, 2]);
+    expect(
+      store
+        .listPostDispatchAttempts([dispatch.id])
+        .filter((attempt) => attempt.event === 'claimed')
+        .map((attempt) => attempt.attempt_number)
+        .sort()
+    ).toEqual([1, 2]);
     expect(second.attempt_count).toBe(1);
   });
 
