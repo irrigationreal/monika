@@ -138,12 +138,20 @@ Implemented in `services/forum`:
   Only then does the forum write `pi_session_links`. Non-dispatch operations never create
   canonical state: they reopen an existing link, or repair a missing derived link solely
   from a currently loaded conversation that supplies both canonical ID and path.
-- Durable post dispatch is strictly ordered per topic: a delayed head cannot be bypassed by a newer due row. Ambiguous
-  transport outcomes retain the exact dispatch ID, generation, normalized origin, and ordered contributors indefinitely,
-  with deterministic retries at about 30 seconds, 60 seconds, two minutes, then a five-minute cap. Claims and outcomes
-  append immutable audit rows transactionally with mutable dispatch state. An admin-only topic projection exposes current
-  delayed/terminal state and bounded sanitized attempt history; the topic UI anchors its warning beneath the source post
-  and polls only while unsettled dispatch work remains.
+- Durable post dispatch is strictly ordered per topic: a delayed head cannot be bypassed by a newer due row. Agentd adds
+  `dispatch_acceptance: "not_accepted"` only when failure is provably before prompt dispatch acceptance (including
+  conversation initialization and synchronous message preparation before Pi acceptance). Agentd draining adds the
+  separate `dispatch_retry: "safe"` marker; only that explicit combination retains the same durable dispatch for
+  indefinite automatic retry at the transport cadence while remaining lifecycle-classified. Other not-accepted failures
+  are terminal/manual. The post author or an admin can retry a failed current-generation dispatch through the existing
+  post-dispatch endpoint; retry crosses deployment admission and the admin topic indicator exposes the action. The durable
+  post, canonical links, and creation ledger remain intact. Markerless 5xx, reset, timeout,
+  and network outcomes remain ambiguous: they retain the exact dispatch ID, generation, normalized origin, and ordered
+  contributors indefinitely, with deterministic retries at about 30 seconds, 60 seconds, two minutes, then a five-minute
+  cap. Status alone never proves non-acceptance. Claims and outcomes append immutable audit rows transactionally with
+  mutable dispatch state. An admin-only topic projection exposes current delayed/terminal state and bounded sanitized
+  attempt history; the topic UI anchors its warning beneath the source post and polls only while unsettled dispatch work
+  remains.
 - Background sync worker is enabled by default:
   - `MONIKA_PI_SYNC_ENABLED=1`
   - `MONIKA_PI_SYNC_INTERVAL_MS=5000`

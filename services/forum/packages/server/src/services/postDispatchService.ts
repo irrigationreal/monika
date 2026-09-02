@@ -1,4 +1,4 @@
-import { isEchsTransportError } from '../echsClient';
+import { isEchsDispatchNotAcceptedError, isEchsTransportError } from '../echsClient';
 
 import type { UtteranceOrigin } from '@irrigationreal/codex-forum-core';
 
@@ -141,15 +141,17 @@ export class PostDispatchService {
       if (!claimed || !claimToken || !this.store.isPostDispatchClaimCurrent(trigger.id, claimToken)) return;
       const robotState = this.store.getRobotState(trigger.topic_id);
       const activeOrigin = this.store.getActiveTurnOrigin(trigger.topic_id);
-      const sameActiveOrigin = activeOrigin?.generation === trigger.generation
-        && activeOrigin.origin_key === trigger.origin_key;
+      const sameActiveOrigin =
+        activeOrigin?.generation === trigger.generation && activeOrigin.origin_key === trigger.origin_key;
       // A durable dispatch may alter an active Pi turn only when it belongs to
       // exactly the same normalized causal origin. Other surfaces are accepted
       // as follow-ups and settle in a later Pi turn.
-      const mode = sameActiveOrigin && (
-        trigger.mode === 'steer' ||
-        (trigger.mode === 'auto' && robotState && !['idle', 'stopped', 'error'].includes(robotState.activity))
-      ) ? 'steer' : 'queue';
+      const mode =
+        sameActiveOrigin &&
+        (trigger.mode === 'steer' ||
+          (trigger.mode === 'auto' && robotState && !['idle', 'stopped', 'error'].includes(robotState.activity)))
+          ? 'steer'
+          : 'queue';
 
       // Re-check the same claimed trigger immediately before crossing agentd.
       // An interrupt advances its durable topic generation and fences the group.
@@ -171,18 +173,25 @@ export class PostDispatchService {
       const claimed = pending.find((item) => item.claim_token === claimToken) ?? row;
       const latest = this.store.getPostDispatch(claimed.id) ?? claimed;
       const message = err instanceof Error ? err.message : String(err);
-      // A transport failure is ambiguous: agentd may be unavailable, or it may
-      // have accepted the canonical dispatch before the response was lost.
-      // Retain the exact durable identity and retry at a bounded cadence; Pi's
-      // dispatch fence deduplicates any already-accepted request.
+      // Agentd marks only failures proven to precede prompt-dispatch acceptance.
+      // Draining additionally marks the exact identity safe to retry, so it stays
+      // lifecycle-classified but uses the indefinite transport cadence. Other
+      // not-accepted failures are terminal/manual. Markerless transport failures
+      // remain ambiguous and retry behind Pi's dispatch fence.
+      const notAccepted = isEchsDispatchNotAcceptedError(err);
+      const safePreAcceptanceRetry = notAccepted && err.safeRetry;
       const transport = isEchsTransportError(err);
-      const retryAt = transport
-        ? transportRetryAtForAttempt(latest.attempt_count)
-        : retryAtForAttempt(latest.attempt_count);
-      if (claimToken) this.store.markPostDispatchFailed(latest.id, claimToken, message, {
-        retryAt,
-        classification: transport ? 'transport' : 'application',
-      });
+      const retryAt =
+        safePreAcceptanceRetry || transport
+          ? transportRetryAtForAttempt(latest.attempt_count)
+          : notAccepted
+            ? null
+            : retryAtForAttempt(latest.attempt_count);
+      if (claimToken)
+        this.store.markPostDispatchFailed(latest.id, claimToken, message, {
+          retryAt,
+          classification: notAccepted ? 'lifecycle' : transport ? 'transport' : 'application',
+        });
     } finally {
       this.activeTopics.delete(row.topic_id);
     }

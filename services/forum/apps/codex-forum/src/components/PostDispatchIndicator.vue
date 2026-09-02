@@ -3,7 +3,16 @@ import { computed, ref } from 'vue';
 
 import type { TopicPostDispatchProjectionDto } from '../lib/apiClient';
 
-const props = defineProps<{ postId: string; projection: TopicPostDispatchProjectionDto }>();
+const props = withDefaults(
+  defineProps<{
+    postId: string;
+    projection: TopicPostDispatchProjectionDto;
+    retrying?: boolean;
+    retryError?: string;
+  }>(),
+  { retrying: false, retryError: '' }
+);
+const emit = defineEmits<{ retry: [postId: string] }>();
 const expanded = ref(false);
 const current = computed(() => props.projection.current.find((item) => item.postId === props.postId) ?? null);
 const attempts = computed(() => {
@@ -23,9 +32,19 @@ function when(value: string): string {
       <span> · attempt {{ current.attemptCount }}</span>
       <span v-if="current.nextAttemptAt"> · retry {{ when(current.nextAttemptAt) }}</span>
     </div>
+    <button
+      v-if="current.status === 'failed'"
+      class="vb-small-btn"
+      type="button"
+      :disabled="retrying"
+      @click="emit('retry', postId)"
+    >
+      {{ retrying ? 'Retrying…' : 'Retry' }}
+    </button>
     <button class="vb-small-btn" type="button" @click="expanded = !expanded">
       {{ expanded ? 'Hide history' : 'Attempt history' }}
     </button>
+    <p v-if="retryError" class="vb-dispatch-error" role="alert">{{ retryError }}</p>
     <ol v-if="expanded" class="vb-dispatch-attempts">
       <li v-for="attempt in attempts" :key="attempt.id">
         {{ when(attempt.createdAt) }} · {{ attempt.event.replaceAll('_', ' ') }}
@@ -48,6 +67,10 @@ function when(value: string): string {
 .vb-dispatch-indicator > div {
   display: inline;
   margin-right: 10px;
+}
+.vb-dispatch-error {
+  margin: 8px 0 0;
+  color: #8b1a1a;
 }
 .vb-dispatch-attempts {
   margin: 8px 0 0;

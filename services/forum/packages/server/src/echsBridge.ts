@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { normalizedOriginKey } from '@irrigationreal/codex-forum-core';
 
-import { EchsClient } from './echsClient';
+import { EchsClient, EchsDispatchNotAcceptedError } from './echsClient';
 import { InMemoryMessageTamperLayer } from './messageTamper';
 import { renderPersonaIndexMarkdown, safePersonaKey } from './personaPrompt';
 import { AssistantProjectionService } from './services/assistantProjectionService';
@@ -1858,6 +1858,7 @@ export class EchsBridge {
             : undefined,
         });
       } catch (err) {
+        if (err instanceof EchsDispatchNotAcceptedError) throw err;
         const message = err instanceof Error ? err.message : String(err);
         if (message.includes('conversation not found') || message.includes('ECHS 404')) {
           if (!this.store.isTopicDispatchGenerationCurrent(topicId, generation)) {

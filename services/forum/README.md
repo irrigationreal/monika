@@ -60,13 +60,16 @@ packages/
 
 - Fastify server in `packages/server` with SQLite storage and optional Redis stream bus.
 - Robot orchestration is handled by the Monika Pi bridge, which calls `agentd` over HTTP/SSE and reconciles canonical Pi
-  provenance into forum state. Ambiguous disconnect/5xx outages retain the exact durable dispatch ID, generation, origin,
-  and ordered contributors indefinitely, retrying deterministically after roughly 30s, 60s, 2m, then at a 5m cap;
-  definite failures remain terminal, and superseded/abandoned work cannot be manually resurrected. Claim and terminal
-  transitions also append immutable attempt-audit rows; the mutable dispatch error is not the diagnostic source of truth. Ordinary
+  provenance into forum state. Ambiguous disconnect/markerless-5xx outages retain the exact durable dispatch ID,
+  generation, origin, and ordered contributors indefinitely, retrying deterministically after roughly 30s, 60s, 2m, then
+  at a 5m cap. Agentd failures explicitly marked `dispatch_acceptance: "not_accepted"` are lifecycle outcomes; only an
+  additional `dispatch_retry: "safe"` marker schedules exact-identity automatic retry (used while agentd drains).
+  Other marked and definite setup failures are terminal/manual regardless of status. A failed current-generation post
+  dispatch can be retried by its author or an admin; superseded/abandoned work cannot be resurrected. Claims and outcomes
+  append immutable attempt-audit rows; the mutable dispatch error is not the diagnostic source of truth. Ordinary
   durable post-dispatch creation also supplies that identity as agentd `creation_id` with `durable_session: true`, so a
-  lost create response reopens the same anchored session. Non-dispatch operations never manufacture a missing canonical link; they may repair
-  one only from a currently loaded conversation carrying canonical session ID and path.
+  lost create response reopens the same anchored session. Non-dispatch operations never manufacture a missing canonical
+  link; they may repair one only from a currently loaded conversation carrying canonical session ID and path.
 - A canonical utterance is channel-neutral. One agent run may persist zero, one, or several ordered assistant messages;
   Pi's internal `agent_settled` is idle-only, and agentd maps it to wire `turn_completed`; neither asks the forum to
   publish a raw aggregate.

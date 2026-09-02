@@ -23,6 +23,24 @@ export function isEchsTransportError(error: unknown): error is EchsTransportErro
   return error instanceof EchsTransportError;
 }
 
+export class EchsDispatchNotAcceptedError extends Error {
+  readonly retryable: boolean;
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly details: unknown,
+    readonly safeRetry = false
+  ) {
+    super(message);
+    this.name = 'EchsDispatchNotAcceptedError';
+    this.retryable = safeRetry;
+  }
+}
+
+export function isEchsDispatchNotAcceptedError(error: unknown): error is EchsDispatchNotAcceptedError {
+  return error instanceof EchsDispatchNotAcceptedError;
+}
+
 export interface EchsThreadState {
   thread_id: string;
   state?: {
@@ -226,7 +244,11 @@ export class EchsClient {
     if (opts.piSessionPath) payload['pi_session_path'] = opts.piSessionPath;
     if (opts.cwd) payload['cwd'] = opts.cwd;
     if (opts.autoCompact !== undefined) payload['auto_compact'] = opts.autoCompact;
-    const result = (await this.request('/v1/conversations/open', { method: 'POST', body: payload, timeoutMs: 30_000 })) as {
+    const result = (await this.request('/v1/conversations/open', {
+      method: 'POST',
+      body: payload,
+      timeoutMs: 30_000,
+    })) as {
       conversation?: EchsConversationRecord;
     };
     if (!result?.conversation?.conversation_id) throw new Error('ECHS openConversation did not return conversation_id');
@@ -237,11 +259,14 @@ export class EchsClient {
     await this.request(`/v1/conversations/${conversationId}/close`, { method: 'POST' });
   }
 
-  async compactConversation(conversationId: string, opts: {
-    operationId: string;
-    expectedLeafId: string;
-    customInstructions?: string | null;
-  }): Promise<Record<string, unknown>> {
+  async compactConversation(
+    conversationId: string,
+    opts: {
+      operationId: string;
+      expectedLeafId: string;
+      customInstructions?: string | null;
+    }
+  ): Promise<Record<string, unknown>> {
     return (await this.request(`/v1/conversations/${conversationId}/compact`, {
       method: 'POST',
       body: {
@@ -348,12 +373,15 @@ export class EchsClient {
     return conversation;
   }
 
-  async generateHandoffDraft(conversationId: string, opts: {
-    goal: string;
-    model?: string | null;
-    reasoning?: string | null;
-    systemPrompt?: string | null;
-  }): Promise<{ source?: unknown; goal: string; draft: string; model?: string | null; reasoning?: string | null }> {
+  async generateHandoffDraft(
+    conversationId: string,
+    opts: {
+      goal: string;
+      model?: string | null;
+      reasoning?: string | null;
+      systemPrompt?: string | null;
+    }
+  ): Promise<{ source?: unknown; goal: string; draft: string; model?: string | null; reasoning?: string | null }> {
     return (await this.request(`/v1/conversations/${conversationId}/handoff/draft`, {
       method: 'POST',
       body: {
@@ -454,16 +482,24 @@ export class EchsClient {
     return out;
   }
 
-  async interruptConversation(conversationId: string, generation?: number, operationId?: string): Promise<EchsCancellationResult> {
+  async interruptConversation(
+    conversationId: string,
+    generation?: number,
+    operationId?: string
+  ): Promise<EchsCancellationResult> {
     return this.requestCancellation(`/v1/conversations/${conversationId}/interrupt`, {
       ...(generation === undefined ? {} : { generation }),
       ...(operationId === undefined ? {} : { operation_id: operationId }),
     });
   }
 
-  async cancelPiSession(sessionId: string, input: { operationId: string; generation: number }): Promise<EchsCancellationResult> {
+  async cancelPiSession(
+    sessionId: string,
+    input: { operationId: string; generation: number }
+  ): Promise<EchsCancellationResult> {
     return this.requestCancellation(`/v1/pi/sessions/${encodeURIComponent(sessionId)}/cancellation`, {
-      operation_id: input.operationId, generation: input.generation,
+      operation_id: input.operationId,
+      generation: input.generation,
     });
   }
 
@@ -663,6 +699,18 @@ export class EchsClient {
     const data = text ? safeJsonParse(text) : null;
     if (!response.ok) {
       const message = `ECHS ${response.status}: ${typeof data === 'string' ? data : JSON.stringify(data)}`;
+      if (
+        data &&
+        typeof data === 'object' &&
+        (data as Record<string, unknown>)['dispatch_acceptance'] === 'not_accepted'
+      ) {
+        throw new EchsDispatchNotAcceptedError(
+          message,
+          response.status,
+          data,
+          (data as Record<string, unknown>)['dispatch_retry'] === 'safe'
+        );
+      }
       if (response.status >= 500) throw new EchsTransportError(message, response.status);
       const error = new Error(message) as Error & { status?: number; details?: unknown };
       error.status = response.status;

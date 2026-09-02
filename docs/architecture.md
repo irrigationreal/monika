@@ -99,8 +99,11 @@ flowchart LR
 ### Pi
 
 Pi supplies the agent runtime, canonical JSONL session format, model/provider
-integration, tools, extension surface, compaction, and interactive TUI. The Monika
-image pins Pi and installs the deployment-owned extensions and packages around it.
+integration, tools, extension surface, compaction, package manager, and interactive
+TUI. The Monika image pins Pi and owns bundled extensions, agents, settings defaults,
+and an immutable browser-package seed created with Pi's install operation. The
+deployment owns Pi's selected `packages` array and managed `npm/`/`git/` trees under
+`/data/pi-agent-packages`; `PI_OFFLINE=1` gates their automatic startup package resolution and update checks.
 
 ### agentd
 

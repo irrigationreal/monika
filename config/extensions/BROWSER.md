@@ -6,11 +6,18 @@ binary.
 
 ## Runtime installation
 
-The Monika image pins `pi-agent-browser` in `config/settings.json`, installs the
-`agent-browser` CLI in `Containerfile`, and sets
-`AGENT_BROWSER_EXECUTABLE_PATH` to the image-owned browser. Pi discovers and
-activates package tools normally; there is no hardcoded active-tool allowlist to
-update.
+The Monika image pins `pi-agent-browser` in `config/settings.json`, uses Pi's own
+`pi install` command to populate immutable first-boot npm seed state, installs the
+`agent-browser` CLI in `Containerfile`, and sets `AGENT_BROWSER_EXECUTABLE_PATH`
+to the image-owned browser. Runtime settings/npm/git state persists under
+`/data/pi-agent-packages`, so offline first boot and container replacement retain
+the tool. Pi discovers and activates package tools normally; there is no hardcoded
+active-tool allowlist or custom package installer to update.
+
+Because the settings source is an exact npm pin, `pi update --extensions` does
+not select a newer browser package. Upgrade it deliberately with
+`PI_OFFLINE=0 pi install npm:pi-agent-browser@NEW_VERSION`, then validate and
+retain a package-state backup for rollback.
 
 The pinned CLI currently declares Node.js 24 or newer while the Monika runtime
 remains on Node.js 22 until the planned Node 26 LTS migration. The native CLI path

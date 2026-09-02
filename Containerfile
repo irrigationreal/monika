@@ -17,7 +17,8 @@ LABEL org.opencontainers.image.created=$MONIKA_BUILD_DATE
 LABEL org.opencontainers.image.licenses="AGPL-3.0-or-later"
 
 ENV MONIKA_BUILD_COMMIT=$MONIKA_BUILD_COMMIT \
-    MONIKA_BUILD_DATE=$MONIKA_BUILD_DATE
+    MONIKA_BUILD_DATE=$MONIKA_BUILD_DATE \
+    PI_OFFLINE=1
 
 # System deps — base + Chromium headless requirements
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -110,15 +111,20 @@ RUN mkdir -p "$AGENT_BROWSER_INSTALL_HOME" && \
     fi && \
     "$AGENT_BROWSER_EXECUTABLE_PATH" --version
 
-# Pre-install pi's declared packages so first run isn't slow.
-# This requires a settings.json with the packages list.
-COPY config/settings.json /tmp/pi-settings.json
-RUN mkdir -p /tmp/pi-prebuild/.pi/agent && \
-    cp /tmp/pi-settings.json /tmp/pi-prebuild/.pi/agent/settings.json && \
-    cd /tmp/pi-prebuild && \
-    HOME=/tmp/pi-prebuild PI_CODING_AGENT_DIR=/tmp/pi-prebuild/.pi/agent \
-    pi --version 2>/dev/null || true && \
-    rm -rf /tmp/pi-prebuild /tmp/pi-settings.json
+# Seed the reviewed browser extension with Pi's own package manager. The seed is
+# immutable image state; entrypoint initialization copies it into deployment-owned
+# package storage on first boot. PI_OFFLINE is deliberately disabled only for this
+# exact build-time install.
+RUN mkdir -p /tmp/pi-package-seed/agent /opt/monika/pi-agent-seed && \
+    printf '{}\n' > /tmp/pi-package-seed/agent/settings.json && \
+    cd /tmp/pi-package-seed && \
+    HOME=/tmp/pi-package-seed PI_CODING_AGENT_DIR=/tmp/pi-package-seed/agent PI_OFFLINE=0 \
+      pi install npm:pi-agent-browser@0.1.0 && \
+    test -d /tmp/pi-package-seed/agent/npm/node_modules/pi-agent-browser && \
+    mv /tmp/pi-package-seed/agent/npm /opt/monika/pi-agent-seed/npm && \
+    mkdir -p /opt/monika/pi-agent-seed/git && \
+    rm -rf /tmp/pi-package-seed
+COPY config/settings.json /opt/monika/pi-agent-seed/settings.json
 
 # Project and separately licensed source notices shipped with the runtime
 # distribution. Dependency-level image compliance is tracked separately.
@@ -178,8 +184,8 @@ RUN mkdir -p /root/.ssh && \
     chmod 700 /root/.ssh && \
     chmod 600 /root/.ssh/config
 
-# Bundled .pi directory. Runtime deployments may mount selected persistent state
-# under /app/.pi, but extensions and defaults are image-owned.
+# Bundled .pi directory. Runtime deployments persist Pi's package-manager state
+# under /data, while extensions, agents, and settings defaults remain image-owned.
 RUN mkdir -p /app/.pi/agent/extensions /app/.pi/stateful-memory/persona_topics \
              /app/.pi/stateful-memory/memory/sessions \
              /app/.pi/stateful-memory/dreams \
@@ -187,7 +193,6 @@ RUN mkdir -p /app/.pi/agent/extensions /app/.pi/stateful-memory/persona_topics \
 
 COPY config/extensions/          /app/.pi/agent/extensions/
 COPY config/agents/              /app/.pi/agent/agents/
-COPY config/settings.json        /app/.pi/agent/settings.json
 COPY config/stateful-memory.json /app/.pi/agent/stateful-memory.json
 COPY config/persona/SOUL.md                /app/.pi/stateful-memory/SOUL.md
 COPY config/persona/STYLE.md               /app/.pi/stateful-memory/STYLE.md

@@ -51,6 +51,40 @@ Open interactive Pi inside the runtime:
 docker exec -it -w /workspace/monika monika pi
 ```
 
+Ordinary Pi and agentd startup uses `PI_OFFLINE=1`. This gates Pi's automatic
+startup package resolution and update checks; it does not authorize or prohibit an
+explicit `pi install`. Package administration remains Pi-owned. Administrator
+commands set `PI_OFFLINE=0` explicitly to record online-maintenance intent rather
+than as an authorization mechanism:
+
+```bash
+docker exec -it -e PI_OFFLINE=0 monika pi install npm:package@1.2.3
+docker exec -it -e PI_OFFLINE=0 -e GIT_TERMINAL_PROMPT=0 monika \
+  pi install git:github.com/owner/repository@<commit>
+docker exec -it -e PI_OFFLINE=0 monika pi update --extensions
+docker exec -it -e PI_OFFLINE=0 monika pi remove npm:package
+```
+
+Keep Git terminal prompting disabled for package maintenance so an unexpected
+credential challenge fails visibly instead of blocking Pi. Configure a reviewed
+credential helper or SSH source explicitly when an administrator intends to install
+a private package.
+
+Perform package maintenance only after the forum and agentd report no active or
+queued work, then recreate Monika through the normal safe deployment path. Loaded
+conversations do not hot-reload package resources, so continuing before recreation
+can mix old and new package code in one runtime. Never run package maintenance from
+a second container against live Monika state.
+
+Pin install sources explicitly and back up `runtime/data/pi-agent-packages/`
+before package maintenance. Exact npm pins, including `pi-agent-browser`, rotate
+only with `pi install npm:name@NEW_VERSION`; `pi update --extensions` does not
+change an exact npm version in settings. A failed install is not written to
+`settings.json`; Pi installs first and persists the package choice only after
+success. To roll back package maintenance, stop the runtime and restore the whole
+package-state backup (settings plus `npm/` and `git/`) together; do not mix a
+settings file from one revision with install trees from another.
+
 The default workspace mount maps `/home/monika/repos` on the host to `/workspace`
 in both containers. Override it before Compose starts when needed:
 
@@ -89,6 +123,7 @@ runtime/
 │   ├── memstore/                  Transcript and observation database
 │   ├── pi-agent-auth/             Writable Pi OAuth state
 │   ├── pi-agent-models/           Refreshed built-in model catalog cache
+│   ├── pi-agent-packages/         Pi settings package choices plus npm/git installs
 │   ├── pi-agent-trust/            Interactive project-trust decisions
 │   ├── pi-subagents/              Async execution lifecycle and results
 │   └── pi-subagent-operator-state/ Delivery custody and operator audit ledger
@@ -139,6 +174,15 @@ Pi OAuth credentials are mutable. At first start, `auth.json` seeds a writable c
 under `runtime/data/pi-agent-auth/`; later token refreshes update that persistent
 copy rather than the read-only secret mount. Model catalog and trust state are
 likewise persisted under `runtime/data/`.
+
+Pi package-manager state lives under `runtime/data/pi-agent-packages/` and is
+linked to `/app/.pi/agent/{settings.json,npm,git}`. On every startup the runtime
+atomically rebuilds settings from the image defaults while retaining only the
+deployment-owned `packages` array. This intentionally discards other interactive
+settings edits, matching the prior image-default behavior. First boot seeds the
+reviewed `pi-agent-browser` npm package from immutable image state produced by
+`pi install`; `/opt/pi-subagents` remains image-local. Bundled `extensions/`,
+`agents/`, and other default resources are never moved into package persistence.
 
 Do not commit `runtime/` or store public-ingress connector credentials anywhere
 inside the mounted workspace tree.

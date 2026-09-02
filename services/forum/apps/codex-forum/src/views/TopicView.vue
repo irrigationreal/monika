@@ -101,6 +101,8 @@ const replyReasoningOptions = computed(() => state.modelReasoningOptions(effecti
 const canModerate = computed(() => state.canModerate.value);
 const isAdmin = computed(() => state.currentUser.value?.kind === 'admin');
 const postDispatchProjection = ref<TopicPostDispatchProjectionDto | null>(null);
+const postDispatchRetrying = ref<Record<string, boolean>>({});
+const postDispatchRetryErrors = ref<Record<string, string>>({});
 let postDispatchRequestGeneration = 0;
 const postDispatchPoller = createCompletionPoller({
   intervalMs: 5_000,
@@ -122,6 +124,31 @@ const postDispatchPoller = createCompletionPoller({
     }
   },
 });
+async function retryTerminalPostDispatch(postId: string): Promise<void> {
+  if (postDispatchRetrying.value[postId]) return;
+  const topicId = routeTopicId.value;
+  postDispatchRetrying.value = { ...postDispatchRetrying.value, [postId]: true };
+  postDispatchRetryErrors.value = { ...postDispatchRetryErrors.value, [postId]: '' };
+  try {
+    await state.dispatchPost(postId);
+    if (topicId) {
+      const projection = await api.getTopicPostDispatches(topicId);
+      if (routeTopicId.value === topicId) postDispatchProjection.value = projection;
+    }
+  } catch (error) {
+    if (routeTopicId.value === topicId) {
+      postDispatchRetryErrors.value = {
+        ...postDispatchRetryErrors.value,
+        [postId]: error instanceof Error ? error.message : 'Could not retry dispatch.',
+      };
+    }
+  } finally {
+    if (routeTopicId.value === topicId) {
+      postDispatchRetrying.value = { ...postDispatchRetrying.value, [postId]: false };
+    }
+  }
+}
+
 const isRobotBusy = computed(() => state.isRobotBusy.value);
 const showStopRobotConfirm = ref(false);
 const showDiscardDraftConfirm = ref(false);
@@ -2197,6 +2224,8 @@ watch(
     postDispatchPoller.stop();
     postDispatchRequestGeneration += 1;
     postDispatchProjection.value = null;
+    postDispatchRetrying.value = {};
+    postDispatchRetryErrors.value = {};
     adminWorkspaceTab.value = null;
     showStopRobotConfirm.value = false;
     showDiscardDraftConfirm.value = false;
@@ -3044,6 +3073,9 @@ onUnmounted(() => {
           v-if="isAdmin && postDispatchProjection"
           :post-id="post.id"
           :projection="postDispatchProjection"
+          :retrying="postDispatchRetrying[post.id] ?? false"
+          :retry-error="postDispatchRetryErrors[post.id] ?? ''"
+          @retry="retryTerminalPostDispatch"
         />
         <div v-if="operationalEventsAfter(post.id).length > 0" class="vb-operational-event-group">
           <OperationalEventBar

@@ -3672,7 +3672,7 @@ export class ForumStore {
     id: string,
     claimToken: string,
     message: string,
-    opts?: { retryAt?: string | null; classification?: 'transport' | 'application' }
+    opts?: { retryAt?: string | null; classification?: 'transport' | 'application' | 'lifecycle' }
   ): PostDispatchRow | null {
     const existing = this.getPostDispatch(id);
     if (!existing) return null;
