@@ -20,7 +20,7 @@ describe('SqliteMessageDraftRepository', () => {
     db = new Database(':memory:');
     db.pragma('foreign_keys = ON');
     runMigrations(db);
-    now = '2026-08-02T12:00:00.000Z';
+    now = '2030-08-02T12:00:00.000Z';
     db.prepare(
       "insert into identities (id,display_name,kind,created_at,updated_at) values ('u1','One','human',?,?),('u2','Two','human',?,?)"
     ).run(now, now, now, now);
@@ -54,9 +54,9 @@ describe('SqliteMessageDraftRepository', () => {
     expect(new Set((await service.listNewThreadByForum('u1', 'f1')).map((item) => item.id))).toEqual(
       new Set([one.id, two.id])
     );
-    now = '2026-08-03T12:00:00.000Z';
+    now = '2030-08-03T12:00:00.000Z';
     const same = await service.saveNewThread('u1', 'f1', one.revision, { title: 'One', body: 'body one' }, one.id);
-    expect(same.updatedAt).toBe('2026-08-02T12:00:00.000Z');
+    expect(same.updatedAt).toBe('2030-08-02T12:00:00.000Z');
   });
 
   it('consumes only an exact revision atomically with publication', async () => {
@@ -82,10 +82,10 @@ describe('SqliteMessageDraftRepository', () => {
   it('expires, purges, and cascades private drafts', async () => {
     await service.saveReply('u1', topicId, 0, { body: 'reply' });
     await service.saveNewThread('u1', 'f1', 0, { title: 'new', body: '' });
-    now = '2026-09-02T12:00:00.000Z';
+    now = '2030-09-02T12:00:00.000Z';
     expect(await service.list('u1')).toEqual([]);
     expect(await service.purgeExpired()).toBe(2);
-    now = '2026-08-02T12:00:00.000Z';
+    now = '2030-08-02T12:00:00.000Z';
     await service.saveReply('u1', topicId, 0, { body: 'again' });
     new ForumStore(db).deleteTopic(topicId);
     expect(await service.list('u1')).toEqual([]);
