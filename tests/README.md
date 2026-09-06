@@ -52,8 +52,13 @@ pnpm test
 ```
 
 The container build runs this suite after installing agentd's frozen production
-lockfile, so the tests exercise the same Pi packages shipped in the image. The
-agentd test command creates explicit temporary runtime, result/session, and
+lockfile, so the tests exercise the same Pi packages shipped in the image.
+Pi integrity coverage additionally exercises safe appends to JSONL without a
+trailing newline, label-boundary remapping when forking compacted history,
+execution-time tool cwd with explicit factory fallback, and a real Pi tool loop
+that defers extension notices until after tool results and compacts before its next
+provider request. Its provider and summary are synthetic; no live model calls or
+credentials are used. The agentd test command creates explicit temporary runtime, result/session, and
 runtime-instance roots; tests must never inherit the live `/data/pi-subagents`
 root. Session-resolution coverage proves known-path dispatch reads only one target
 amid 1,800 decoys and rejects containment escapes, symlinks, malformed/mismatched
