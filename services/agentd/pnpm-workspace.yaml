@@ -6,6 +6,8 @@ minimumReleaseAgeStrict: true
 minimumReleaseAgeIgnoreMissingTime: false
 minimumReleaseAgeExclude:
   - '@earendil-works/*'
+  # Pi 0.85.1 pins this SDK; reviewed with the coordinated Pi upgrade.
+  - '@anthropic-ai/sdk@0.123.0'
 
 overrides:
   protobufjs: 7.6.5
@@ -13,3 +15,5 @@ overrides:
 allowBuilds:
   '@google/genai': false
   protobufjs: false
+  # Chord's bundler is not used by agentd's published local SDK.
+  esbuild: false

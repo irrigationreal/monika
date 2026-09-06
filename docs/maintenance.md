@@ -22,7 +22,10 @@ The pnpm workspaces exempt `@earendil-works/*` so coordinated Pi releases can be
 adopted without waiting ten days. The image's exact global Pi install bypasses the
 npm cooldown explicitly for that one reviewed command; arbitrary interactive npm
 installs are not broadly exempt. Agentd records its complete dependency graph in
-`services/agentd/pnpm-lock.yaml`.
+`services/agentd/pnpm-lock.yaml`. Agentd also carries an exact-version exception
+for the Anthropic SDK pinned by Pi; this is a dependency-install exception, not
+an opt-in to Anthropic thinking features. Keep non-Pi exceptions version-scoped
+in `services/agentd/pnpm-workspace.yaml` and remove them when no longer needed.
 
 For an urgent non-Pi update, bypass the cooldown only for the exact update command
 and restore normal policy immediately:
@@ -121,6 +124,21 @@ tests/smoke/monika-runtime.sh monika-test
 Pi upgrades can change extension loading, tool schemas, model catalog behavior,
 JSONL events, compaction, and SDK lifecycle semantics. Run focused tests for any
 surface touched by the release rather than relying only on `pi --version`.
+The agentd integrity suite exercises real Pi session persistence, forked compaction
+boundaries, execution-time tool cwd, deferred context-only extension messages, and
+threshold compaction between tool results and the next provider request. It uses a
+synthetic provider and extension-generated summary, never live model credentials.
+
+Automatic compaction remains disabled in image defaults and controlled per forum
+topic. When enabled, it can now occur within a running tool loop, not only after a
+run ends. Status integrations must retain `agent_settled` as the completion barrier;
+`agent_end` and `compaction_end` are not permission to finalize a forum reply.
+Context-only extension messages sent during a run are persisted after tool results,
+so callers must not assume immediate insertion into the canonical session tree.
+
+Custom Claude compatibility settings and default model selection are independent
+of the Pi upgrade. Do not enable `supportsMidConvoEffort` or remove subagent
+fork-thinking safeguards without separate transport-specific validation.
 
 Do not recreate the live Monika container from an active Pi session. Prepare and
 validate the image, then let the operator apply it through the safe deployment

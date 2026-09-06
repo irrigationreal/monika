@@ -437,7 +437,9 @@ shared global setting. Consequently unrelated parent sessions and direct Pi CLI 
 remain governed by the global default, which stays disabled.
 
 When enabled, Pi owns threshold detection and overflow recovery. Threshold compaction
-summarizes older context near the model limit. On the first context-overflow failure,
+summarizes older context near the model limit, including between completed tool
+execution and the next assistant request within the same run. Neither a tool result
+nor `compaction_end` ends the forum response. On the first context-overflow failure,
 Pi compacts and retries the original request inside the same forum response; agentd
 still commits only when it observes Pi's internal `agent_settled`. Automatic
 compactions create idempotent

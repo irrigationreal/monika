@@ -159,13 +159,16 @@ directly so it does not recursively deadlock on its own newly published fence.
 
 ## Compaction
 
-Agentd exposes idle-only Pi compaction with an operation ID and expected canonical
+Agentd exposes idle-only manual Pi compaction with an operation ID and expected canonical
 leaf. A response lost after Pi appends the compaction is recognized from canonical
 ancestry so a retry does not compact twice.
 
 Manual forum compaction is a durable forum job around this synchronous agentd
 operation. Canonical parent automatic compaction is an isolated topic policy applied
-through agentd and never inherited by disposable children.
+through agentd and never inherited by disposable children. When enabled, threshold
+compaction may occur between tool execution and the next assistant request in the
+same run. Agentd forwards compaction status without completing that run; only
+`agent_settled` permits final response projection.
 
 ## Subagents
 
