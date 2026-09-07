@@ -151,8 +151,9 @@ and [`services/forum/README.md`](../services/forum/README.md) for the component.
 The Gate 1 Realtime Voice Lab is a separate authenticated BFF and a disabled-by-default,
 narrow agentd adapter. Browser media uses WebRTC directly with the configured Realtime
 provider, while agentd owns credential minting, SDP exchange, persona assembly, sideband
-control, and one bounded read-only recall tool. It never dispatches Pi, exposes write/action
-tools, opens live deployment memory in its isolated stack, or creates canonical sessions.
+control, and two bounded read-only recall tools for snapshot sessions and current
+observations. It never dispatches Pi, exposes write/action tools, opens live deployment
+memory in its isolated stack, or creates canonical sessions.
 Its bounded local JSONL records are explicitly experimental and outside Pi discovery. See
 [`docs/voice.md`](voice.md) and [`services/voice/README.md`](../services/voice/README.md).
 

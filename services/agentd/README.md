@@ -258,7 +258,8 @@ replacement during validation fail closed.
 
 The optional voice adapter owns pool credential use, ephemeral credential minting,
 Realtime SDP exchange, and a server-side sideband WebSocket. Only the bounded read-only
-`recall_past_context` function is advertised. The browser receives an SDP answer but no
+`recall_past_context` and `read_session_excerpt` functions are advertised. Recall searches
+session snippets plus current observations, and excerpts never expose origin paths. The browser receives an SDP answer but no
 credential and cannot execute tools. Provider/media/sideband destinations are fixed HTTPS/WSS
 configuration rather than request parameters, and upstream error bodies are never relayed.
 The adapter is disabled unless `MONIKA_VOICE_ENABLED=1` and then requires external provider

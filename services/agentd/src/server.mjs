@@ -1,11 +1,11 @@
 import http from "node:http";
-import net from "node:net";
 import { createHash, randomUUID } from "node:crypto";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { existsSync, readFileSync, promises as fs } from "node:fs";
 import path from "node:path";
 import { resolveLegacyArtifact } from './artifact-export.mjs';
 import { handlePiEvent } from "./pi-event-bridge.mjs";
+import { callMemstoreTool as callMemstoreRpc } from "./memstore-rpc.mjs";
 import {
   aggregateAnalytics,
   AnalyticsQueryError,
@@ -374,45 +374,8 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function callMemstoreTool(name, args = {}, timeoutMs = 2000) {
-  return new Promise((resolve) => {
-    const socket = net.createConnection(MEMSTORE_SOCKET);
-    let settled = false;
-    let buffer = "";
-    const finish = (value) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      socket.destroy();
-      resolve(value);
-    };
-    const timer = setTimeout(() => finish(null), timeoutMs);
-    socket.on("connect", () => {
-      socket.write(
-        JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method: "tools/call",
-          params: { name, arguments: args },
-        }) + "\n",
-      );
-    });
-    socket.on("data", (chunk) => {
-      buffer += chunk.toString("utf8");
-      const newline = buffer.indexOf("\n");
-      if (newline < 0) return;
-      const line = buffer.slice(0, newline).trim();
-      if (!line) return;
-      try {
-        const parsed = JSON.parse(line);
-        finish(parsed.result?.structuredContent ?? parsed.result ?? null);
-      } catch {
-        finish(null);
-      }
-    });
-    socket.on("error", () => finish(null));
-    socket.on("close", () => finish(null));
-  });
+async function callMemstoreTool(name, args = {}, timeoutMs = 2_000, options) {
+  return callMemstoreRpc(MEMSTORE_SOCKET, name, args, timeoutMs, options);
 }
 
 const voiceAdapter = createVoiceAdapter({ callMemstoreTool });
@@ -2396,6 +2359,15 @@ const server = http.createServer(async (req, res) => {
         if (error instanceof VoiceAdapterError) {
           return json(res, error.status, { error: error.code, message: error.message });
         }
+        throw error;
+      }
+    }
+    const voicePreviewStartMatch = url.pathname.match(/^\/v1\/voice\/sessions\/([0-9a-f-]{36})\/preview-start$/);
+    if (voicePreviewStartMatch && method === "POST") {
+      try {
+        return json(res, 200, voiceAdapter.startPreview(voicePreviewStartMatch[1]));
+      } catch (error) {
+        if (error instanceof VoiceAdapterError) return json(res, error.status, { error: error.code, message: error.message });
         throw error;
       }
     }

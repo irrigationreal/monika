@@ -30,7 +30,11 @@ Browser -- HTTPS --> voice BFF -- internal token --> agentd voice adapter
    `session.updated` before returning the SDP answer. Tool calls and tool results
    remain on this sideband channel.
 5. Browser and provider then exchange WebRTC media directly. Browser data-channel
-   events drive safe-text captions and diagnostics.
+   events drive safe-text captions and diagnostics. For preview only, generation
+   remains stopped until the browser applies the SDP answer, reaches a connected
+   peer state, attaches the receive-only audio track, explicitly starts playback,
+   and calls the exact authenticated, CSRF-protected preview-start route. That
+   route is idempotent.
 
 The provider origin, media URL, and sideband URL are deployment configuration,
 not request inputs. Media and sideband must use exact fixed paths on the same host,
@@ -39,20 +43,57 @@ The pool requires a browser-like User-Agent; `Mozilla/5.0` is the default.
 
 ## Gate 1 boundaries
 
-The adapter is disabled unless `MONIKA_VOICE_ENABLED=1`. Its only model tool is
-`recall_past_context`, which performs bounded `memstore_search`: queries are at
-most 240 characters, results at most five, snippets at most 1,200 characters,
-and combined snippets at most 4,000 characters. The POC stack gives memstore a
-new named volume, so it starts empty and never opens the live database. It
-remains empty at first startup even when a read-only `FACTS.md` snapshot is
-mounted: snapshot prompt context is not memstore content. The compose template
-includes slots for the default persona set (`SOUL`, `STYLE`, `REGISTER`, and
-`PERSONALITY_MATRIX`) and the selected `FACTS`, `WAKE`, and `OBSERVATIONS`
-snapshot. These are selected POC context, not live canonical history.
+The adapter is disabled unless `MONIKA_VOICE_ENABLED=1`. It advertises exactly
+two model tools. `recall_past_context` searches both session transcripts and
+**current** observations (superseded/retracted observations are excluded),
+returning numeric IDs, dates, and bounded snippets. Queries are at most 240
+characters, session results at most five, observation results at most three,
+each snippet at most 1,200 characters, and combined snippets at most 4,000
+characters. `read_session_excerpt` accepts only a returned numeric session ID,
+offset, and a 500–6,000 character bound. Agentd bounds the raw
+`memstore_show_entry` body to 8 MiB before JSON parsing, then bounds the returned
+excerpt and omits origin paths and other filesystem metadata. Session IDs must be
+strict positive integers; an excerpt ID must have been returned by recall in that
+same voice session (including opening-topic enrichment), and the backend response
+ID must exactly match it. Guessed or coerced IDs are rejected.
 
-The voice-specific delivery preamble does not replace that core identity. It
-asks for low reasoning effort and concise, natural spoken delivery without
-speaking Markdown syntax, headings, bullet markers, or long structured lists.
+The POC stack gives memstore its own named volume and never mounts the live
+database. It starts empty unless an operator restores an SQLite online-backup
+artifact into that isolated volume while the staging stack is stopped. An
+optional external manifest supplies the snapshot timestamp surfaced in the UI,
+prompt, recall results, and experimental record. The compose template also has
+read-only slots for the default persona set (`SOUL`, `STYLE`, `REGISTER`, and
+`PERSONALITY_MATRIX`), selected `FACTS`, `WAKE`, and `OBSERVATIONS` files, and
+the copied `persona_topics` directory. These are selected POC context, not live
+canonical history.
+
+The browser exposes all ten current Realtime voices (`alloy`, `ash`, `ballad`,
+`coral`, `echo`, `sage`, `shimmer`, `verse`, `marin`, and `cedar`). Preview uses
+the configured Realtime model to speak one fixed short sentence, without
+requesting microphone access or loading persona, context, memory, or tools.
+Unexpected preview tool calls are rejected without execution. The browser uses a
+receive-only audio transceiver plus a data channel, explicitly calls `play()`,
+and cleans up when `output_audio_buffer.stopped` arrives, with a fixed 30-second
+maximum lifetime. Preview is explicitly labeled as consuming API credits.
+
+Call settings are delivery configuration, not identity. Persisted local
+preferences include resettable speech direction, Semantic VAD eagerness
+(`low`, `medium`, `high`, or `auto`), response length (`brief`, `normal`, or
+`detailed`), playback speed (`0.25`–`1.5`), and actual
+`reasoning.effort` (`minimal`, `low`, `medium`, `high`, or `xhigh`). Agentd
+applies these to `audio.input.turn_detection.eagerness`, `audio.output.speed`,
+and `reasoning.effort` and validates strict allowlists/ranges. Settings lock
+when connection starts and unlock after disconnect. Provider origins,
+endpoints, and tool capabilities are never client settings.
+
+The voice-specific delivery direction does not replace core identity. An
+optional opening topic triggers bounded session/current-observation retrieval
+before connection and selects at most two matching persona topic addenda from
+the configured read-only directory. Empty opening topics perform neither
+operation. Topic-index and topic-directory paths are trusted operator-selected
+snapshot configuration. Dynamically selected topic files must remain beneath the
+configured directory by lexical and opened-descriptor realpath checks; symlinked
+files and symlinked subdirectories are rejected.
 
 Gate 1 deliberately has:
 
@@ -86,8 +127,9 @@ server-side session. The browser receives only an opaque `HttpOnly; Secure;
 SameSite=Strict` cookie and a CSRF token; every mutation checks both the token and
 an exact `Origin` value. Logout destroys the server session.
 
-Captions and diagnostics can be retained only as bounded experimental JSONL in
-the voice container's `/data/voice`. Files are marked noncanonical, live outside
+Captions, effective settings, snapshot timestamps, selected topic IDs, and
+diagnostics can be retained only as bounded experimental JSONL in the voice
+container's `/data/voice`. Files are marked noncanonical, live outside
 Pi discovery, default to 7-day/50-file/20-MiB retention, and can be exported or
 deleted in the UI. Record creates, appends, deletes, and pruning are serialized.
 Every create and append enforces file count and aggregate bytes immediately,
@@ -126,8 +168,41 @@ export VOICE_PERSONA_MATRIX_HOST_FILE=/outside/workspace/voice/persona/PERSONALI
 export VOICE_CONTEXT_FACTS_HOST_FILE=/outside/workspace/voice/persona/FACTS.md
 export VOICE_CONTEXT_WAKE_HOST_FILE=/outside/workspace/voice/persona/WAKE.md
 export VOICE_CONTEXT_OBSERVATIONS_HOST_FILE=/outside/workspace/voice/persona/OBSERVATIONS.md
+export VOICE_PERSONA_TOPICS_HOST_DIR=/outside/workspace/voice/persona/persona_topics
+export VOICE_SNAPSHOT_MANIFEST_HOST_FILE=/outside/workspace/voice/snapshot/snapshot.json
+export MONIKA_VOICE_SNAPSHOT_MANIFEST_FILE=/voice-snapshot/snapshot.json
+export MONIKA_VOICE_TOPIC_INDEX_FILE=/voice-persona/PERSONALITY_MATRIX.md
+export MONIKA_VOICE_TOPIC_DIR=/voice-persona/persona_topics
 export MONIKA_VOICE_ENABLED=1
+```
 
+To populate recall, restore only a previously created SQLite online-backup
+artifact into the POC volume. Never bind-mount or copy from the live database,
+and never restore while staging is running. The external `snapshot.json` must
+contain `version`, ISO `snapshot_at`, `source`, a 64-hex-character `sha256`,
+non-negative `entries`, `observations`, and `observation_relations` counts, and
+`read_only_tools` exactly listing `memstore_search`,
+`memstore_search_observations`, and `memstore_show_entry`. Agentd fails closed
+when a configured manifest is malformed.
+
+For an artifact externally custodied as `/outside/workspace/voice/snapshot/memory.db`:
+
+```bash
+docker compose -f tests/compose.voice-poc.yaml stop
+docker compose -f tests/compose.voice-poc.yaml create monika-voice
+docker run --rm \
+  -v monika-voice-poc_voice-poc-runtime-data:/target \
+  -v /outside/workspace/voice/snapshot:/snapshot:ro \
+  alpine:3.21 sh -eu -c \
+  'rm -f /target/memstore/memory.db /target/memstore/memory.db-wal /target/memstore/memory.db-shm; mkdir -p /target/memstore; cp /snapshot/memory.db /target/memstore/memory.db; chmod 600 /target/memstore/memory.db'
+```
+
+Run integrity/count verification against the isolated copy before starting the
+stack. This procedure requires the service to remain stopped throughout the
+restore; the manifest is provenance/display metadata and does not make an
+unsafe database copy safe. Then start and check the stack:
+
+```bash
 docker compose -f tests/compose.voice-poc.yaml up -d --build
 curl -fsS http://127.0.0.1:4320/healthz
 ```
@@ -171,10 +246,12 @@ docker compose -f tests/compose.voice-poc.yaml down -v # also deletes POC record
 | `MONIKA_VOICE_PROVIDER_USER_AGENT` | Credential mint User-Agent; default `Mozilla/5.0` |
 | `MONIKA_VOICE_MEDIA_URL` | Fixed HTTPS `/v1/realtime/calls` URL |
 | `MONIKA_VOICE_SIDEBAND_URL` | Fixed WSS `/v1/realtime` URL |
-| `MONIKA_VOICE_MODEL` | Realtime model; default `gpt-realtime-2.1` |
-| `MONIKA_VOICE_VOICE` | Output voice; default `marin` |
+| `MONIKA_VOICE_MODEL` | Fixed Realtime model; default `gpt-realtime-2.1` |
 | `MONIKA_VOICE_PERSONA_FILES` | Colon-separated bounded, read-only persona files |
 | `MONIKA_VOICE_CONTEXT_FILES` | Colon-separated selected POC snapshot files, labeled non-live/incomplete in context |
+| `MONIKA_VOICE_SNAPSHOT_MANIFEST_FILE` | Optional absolute external snapshot-manifest path |
+| `MONIKA_VOICE_TOPIC_INDEX_FILE` | Optional absolute bounded topic-index (`PERSONALITY_MATRIX.md`) path |
+| `MONIKA_VOICE_TOPIC_DIR` | Optional absolute read-only directory containing selectable topic addenda |
 
 ### voice BFF
 
@@ -194,8 +271,12 @@ docker compose -f tests/compose.voice-poc.yaml down -v # also deletes POC record
 
 All automated tests use fake HTTP/WebSocket/memstore boundaries and no provider
 credential. They cover disabled behavior, internal and browser authentication,
-CSRF and exact-route boundaries, provider failure redaction, recall bounds,
-sideband tool execution/close, record lifecycle, and retention.
+CSRF and exact-route boundaries, provider failure redaction, strict setting
+validation and API schema placement, browser-ready idempotent preview start and
+private-data-free preview handling, current observation/session recall,
+session-scoped excerpt IDs and transport bounds, symlink-safe topic bounds,
+browser setting lifecycle, sideband tool execution/close, record lifecycle, and
+retention.
 
 Gate 1 does not provide canonical continuity, live memory, durable sideband
 recovery, multi-user identity, TURN configuration, or guaranteed caption

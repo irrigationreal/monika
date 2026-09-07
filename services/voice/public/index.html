@@ -27,7 +27,40 @@
     <div id="lab" hidden>
       <section class="card controls">
         <div class="status-line"><span id="status-dot"></span><strong id="status">Disconnected</strong></div>
+        <fieldset id="pre-call-settings">
+          <legend>Pre-call settings</legend>
+          <div class="settings-grid">
+            <label>Realtime voice
+              <select id="voice">
+                <option value="alloy">Alloy</option><option value="ash">Ash</option><option value="ballad">Ballad</option>
+                <option value="coral">Coral</option><option value="echo">Echo</option><option value="sage">Sage</option>
+                <option value="shimmer">Shimmer</option><option value="verse">Verse</option><option value="marin">Marin</option>
+                <option value="cedar">Cedar</option>
+              </select>
+            </label>
+            <div class="preview-control"><button id="preview" type="button" class="quiet">Preview voice</button><small>Uses the selected Realtime model and API credits. No microphone, persona, memories, or tools are used. Preview sessions clean up automatically.</small></div>
+            <label>Opening topic (optional) <input id="opening-topic" maxlength="240" placeholder="What would you like to talk about?"></label>
+            <label>Semantic VAD patience
+              <select id="vad-patience"><option value="auto">Auto</option><option value="low">Low (wait longer)</option><option value="medium">Medium</option><option value="high">High (respond sooner)</option></select>
+            </label>
+            <label>Response length
+              <select id="response-length"><option value="brief">Brief</option><option value="normal">Normal</option><option value="detailed">Detailed</option></select>
+            </label>
+          </div>
+          <label>Speech direction (delivery only; separate from identity) <textarea id="speech-direction" maxlength="800" rows="3"></textarea></label>
+          <button id="reset-speech-direction" type="button" class="quiet">Reset speech direction</button>
+          <details>
+            <summary>Advanced</summary>
+            <div class="settings-grid">
+              <label>Playback speed (0.25–1.5) <input id="playback-speed" type="number" min="0.25" max="1.5" step="0.05"></label>
+              <label>Reasoning effort
+                <select id="reasoning-effort"><option value="minimal">Minimal</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra high</option></select>
+              </label>
+            </div>
+          </details>
+        </fieldset>
         <label>Microphone <select id="device"></select></label>
+        <p id="snapshot-time" class="snapshot-time">Memory snapshot timestamp: unavailable</p>
         <div class="buttons">
           <button id="connect">Connect</button>
           <button id="disconnect" disabled>Disconnect</button>

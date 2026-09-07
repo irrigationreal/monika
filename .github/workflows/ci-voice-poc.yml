@@ -29,6 +29,8 @@ jobs:
           if [ -z "$BASE" ] || git diff --name-only "$BASE" "${{ github.sha }}" -- \
             'services/voice/' \
             'services/agentd/src/voice-adapter.mjs' \
+            'services/agentd/src/memstore-rpc.mjs' \
+            'services/agentd/test/memstore-rpc.test.mjs' \
             'services/agentd/src/server.mjs' \
             'services/agentd/test/voice-adapter.test.mjs' \
             'services/agentd/package.json' \
@@ -55,7 +57,7 @@ jobs:
         run: corepack pnpm@11.21.0 --dir services/agentd install --frozen-lockfile
       - name: Run provider-independent voice tests
         run: |
-          node --test services/agentd/test/voice-adapter.test.mjs services/agentd/test/health-route.test.mjs
+          node --test services/agentd/test/voice-adapter.test.mjs services/agentd/test/memstore-rpc.test.mjs services/agentd/test/health-route.test.mjs
           npm --prefix services/voice test
       - name: Build voice images
         run: |

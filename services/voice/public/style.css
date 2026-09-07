@@ -8,7 +8,13 @@ h2 { margin-top: 0; }
 .eyebrow { color: #86efac; text-transform: uppercase; letter-spacing: .12em; font-size: .8rem; }
 .card { background: rgba(17, 31, 23, .92); border: 1px solid #31563e; border-radius: 14px; padding: 1.25rem; margin: 1rem 0; box-shadow: 0 18px 60px #0006; }
 label { display: grid; gap: .45rem; margin: .75rem 0; }
-input, select, button { font: inherit; color: inherit; border-radius: 8px; border: 1px solid #52735c; background: #101a14; padding: .7rem .9rem; }
+input, select, textarea, button { font: inherit; color: inherit; border-radius: 8px; border: 1px solid #52735c; background: #101a14; padding: .7rem .9rem; }
+textarea { width: 100%; resize: vertical; }
+fieldset { border: 1px solid #31563e; border-radius: 10px; margin: 1rem 0; padding: 1rem; }
+fieldset:disabled { opacity: .58; }
+.settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0 1rem; }
+.preview-control { display: grid; align-content: center; gap: .4rem; }
+.preview-control small, .snapshot-time { color: #9acbaa; }
 button { background: #24723e; cursor: pointer; font-weight: 650; }
 button:hover:not(:disabled) { background: #2e8b4e; }
 button:disabled { opacity: .45; cursor: not-allowed; }

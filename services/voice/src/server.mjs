@@ -188,8 +188,9 @@ export async function createVoiceServer({ env = process.env, fetchImpl = fetch, 
         sessions.delete(active.token);
         return json(res, 200, { ok: true }, { "set-cookie": `${COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0` });
       }
-      if (method === "POST" && url.pathname === "/api/realtime/connect") {
+      if (method === "POST" && ["/api/realtime/connect", "/api/realtime/preview"].includes(url.pathname)) {
         if (!requireAuth(req, res, { csrf: true })) return;
+        const preview = url.pathname === "/api/realtime/preview";
         const controller = new AbortController();
         let connectedSessionId = null;
         let cleanupPromise = null;
@@ -208,11 +209,20 @@ export async function createVoiceServer({ env = process.env, fetchImpl = fetch, 
         if (req.aborted || res.destroyed) abortAgentd();
         try {
           const body = await readJson(req);
+          const keys = Object.keys(body);
+          let agentdBody;
+          if (preview) {
+            if (keys.some((key) => !["sdp", "voice"].includes(key))) return json(res, 400, { error: "bad_request", message: "preview accepts only sdp and voice" });
+            agentdBody = { mode: "preview", sdp: body.sdp, voice: body.voice };
+          } else {
+            if (keys.some((key) => !["sdp", "settings", "opening_topic"].includes(key))) return json(res, 400, { error: "bad_request", message: "connect contains an unsupported field" });
+            agentdBody = { mode: "call", sdp: body.sdp, settings: body.settings, opening_topic: body.opening_topic };
+          }
           if (controller.signal.aborted) return;
           const result = await agentd("/v1/voice/connect", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify(body),
+            body: JSON.stringify(agentdBody),
             signal: controller.signal,
           }, AGENTD_CONNECT_TIMEOUT_MS);
           if (result.status === 201 && /^[0-9a-f-]{36}$/.test(result.body?.session_id ?? "")) connectedSessionId = result.body.session_id;
@@ -229,6 +239,12 @@ export async function createVoiceServer({ env = process.env, fetchImpl = fetch, 
       if (method === "POST" && url.pathname === "/api/recall") {
         if (!requireAuth(req, res, { csrf: true })) return;
         const result = await agentd("/v1/voice/recall", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(await readJson(req)) });
+        return json(res, result.status, result.body);
+      }
+      const previewStartMatch = url.pathname.match(/^\/api\/realtime\/sessions\/([0-9a-f-]{36})\/preview-start$/);
+      if (previewStartMatch && method === "POST") {
+        if (!requireAuth(req, res, { csrf: true })) return;
+        const result = await agentd(`/v1/voice/sessions/${previewStartMatch[1]}/preview-start`, { method: "POST" });
         return json(res, result.status, result.body);
       }
       const realtimeMatch = url.pathname.match(/^\/api\/realtime\/sessions\/([0-9a-f-]{36})(?:\/diagnostics)?$/);

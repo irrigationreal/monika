@@ -53,10 +53,13 @@ npm --prefix services/voice test
 ```
 
 Coverage includes disabled-by-default routes, external/internal authentication,
-same-origin CSRF, exact proxy paths, secret and upstream-error redaction, SDP/sideband
-lifecycle, server-owned bounded recall, local JSONL export/delete, and retention.
+same-origin CSRF, exact proxy paths, secret and upstream-error redaction, strict
+call settings, microphone/private-data-free preview, SDP/sideband lifecycle,
+session/current-observation recall, bounded transcript excerpts and topic enrichment,
+browser setting lifecycle, local JSONL export/delete, and retention.
 `tests/compose.voice-poc.yaml` is the two-service manual stack with new named volumes,
-loopback port 4320, and no live mounts or secrets by default. See
+loopback port 4320, no live mounts or secrets by default, and optional mounts for an
+external snapshot manifest and copied persona-topic directory. See
 [`../docs/voice.md`](../docs/voice.md).
 
 ## Agentd/forum integration tests

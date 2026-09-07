@@ -74,11 +74,41 @@ test("authentication, same-origin CSRF, logout, and exact agentd proxy boundarie
   assert.equal(agentRequests.length, 1);
   assert.equal(agentRequests[0].url, "http://agentd.test:7724/v1/voice/connect");
   assert.equal(agentRequests[0].options.headers["x-monika-voice-token"], "agentd-token");
+  assert.equal((await call(base, "/api/realtime/connect", { method: "POST", cookie: auth.cookie, csrf: auth.csrf, origin: ORIGIN, body: { sdp: "v=0", endpoint: "https://evil.example" } })).response.status, 400);
   assert.equal((await call(base, "/api/v1/admin/quiescence", { cookie: auth.cookie })).response.status, 404);
   assert.equal(agentRequests.length, 1);
 
   assert.equal((await call(base, "/api/logout", { method: "POST", cookie: auth.cookie, csrf: auth.csrf, origin: ORIGIN, body: {} })).response.status, 200);
   assert.equal((await call(base, "/api/session", { cookie: auth.cookie })).response.status, 401);
+});
+
+test("preview route constructs a private-data-free fixed adapter request", async (t) => {
+  const agentRequests = [];
+  const sessionId = "12345678-1234-1234-1234-123456789abc";
+  const { base } = await start(t, {
+    fetchImpl: async (url, options) => {
+      agentRequests.push({ url, options });
+      return Response.json({ session_id: sessionId, sdp: "v=0", mode: "preview", capabilities: { tools: [] } }, { status: 201 });
+    },
+  });
+  const auth = await login(base);
+  const rejected = await call(base, "/api/realtime/preview", { method: "POST", cookie: auth.cookie, csrf: auth.csrf, origin: ORIGIN, body: { sdp: "v=0", voice: "marin", opening_topic: "private" } });
+  assert.equal(rejected.response.status, 400);
+  assert.equal(agentRequests.length, 0);
+  const preview = await call(base, "/api/realtime/preview", { method: "POST", cookie: auth.cookie, csrf: auth.csrf, origin: ORIGIN, body: { sdp: "v=0", voice: "cedar" } });
+  assert.equal(preview.response.status, 201);
+  assert.deepEqual(JSON.parse(agentRequests[0].options.body), { mode: "preview", sdp: "v=0", voice: "cedar" });
+  assert.equal(agentRequests[0].url, "http://agentd.test:7724/v1/voice/connect");
+
+  const startPath = `/api/realtime/sessions/${sessionId}/preview-start`;
+  assert.equal((await call(base, startPath, { method: "POST", cookie: auth.cookie, origin: ORIGIN, body: {} })).response.status, 403);
+  assert.equal(agentRequests.length, 1);
+  assert.equal((await call(base, startPath, { method: "POST", cookie: auth.cookie, csrf: auth.csrf, origin: ORIGIN, body: {} })).response.status, 201);
+  assert.equal((await call(base, startPath, { method: "POST", cookie: auth.cookie, csrf: auth.csrf, origin: ORIGIN, body: {} })).response.status, 201);
+  assert.equal(agentRequests[1].url, `http://agentd.test:7724/v1/voice/sessions/${sessionId}/preview-start`);
+  assert.equal(agentRequests[1].options.method, "POST");
+  assert.equal(agentRequests[2].url, agentRequests[1].url);
+  assert.equal((await call(base, `${startPath}/extra`, { method: "POST", cookie: auth.cookie, csrf: auth.csrf, origin: ORIGIN, body: {} })).response.status, 404);
 });
 
 test("server sessions expire and fail closed", async (t) => {

@@ -1,10 +1,50 @@
 const $ = (id) => document.getElementById(id);
+const DEFAULT_SPEECH_DIRECTION = "Speak naturally and warmly. Do not speak Markdown syntax, headings, bullet markers, or long structured lists.";
+const PREFERENCE_KEY = "monika.voice.preferences.v1";
+const PREFERENCE_IDS = ["voice", "speech-direction", "vad-patience", "response-length", "playback-speed", "reasoning-effort"];
+const PREVIEW_MAX_MS = 30_000;
 const state = {
   csrf: "", pc: null, dc: null, stream: null, sessionId: null, recordId: null,
   muted: false, diagnosticsTimer: null, assistantCaption: null,
-  connectController: null, generation: 0, disconnectPromise: null,
+  connectController: null, previewController: null, generation: 0, disconnectPromise: null,
 };
 const closedSessions = new Set();
+
+function readPreferences() {
+  try { return JSON.parse(localStorage.getItem(PREFERENCE_KEY) ?? "{}"); } catch { return {}; }
+}
+function savePreferences() {
+  const values = Object.fromEntries(PREFERENCE_IDS.map((id) => [id, $(id).value]));
+  try { localStorage.setItem(PREFERENCE_KEY, JSON.stringify(values)); } catch { /* preferences remain usable in this page */ }
+}
+function loadPreferences() {
+  const saved = readPreferences();
+  $("speech-direction").value = DEFAULT_SPEECH_DIRECTION;
+  $("voice").value = "marin";
+  $("vad-patience").value = "auto";
+  $("response-length").value = "normal";
+  $("playback-speed").value = "1";
+  $("reasoning-effort").value = "low";
+  for (const id of PREFERENCE_IDS) {
+    const element = $(id);
+    if (typeof saved[id] === "string" && (!element.options || [...element.options].some((option) => option.value === saved[id]))) element.value = saved[id];
+  }
+}
+function effectiveSettings() {
+  const speed = Number($("playback-speed").value);
+  if (!Number.isFinite(speed) || speed < 0.25 || speed > 1.5) throw new Error("Playback speed must be from 0.25 to 1.5");
+  const direction = $("speech-direction").value.trim();
+  if (!direction) throw new Error("Speech direction cannot be empty");
+  return {
+    voice: $("voice").value,
+    speech_direction: direction,
+    vad_patience: $("vad-patience").value,
+    response_length: $("response-length").value,
+    playback_speed: speed,
+    reasoning_effort: $("reasoning-effort").value,
+  };
+}
+function lockSettings(locked) { $("pre-call-settings").disabled = locked; }
 
 function setStatus(text, live = false) {
   $("status").textContent = text;
@@ -117,6 +157,44 @@ function ensureCurrent(generation, signal) {
   if (generation !== state.generation || signal.aborted) throw signal.reason ?? new DOMException("Cancelled", "AbortError");
 }
 
+function waitForPeerConnected(pc, signal) {
+  if (pc.connectionState === "connected") return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const finish = (error) => {
+      pc.removeEventListener("connectionstatechange", onChange);
+      signal.removeEventListener("abort", onAbort);
+      error ? reject(error) : resolve();
+    };
+    const onChange = () => {
+      if (pc.connectionState === "connected") finish();
+      else if (["failed", "disconnected", "closed"].includes(pc.connectionState)) finish(new Error("Preview media connection failed"));
+    };
+    const onAbort = () => finish(signal.reason ?? new DOMException("Cancelled", "AbortError"));
+    pc.addEventListener("connectionstatechange", onChange);
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) onAbort();
+  });
+}
+
+function waitForDataChannelOpen(dc, signal) {
+  if (dc.readyState === "open") return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const finish = (error) => {
+      dc.removeEventListener("open", onOpen);
+      dc.removeEventListener("close", onClose);
+      signal.removeEventListener("abort", onAbort);
+      error ? reject(error) : resolve();
+    };
+    const onOpen = () => finish();
+    const onClose = () => finish(new Error("Preview event channel closed"));
+    const onAbort = () => finish(signal.reason ?? new DOMException("Cancelled", "AbortError"));
+    dc.addEventListener("open", onOpen, { once: true });
+    dc.addEventListener("close", onClose, { once: true });
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) onAbort();
+  });
+}
+
 function stopLocalMedia(pc, dc, stream) {
   if (pc) pc.onconnectionstatechange = null;
   if (dc) dc.onclose = null;
@@ -125,8 +203,71 @@ function stopLocalMedia(pc, dc, stream) {
   for (const track of stream?.getTracks?.() ?? []) track.stop();
 }
 
+async function previewVoice() {
+  if (state.pc || state.connectController || state.previewController) return;
+  const controller = new AbortController();
+  state.previewController = controller;
+  let pc;
+  let dc;
+  let sessionId;
+  let finishPreview;
+  const previewDone = new Promise((resolve) => { finishPreview = resolve; });
+  const cleanupTimer = setTimeout(() => controller.abort(), PREVIEW_MAX_MS);
+  $("preview").disabled = true;
+  setError("");
+  setStatus("Preparing voice preview…");
+  try {
+    pc = new RTCPeerConnection();
+    pc.addTransceiver("audio", { direction: "recvonly" });
+    let markTrackReady;
+    const trackReady = new Promise((resolve) => { markTrackReady = resolve; });
+    pc.ontrack = (event) => {
+      $("remote-audio").srcObject = event.streams[0];
+      markTrackReady();
+    };
+    dc = pc.createDataChannel("oai-events");
+    dc.onmessage = ({ data }) => {
+      try {
+        const event = JSON.parse(data);
+        if (event.type === "output_audio_buffer.stopped") finishPreview();
+      } catch { /* preview provider diagnostics are non-authoritative */ }
+    };
+    dc.onclose = finishPreview;
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await waitForIce(pc, controller.signal);
+    const result = await api("/api/realtime/preview", {
+      method: "POST",
+      body: JSON.stringify({ sdp: pc.localDescription.sdp, voice: $("voice").value }),
+      signal: controller.signal,
+    });
+    sessionId = result.session_id;
+    await pc.setRemoteDescription({ type: "answer", sdp: result.sdp });
+    await Promise.all([waitForPeerConnected(pc, controller.signal), waitForDataChannelOpen(dc, controller.signal), trackReady]);
+    await $("remote-audio").play();
+    await api(`/api/realtime/sessions/${sessionId}/preview-start`, { method: "POST", body: "{}", signal: controller.signal });
+    setStatus("Playing preview", true);
+    await Promise.race([
+      previewDone,
+      new Promise((resolve) => controller.signal.addEventListener("abort", resolve, { once: true })),
+    ]);
+  } catch (error) {
+    if (!controller.signal.aborted) setError(error.message);
+  } finally {
+    clearTimeout(cleanupTimer);
+    controller.abort();
+    stopLocalMedia(pc, dc, null);
+    $("remote-audio").pause();
+    $("remote-audio").srcObject = null;
+    await closeProviderSession(sessionId);
+    if (state.previewController === controller) state.previewController = null;
+    $("preview").disabled = false;
+    if (!state.pc && !state.connectController) setStatus("Disconnected");
+  }
+}
+
 async function connect() {
-  if (state.pc || state.connectController) return;
+  if (state.pc || state.connectController || state.previewController) return;
   const controller = new AbortController();
   const generation = ++state.generation;
   state.connectController = controller;
@@ -136,6 +277,10 @@ async function connect() {
   let sessionId;
   let recordId;
   setError("");
+  let requestedSettings;
+  try { requestedSettings = effectiveSettings(); } catch (error) { state.connectController = null; setError(error.message); return; }
+  savePreferences();
+  lockSettings(true);
   setStatus("Requesting microphone…");
   $("captions").replaceChildren();
   state.assistantCaption = null;
@@ -171,7 +316,7 @@ async function connect() {
     setStatus("Establishing protected control channel…");
     const result = await api("/api/realtime/connect", {
       method: "POST",
-      body: JSON.stringify({ sdp: pc.localDescription.sdp }),
+      body: JSON.stringify({ sdp: pc.localDescription.sdp, settings: requestedSettings, opening_topic: $("opening-topic").value.trim() }),
       signal: controller.signal,
     });
     sessionId = result.session_id;
@@ -183,11 +328,12 @@ async function connect() {
     recordId = created.id;
     ensureCurrent(generation, controller.signal);
     state.recordId = recordId;
-    await recordFor(recordId, { type: "status", status: "connected", model: result.model, capabilities: result.capabilities }, { signal: controller.signal });
+    await recordFor(recordId, { type: "status", status: "connected", model: result.model, capabilities: result.capabilities, effective_settings: result.effective_settings, snapshot_at: result.snapshot_at, selected_topics: result.selected_topics }, { signal: controller.signal });
     ensureCurrent(generation, controller.signal);
     $("mute").disabled = false;
     setStatus("Connected", true);
-    showDiagnostics({ model: result.model, sideband: result.capabilities.sideband, tools: result.capabilities.tools.join(", "), archival: "experimental local JSONL only" });
+    $("snapshot-time").textContent = `Memory snapshot timestamp: ${result.snapshot_at ? new Date(result.snapshot_at).toLocaleString() : "unavailable"}`;
+    showDiagnostics({ model: result.model, voice: result.effective_settings.voice, vad_patience: result.effective_settings.vad_patience, response_length: result.effective_settings.response_length, playback_speed: result.effective_settings.playback_speed, reasoning_effort: result.effective_settings.reasoning_effort, snapshot_at: result.snapshot_at ?? "unavailable", selected_topics: result.selected_topics.join(", ") || "none", sideband: result.capabilities.sideband, tools: result.capabilities.tools.join(", "), archival: "experimental local JSONL only" });
     state.diagnosticsTimer = setInterval(async () => {
       if (generation !== state.generation || !state.sessionId) return;
       try { showDiagnostics(await api(`/api/realtime/sessions/${state.sessionId}/diagnostics`)); }
@@ -206,6 +352,7 @@ async function connect() {
   } finally {
     if (state.connectController === controller) state.connectController = null;
     if (!state.pc) {
+      lockSettings(false);
       $("connect").disabled = false;
       $("disconnect").disabled = true;
     }
@@ -216,6 +363,7 @@ async function disconnect({ finalStatus = "Disconnected" } = {}) {
   if (state.disconnectPromise) return state.disconnectPromise;
   ++state.generation;
   state.connectController?.abort();
+  state.previewController?.abort();
   clearInterval(state.diagnosticsTimer);
   state.diagnosticsTimer = null;
   const sessionId = state.sessionId;
@@ -237,6 +385,7 @@ async function disconnect({ finalStatus = "Disconnected" } = {}) {
   $("disconnect").disabled = true;
   $("mute").disabled = true;
   $("mute").textContent = "Mute";
+  lockSettings(false);
   setStatus(finalStatus);
 
   const completion = (async () => {
@@ -292,6 +441,11 @@ $("login-form").addEventListener("submit", async (event) => {
     state.csrf = result.csrf; $("passphrase").value = ""; await enterLab();
   } catch (error) { $("login-error").textContent = error.message; }
 });
+loadPreferences();
+for (const id of PREFERENCE_IDS) $(id).addEventListener("change", savePreferences);
+$("speech-direction").addEventListener("input", savePreferences);
+$("reset-speech-direction").addEventListener("click", () => { $("speech-direction").value = DEFAULT_SPEECH_DIRECTION; savePreferences(); });
+$("preview").addEventListener("click", previewVoice);
 $("connect").addEventListener("click", connect);
 $("disconnect").addEventListener("click", disconnect);
 $("mute").addEventListener("click", () => {
