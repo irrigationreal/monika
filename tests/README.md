@@ -221,12 +221,14 @@ The script verifies:
 9. agentd sends a complete Pi turn to a local OpenAI Responses fixture, which requires `pi_run`, `browser`, `web_search`, `subagent`, `subagent_wait`, `subagent_supervisor`, and stateful-memory's `recall` tool while rejecting the legacy `delegate` tool;
 10. every strict function schema in the serialized request satisfies OpenAI's
    `additionalProperties: false` and required-property rules;
-11. an interactive Pi ownership lease evicts an idle agentd runtime, blocks forum reopen and deployment, heartbeats, and releases cleanly;
+11. a first-action pending Pi reservation is included in approximate health and authoritative quiescence, and a durable existing-session claim using the exact canonical path evicts idle agentd, blocks reopen/deployment, heartbeats, and releases cleanly;
 12. agentd quiescence reports the reloaded idle conversation and deploy drain closes it;
 13. a replacement container sharing only isolated `/data` restores that drain and Pi package state, reapplies image-owned non-package defaults, rejects new work, and becomes healthy only after cancellation clears the durable drain state;
 14. `scripts/deploy-if-safe --backup-only` can acquire/cancel mock forum deployment admission and create and verify an isolated runtime capsule backup;
 15. the container stops cleanly on SIGTERM;
 16. isolated second runtimes exit nonzero and reap their sibling when either agentd or memstore dies unexpectedly.
+
+Agentd route integration tests, rather than this container smoke, cover ownership-record process-restart survival for heartbeat, promotion, and fencing by capability.
 
 The model fixture runs in a second throwaway container on an isolated Docker
 network. It exercises Pi's real extension loading, tool serialization, provider

@@ -66,6 +66,8 @@ import {
   readKnownSession,
   SessionResolutionError,
   uniqueSessionById,
+  validateCanonicalSessionId,
+  validatePendingSessionPath,
   withVerifiedSessionReopen,
 } from './session-resolution.mjs';
 import {
@@ -254,6 +256,7 @@ Files involved:
 const conversations = new Map();
 const sessionOperations = new SessionOperationCoordinator();
 let runtimeCreationTail = Promise.resolve();
+let ownershipAdmissionTail = Promise.resolve();
 const sessionOwnership = new SessionOwnershipRegistry({
   storagePath:
     process.env.MONIKA_AGENTD_OWNERSHIP_FILE ??
@@ -576,7 +579,7 @@ async function retentionInventory() {
 }
 async function applyRetention(expectedDigest, { operator = false, reason = 'automatic-daily-retention' } = {}) {
   if (operator && (draining || [...conversations.values()].some(conversationIsActive)
-    || [...conversations.values()].some(conversationHasPendingRetentionMutations) || sessionOwnership.list().length > 0)) throw new Error('retention apply requires no draining, active conversations, or interactive Pi sessions');
+    || [...conversations.values()].some(conversationHasPendingRetentionMutations) || sessionOwnership.quiescenceList().length > 0)) throw new Error('retention apply requires no draining, active conversations, or interactive Pi sessions');
   return retentionCoordinator.run(async () => {
     const snapshot = await subagentSnapshot();
     const result = await compactSubagentRetention({
@@ -615,7 +618,7 @@ async function deployState() {
   const activeTurns = convs.filter(
     (conv) => conv.current || conv.pendingMutations > 0,
   );
-  const externalLeases = sessionOwnership.list();
+  const externalLeases = sessionOwnership.quiescenceList();
   const memstore = await memstoreDeployState();
   const blockers = [];
   const drainRequired = [];
@@ -1347,6 +1350,18 @@ async function withSessionOperation(sessionId, operation) {
   return sessionOperations.run(sessionId, operation);
 }
 
+async function withOwnershipAdmission(operation) {
+  const previous = ownershipAdmissionTail;
+  let release;
+  ownershipAdmissionTail = new Promise((resolve) => { release = resolve; });
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+  }
+}
+
 async function withMutableSessionOperation(sessionId, operation) {
   return withForumMutableSessionOperation(sessionOperations, forumForkLedger, sessionId, operation);
 }
@@ -2022,15 +2037,27 @@ function ownershipConversationRecord(conv) {
   } : null;
 }
 
-async function claimExternalSession(sessionRef, body) {
-  const session = await findSession(sessionRef);
-  if (!session) return { status: 404, body: { error: 'not_found' } };
+async function normalizeOwnershipSessionRef(sessionRef) {
+  if (!path.isAbsolute(sessionRef)) return { sessionId: sessionRef, sessionPath: null, session: null };
+  const session = await directSession(sessionRef);
+  return session ? { sessionId: session.id, sessionPath: session.path, session } : null;
+}
+
+async function claimExternalSession(sessionRef, sessionPath, body) {
   const clientId = typeof body.client_id === 'string' ? body.client_id.trim() : '';
   if (!clientId) return { status: 400, body: { error: 'bad_request', message: 'client_id is required' } };
+  if (!validateCanonicalSessionId(sessionRef)) {
+    return { status: 400, body: { error: 'bad_request', message: 'invalid canonical session id' } };
+  }
   const timeoutValue = Number(body.timeout_ms ?? 10_000);
   const timeoutMs = Number.isFinite(timeoutValue) ? Math.min(30_000, Math.max(1_000, timeoutValue)) : 10_000;
 
-  return withMutableSessionOperation(session.id, async () => {
+  // Resolve the extension-supplied canonical path exactly once, after entering
+  // the same operation/fork-fence critical section as takeover and publication.
+  return withOwnershipAdmission(() => withMutableSessionOperation(sessionRef, async () => {
+    if (draining) return { status: 503, body: { error: 'unavailable', message: 'agentd is draining for deployment' } };
+    const session = await findSession(sessionRef, sessionPath);
+    if (!session) return { status: 404, body: { error: 'not_found' } };
     const existingLease = sessionOwnership.get(session.id);
     if (existingLease && existingLease.clientId !== clientId) {
       return {
@@ -2123,7 +2150,79 @@ async function claimExternalSession(sessionRef, body) {
       if (conv) conv.takeoverPending = false;
       throw err;
     }
-  });
+  }));
+}
+
+async function reserveExternalSession(sessionId, sessionPath, body) {
+  const clientId = typeof body.client_id === 'string' ? body.client_id.trim() : '';
+  if (!clientId || typeof sessionPath !== 'string') {
+    return { status: 400, body: { error: 'bad_request', message: 'client_id and session_path are required' } };
+  }
+  if (!validateCanonicalSessionId(sessionId)) {
+    return { status: 400, body: { error: 'bad_request', message: 'invalid canonical session id' } };
+  }
+  return withOwnershipAdmission(() => withMutableSessionOperation(sessionId, async () => {
+    if (draining) return { status: 503, body: { error: 'unavailable', message: 'agentd is draining for deployment' } };
+    const validatedPath = await validatePendingSessionPath({
+      sessionsRoot: path.join(AGENT_DIR, 'sessions'),
+      sessionPath,
+      sessionId,
+    });
+    for (const conv of conversations.values()) {
+      const idMatches = conv.piSessionId === sessionId;
+      const pathMatches = conv.sessionPath === validatedPath;
+      if (!idMatches && !pathMatches) continue;
+      if (!idMatches || !pathMatches) {
+        throw new SessionResolutionError('session_loaded_identity_collision', 'loaded conversation identity collides with the intended session');
+      }
+      return { status: 409, body: {
+        ok: false,
+        state: 'active',
+        conversation: ownershipConversationRecord(conv),
+        message: 'Agentd already has the intended session loaded.',
+      } };
+    }
+    const reserved = sessionOwnership.reserve(sessionId, validatedPath, clientId);
+    if (!reserved.ok) {
+      return { status: 409, body: { ok: false, state: 'leased', lease: sessionOwnership.describe(sessionId) } };
+    }
+    return { status: 200, body: {
+      ok: true,
+      state: 'reserved',
+      session_id: sessionId,
+      lease_token: reserved.lease.token,
+      expires_at: new Date(reserved.lease.expiresAtMs).toISOString(),
+    } };
+  }));
+}
+
+async function promoteExternalSession(sessionId, sessionPath, body) {
+  if (!validateCanonicalSessionId(sessionId) || typeof sessionPath !== 'string') {
+    return { status: 400, body: { error: 'bad_request', message: 'session_path and a valid canonical session id are required' } };
+  }
+  return withOwnershipAdmission(() => withMutableSessionOperation(sessionId, async () => {
+    if (draining) return { status: 503, body: { error: 'unavailable', message: 'agentd is draining for deployment' } };
+    // Descriptor/header/inode validation occurs only now that Pi has created the
+    // file, and while the canonical writer/fork fence is held.
+    const session = await findSession(sessionId, sessionPath);
+    if (!session) return { status: 404, body: { error: 'not_found' } };
+    const loaded = loadedConversationForCanonicalSession(conversations.values(), session);
+    if (loaded) return { status: 409, body: {
+      ok: false,
+      state: 'active',
+      conversation: ownershipConversationRecord(loaded),
+      message: 'Agentd loaded the session before reservation promotion.',
+    } };
+    const promoted = sessionOwnership.promote(session.id, session.path, body.lease_token);
+    if (!promoted) return { status: 409, body: { ok: false, state: 'lease_lost' } };
+    return { status: 200, body: {
+      ok: true,
+      state: 'claimed',
+      session_id: session.id,
+      lease_token: promoted.token,
+      expires_at: new Date(promoted.expiresAtMs).toISOString(),
+    } };
+  }));
 }
 
 async function exportSession(sessionId) {
@@ -2319,8 +2418,10 @@ const server = http.createServer(async (req, res) => {
         ? requestedAutoCancelMs
         : DRAIN_AUTO_CANCEL_MS;
       const leaseExpiresAtMs = Date.now() + autoCancelMs;
-      setDraining(true, { reason: "deploy-api", autoCancelMs });
-      await durableDrainState.publish({ reason: 'deploy-api', leaseExpiresAtMs });
+      await withOwnershipAdmission(async () => {
+        setDraining(true, { reason: "deploy-api", autoCancelMs });
+        await durableDrainState.publish({ reason: 'deploy-api', leaseExpiresAtMs });
+      });
       const closed = await closeIdleConversations("deploy-drain");
       const state = await waitForDeployState({
         timeoutMs: body.timeout_ms ?? body.timeoutMs ?? 0,
@@ -2346,14 +2447,16 @@ const server = http.createServer(async (req, res) => {
     }
 
     const piOwnershipMatch = url.pathname.match(
-      /^\/v1\/pi\/sessions\/([^/]+)\/ownership(?:\/(claim|heartbeat|release))?$/,
+      /^\/v1\/pi\/sessions\/([^/]+)\/ownership(?:\/(reserve|promote|claim|heartbeat|release))?$/,
     );
     if (piOwnershipMatch) {
       const sessionRef = decodeURIComponent(piOwnershipMatch[1]);
       const action = piOwnershipMatch[2] ?? "";
-      const session = await findSession(sessionRef);
-      if (!session) return notFound(res);
       if (method === "GET" && action === "") {
+        const normalized = await normalizeOwnershipSessionRef(sessionRef);
+        if (!normalized) return notFound(res);
+        const session = normalized.session ?? await findSession(normalized.sessionId);
+        if (!session) return notFound(res);
         const conv = loadedConversationForSession(session);
         const lease = sessionOwnership.describe(session.id);
         return json(res, 200, {
@@ -2369,11 +2472,33 @@ const server = http.createServer(async (req, res) => {
           lease,
         });
       }
+      if (method === "POST" && action === "reserve") {
+        const body = await readBody(req);
+        const result = await reserveExternalSession(sessionRef, body.session_path, body);
+        return json(res, result.status, result.body);
+      }
+      if (method === "POST" && action === "promote") {
+        try {
+          const body = await readBody(req);
+          const result = await promoteExternalSession(sessionRef, body.session_path, body);
+          return json(res, result.status, result.body);
+        } catch (error) {
+          if (error instanceof ForumForkConflictError) return conflict(res, error);
+          throw error;
+        }
+      }
       if (method === "POST" && action === "claim") {
         try {
+          const body = await readBody(req);
+          // Legacy clients put an encoded absolute path in the route. Resolve
+          // that exact allowlisted file, then enter the same canonical ID+path
+          // operation as current extension clients.
+          const normalized = await normalizeOwnershipSessionRef(sessionRef);
+          if (!normalized) return notFound(res);
           const result = await claimExternalSession(
-            session.id,
-            await readBody(req),
+            normalized.sessionId,
+            normalized.sessionPath ?? body.session_path ?? null,
+            body,
           );
           return json(res, result.status, result.body);
         } catch (error) {
@@ -2381,9 +2506,21 @@ const server = http.createServer(async (req, res) => {
           throw error;
         }
       }
+      // Canonical ID capability operations remain O(1) token lookups with no
+      // session discovery. Legacy encoded absolute paths use only exact direct
+      // resolution to recover the canonical ID before the same core operation.
+      let capabilitySessionId = sessionRef;
+      if (method === "POST" && (action === "heartbeat" || action === "release")) {
+        const normalized = await normalizeOwnershipSessionRef(sessionRef);
+        if (!normalized) return notFound(res);
+        capabilitySessionId = normalized.sessionId;
+        if (!validateCanonicalSessionId(capabilitySessionId)) {
+          return json(res, 400, { error: 'bad_request', message: 'invalid canonical session id' });
+        }
+      }
       if (method === "POST" && action === "heartbeat") {
         const body = await readBody(req);
-        const lease = sessionOwnership.heartbeat(session.id, body.lease_token);
+        const lease = sessionOwnership.heartbeat(capabilitySessionId, body.lease_token);
         if (!lease) return json(res, 409, { ok: false, state: "lease_lost" });
         return json(res, 200, {
           ok: true,
@@ -2392,7 +2529,7 @@ const server = http.createServer(async (req, res) => {
       }
       if (method === "POST" && action === "release") {
         const body = await readBody(req);
-        const released = sessionOwnership.release(session.id, body.lease_token);
+        const released = sessionOwnership.release(capabilitySessionId, body.lease_token);
         return json(res, released ? 200 : 409, {
           ok: released,
           state: released ? "released" : "lease_lost",
@@ -2901,7 +3038,9 @@ async function shutdown(signal) {
   if (shutdownStarted) return;
   shutdownStarted = true;
   forumCatalogRefresh.stop();
-  setDraining(true, { reason: signal.toLowerCase(), autoCancel: false });
+  await withOwnershipAdmission(() => {
+    setDraining(true, { reason: signal.toLowerCase(), autoCancel: false });
+  });
   const configuredDeadline = Number(process.env.MONIKA_AGENTD_SHUTDOWN_DEADLINE_MS ?? 30_000);
   const deadlineMs = Number.isFinite(configuredDeadline) ? Math.max(1_000, configuredDeadline) : 30_000;
   await runBoundedShutdown({

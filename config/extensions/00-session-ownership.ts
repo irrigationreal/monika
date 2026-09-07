@@ -11,11 +11,11 @@ const SHARED_STATE_KEY = Symbol.for("monika.session-ownership.shared-state");
 const STATUS_KEY = "session-ownership";
 
 type ConflictState = "active" | "interrupt_timeout" | "leased";
-type GateMode = "switch" | "recovery";
+type GateMode = "switch" | "recovery" | "reservation" | "promotion";
 
 interface ClaimSuccess {
 	ok: true;
-	state: "claimed";
+	state: "claimed" | "reserved";
 	lease_token: string;
 	expires_at: string;
 	evicted_idle?: boolean;
@@ -41,6 +41,7 @@ interface Lease {
 	sessionId: string;
 	sessionFile: string;
 	claim: ClaimSuccess;
+	pending?: boolean;
 }
 
 interface PreparedLease {
@@ -62,9 +63,13 @@ type GateResult =
 	| { kind: "unprotected"; sessionId?: string };
 
 type GateAction = "cancel" | "continue" | "force" | "refresh" | "retry" | "takeover";
-type ProtectionState = "protected" | "blocked" | "unprotected";
+type ProtectionState = "launcher" | "protected" | "blocked" | "unprotected";
 
 class LeaseLostError extends Error {}
+
+function isMissingFile(error: unknown): boolean {
+	return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
 
 function getSharedState(): SharedState {
 	const globals = globalThis as unknown as Record<symbol, unknown>;
@@ -106,7 +111,7 @@ async function readCanonicalSessionId(sessionFile: string): Promise<string> {
 	}
 }
 
-function ownershipUrl(sessionId: string, operation: "claim" | "heartbeat" | "release"): string {
+function ownershipUrl(sessionId: string, operation: "reserve" | "promote" | "claim" | "heartbeat" | "release"): string {
 	return `${AGENTD_BASE_URL}/v1/pi/sessions/${encodeURIComponent(sessionId)}/ownership/${operation}`;
 }
 
@@ -164,6 +169,7 @@ function prepareLease(shared: SharedState, lease: Lease): void {
 
 async function claimSession(
 	sessionId: string,
+	sessionFile: string,
 	clientId: string,
 	options: { takeover?: boolean; force?: boolean },
 	signal: AbortSignal,
@@ -171,7 +177,7 @@ async function claimSession(
 	const response = await fetch(ownershipUrl(sessionId, "claim"), {
 		method: "POST",
 		headers: { "content-type": "application/json" },
-		body: JSON.stringify({ client_id: clientId, ...options }),
+		body: JSON.stringify({ client_id: clientId, session_path: sessionFile, ...options }),
 		signal,
 	});
 	const body = await response.json().catch(() => undefined) as ClaimSuccess | ClaimConflict | undefined;
@@ -192,6 +198,39 @@ async function claimSession(
 	throw new Error(`agentd returned HTTP ${response.status}${detail}`);
 }
 
+async function reserveSession(sessionId: string, sessionFile: string, clientId: string, signal: AbortSignal): Promise<ClaimSuccess | ClaimConflict> {
+	const response = await fetch(ownershipUrl(sessionId, "reserve"), {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ client_id: clientId, session_path: sessionFile }),
+		signal,
+	});
+	const body = await response.json().catch(() => undefined) as ClaimSuccess | ClaimConflict | undefined;
+	if (response.status === 200 && body?.ok === true && body.state === "reserved" && body.lease_token) {
+		expiryMs(body.expires_at);
+		return body;
+	}
+	if (response.status === 409 && body?.ok === false && body.state === "leased") return body;
+	const detail = body && "message" in body && body.message ? `: ${body.message}` : "";
+	throw new Error(`agentd returned HTTP ${response.status}${detail}`);
+}
+
+async function promoteSession(lease: Lease, signal: AbortSignal): Promise<ClaimSuccess> {
+	const response = await fetch(ownershipUrl(lease.sessionId, "promote"), {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ session_path: lease.sessionFile, lease_token: lease.claim.lease_token }),
+		signal,
+	});
+	if (response.status === 409) throw new LeaseLostError("agentd lost the pending ownership reservation");
+	const body = await response.json().catch(() => undefined) as ClaimSuccess | undefined;
+	if (!response.ok || body?.ok !== true || body.state !== "claimed" || !body.lease_token) {
+		throw new Error(`ownership promotion returned HTTP ${response.status}`);
+	}
+	expiryMs(body.expires_at);
+	return body;
+}
+
 function conflictDiagnostics(conflict: ClaimConflict): string[] {
 	const lines = [`Ownership state: ${conflict.state}`];
 	if (conflict.message) lines.push(conflict.message);
@@ -203,7 +242,7 @@ function conflictDiagnostics(conflict: ClaimConflict): string[] {
 	return lines;
 }
 
-async function showOwnershipGate(ctx: ExtensionContext, sessionFile: string, mode: GateMode = "switch"): Promise<GateResult> {
+async function showOwnershipGate(ctx: ExtensionContext, sessionFile: string, mode: GateMode = "switch", intendedSessionId?: string, pendingLease?: Lease): Promise<GateResult> {
 	const shared = getSharedState();
 
 	return ctx.ui.custom<GateResult>((tui, theme, _keybindings, done) => {
@@ -249,12 +288,12 @@ async function showOwnershipGate(ctx: ExtensionContext, sessionFile: string, mod
 
 		const exitItem = {
 			value: "cancel",
-			label: mode === "recovery" ? "Exit Pi" : "Return to current session",
-			description: mode === "recovery" ? "Stop before another prompt or tool can write." : "Cancel /resume without changing ownership.",
+			label: mode === "switch" ? "Return to current session" : "Exit Pi",
+			description: mode === "switch" ? "Cancel /resume without changing ownership." : "Stop before another prompt or tool can write.",
 		};
 
 		const showConflict = (conflict: ClaimConflict) => {
-			const ownershipActions = conflict.state === "leased"
+			const ownershipActions = mode === "reservation" || mode === "promotion" || conflict.state === "leased"
 				? []
 				: conflict.state === "interrupt_timeout"
 					? [{
@@ -276,38 +315,52 @@ async function showOwnershipGate(ctx: ExtensionContext, sessionFile: string, mod
 
 		const showUnavailable = (error: unknown) => {
 			const message = error instanceof Error ? error.message : String(error);
+			const actions: SelectItem[] = [
+				{ value: "retry", label: "Retry ownership", description: "Try agentd again." },
+				exitItem,
+			];
+			if (mode !== "reservation" && mode !== "promotion") actions.push({
+				value: "continue",
+				label: "⚠ CONTINUE WITHOUT PROTECTION ⚠",
+				description: "Keep using the session despite the risk of concurrent writers.",
+			});
 			rebuild("SESSION OWNERSHIP PROTECTION IS UNAVAILABLE", [
 				`Agentd: ${AGENTD_BASE_URL}`,
 				`Diagnostic: ${message}`,
-				"Continuing can allow two clients to write to the same Pi session.",
-			], [
-				{ value: "retry", label: "Retry ownership", description: "Try agentd again." },
-				exitItem,
-				{
-					value: "continue",
-					label: "⚠ CONTINUE WITHOUT PROTECTION ⚠",
-					description: "Keep using the session despite the risk of concurrent writers.",
-				},
-			]);
+				mode === "reservation"
+					? "The first action will not run without an ownership reservation."
+					: mode === "promotion"
+						? "No prompt or tool can continue until the materialized session reservation is promoted."
+						: "Continuing can allow two clients to write to the same Pi session.",
+			], actions);
 		};
 
 		const attemptClaim = async (options: { takeover?: boolean; force?: boolean }) => {
 			requestController?.abort();
 			requestController = new AbortController();
-			rebuild(options.force ? "Forcing session takeover" : options.takeover ? "Interrupting current owner" : "Claiming session ownership", [
+			rebuild(mode === "reservation" ? "Reserving session ownership" : mode === "promotion" ? "Promoting session ownership" : options.force ? "Forcing session takeover" : options.takeover ? "Interrupting current owner" : "Claiming session ownership", [
 				`Session file: ${sessionFile}`,
 			]);
 
 			try {
-				sessionId = await readCanonicalSessionId(sessionFile);
-				const response = await claimSession(sessionId, shared.clientId, options, requestController.signal);
+				sessionId = mode === "reservation" || mode === "promotion" ? intendedSessionId : await readCanonicalSessionId(sessionFile);
+				if (!sessionId) throw new Error("Pi did not provide an intended canonical session id");
+				const response = mode === "reservation"
+					? await reserveSession(sessionId, sessionFile, shared.clientId, requestController.signal)
+					: mode === "promotion" && pendingLease
+						? await promoteSession(pendingLease, requestController.signal)
+						: await claimSession(sessionId, sessionFile, shared.clientId, options, requestController.signal);
 				if (response.ok) {
-					finish({ kind: "claimed", lease: { sessionId, sessionFile, claim: response } });
+					finish({ kind: "claimed", lease: { sessionId, sessionFile, claim: response, pending: response.state === "reserved" } });
 					return;
 				}
 				showConflict(response);
 			} catch (error) {
 				if (requestController.signal.aborted || finished) return;
+				if (mode === "promotion" && error instanceof LeaseLostError) {
+					showConflict({ ok: false, state: "leased", message: error.message });
+					return;
+				}
 				showUnavailable(error);
 			}
 		};
@@ -359,6 +412,8 @@ export default function sessionOwnershipExtension(pi: ExtensionAPI) {
 	let heartbeatRunning = false;
 	let heartbeatWarningShown = false;
 	let protectionState: ProtectionState = "blocked";
+	let intendedLauncher: { sessionId: string; sessionFile: string } | undefined;
+	let launcherPromise: Promise<boolean> | undefined;
 	let recoveryPromise: Promise<void> | undefined;
 
 	const stopHeartbeat = () => {
@@ -382,9 +437,24 @@ export default function sessionOwnershipExtension(pi: ExtensionAPI) {
 	const recoverOwnership = (ctx: ExtensionContext, lease: Lease): Promise<void> => {
 		if (recoveryPromise) return recoveryPromise;
 		protectionState = "blocked";
+		// Recovery owns the capability now. Abort an in-flight heartbeat before it
+		// can refresh stale state or race promotion/release.
+		stopHeartbeat();
 		ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("error", "ownership: EXPIRED — INPUT BLOCKED"));
 		recoveryPromise = (async () => {
-			const result = await showOwnershipGate(ctx, lease.sessionFile, "recovery");
+			let mode: GateMode = "recovery";
+			if (lease.pending) {
+				try {
+					const canonicalId = await readCanonicalSessionId(lease.sessionFile);
+					if (canonicalId !== lease.sessionId) throw new LeaseLostError("materialized session identity changed");
+					mode = "promotion";
+				} catch (error) {
+					if (isMissingFile(error)) mode = "reservation";
+					else if (!(error instanceof LeaseLostError)) mode = "promotion";
+					else throw error;
+				}
+			}
+			const result = await showOwnershipGate(ctx, lease.sessionFile, mode, lease.sessionId, mode === "promotion" ? lease : undefined);
 			if (result.kind === "claimed") {
 				startHeartbeat(ctx, result.lease);
 				if (result.lease.claim.evicted_idle) ctx.ui.notify("Claimed session after evicting an idle owner.", "warning");
@@ -396,10 +466,31 @@ export default function sessionOwnershipExtension(pi: ExtensionAPI) {
 				return;
 			}
 			ctx.shutdown();
-		})().finally(() => {
+		})().catch((error) => {
+			ctx.ui.notify(`Session ownership recovery failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+			ctx.shutdown();
+		}).finally(() => {
 			recoveryPromise = undefined;
 		});
 		return recoveryPromise;
+	};
+
+	const promoteIfMaterialized = async (ctx: ExtensionContext, lease: Lease): Promise<boolean> => {
+		if (!lease.pending || currentLease !== lease || protectionState !== "protected") return true;
+		let canonicalId: string;
+		try {
+			canonicalId = await readCanonicalSessionId(lease.sessionFile);
+		} catch (error) {
+			if (isMissingFile(error)) return true;
+			throw error;
+		}
+		if (canonicalId !== lease.sessionId) throw new LeaseLostError("materialized session identity changed");
+		const body = await promoteSession(lease, AbortSignal.timeout(5000));
+		if (currentLease !== lease || protectionState !== "protected") return false;
+		lease.claim = body;
+		lease.pending = false;
+		scheduleExpiry(ctx, lease);
+		return true;
 	};
 
 	const scheduleExpiry = (ctx: ExtensionContext, lease: Lease) => {
@@ -440,12 +531,25 @@ export default function sessionOwnershipExtension(pi: ExtensionAPI) {
 				const body = await response.json().catch(() => undefined) as HeartbeatSuccess | undefined;
 				if (body?.ok !== true || typeof body.expires_at !== "string") throw new Error("heartbeat response has no expiry");
 				expiryMs(body.expires_at);
+				// A recovery/block transition may have happened while this request was
+				// in flight. An obsolete success must never repaint protection.
+				if (controller.signal.aborted || currentLease !== lease || protectionState !== "protected") return;
 				lease.claim.expires_at = body.expires_at;
+				if (lease.pending) {
+					try {
+						await promoteIfMaterialized(ctx, lease);
+					} catch {
+						if (!ctx.isIdle()) ctx.abort();
+						await recoverOwnership(ctx, lease);
+						return;
+					}
+				}
+				if (controller.signal.aborted || currentLease !== lease || protectionState !== "protected") return;
 				heartbeatWarningShown = false;
 				ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("success", "ownership: protected"));
 				scheduleExpiry(ctx, lease);
 			} catch (error) {
-				if (controller.signal.aborted || currentLease !== lease) return;
+				if (controller.signal.aborted || currentLease !== lease || protectionState !== "protected") return;
 				if (error instanceof LeaseLostError || Date.now() >= expiryMs(lease.claim.expires_at)) {
 					if (!ctx.isIdle()) ctx.abort();
 					await recoverOwnership(ctx, lease);
@@ -506,6 +610,19 @@ export default function sessionOwnershipExtension(pi: ExtensionAPI) {
 			return;
 		}
 
+		try {
+			const canonicalId = await readCanonicalSessionId(sessionFile);
+			if (canonicalId !== sessionId) throw new Error("Pi session manager identity does not match its JSONL header");
+		} catch (error) {
+			if (isMissingFile(error)) {
+				// Pi 0.85.1 deliberately has no JSONL yet. This is a launcher, not
+				// an owned session: no request, record, status, or warning is emitted.
+				intendedLauncher = { sessionId, sessionFile };
+				protectionState = "launcher";
+				return;
+			}
+		}
+
 		const result = await showOwnershipGate(ctx, sessionFile);
 		if (result.kind === "claimed") {
 			startHeartbeat(ctx, result.lease);
@@ -522,20 +639,68 @@ export default function sessionOwnershipExtension(pi: ExtensionAPI) {
 		ctx.shutdown();
 	});
 
+	const ensureLauncherOwnership = (ctx: ExtensionContext): Promise<boolean> => {
+		if (protectionState !== "launcher" || !intendedLauncher) return Promise.resolve(true);
+		if (launcherPromise) return launcherPromise;
+		const intended = intendedLauncher;
+		launcherPromise = (async () => {
+			const result = await showOwnershipGate(ctx, intended.sessionFile, "reservation", intended.sessionId);
+			if (result.kind !== "claimed") {
+				ctx.shutdown();
+				return false;
+			}
+			intendedLauncher = undefined;
+			startHeartbeat(ctx, result.lease);
+			return true;
+		})().finally(() => {
+			launcherPromise = undefined;
+		});
+		return launcherPromise;
+	};
+
 	pi.on("input", async (_event, ctx) => {
-		if (ctx.mode !== "tui" || protectionState !== "blocked" || !currentLease) return;
+		if (ctx.mode !== "tui") return;
+		if (!await ensureLauncherOwnership(ctx)) return { action: "handled" as const };
+		if (protectionState !== "blocked" || !currentLease) return;
 		await recoverOwnership(ctx, currentLease);
 		return protectionState === "blocked" ? { action: "handled" as const } : { action: "continue" as const };
 	});
 
+	const promoteAtPersistedBoundary = async (ctx: ExtensionContext): Promise<boolean> => {
+		const lease = currentLease;
+		if (ctx.mode !== "tui" || !lease?.pending || protectionState !== "protected") return true;
+		try {
+			return await promoteIfMaterialized(ctx, lease);
+		} catch {
+			if (!ctx.isIdle()) ctx.abort();
+			await recoverOwnership(ctx, lease);
+			return protectionState === "protected" && currentLease?.pending !== true;
+		}
+	};
+
+	// tool_execution_start follows persistence of the assistant tool-call entry;
+	// turn_end covers no-tool responses. Later boundaries are retry fallbacks.
+	pi.on("tool_execution_start", async (_event, ctx) => promoteAtPersistedBoundary(ctx));
+	pi.on("turn_end", async (_event, ctx) => promoteAtPersistedBoundary(ctx));
+	pi.on("agent_end", async (_event, ctx) => promoteAtPersistedBoundary(ctx));
+	pi.on("agent_settled", async (_event, ctx) => promoteAtPersistedBoundary(ctx));
+
 	pi.on("tool_call", async (_event, ctx) => {
-		if (ctx.mode !== "tui" || protectionState !== "blocked" || !currentLease) return;
+		if (ctx.mode !== "tui") return;
+		if (!await promoteAtPersistedBoundary(ctx)) {
+			return { block: true, reason: "Session ownership promotion failed; tool execution is blocked." };
+		}
+		if (protectionState !== "blocked" || !currentLease) return;
 		await recoverOwnership(ctx, currentLease);
 		if (protectionState === "blocked") return { block: true, reason: "Session ownership lease expired; tool writes are blocked." };
 	});
 
 	pi.on("user_bash", async (_event, ctx) => {
-		if (ctx.mode !== "tui" || protectionState !== "blocked" || !currentLease) return;
+		if (ctx.mode !== "tui") return;
+		if (!await ensureLauncherOwnership(ctx) || !await promoteAtPersistedBoundary(ctx)) {
+			return { result: { output: "Session ownership could not be established; shell execution is blocked.", exitCode: 1, cancelled: true, truncated: false } };
+		}
+		if (protectionState !== "blocked" || !currentLease) return;
 		await recoverOwnership(ctx, currentLease);
 		if (protectionState === "blocked") {
 			return { result: { output: "Session ownership lease expired; shell writes are blocked.", exitCode: 1, cancelled: true, truncated: false } };

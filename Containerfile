@@ -144,6 +144,9 @@ RUN corepack enable && \
     pnpm install --prod --frozen-lockfile
 COPY services/agentd/src/ /opt/agentd/src/
 COPY services/agentd/test/ /opt/agentd/test/
+# Agentd's ownership tests exercise the exact bundled TUI extensions and their
+# discovery order, so stage those image-owned resources before running tests.
+COPY config/extensions/ /app/.pi/agent/extensions/
 RUN pnpm test
 
 # Keep pnpm's 10-day cooldown active outside a checked-out workspace without
@@ -191,7 +194,6 @@ RUN mkdir -p /app/.pi/agent/extensions /app/.pi/stateful-memory/persona_topics \
              /app/.pi/stateful-memory/dreams \
              /app/.pi/memstore /data
 
-COPY config/extensions/          /app/.pi/agent/extensions/
 COPY config/agents/              /app/.pi/agent/agents/
 COPY config/stateful-memory.json /app/.pi/agent/stateful-memory.json
 COPY config/persona/SOUL.md                /app/.pi/stateful-memory/SOUL.md
