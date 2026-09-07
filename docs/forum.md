@@ -358,22 +358,33 @@ an admin can intentionally resurface a repaired thread with
 
 ### Interactive Pi ownership
 
-`config/extensions/session-ownership.ts` prevents agentd and an interactive Pi
-TUI from independently writing the same canonical session. It hooks Pi's
-cancellable `session_before_switch` event, so the normal `pi` then `/resume`
-workflow remains unchanged. Initial command-line resumes use a guarded
-`session_start` fallback. Non-TUI runtimes, including agentd itself, do not claim
-interactive ownership.
+`config/extensions/00-session-ownership.ts` prevents agentd and an interactive Pi
+TUI from independently writing the same canonical session. It hooks Pi's cancellable `session_before_switch` event, so `/resume` claims the
+selected existing canonical ID and extension-supplied path before switching.
+Initial command-line resumes use a guarded `session_start` fallback. A fresh TUI
+whose intended JSONL does not yet exist is only an unmaterialized launcher: startup
+makes no agentd request and publishes no lease, status, or warning. Pi 0.85.1's
+`input` and `user_bash` hooks are fail-closed first-action gates. The first
+interactive input or launcher bash must obtain a durable pending reservation bound
+to the validated intended ID/path; failure can only retry or exit, never continue
+unprotected. Unused launchers can exit or `/resume` without leaving ownership state. Non-TUI runtimes, including agentd
+itself, do not claim interactive ownership.
 
-Agentd grants renewable 90-second leases persisted under the Pi agent directory,
-so an agentd restart does not silently create a second writer. Claiming an idle
-loaded conversation evicts its cached runtime; claiming an active forum turn
-requires an explicit interrupt-and-takeover choice. The extension heartbeats
-every 30 seconds and releases its lease on session shutdown. Expiry recovers
-ownership after a crashed terminal, while an expired heartbeat blocks further
-TUI input until the administrator reclaims ownership, exits, or explicitly
-continues unprotected. Agentd rejects forum reopen and message dispatch attempts
-while a lease is active.
+Agentd persists renewable 90-second claimed leases and first-action pending
+reservations under the Pi agent directory. Pending records appear in the ownership
+list, approximate health count, and authoritative quiescence only after the
+launcher is actually used. After Pi materializes JSONL, the extension promotes the
+reservation only after agentd validates the exact canonical path, header ID, and
+opened inode under the session-operation/fork fence. Restart restores the pending
+capability and token index; recovery of a materialized pending session retries
+promotion before any ordinary claim and blocks work on failure or uncertainty. Claiming an idle loaded conversation evicts its cached runtime;
+claiming an active forum turn requires explicit takeover. Canonical-ID heartbeat
+and release are O(1) token-index operations and never scan the session archive;
+legacy encoded-path routes first resolve only their exact allowlisted file. The
+extension heartbeats every 30 seconds and releases on shutdown. Expiry recovers
+after a crashed terminal; established sessions retain the explicit recovery-only
+unprotected escape hatch. Agentd rejects forum reopen and message dispatch while
+either a lease or pending reservation fences that canonical ID.
 
 Session export also reconciles the loaded manager branch with the append-only
 JSONL. If disk is a strict descendant of the cached leaf, export selects the disk

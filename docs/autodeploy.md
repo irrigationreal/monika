@@ -10,7 +10,7 @@ This runbook describes a host-side deployment lifecycle for standalone Monika ru
 |---|---|
 | `compose.yaml` | Local deployment file for the live Monika runtime. Copied from `compose.yaml.example` and kept out of git. |
 | `scripts/deploy-if-safe` | Host-side deploy entry point. Pulls images, checks quiescence, creates backups, applies images, and prunes old artifacts. |
-| agentd quiescence API | Reports whether forum turns, interactive Pi sessions, and memstore saves are safe to stop and performs deploy drain. |
+| agentd quiescence API | Authoritatively reports whether forum turns, durable claimed or first-action pending Pi ownership, and memstore saves are safe to stop and performs deploy drain. The lightweight health count is only an approximate cached ownership count. |
 | forum deploy API | Acquires/cancels an expiring deployment-admission fence after pausing/waiting Pi sync and evaluating durable robot work. Diagnostic quiescence remains available. Requires `CODEX_FORUM_DEPLOY_TOKEN`. |
 | `cloudflared` (optional) | Outbound-only public forum ingress enabled with the `public-ingress` Compose profile. |
 | systemd timer | Periodically invokes `scripts/deploy-if-safe` from the host. |
@@ -113,7 +113,7 @@ change is repaired even when Monika/forum are already current. The connector is
 never allowed to pull an unreviewed moving image. See
 [`public-ingress.md`](public-ingress.md) for provisioning and recovery.
 
-The script exits `75` (`EX_TEMPFAIL`) when deployment should be retried later. This includes active or uncertain async-subagent execution and an active interactive Pi ownership lease: deployment waits rather than terminating work. systemd treats this as a successful deferral, not as a failed unit. Forum Deploy on Finish persists its request and retries after exit 75 instead of losing the one-shot intent.
+The script exits `75` (`EX_TEMPFAIL`) when deployment should be retried later. This includes active or uncertain async-subagent execution and either an active interactive Pi ownership lease or pending first-input reservation: deployment waits rather than terminating work. Pending reservations appear in the approximate `/healthz` interactive count after first action, but automation must use freshly pruned quiescence rather than health as its stop authority. systemd treats this as a successful deferral, not as a failed unit. Forum Deploy on Finish persists its request and retries after exit 75 instead of losing the one-shot intent.
 
 ## Manual commands
 

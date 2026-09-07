@@ -14,6 +14,8 @@ import {
   readKnownSession,
   SessionResolutionError,
   uniqueSessionById,
+  validateCanonicalSessionId,
+  validatePendingSessionPath,
   withVerifiedSessionReopen,
 } from '../src/session-resolution.mjs';
 
@@ -90,6 +92,37 @@ test('an exact loaded session still fails closed when another partial identity c
     ], session),
     (error) => error instanceof SessionResolutionError && error.code === 'session_loaded_identity_collision',
   );
+});
+
+test('absent intended sessions validate ID binding and safe containment without creating a file', async () => {
+  const { root, sessions } = await fixture();
+  try {
+    const day = path.join(sessions, '2026-01-01');
+    await mkdir(day);
+    const sessionId = '018f47a2-9b3c-7def-8123-456789abcdef';
+    const intended = path.join(day, `2026-01-01_${sessionId}.jsonl`);
+    assert.equal(validateCanonicalSessionId(sessionId), true);
+    assert.equal(validateCanonicalSessionId('session-1'), false);
+    assert.equal(validateCanonicalSessionId('../session-1'), false);
+    assert.equal(await validatePendingSessionPath({ sessionsRoot: sessions, sessionPath: intended, sessionId }), intended);
+    await assert.rejects(stat(intended), (error) => error?.code === 'ENOENT');
+    await assert.rejects(
+      validatePendingSessionPath({ sessionsRoot: sessions, sessionPath: path.join(root, `${sessionId}.jsonl`), sessionId }),
+      (error) => error instanceof SessionResolutionError && error.code === 'session_path_outside_root',
+    );
+    await assert.rejects(
+      validatePendingSessionPath({ sessionsRoot: sessions, sessionPath: path.join(day, 'other.jsonl'), sessionId }),
+      (error) => error instanceof SessionResolutionError && error.code === 'session_identity_mismatch',
+    );
+    const dangling = path.join(day, `dangling_${sessionId}.jsonl`);
+    await symlink(path.join(root, 'missing.jsonl'), dangling);
+    await assert.rejects(
+      validatePendingSessionPath({ sessionsRoot: sessions, sessionPath: dangling, sessionId }),
+      (error) => error instanceof SessionResolutionError && error.code === 'session_already_materialized',
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test('known-path resolution reads only the canonical target amid many decoys', async () => {

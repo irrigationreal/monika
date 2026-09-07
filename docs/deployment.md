@@ -51,6 +51,15 @@ Open interactive Pi inside the runtime:
 docker exec -it -w /workspace/monika monika pi
 ```
 
+A fresh Pi TUI is initially an unmaterialized launcher and does not claim a
+session merely by opening. Its first input or launcher bash action durably reserves
+ownership fail-closed before work, then promotes the pending record after Pi creates
+and agentd validates canonical JSONL. `/resume` still claims the selected existing
+target before switching. Used launchers and claimed sessions remain fenced across
+agentd restart. Agentd `/healthz` reports an approximate cached count of both
+pending and claimed ownership; use `/v1/admin/quiescence` for the freshly pruned,
+authoritative set.
+
 Ordinary Pi and agentd startup uses `PI_OFFLINE=1`. This gates Pi's automatic
 startup package resolution and update checks; it does not authorize or prohibit an
 explicit `pi install`. Package administration remains Pi-owned. Administrator

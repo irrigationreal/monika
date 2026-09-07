@@ -8,7 +8,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { open, realpath, stat } from 'node:fs/promises';
+import { lstat, open, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 export class SessionResolutionError extends Error {
@@ -62,6 +62,62 @@ export function loadedConversationForCanonicalSession(conversations, session) {
 function within(root, candidate) {
   const relative = path.relative(root, candidate);
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+}
+
+export function validateCanonicalSessionId(sessionId) {
+  return typeof sessionId === 'string'
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId);
+}
+
+/**
+ * Validate the intended pathname for a Pi session that has not materialized yet.
+ * Existing targets use readKnownSession instead. Requiring an existing, realpath-
+ * stable parent rejects symlinked ancestors while still allowing Pi to create the
+ * final JSONL file itself.
+ */
+export async function validatePendingSessionPath({ sessionsRoot, sessionPath, sessionId, fsOps = {} }) {
+  const resolveRealpath = fsOps.realpath ?? realpath;
+  const statPath = fsOps.lstat ?? lstat;
+  if (!validateCanonicalSessionId(sessionId)) {
+    throw new SessionResolutionError('invalid_session_id', 'canonical session id has invalid syntax');
+  }
+  if (typeof sessionPath !== 'string' || !path.isAbsolute(sessionPath) || sessionPath.includes('\0')) {
+    throw new SessionResolutionError('invalid_session_path', 'intended session path must be absolute');
+  }
+  const components = sessionPath.split(path.sep);
+  if (components.includes('.') || components.includes('..') || path.normalize(sessionPath) !== sessionPath) {
+    throw new SessionResolutionError('invalid_session_path', 'intended session path contains unsafe components');
+  }
+  const filename = path.basename(sessionPath);
+  if (path.extname(filename) !== '.jsonl'
+    || (filename !== `${sessionId}.jsonl` && !filename.endsWith(`_${sessionId}.jsonl`))) {
+    throw new SessionResolutionError('session_identity_mismatch', 'intended session filename is not bound to the canonical session id');
+  }
+  const root = await resolveRealpath(path.resolve(sessionsRoot));
+  const lexicalPath = path.resolve(sessionPath);
+  if (!within(root, lexicalPath)) {
+    throw new SessionResolutionError('session_path_outside_root', 'intended session path is outside the sessions root');
+  }
+  const parent = path.dirname(lexicalPath);
+  let canonicalParent;
+  try {
+    canonicalParent = await resolveRealpath(parent);
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      throw new SessionResolutionError('session_parent_not_found', 'intended session parent does not exist');
+    }
+    throw error;
+  }
+  if (canonicalParent !== parent || !within(root, canonicalParent)) {
+    throw new SessionResolutionError('session_path_symlink', 'intended session parent must be a non-symlink path beneath the sessions root');
+  }
+  try {
+    await statPath(lexicalPath);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return lexicalPath;
+    throw error;
+  }
+  throw new SessionResolutionError('session_already_materialized', 'intended session path already exists');
 }
 
 function parentSessionId(parentSession) {

@@ -78,18 +78,17 @@ exposes these conceptual groups:
   privacy-safe aggregate analytics.
 
 `GET /healthz` is a lightweight liveness/readiness dependency: request handling
-uses only O(1) in-memory state and never scans lifecycle or Pi session archives,
-reads build files, prunes leases, or waits for canonical-session work. Build
+uses cached in-memory state and never scans lifecycle or Pi session archives,
+reads build files, prunes ownership records, or waits for canonical-session work. Build
 metadata is loaded once before the HTTP listener starts. Existing lifecycle count
 fields remain present but are informational snapshots from the last successful
 lifecycle scan. Their `subagent_lifecycle_freshness` object reports
 `last_successful_scan` with `scanned_at_ms`/`age_ms`, or `not_yet_scanned` with
 null timestamps and conservative counts before the first successful scan.
-`interactive_pi_sessions` is also explicitly approximate: it is the cached lease
-map size and can temporarily include expired leases until a normal ownership
-operation prunes them. Use `GET /v1/admin/quiescence`, not health, for a fresh
-fail-closed deployment scan; quiescence prunes and reports the accurate lease
-set.
+`interactive_pi_sessions` is also explicitly approximate: it is the cached
+size of durable claimed and pending ownership records and can temporarily include
+expired records. Use `GET /v1/admin/quiescence`, not health, for authoritative
+quiescence; that endpoint freshly prunes and reports both kinds of interactive blocker.
 
 Conversation records expose canonical `session_id` and `session_path`. When both
 are supplied on reopen, agentd opens and validates exactly that canonical path:
@@ -122,9 +121,22 @@ Those are forum behavior, not agentd's canonical conversation record. See
 ## Conversation ownership
 
 Interactive Pi and agentd must not write the same JSONL session concurrently.
-Renewable ownership leases let the TUI evict an idle loaded agentd runtime, reject
-unsafe takeover of active work, heartbeat its claim, and release it on exit.
-Deployment quiescence treats a live interactive lease as a blocker.
+An absent fresh-session JSONL is an unmaterialized launcher and creates no startup
+request or ownership record. Its first `input` must reserve the validated intended
+canonical ID/path durably before agent processing or launcher bash execution.
+Reservation failure is fail-closed. When Pi first persists the JSONL,
+`POST .../ownership/promote` validates the exact path/header/inode under the
+session operation fence before turning the pending record into a claimed renewable
+lease. Unused launchers leave no record; used launchers remain fenced across agentd
+restart and recover by promoting their retained capability before ordinary claim.
+
+Existing sessions use `POST .../ownership/claim` with `client_id` and canonical
+`session_path`; agentd resolves that path once inside the mutation critical
+section. Claims let the TUI evict an idle loaded runtime and reject unsafe active
+takeover. `heartbeat` and `release` use the random `lease_token` plus route session
+ID as O(1) token-index lookups without session discovery or archive scans. Tokens
+are never logged. Deployment quiescence treats both claimed leases and pending
+reservations as blockers, while the lightweight health count remains approximate.
 
 A cached agentd conversation is not itself canonical authority. Runtime state must
 be reconciled with the JSONL tree when a session may have advanced elsewhere.

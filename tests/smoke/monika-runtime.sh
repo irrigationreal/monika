@@ -507,6 +507,13 @@ docker exec "$CONTAINER_NAME" sh -eu -c '
 '
 pass "bundled JavaScript extensions pass syntax validation"
 
+docker exec "$CONTAINER_NAME" sh -eu -c '
+  test -f /app/.pi/agent/extensions/00-session-ownership.ts
+  test ! -e /app/.pi/agent/extensions/session-ownership.ts
+  test "$(find /app/.pi/agent/extensions -maxdepth 1 -type f -printf "%f\n" | sort | grep -E "^(00-session-ownership|interactive-shell)\.ts$" | head -n 1)" = "00-session-ownership.ts"
+'
+pass "ownership extension is unique and sorts before interactive shell"
+
 # Agentd supplies explicit extension factories, while the emergency CLI path
 # discovers ambient extensions from PI_CODING_AGENT_DIR. Start Pi's direct RPC
 # mode and require a state response; malformed ambient extensions fail before
@@ -771,8 +778,19 @@ case "$RG_VERSION" in ripgrep\ *) ;; *) echo "Expected image-provisioned ripgrep
 case "$FD_VERSION" in fd\ *|fdfind\ *) ;; *) echo "Expected image-provisioned fd, got: $FD_VERSION"; exit 1 ;; esac
 pass "search dependencies pre-provisioned: ${RG_VERSION}, ${FD_VERSION}"
 
-AGENTD_PORT="$AGENTD_PORT" node <<'NODE_SMOKE'
+AGENTD_PORT="$AGENTD_PORT" SMOKE_CONTAINER_NAME="$CONTAINER_NAME" node <<'NODE_SMOKE'
+const { execFileSync } = await import('node:child_process');
+const { randomUUID } = await import('node:crypto');
+const path = await import('node:path');
 const base = `http://127.0.0.1:${process.env.AGENTD_PORT}`;
+
+function writeContainerFile(file, content) {
+  execFileSync('docker', ['exec', '-i', process.env.SMOKE_CONTAINER_NAME, 'sh', '-c', 'cat > "$1"', 'sh', file], { input: content });
+}
+
+function removeContainerFile(file) {
+  execFileSync('docker', ['exec', process.env.SMOKE_CONTAINER_NAME, 'rm', '-f', '--', file]);
+}
 
 async function request(method, path, body, opts = {}) {
   const timeoutMs = opts.timeoutMs ?? 60_000;
@@ -853,8 +871,48 @@ if (terminalText !== 'OK') {
 }
 console.log('✓ real Pi model round trip accepted all extension tool schemas');
 
+const pendingId = randomUUID();
+const pendingPath = `${path.dirname(conversation.session_path)}/smoke_${pendingId}.jsonl`;
+const pendingOwnershipPath = `/v1/pi/sessions/${encodeURIComponent(pendingId)}/ownership`;
+const healthBeforeReservation = await request('GET', '/healthz');
+const reserved = await request('POST', `${pendingOwnershipPath}/reserve`, {
+  client_id: 'runtime-smoke-pending', session_path: pendingPath,
+});
+if (reserved.state !== 'reserved' || !reserved.lease_token) {
+  throw new Error(`pending ownership reservation failed: ${JSON.stringify(reserved)}`);
+}
+const pendingQuiescence = await request('GET', '/v1/admin/quiescence');
+if (!pendingQuiescence.interactive_pi_sessions?.some?.((lease) => lease.session_id === pendingId && lease.pending === true)) {
+  throw new Error(`pending reservation was absent from authoritative quiescence: ${JSON.stringify(pendingQuiescence)}`);
+}
+const healthAfterReservation = await request('GET', '/healthz');
+if (healthAfterReservation.interactive_pi_sessions !== healthBeforeReservation.interactive_pi_sessions + 1) {
+  throw new Error(`pending reservation was absent from approximate ownership health count`);
+}
+await request('POST', `${pendingOwnershipPath}/heartbeat`, { lease_token: reserved.lease_token });
+writeContainerFile(pendingPath, `${JSON.stringify({
+  type: 'session', version: 3, id: pendingId, cwd: '/workspace', timestamp: new Date().toISOString(),
+})}\n`);
+const promotedPending = await request('POST', `${pendingOwnershipPath}/promote`, {
+  session_path: pendingPath, lease_token: reserved.lease_token,
+});
+if (promotedPending.state !== 'claimed') {
+  throw new Error(`pending ownership did not promote after valid materialization: ${JSON.stringify(promotedPending)}`);
+}
+const fencedPending = await fetch(base + `${pendingOwnershipPath}/claim`, {
+  method: 'POST', headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ client_id: 'runtime-smoke-competing', session_path: pendingPath }),
+});
+if (fencedPending.status !== 409) {
+  throw new Error(`promoted pending ownership did not fence a competing claim: ${fencedPending.status} ${await fencedPending.text()}`);
+}
+await request('POST', `${pendingOwnershipPath}/release`, { lease_token: reserved.lease_token });
+removeContainerFile(pendingPath);
+
 const ownershipPath = `/v1/pi/sessions/${encodeURIComponent(conversation.session_id)}/ownership`;
-const claimed = await request('POST', `${ownershipPath}/claim`, { client_id: 'runtime-smoke-cli' });
+const claimed = await request('POST', `${ownershipPath}/claim`, {
+  client_id: 'runtime-smoke-cli', session_path: conversation.session_path,
+});
 if (claimed.state !== 'claimed' || !claimed.lease_token || claimed.evicted_idle !== true) {
   throw new Error(`interactive ownership claim did not evict the idle runtime: ${JSON.stringify(claimed)}`);
 }
@@ -865,15 +923,15 @@ if (!leasedQuiescence.blockers?.some?.((blocker) => blocker.code === 'interactiv
 const blockedOpen = await fetch(base + '/v1/conversations/open', {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({ pi_session_id: conversation.session_id }),
+  body: JSON.stringify({ pi_session_id: conversation.session_id, pi_session_path: conversation.session_path }),
 });
 if (blockedOpen.status !== 409) {
   throw new Error(`agentd reopened a CLI-owned session: ${blockedOpen.status} ${await blockedOpen.text()}`);
 }
 await request('POST', `${ownershipPath}/heartbeat`, { lease_token: claimed.lease_token });
 await request('POST', `${ownershipPath}/release`, { lease_token: claimed.lease_token });
-await request('POST', '/v1/conversations/open', { pi_session_id: conversation.session_id });
-console.log('✓ interactive Pi ownership evicts idle agentd, fences reopen, heartbeats, and blocks deploy');
+await request('POST', '/v1/conversations/open', { pi_session_id: conversation.session_id, pi_session_path: conversation.session_path });
+console.log('✓ pending and durable interactive Pi ownership fence writes, heartbeat, release, and block deploy');
 
 const loaded = await request('GET', '/v1/admin/quiescence');
 if (loaded.status === 'blocked') {
