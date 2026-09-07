@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Monika Realtime Voice Lab</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" type="module"></script>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">Isolated experiment · Gate 1</p>
+      <h1>Realtime Voice Lab</h1>
+      <p>This conversation is not a canonical Pi session and cannot write memory or run action tools.</p>
+    </header>
+
+    <section id="login-panel" class="card">
+      <h2>Sign in</h2>
+      <form id="login-form">
+        <label>Shared passphrase <input id="passphrase" type="password" autocomplete="current-password" required></label>
+        <button type="submit">Enter lab</button>
+      </form>
+      <p id="login-error" class="error" role="alert"></p>
+    </section>
+
+    <div id="lab" hidden>
+      <section class="card controls">
+        <div class="status-line"><span id="status-dot"></span><strong id="status">Disconnected</strong></div>
+        <label>Microphone <select id="device"></select></label>
+        <div class="buttons">
+          <button id="connect">Connect</button>
+          <button id="disconnect" disabled>Disconnect</button>
+          <button id="mute" disabled>Mute</button>
+          <button id="logout" class="quiet">Log out</button>
+        </div>
+        <audio id="remote-audio" autoplay></audio>
+      </section>
+
+      <section class="card">
+        <h2>Live captions</h2>
+        <div id="captions" class="captions" aria-live="polite"></div>
+      </section>
+
+      <details class="card">
+        <summary>Diagnostics</summary>
+        <dl id="diagnostics"></dl>
+        <pre id="errors" class="error"></pre>
+      </details>
+
+      <section class="card">
+        <div class="section-heading"><h2>Experimental records</h2><button id="refresh-records" class="quiet">Refresh</button></div>
+        <p>Local bounded JSONL only. These files are outside Pi session discovery.</p>
+        <ul id="records"></ul>
+      </section>
+    </div>
+  </main>
+</body>
+</html>

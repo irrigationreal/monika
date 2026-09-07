@@ -1,0 +1,11 @@
+ARG MONIKA_VOICE_BASE_IMAGE=ghcr.io/irrigationreal/monika@sha256:86f932cea2f4f413fab3e7772c60354dad4aa39738422a074b996d0f9efd5177
+FROM ${MONIKA_VOICE_BASE_IMAGE}
+
+# Fast Gate 1 derivative: retain the coordinated runtime image and replace only
+# agentd's dependency manifest/lock and source. The normal release path rebuilds
+# the repository root Containerfile instead.
+WORKDIR /opt/agentd
+COPY services/agentd/package.json services/agentd/pnpm-lock.yaml services/agentd/pnpm-workspace.yaml ./
+RUN corepack pnpm@11.21.0 install --prod --frozen-lockfile
+COPY services/agentd/src/ ./src/
+WORKDIR /

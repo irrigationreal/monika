@@ -24,6 +24,7 @@ test('health route is restricted to constant-time in-memory cache reads', () => 
     'json',
     'sessionOwnership.approximateLeaseCount',
     'subagentHealthCache.read',
+    'voiceAdapter.activeCount',
   ]);
   assert.doesNotMatch(route, /\b(?:await|for|while)\b/);
   assert.doesNotMatch(route, /\b(?:existsSync|readFileSync|readdirSync|statSync|subagentSnapshot|scanLifecycleSnapshot|findSession|directSession|deployState)\b|\bfs\s*\./);
@@ -46,6 +47,20 @@ test('lifecycle health cache is recorded only after loaded reconciliation', () =
   const loaded = reconciliation.indexOf('reconcileArtifacts');
   const record = reconciliation.indexOf('subagentHealthCache.record(snapshot)');
   assert.ok(merge >= 0 && merge < loaded && loaded < record);
+});
+
+test('voice connect admission rechecks drain state after body and propagates response cancellation', () => {
+  const start = serverSource.indexOf('if (method === "POST" && url.pathname === "/v1/voice/connect")');
+  const end = serverSource.indexOf('if (method === "POST" && url.pathname === "/v1/voice/recall")', start);
+  assert.ok(start >= 0 && end > start);
+  const route = serverSource.slice(start, end);
+  const drainChecks = [...route.matchAll(/if \(draining\)/g)].map((match) => match.index);
+  const read = route.indexOf('await readBody(req)');
+  const connect = route.indexOf('await voiceAdapter.connect(body, { signal: controller.signal })');
+  assert.equal(drainChecks.length, 2);
+  assert.ok(drainChecks[0] < read && read < drainChecks[1] && drainChecks[1] < connect);
+  assert.match(route, /res\.once\("close", abortOnResponseClose\)/);
+  assert.match(route, /req\.once\("aborted", abortConnect\)/);
 });
 
 test('build metadata is preloaded before the HTTP listener is created', () => {

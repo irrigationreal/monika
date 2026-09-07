@@ -17,6 +17,9 @@ importers:
       '@earendil-works/pi-coding-agent':
         specifier: 0.85.1
         version: 0.85.1(ws@8.21.0)(zod@4.4.3)
+      ws:
+        specifier: 8.21.0
+        version: 8.21.0
 
 packages:
 

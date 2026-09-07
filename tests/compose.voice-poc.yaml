@@ -1,0 +1,78 @@
+# Isolated Realtime Voice Lab (Gate 1). No live runtime, workspace, database, or
+# secret is mounted. /dev/null defaults make authentication/provider startup fail
+# closed until the operator supplies explicit host files.
+name: monika-voice-poc
+
+services:
+  monika-voice:
+    image: ${MONIKA_VOICE_RUNTIME_IMAGE:-monika-voice-runtime-poc}
+    build:
+      context: ..
+      dockerfile: services/agentd/Containerfile.voice-poc
+      args:
+        MONIKA_VOICE_BASE_IMAGE: ${MONIKA_VOICE_BASE_IMAGE:-ghcr.io/irrigationreal/monika@sha256:86f932cea2f4f413fab3e7772c60354dad4aa39738422a074b996d0f9efd5177}
+    container_name: monika-voice-runtime
+    stop_grace_period: 2m
+    volumes:
+      - voice-poc-runtime-data:/data
+      - ${VOICE_PROVIDER_KEY_HOST_FILE:-/dev/null}:/run/voice-secrets/provider-key:ro
+      - ${VOICE_INTERNAL_TOKEN_HOST_FILE:-/dev/null}:/run/voice-secrets/internal-token:ro
+      - ${VOICE_PERSONA_SOUL_HOST_FILE:-/dev/null}:/voice-persona/SOUL.md:ro
+      - ${VOICE_PERSONA_STYLE_HOST_FILE:-/dev/null}:/voice-persona/STYLE.md:ro
+      - ${VOICE_PERSONA_REGISTER_HOST_FILE:-/dev/null}:/voice-persona/REGISTER.md:ro
+      - ${VOICE_PERSONA_MATRIX_HOST_FILE:-/dev/null}:/voice-persona/PERSONALITY_MATRIX.md:ro
+      - ${VOICE_CONTEXT_FACTS_HOST_FILE:-/dev/null}:/voice-context/FACTS.md:ro
+      - ${VOICE_CONTEXT_WAKE_HOST_FILE:-/dev/null}:/voice-context/WAKE.md:ro
+      - ${VOICE_CONTEXT_OBSERVATIONS_HOST_FILE:-/dev/null}:/voice-context/OBSERVATIONS.md:ro
+    environment:
+      HOME: /app
+      PI_CODING_AGENT_DIR: /app/.pi/agent
+      PI_OFFLINE: "1"
+      MEMSTORE_SOCKET: /tmp/memstore.sock
+      MEMSTORE_DATA_DIR: /data/memstore
+      MONIKA_AGENTD_HOST: 0.0.0.0
+      MONIKA_AGENTD_PORT: "7724"
+      MONIKA_AGENTD_DEFAULT_CWD: /tmp
+      MONIKA_VOICE_ENABLED: ${MONIKA_VOICE_ENABLED:-0}
+      MONIKA_VOICE_PROVIDER_API_BASE_URL: ${MONIKA_VOICE_PROVIDER_API_BASE_URL:-https://codex.ppflix.net}
+      MONIKA_VOICE_PROVIDER_API_KEY_FILE: /run/voice-secrets/provider-key
+      MONIKA_VOICE_PROVIDER_USER_AGENT: ${MONIKA_VOICE_PROVIDER_USER_AGENT:-Mozilla/5.0}
+      MONIKA_VOICE_INTERNAL_TOKEN_FILE: /run/voice-secrets/internal-token
+      MONIKA_VOICE_MEDIA_URL: ${MONIKA_VOICE_MEDIA_URL:-https://api.openai.com/v1/realtime/calls}
+      MONIKA_VOICE_SIDEBAND_URL: ${MONIKA_VOICE_SIDEBAND_URL:-wss://api.openai.com/v1/realtime}
+      MONIKA_VOICE_MODEL: ${MONIKA_VOICE_MODEL:-gpt-realtime-2.1}
+      MONIKA_VOICE_VOICE: ${MONIKA_VOICE_VOICE:-marin}
+      MONIKA_VOICE_PERSONA_FILES: /voice-persona/SOUL.md:/voice-persona/STYLE.md:/voice-persona/REGISTER.md:/voice-persona/PERSONALITY_MATRIX.md
+      MONIKA_VOICE_CONTEXT_FILES: /voice-context/FACTS.md:/voice-context/WAKE.md:/voice-context/OBSERVATIONS.md
+    networks: [voice-backend]
+
+  voice:
+    build:
+      context: ../services/voice
+      dockerfile: Containerfile
+    container_name: monika-voice-lab
+    depends_on:
+      monika-voice:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:4320:4320"
+    volumes:
+      - voice-poc-records:/data
+      - ${VOICE_PASSPHRASE_HOST_FILE:-/dev/null}:/run/voice-secrets/passphrase:ro
+      - ${VOICE_INTERNAL_TOKEN_HOST_FILE:-/dev/null}:/run/voice-secrets/internal-token:ro
+    environment:
+      VOICE_PUBLIC_ORIGIN: ${VOICE_PUBLIC_ORIGIN:-https://stanza.tawny-stork.ts.net:8443}
+      VOICE_PASSPHRASE_FILE: /run/voice-secrets/passphrase
+      VOICE_AGENTD_TOKEN_FILE: /run/voice-secrets/internal-token
+      VOICE_STATE_DIR: /data/voice
+      MONIKA_AGENTD_BASE_URL: http://monika-voice:7724
+    networks: [voice-backend]
+
+networks:
+  # A dedicated bridge isolates the POC from the normal deployment while retaining
+  # outbound access required for credential, WebRTC, and sideband provider calls.
+  voice-backend: {}
+
+volumes:
+  voice-poc-records:
+  voice-poc-runtime-data:

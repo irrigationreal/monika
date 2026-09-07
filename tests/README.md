@@ -41,6 +41,24 @@ cover token auth, response DTO shape, idempotent ownership renewal/expiry, Pi-sy
 preparing revocation, acquired publication rollback, tracked in-flight agent/Director work, delayed handoff races,
 explicit-dispatch atomicity, pending/running forks, and global durable blockers.
 
+## Realtime Voice Lab tests
+
+The Gate 1 voice adapter and BFF have provider-independent Node tests with fake
+HTTP, WebSocket, and memstore boundaries:
+
+```bash
+pnpm --dir services/agentd install --frozen-lockfile
+node --test services/agentd/test/voice-adapter.test.mjs
+npm --prefix services/voice test
+```
+
+Coverage includes disabled-by-default routes, external/internal authentication,
+same-origin CSRF, exact proxy paths, secret and upstream-error redaction, SDP/sideband
+lifecycle, server-owned bounded recall, local JSONL export/delete, and retention.
+`tests/compose.voice-poc.yaml` is the two-service manual stack with new named volumes,
+loopback port 4320, and no live mounts or secrets by default. See
+[`../docs/voice.md`](../docs/voice.md).
+
 ## Agentd/forum integration tests
 
 The cross-service fork-boundary contract test expects frozen dependency installs
@@ -336,9 +354,10 @@ The script verifies:
 
 ## Test compose
 
-`tests/compose.monika-runtime.yaml` is a test-only standalone compose file for
-manual runtime startup with ephemeral Docker volumes. It is not a deployment
-template. Use `compose.yaml.example` for real deployments.
+`tests/compose.monika-runtime.yaml` and `tests/compose.voice-poc.yaml` are test-only
+standalone Compose files with ephemeral Docker volumes. They are not deployment
+templates. Use `compose.yaml.example` for the canonical deployment; the intentionally
+isolated voice POC startup is documented in `docs/voice.md`.
 
 ```bash
 docker compose -f tests/compose.monika-runtime.yaml up -d

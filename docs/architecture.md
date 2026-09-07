@@ -78,6 +78,9 @@ they are continuing.
 ```mermaid
 flowchart LR
     Browser["Browser"] --> Forum["Forum container"]
+    VoiceBrowser["Voice Lab browser"] --> Voice["voice BFF"]
+    Voice --> VoiceAdapter["agentd voice adapter\noptional / isolated"]
+    VoiceAdapter --> Realtime["Realtime provider\nWebRTC + sideband"]
     Terminal["Interactive terminal"] --> Pi["Pi SDK/runtime"]
     Forum --> Agentd["agentd"]
     Agentd --> Pi
@@ -93,7 +96,7 @@ flowchart LR
     classDef canonical fill:#123524,stroke:#4ade80,color:#f0fdf4,stroke-width:2px;
     classDef service fill:#17201a,stroke:#86efac,color:#f0fdf4;
     class Sessions canonical;
-    class Forum,Agentd,Pi,Extensions,Stateful,Memstore service;
+    class Forum,Voice,VoiceAdapter,Agentd,Pi,Extensions,Stateful,Memstore service;
 ```
 
 ### Pi
@@ -142,6 +145,16 @@ owner-scoped forum-native aggregate rather than topics: they never create Pi
 sessions, enter conversation projections, or become memory origins. See
 [`docs/forum.md`](forum.md) for the cross-service contract
 and [`services/forum/README.md`](../services/forum/README.md) for the component.
+
+### Realtime Voice Lab
+
+The Gate 1 Realtime Voice Lab is a separate authenticated BFF and a disabled-by-default,
+narrow agentd adapter. Browser media uses WebRTC directly with the configured Realtime
+provider, while agentd owns credential minting, SDP exchange, persona assembly, sideband
+control, and one bounded read-only recall tool. It never dispatches Pi, exposes write/action
+tools, opens live deployment memory in its isolated stack, or creates canonical sessions.
+Its bounded local JSONL records are explicitly experimental and outside Pi discovery. See
+[`docs/voice.md`](voice.md) and [`services/voice/README.md`](../services/voice/README.md).
 
 ### Subagents
 
