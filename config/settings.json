@@ -30,6 +30,7 @@
     "claude/claude-haiku-4-5-20251001",
     "claude/claude-sonnet-4-5-20250929",
     "codex/gpt-6-astra",
+    "codex/gpt-6-astra[1m]",
     "codex/gpt-5.6-sol",
     "codex/gpt-5.6-sol[1m]",
     "codex/gpt-5.6-terra",
