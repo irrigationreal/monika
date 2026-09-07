@@ -165,8 +165,8 @@ Pull requests and merge-queue candidates use stable subsystem gate jobs:
 
 - `monika-container-checks` — runtime image and smoke validation;
 - `forum-container-checks` — forum tests and image build;
-- `integration-checks` — stable placeholder reserved for future cross-service
-  compatibility coverage.
+- `integration-checks` — agentd/forum compatibility coverage, currently enforcing
+  the canonical fork-boundary snapshot and durable materialization contract.
 
 Workflow files under [`.github/workflows/`](../.github/workflows/) are executable
 truth. [`AGENTS.md`](../AGENTS.md) records contributor and agent branch-gate rules;

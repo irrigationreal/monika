@@ -41,6 +41,23 @@ cover token auth, response DTO shape, idempotent ownership renewal/expiry, Pi-sy
 preparing revocation, acquired publication rollback, tracked in-flight agent/Director work, delayed handoff races,
 explicit-dispatch atomicity, pending/running forks, and global durable blockers.
 
+## Agentd/forum integration tests
+
+The cross-service fork-boundary contract test expects frozen dependency installs
+for both services, then exercises a real Pi `SessionManager`, the actual agentd
+HTTP snapshot endpoint and fork operation, and the forum's projection intersection
+and durable materialization:
+
+```bash
+pnpm --dir services/agentd install --frozen-lockfile
+pnpm --dir services/forum install --frozen-lockfile
+tests/integration/fork-boundary-contract.sh
+```
+
+It uses only temporary sessions, an in-memory forum database, and ephemeral
+attachment/ledger roots. The `integration-checks` branch gate runs this test when
+agentd, forum, or integration-contract files change.
+
 ## Agentd tests
 
 Provider-independent Pi lifecycle and workspace-loading tests live under

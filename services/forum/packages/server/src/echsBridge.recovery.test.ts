@@ -125,6 +125,9 @@ describe('passive ECHS startup reconciliation', () => {
     });
     const create = vi.spyOn((bridge as any).client, 'createConversationRecord');
     await expect(bridge.getTopicCompactionLeaf('topic-1')).rejects.toThrow(/non-dispatch operations cannot create/);
+    await expect(bridge.getTopicForkBoundarySnapshot('topic-1')).rejects.toThrow(
+      /non-dispatch operations cannot create/
+    );
     expect(create).not.toHaveBeenCalled();
   });
 

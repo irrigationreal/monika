@@ -140,8 +140,13 @@ session. `creation_id` reuse with different creation parameters is rejected.
 ## Forum-native forks
 
 Agentd exposes an idle-only, optimistic before-user fork operation for the forum.
-It validates the current session format, active-branch user boundary, completed
-assistant response, and expected dynamic leaf. A detached `SessionManager` extracts
+`GET /v1/conversations/:id/fork-boundaries` returns the canonical active branch,
+eligible user-entry IDs, and leaf from one detached session snapshot. The mutation
+path uses the same boundary classifier and rejects a changed leaf before creating a
+child. Because before-user extraction discards the selected user entry and everything
+after it, that discarded turn may be tool-using, failed, interrupted, or unanswered;
+its completion state is not a fork-safety condition. The first canonical user remains
+excluded by the V1 inherited-history contract. A detached `SessionManager` extracts
 the child branch without replacing the loaded parent or changing parent bytes. A
 filesystem operation ledger makes retries idempotent and quarantines the child from
 generic session listing until the forum acknowledges durable projection

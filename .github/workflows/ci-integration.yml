@@ -1,8 +1,4 @@
-# Integration CI placeholder.
-#
-# This workflow intentionally does not run real integration tests yet. It exists
-# so branch protection can require a stable integration gate today, and so future
-# agentd/forum compatibility tests have a documented place to grow.
+# Cross-service compatibility checks for agentd and the forum projection.
 
 name: CI / Integration
 
@@ -49,6 +45,7 @@ jobs:
               'config/extensions/' \
               'services/agentd/' \
               'services/forum/' \
+              'tests/integration/' \
               '.github/workflows/ci-integration.yml' \
             | grep -qvE '\.md$'; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
@@ -56,26 +53,45 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
-  integration-placeholder:
+  integration-build:
     needs: integration-changes
     if: needs.integration-changes.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Placeholder integration test
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 22
+
+      - name: Enable pnpm
         run: |
-          echo "No integration checks are implemented yet."
-          echo "Future checks should exercise agentd + forum compatibility here."
+          corepack enable
+          corepack prepare pnpm@11.21.0 --activate
+
+      - name: Install cross-service dependencies
+        run: |
+          pnpm --dir services/agentd install --frozen-lockfile
+          pnpm --dir services/forum install --frozen-lockfile
+
+      - name: Run agentd/forum fork-boundary contract test
+        run: tests/integration/fork-boundary-contract.sh
 
   # Gate job — branch protection should require this check.
   integration-checks:
     if: always()
-    needs: [integration-changes, integration-placeholder]
+    needs: [integration-changes, integration-build]
     runs-on: ubuntu-latest
     steps:
       - name: Evaluate result
         shell: bash
         run: |
-          if [ "${{ needs.integration-placeholder.result }}" = "failure" ] || [ "${{ needs.integration-placeholder.result }}" = "cancelled" ]; then
+          if [ "${{ needs.integration-changes.result }}" != "success" ]; then
+            echo "Integration change detection did not complete successfully"
+            exit 1
+          fi
+
+          if [ "${{ needs.integration-build.result }}" = "failure" ] || [ "${{ needs.integration-build.result }}" = "cancelled" ]; then
             echo "Integration checks failed or were cancelled"
             exit 1
           fi

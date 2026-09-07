@@ -36,6 +36,19 @@ function definitive(error: unknown): boolean {
   return typeof value.status === 'number' && value.status >= 400 && value.status < 500;
 }
 
+function forkFailureMessage(error: unknown): string {
+  switch (agentErrorCode(error)) {
+    case 'stale_leaf':
+      return 'The source conversation changed after this fork was accepted. Reopen Fork and submit a new request.';
+    case 'invalid_boundary':
+      return 'The selected post is no longer an eligible canonical fork point. Reopen Fork and choose again.';
+    case 'operation_mismatch':
+      return 'This fork request identifier is already bound to different canonical source data.';
+    default:
+      return error instanceof Error ? error.message : String(error);
+  }
+}
+
 export class ForkBoundariesUnavailableError extends Error {}
 export class ForkConflictError extends Error {}
 export class ForkNotFoundError extends Error {}
@@ -49,7 +62,11 @@ export class ForkService {
   constructor(
     private readonly store: ForumStore,
     private readonly agent: {
-      getTopicCompactionLeaf(topicId: string): Promise<string | null>;
+      getTopicForkBoundarySnapshot(topicId: string): Promise<{
+        leaf_entry_id: string | null;
+        active_entry_ids: string[];
+        eligible_boundary_entry_ids: string[];
+      }>;
       forkTopicConversation(
         topicId: string,
         input: { operationId: string; expectedLeafId: string; boundaryEntryId: string }
@@ -97,17 +114,45 @@ export class ForkService {
     });
   }
 
-  async boundaries(topicId: string): Promise<ForkBoundary[]> {
-    if (this.opts.refreshBoundaries) {
-      try {
-        await this.opts.refreshBoundaries(topicId);
-      } catch (error) {
-        throw new ForkBoundariesUnavailableError(
-          error instanceof Error ? error.message : 'Canonical fork boundaries could not be refreshed'
-        );
-      }
+  private async canonicalBoundarySnapshot(
+    topicId: string
+  ): Promise<{ leafEntryId: string | null; boundaries: ForkBoundary[] }> {
+    try {
+      if (this.opts.refreshBoundaries) await this.opts.refreshBoundaries(topicId);
+      const snapshot = await this.agent.getTopicForkBoundarySnapshot(topicId);
+      if (
+        !Array.isArray(snapshot.active_entry_ids) ||
+        !snapshot.active_entry_ids.every((entryId) => typeof entryId === 'string') ||
+        !Array.isArray(snapshot.eligible_boundary_entry_ids) ||
+        !snapshot.eligible_boundary_entry_ids.every((entryId) => typeof entryId === 'string') ||
+        !(
+          (typeof snapshot.leaf_entry_id === 'string' && snapshot.leaf_entry_id) ||
+          (snapshot.leaf_entry_id === null &&
+            snapshot.active_entry_ids.length === 0 &&
+            snapshot.eligible_boundary_entry_ids.length === 0)
+        )
+      )
+        throw new Error('Agent runtime returned an invalid fork-boundary snapshot');
+      return {
+        leafEntryId: snapshot.leaf_entry_id,
+        boundaries: this.store.listEligibleForkBoundaries(topicId, {
+          activeEntryIds: snapshot.active_entry_ids,
+          eligibleBoundaryEntryIds: new Set(snapshot.eligible_boundary_entry_ids),
+        }),
+      };
+    } catch (error) {
+      console.warn(
+        `[fork] canonical boundary snapshot unavailable for topic ${topicId}:`,
+        error instanceof Error ? error.message : error
+      );
+      throw new ForkBoundariesUnavailableError(
+        'Canonical fork boundaries are temporarily unavailable. Try reopening Fork.'
+      );
     }
-    return this.store.listEligibleForkBoundaries(topicId);
+  }
+
+  async boundaries(topicId: string): Promise<ForkBoundary[]> {
+    return (await this.canonicalBoundarySnapshot(topicId)).boundaries;
   }
   get(topicId: string, operationId: string): ForkOperation {
     const operation = this.store.getForkOperation(operationId);
@@ -198,17 +243,16 @@ export class ForkService {
 
     const releaseAdmission = this.store.beginRobotWork();
     try {
-      const boundary = (await this.boundaries(input.topicId)).find(
-        (candidate) => candidate.postId === input.boundaryPostId
-      );
+      const canonicalSnapshot = await this.canonicalBoundarySnapshot(input.topicId);
+      const boundary = canonicalSnapshot.boundaries.find((candidate) => candidate.postId === input.boundaryPostId);
       if (!boundary) throw new ForkConflictError('Selected post is not an eligible canonical fork boundary');
       const session = this.store.getSessionByTopic(input.topicId);
       const link = this.store.getPiSessionLinkByTopic(input.topicId);
       if (!session || !link) throw new ForkConflictError('Linked canonical Pi session is unavailable');
-      // The canonical leaf may be a non-post custom/tool/model entry newer than
-      // the forum projection head. Ask agentd at durable acceptance time rather
-      // than pretending the selected post is the source leaf.
-      const expectedLeafId = await this.agent.getTopicCompactionLeaf(input.topicId);
+      // Eligibility and the optimistic leaf come from one canonical agentd
+      // snapshot, so acceptance cannot combine a candidate list with a leaf
+      // observed from a different source state.
+      const expectedLeafId = canonicalSnapshot.leafEntryId;
       if (!expectedLeafId) throw new ForkConflictError('Linked canonical Pi session leaf is unavailable');
 
       const stageRoot = join(this.prestageRoot(), input.operationId);
@@ -358,7 +402,9 @@ export class ForkService {
         this.store.completeForkOperation(claimed.id);
         this.dispatcher.wake();
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const rawMessage = error instanceof Error ? error.message : String(error);
+        const message = forkFailureMessage(error);
+        if (message !== rawMessage) console.warn(`[fork] ${claimed.id}: ${rawMessage}`);
         // Once the child is materialized, only a successful agentd acknowledgement
         // can release either side's fence. Never terminalize an acknowledgement error.
         const childMaterialized = Boolean(this.store.getForkOperation(claimed.id)?.childTopicId);

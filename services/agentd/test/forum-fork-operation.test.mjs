@@ -7,10 +7,12 @@ import test from 'node:test';
 import { SessionManager } from '@earendil-works/pi-coding-agent';
 import {
   assertForumForkSourceMutable,
+  classifyForumForkBoundaryEntries,
   ForumForkConflictError,
   ForumForkLedger,
   filterForumForkSessionDiscovery,
   forkConversationBeforeUser,
+  readForumForkBoundarySnapshot,
 } from '../src/forum-fork-operation.mjs';
 
 function message(role, text, timestamp) {
@@ -182,21 +184,86 @@ test('fails closed when the durable fork ledger is unreadable', async () => {
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test('rejects boundaries without a completed inherited assistant response', async () => {
+test('canonical fork classifier excludes only the first user boundary', () => {
+  const branch = [
+    { id: 'custom', type: 'custom' },
+    { id: 'user-1', type: 'message', message: { role: 'user' } },
+    { id: 'assistant-tool', type: 'message', message: { role: 'assistant', stopReason: 'toolUse' } },
+    { id: 'user-2', type: 'message', message: { role: 'user' } },
+    { id: 'assistant-error', type: 'message', message: { role: 'assistant', stopReason: 'error' } },
+    { id: 'user-3', type: 'message', message: { role: 'user' } },
+  ];
+  assert.deepEqual(classifyForumForkBoundaryEntries(branch), ['user-2', 'user-3']);
+});
+
+for (const suffix of ['tool-use-complete', 'failed', 'unanswered']) {
+  test(`snapshot-advertised ${suffix} selected turn forks before that discarded turn`, async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'forum-fork-'));
+    try {
+      const manager = SessionManager.create(root, path.join(root, 'sessions'));
+      manager.appendMessage(message('user', 'inherited prompt', 1));
+      const inheritedAssistant = manager.appendMessage(message('assistant', 'inherited answer', 2));
+      const boundary = manager.appendMessage(message('user', 'opening to replace', 3));
+      if (suffix === 'tool-use-complete') {
+        const toolUse = message('assistant', 'working', 4);
+        toolUse.stopReason = 'toolUse';
+        manager.appendMessage(toolUse);
+        manager.appendMessage({ role: 'toolResult', toolCallId: 'call-1', toolName: 'read', content: [{ type: 'text', text: 'result' }], isError: false, timestamp: 5 });
+        manager.appendMessage(message('assistant', 'done', 6));
+      } else if (suffix === 'failed') {
+        const failed = message('assistant', 'partial progress', 4);
+        failed.stopReason = 'error';
+        failed.errorMessage = 'provider failed';
+        manager.appendMessage(failed);
+      }
+      const conv = { piSessionId: manager.getSessionId(), sessionPath: manager.getSessionFile(), cwd: root };
+      const snapshot = readForumForkBoundarySnapshot(conv);
+      assert.equal(snapshot.eligible_boundary_entry_ids.includes(boundary), true);
+
+      const result = await forkConversationBeforeUser({
+        conv,
+        input: {
+          operation_id: `fork-${suffix}`,
+          expected_leaf_id: snapshot.leaf_entry_id,
+          boundary_entry_id: boundary,
+        },
+        ledger: new ForumForkLedger(path.join(root, 'ledger')),
+      });
+      const child = SessionManager.open(result.child_session_path);
+      assert.equal(child.getBranch().some((entry) => entry.id === boundary), false);
+      assert.equal(child.getBranch().some((entry) => entry.id === inheritedAssistant), true);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+}
+
+test('rejects first-user and stale-snapshot boundaries before creating a child', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'forum-fork-'));
   try {
     const manager = SessionManager.create(root, path.join(root, 'sessions'));
-    const boundary = manager.appendMessage(message('user', 'unanswered', 1));
-    const failed = message('assistant', '', 2);
-    failed.stopReason = 'error';
-    manager.appendMessage(failed);
+    const firstUser = manager.appendMessage(message('user', 'first', 1));
+    manager.appendMessage(message('assistant', 'first answer', 2));
+    const boundary = manager.appendMessage(message('user', 'second', 3));
+    const conv = { piSessionId: manager.getSessionId(), sessionPath: manager.getSessionFile(), cwd: root };
+    const snapshot = readForumForkBoundarySnapshot(conv);
+    assert.deepEqual(snapshot.eligible_boundary_entry_ids, [boundary]);
+
     await assert.rejects(
       forkConversationBeforeUser({
-        conv: { piSessionId: manager.getSessionId(), sessionPath: manager.getSessionFile(), cwd: root },
-        input: { operation_id: 'fork-two', expected_leaf_id: manager.getLeafId(), boundary_entry_id: boundary },
-        ledger: new ForumForkLedger(path.join(root, 'ledger')),
+        conv,
+        input: { operation_id: 'fork-first', expected_leaf_id: snapshot.leaf_entry_id, boundary_entry_id: firstUser },
+        ledger: new ForumForkLedger(path.join(root, 'ledger-first')),
       }),
-      (error) => error instanceof ForumForkConflictError && error.code === 'missing_assistant_response',
+      (error) => error instanceof ForumForkConflictError && error.code === 'invalid_boundary',
+    );
+
+    manager.appendMessage(message('assistant', 'second answer', 4));
+    await assert.rejects(
+      forkConversationBeforeUser({
+        conv,
+        input: { operation_id: 'fork-stale', expected_leaf_id: snapshot.leaf_entry_id, boundary_entry_id: boundary },
+        ledger: new ForumForkLedger(path.join(root, 'ledger-stale')),
+      }),
+      (error) => error instanceof ForumForkConflictError && error.code === 'stale_leaf',
     );
   } finally { await rm(root, { recursive: true, force: true }); }
 });

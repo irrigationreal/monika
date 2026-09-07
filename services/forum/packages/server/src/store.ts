@@ -2450,21 +2450,14 @@ export class ForumStore {
     ).map(mapTopicOperationalEventRowToDomain);
   }
 
-  listEligibleForkBoundaries(topicId: string): ForkBoundary[] {
+  listEligibleForkBoundaries(
+    topicId: string,
+    canonical: { activeEntryIds: readonly string[]; eligibleBoundaryEntryIds: ReadonlySet<string> }
+  ): ForkBoundary[] {
     const link = this.getPiSessionLinkByTopic(topicId);
     if (!link) return [];
-    const head = this.db
-      .prepare('select active_entry_ids_json from pi_session_heads where pi_session_id = ?')
-      .get(link.pi_session_id) as { active_entry_ids_json: string } | undefined;
-    if (!head) return [];
-    let activeIds: string[];
-    let active: Set<string>;
-    try {
-      activeIds = JSON.parse(head.active_entry_ids_json) as string[];
-      active = new Set(activeIds);
-    } catch {
-      return [];
-    }
+    const activeIds = [...canonical.activeEntryIds];
+    const active = new Set(activeIds);
     const posts = this.db
       .prepare('select * from posts where topic_id = ? order by rowid asc')
       .all(topicId) as PostRow[];
@@ -2509,33 +2502,10 @@ export class ForumStore {
               candidate.entry.has_visible_text && candidate.message && active.has(candidate.message.pi_message_id)
             )
         );
-      // V1 materialization requires an inherited forum prefix and at least one
-      // inherited assistant response. Never advertise a before-first-user
-      // boundary that the durable worker must later reject.
-      if (
-        !prefixComplete ||
-        index === 0 ||
-        !inheritedHasAssistant ||
-        current.entry?.role !== 'user' ||
-        !current.singleton
-      )
-        continue;
-      const response = projected[index + 1];
       const activeIndex = current.message ? activeIds.indexOf(current.message.pi_message_id) : -1;
-      let nextCanonicalMessageId: string | null = null;
-      for (const entryId of activeIds.slice(activeIndex + 1)) {
-        const entry = this.db
-          .prepare('select role, has_visible_text from pi_entry_index where pi_session_id = ? and entry_id = ?')
-          .get(link.pi_session_id, entryId) as { role: string | null; has_visible_text: number } | undefined;
-        if (entry?.has_visible_text && (entry.role === 'user' || entry.role === 'assistant')) {
-          nextCanonicalMessageId = entryId;
-          break;
-        }
-      }
-      const responseActiveIndex = nextCanonicalMessageId ? activeIds.indexOf(nextCanonicalMessageId) : -1;
       const canonicalPrefixComplete =
-        responseActiveIndex >= 0 &&
-        activeIds.slice(0, responseActiveIndex + 1).every((entryId) => {
+        activeIndex >= 0 &&
+        activeIds.slice(0, activeIndex).every((entryId) => {
           const entry = this.db
             .prepare('select role, has_visible_text from pi_entry_index where pi_session_id = ? and entry_id = ?')
             .get(link.pi_session_id, entryId) as { role: string | null; has_visible_text: number } | undefined;
@@ -2549,23 +2519,25 @@ export class ForumStore {
             .get(link.pi_session_id, entryId, topicId) as { deleted_at: string | null } | undefined;
           return Boolean(projectedPost && !projectedPost.deleted_at);
         });
+      // Agentd owns canonical before-user eligibility. The forum intersects
+      // that snapshot with the V1 projection, provenance, and inherited-history
+      // requirements needed to materialize the child topic faithfully.
       if (
-        activeIndex < 0 ||
-        !canonicalPrefixComplete ||
-        !response ||
-        response.post.deleted_at ||
-        response.entry?.role !== 'assistant' ||
-        !response.entry.has_visible_text ||
-        !response.message ||
-        nextCanonicalMessageId !== response.message.pi_message_id ||
-        !active.has(response.message.pi_message_id)
+        !prefixComplete ||
+        index === 0 ||
+        !inheritedHasAssistant ||
+        current.entry?.role !== 'user' ||
+        !current.singleton ||
+        !current.message ||
+        !canonical.eligibleBoundaryEntryIds.has(current.message.pi_message_id) ||
+        !canonicalPrefixComplete
       )
         continue;
       boundaries.push({
         postId: current.post.id,
         postNumber: index + 1,
-        piMessageId: current.message!.pi_message_id,
-        entryId: current.message!.pi_message_id,
+        piMessageId: current.message.pi_message_id,
+        entryId: current.message.pi_message_id,
         excerpt: current.post.body.trim().slice(0, 180),
         body: current.post.body,
       });
