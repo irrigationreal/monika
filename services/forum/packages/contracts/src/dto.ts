@@ -602,12 +602,16 @@ export interface CreateForkRequestDto {
   boundaryPostId: string;
   title: string;
   openingBody: string;
+  model?: string | null;
+  reasoningEffort?: string | null;
 }
 
 export interface ForkOperationDto {
   id: string;
   sourceTopicId: string;
   boundaryPostId: string;
+  model: string | null;
+  reasoningEffort: string | null;
   status: ForkOperationStatus;
   childTopicId: string | null;
   errorMessage: string | null;

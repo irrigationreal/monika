@@ -134,7 +134,10 @@ export class PostDispatchService {
       if (startIndex < 0) return;
       const candidates = pendingForTopic.slice(startIndex);
       const boundary = candidates.findIndex((pending) => pending.origin_key !== row.origin_key);
-      const group = dispatchingRecoveryCheckpoint ? [row] : candidates.slice(0, boundary < 0 ? undefined : boundary);
+      const group =
+        dispatchingRecoveryCheckpoint || row.mode === 'fork-opening'
+          ? [row]
+          : candidates.slice(0, boundary < 0 ? undefined : boundary);
       const trigger = group.at(-1) ?? row;
       const claimed = this.store.claimPostDispatchGroup(group);
       claimToken = claimed?.claim_token ?? null;

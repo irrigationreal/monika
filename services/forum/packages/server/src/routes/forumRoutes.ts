@@ -571,6 +571,8 @@ export function registerForumRoutes({
         initiatedBy: user.identityId,
         title: parsed.data.title,
         openingBody: parsed.data.openingBody,
+        model: parsed.data.model ?? null,
+        reasoningEffort: parsed.data.reasoningEffort ?? null,
       });
       reply.code(202);
       reply.header('Location', `${request.url}/${encodeURIComponent(operation.id)}`);

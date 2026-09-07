@@ -21,6 +21,9 @@ export interface ForkOperation {
   initiatedBy: IdentityId;
   title: string;
   openingBody: string;
+  requestedModel: string | null;
+  model: string | null;
+  reasoningEffort: string | null;
   status: ForkOperationStatus;
   childTopicId: TopicId | null;
   childSessionId: string | null;

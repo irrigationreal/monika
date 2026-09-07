@@ -8,6 +8,11 @@ const props = defineProps<{
   boundaryPostId: string;
   title: string;
   openingBody: string;
+  modelOptions: string[];
+  model: string;
+  reasoningEffort: string;
+  supportsReasoning: boolean;
+  reasoningOptions: string[];
   loading: boolean;
   submitting: boolean;
   operationStatus: ForkOperationDto['status'] | null;
@@ -22,6 +27,8 @@ const emit = defineEmits<{
   'update:boundaryPostId': [value: string];
   'update:title': [value: string];
   'update:openingBody': [value: string];
+  'update:model': [value: string];
+  'update:reasoningEffort': [value: string];
 }>();
 
 const modalRef = ref<HTMLElement | null>(null);
@@ -155,6 +162,32 @@ onUnmounted(() => {
             :disabled="loading || submitting || boundaries.length === 0"
             @input="emit('update:openingBody', ($event.target as HTMLTextAreaElement).value)"
           ></textarea>
+        </div>
+        <div class="vb-modal-field">
+          <label for="fork-model">Model for the forked conversation</label>
+          <select
+            id="fork-model"
+            :value="model"
+            class="vb-modal-select"
+            :disabled="loading || submitting || boundaries.length === 0"
+            @change="emit('update:model', ($event.target as HTMLSelectElement).value)"
+          >
+            <option value="">Default</option>
+            <option v-for="option in modelOptions" :key="option" :value="option">{{ option }}</option>
+          </select>
+        </div>
+        <div v-if="supportsReasoning" class="vb-modal-field">
+          <label for="fork-reasoning">Reasoning</label>
+          <select
+            id="fork-reasoning"
+            :value="reasoningEffort"
+            class="vb-modal-select"
+            :disabled="loading || submitting || boundaries.length === 0"
+            @change="emit('update:reasoningEffort', ($event.target as HTMLSelectElement).value)"
+          >
+            <option value="">Default</option>
+            <option v-for="option in reasoningOptions" :key="option" :value="option">{{ option }}</option>
+          </select>
         </div>
         <div v-if="loading" class="vb-note" role="status" aria-live="polite">Refreshing canonical fork boundaries…</div>
         <p v-if="error" class="vb-error" role="alert">{{ error }}</p>

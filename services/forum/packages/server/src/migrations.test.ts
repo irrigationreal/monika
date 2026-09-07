@@ -133,6 +133,31 @@ describe('schema migrations', () => {
     expect(store.getPiMessageLink('pi-session', 'pi-assistant')?.post_id).toBe(post.id);
   });
 
+  it('adds nullable fork model selection columns to populated v49 databases', () => {
+    runMigrations(db, { targetVersion: 49 });
+    const legacyStore = new ForumStore(db);
+    const forum = legacyStore.createForum('Fork forum');
+    const author = legacyStore.createIdentity('Fork author', 'fork-author');
+    const { topic, post } = legacyStore.createTopic({ forumId: forum.id, title: 'Fork source', body: 'Opening', authorId: author.id });
+    const session = legacyStore.ensureSession({ topicId: topic.id });
+    db.prepare(
+      `insert into fork_operations
+       (id, source_topic_id, source_session_id, source_pi_session_id, source_pi_session_path,
+        boundary_post_id, boundary_pi_message_id, boundary_entry_id, expected_leaf_id, initiated_by,
+        title, opening_body, status, prestaged_attachments_json, attempt_count, created_at)
+       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'failed', '[]', 0, ?)`
+    ).run(
+      'legacy-fork', topic.id, session.id, 'pi-source', '/tmp/source.jsonl', post.id, 'pi-message',
+      'entry', 'leaf', author.id, 'Forked topic', 'Edited opening', new Date().toISOString()
+    );
+
+    runMigrations(db);
+
+    expect(
+      db.prepare('select requested_model, model, reasoning_effort from fork_operations where id = ?').get('legacy-fork')
+    ).toEqual({ requested_model: null, model: null, reasoning_effort: null });
+  });
+
   it('records applied schema versions', () => {
     runMigrations(db);
     const rows = db.prepare('select version from schema_migrations order by version asc').all() as Array<{

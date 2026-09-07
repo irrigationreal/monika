@@ -45,9 +45,32 @@ describe('global actionable durable dispatch blocker', () => {
       initiatedBy: source.post.author_id,
       title: 'Fork',
       openingBody: 'Opening',
+      requestedModel: 'openai/gpt-5.6-terra',
+      model: 'openai/gpt-5.6-terra',
+      reasoningEffort: 'high',
       prestagedAttachments: [],
     });
 
+    expect(() =>
+      store.enqueueForkOperation({
+        id: 'fork-blocker',
+        sourceTopicId: source.topic.id,
+        sourceSessionId: source.session.id,
+        sourcePiSessionId: 'pi-source',
+        sourcePiSessionPath: '/tmp/source.jsonl',
+        boundaryPostId: source.post.id,
+        boundaryPiMessageId: 'message',
+        boundaryEntryId: 'entry',
+        expectedLeafId: 'leaf',
+        initiatedBy: source.post.author_id,
+        title: 'Fork',
+        openingBody: 'Opening',
+        requestedModel: 'anthropic/claude-sonnet-4-6',
+        model: 'anthropic/claude-sonnet-4-6',
+        reasoningEffort: 'high',
+        prestagedAttachments: [],
+      })
+    ).toThrow('fork_operation_mismatch');
     expect(store.countPendingOrRunningForkOperations()).toBe(1);
     expect(store.claimForkOperation(operation.id)?.status).toBe('running');
     expect(store.countPendingOrRunningForkOperations()).toBe(1);

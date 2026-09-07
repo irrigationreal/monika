@@ -172,7 +172,10 @@ acknowledgement or manual recovery is unresolved, conversation writes, canonical
 cancellation reconciliation, and interactive ownership claims against the parent are fenced.
 Every parent writer takes the same per-session operation lock and checks the durable fork
 fence inside that lock immediately before mutation; the fork operation takes the lock
-directly so it does not recursively deadlock on its own newly published fence.
+directly so it does not recursively deadlock on its own newly published fence. Model and
+thinking selection are intentionally not part of branch extraction: the forum persists
+them with the fork operation and opening dispatch, then agentd applies them through Pi's
+session configuration before accepting the child conversation's opening prompt.
 
 ## Compaction
 

@@ -303,6 +303,7 @@ const forkService = new ForkService(store, codex, postDispatchService, {
         }
       }
     : undefined,
+  modelCatalog,
 });
 
 const getForumDeploymentBlockers = (includePiSync: boolean) => {

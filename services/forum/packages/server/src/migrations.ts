@@ -1942,6 +1942,21 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 50,
+    name: 'fork-model-selection',
+    up: (db) => {
+      if (!hasColumn(db, 'fork_operations', 'requested_model')) {
+        db.prepare('alter table fork_operations add column requested_model text').run();
+      }
+      if (!hasColumn(db, 'fork_operations', 'model')) {
+        db.prepare('alter table fork_operations add column model text').run();
+      }
+      if (!hasColumn(db, 'fork_operations', 'reasoning_effort')) {
+        db.prepare('alter table fork_operations add column reasoning_effort text').run();
+      }
+    },
+  },
 ];
 
 export const SCHEMA_VERSION: number = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;

@@ -200,9 +200,20 @@ Implemented in `services/forum`:
   discards the selected user entry and the entire suffix. Source idleness, durable
   operation fencing, and the snapshot leaf protect the inherited branch instead. The
   detached manager leaves parent bytes and the loaded parent runtime unchanged. The
-  forum copies the inherited active projection and attachments, seeds the child's
-  inherited dispatch generation, and queues the edited opening replay only after
-  materialization. Copied posts retain their
+  fork dialog selects the child conversation's model and capability-aware reasoning
+  level from agentd's current catalog, defaulting to the source topic's effective
+  configuration. Those values are part of the durable, idempotent forum operation; a
+  requested Default is resolved to the catalog's concrete model at acceptance so later
+  configuration changes cannot alter the accepted choice. The values are copied into
+  the child's opening dispatch, which is isolated from same-origin grouping so a newer
+  post cannot supersede it before agentd applies the configuration through Pi and
+  accepts the opening prompt. This persists the selection in canonical session history.
+  Unknown models and unsupported reasoning levels are rejected before fork state is
+  created, while a model that disappears after acceptance fails visibly in the ordinary
+  durable dispatch lifecycle rather than silently falling back. The forum
+  copies the inherited active projection and attachments, seeds the child's inherited
+  dispatch generation, and queues the edited opening replay only after materialization.
+  Copied posts retain their
   `follow_up` and remapped parent topology; the edited opening uses the selected source
   post's remapped parent rather than the chronological projection tail. Attachment custody
   is prestaged to operation-specific paths and verified against recorded size and SHA-256;

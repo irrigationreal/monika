@@ -28,6 +28,10 @@ describe('TopicView fork controls', () => {
     expect(source).toContain('persistForkIntent(intent)');
     expect(source).toContain('await api.getForkState(topicId)');
     expect(source).toContain('operationId: intent.operationId');
+    expect(source).toContain('model: intent.model');
+    expect(source).toContain('reasoningEffort: intent.reasoningEffort');
+    expect(source.match(/!\[408, 425, 429\]\.includes\(status\)/g)).toHaveLength(2);
+    expect(source).toContain('clearForkIntent(topicId)');
   });
 
   it('renders manual review as an active source fence without polling or blind retry', () => {
@@ -46,6 +50,8 @@ describe('TopicView fork controls', () => {
     expect(source).toContain('requestGeneration !== forkBoundaryRequestGeneration');
     expect(dialog).toContain('role="dialog"');
     expect(dialog).toContain('aria-describedby="fork-modal-description"');
+    expect(dialog).toContain('Model for the forked conversation');
+    expect(dialog).toContain('id="fork-reasoning"');
     expect(dialog).toContain("event.key === 'Escape'");
   });
 });
