@@ -109,6 +109,11 @@ After creating the tunnel, DNS records, redirect rules, cache-bypass rule, and
 connector token, delete the local API token and revoke it in Cloudflare. Only the
 connector token remains at runtime.
 
+The Gate 1 Realtime Voice Lab does not change this tunnel or claim a public
+hostname. Its optional tailnet-only HTTPS 8443 listener is separate operator
+configuration and must preserve the existing 443 root and `/pi` handlers. See
+[`voice.md`](voice.md).
+
 ## Verification
 
 ```bash

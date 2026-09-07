@@ -51,8 +51,10 @@ boundaries, and design lineage behind these principles.
 ```mermaid
 flowchart LR
     Human["Human / browser"] --> Forum["Forum\nUI + projection"]
+    Human --> Voice["Realtime Voice Lab\nisolated Gate 1"]
     Human --> Pi["Pi\ninteractive agent"]
     Forum --> Agentd["agentd\nHTTP + SSE bridge"]
+    Voice --> Agentd
     Agentd --> Pi
     Pi --> Tools["Tools + extensions"]
     Pi --> Memory["stateful-memory"]
@@ -117,6 +119,7 @@ Monika/
 ├── services/
 │   ├── agentd/               Pi-backed HTTP/SSE runtime daemon
 │   ├── memstore/             SQLite FTS5 transcript and observation service
+│   ├── voice/                Isolated Realtime Voice Lab BFF and browser UI
 │   └── forum/                Forum UI and Pi-session projection service
 │
 ├── runner/                   Disposable non-interactive Pi job mode
@@ -135,12 +138,14 @@ Monika/
   state, secrets, signing, host launcher, and AgentLogs
 - [Forum integration](docs/forum.md) — canonical-session projection and the
   forum↔agentd contract
+- [Realtime Voice Lab](docs/voice.md) — isolated Gate 1 architecture, trust
+  boundaries, configuration, and test stack
 - [Subagents](docs/subagents.md) — specialist roles, identity boundaries, durable
   execution, provenance, and recovery
 - [Maintenance](docs/maintenance.md) — dependency policy, CI entry points, and Pi
   upgrades
 - [Agentd](services/agentd/README.md), [memstore](services/memstore/README.md),
-  [forum](services/forum/README.md), and [runner](runner/README.md) — component
+  [voice](services/voice/README.md), [forum](services/forum/README.md), and [runner](runner/README.md) — component
   documentation
 - [Redeployment](docs/redeployment.md), [autodeploy](docs/autodeploy.md),
   [backups](docs/backups.md), [releases](docs/releases.md), and

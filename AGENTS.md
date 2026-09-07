@@ -9,6 +9,7 @@ This repo builds Monika's runtime containers and supporting services.
 - `services/agentd/` — Pi-backed HTTP/SSE daemon used by alternate frontends.
 - `services/memstore/` — SQLite FTS5 memory/observation service.
 - `services/forum/` — Monika forum frontend imported from `irrigationreal/monika-forum`.
+- `services/voice/` — optional isolated Realtime Voice Lab frontend; see `docs/voice.md` and `tests/compose.voice-poc.yaml`. Its records are experimental, not canonical sessions or memory origins.
 - `config/extensions/` — bundled Pi extensions copied into the image; this repo is the runtime source of truth for extensions.
 - `config/persona/` — bundled default persona files for standalone/test mode.
 - `tests/` — locally runnable smoke and integration tests used by CI gates, including test-only compose files.
@@ -55,6 +56,8 @@ Current CI gates:
 - `monika-container-checks` from `CI / Monika Container` — builds the Monika runtime image and runs `tests/smoke/monika-runtime.sh` when runtime-relevant files change.
 - `forum-container-checks` from `CI / Forum Container` — runs forum unit/E2E tests and builds the forum image when forum-relevant files change.
 - `integration-checks` from `CI / Integration` — runs focused agentd/forum compatibility tests when either service or the integration contract changes.
+
+- `voice-poc-checks` from `CI / Realtime Voice POC` — tests the optional voice adapter/frontend and builds both POC images when relevant files change. It is an experimental workflow gate; adding it to branch protection is an operator decision.
 
 Image publishing workflows:
 

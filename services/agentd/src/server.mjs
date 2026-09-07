@@ -72,6 +72,7 @@ import {
   modelRefreshIntervalMs,
   startModelCatalogRefresh,
 } from "./model-refresh.mjs";
+import { createVoiceAdapter, VoiceAdapterError } from "./voice-adapter.mjs";
 import {
   applyAutoCompactionOverride,
   requestedAutoCompaction,
@@ -414,6 +415,8 @@ async function callMemstoreTool(name, args = {}, timeoutMs = 2000) {
   });
 }
 
+const voiceAdapter = createVoiceAdapter({ callMemstoreTool });
+
 async function memstoreDeployState() {
   const status = await callMemstoreTool("memstore_status");
   const saveQueue =
@@ -621,6 +624,9 @@ async function deployState() {
   const drainRequired = [];
   if (activeTurns.length > 0)
     blockers.push({ code: "active_agent_turns", count: activeTurns.length });
+  const activeVoiceSessions = voiceAdapter.activeCount();
+  if (activeVoiceSessions > 0)
+    blockers.push({ code: "active_voice_sessions", count: activeVoiceSessions });
   let snapshot;
   try {
     snapshot = await subagentSnapshot();
@@ -672,6 +678,7 @@ async function deployState() {
           : "blocked",
     draining,
     active_threads: activeTurns.length,
+    active_voice_sessions: activeVoiceSessions,
     active_subagent_runs: backgroundRuns,
     uncertain_subagent_runs: snapshot.uncertain_count,
     effects_unknown_subagent_runs: effectsUnknownRuns,
@@ -2172,6 +2179,7 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         status: draining ? "draining" : "healthy",
         active_threads: activeThreadHealthCache.count(),
+        active_voice_sessions: voiceAdapter.activeCount(),
         active_subagent_runs: subagents.active_count,
         uncertain_subagent_runs: subagents.uncertain_count,
         effects_unknown_subagent_runs: subagents.effects_unknown_count,
@@ -2337,6 +2345,73 @@ const server = http.createServer(async (req, res) => {
     }
     if (method === "GET" && url.pathname === "/v1/models")
       return json(res, 200, await listModels());
+    if (url.pathname.startsWith("/v1/voice/")) {
+      if (!voiceAdapter.enabled) return json(res, 404, { error: "voice_disabled", message: "Realtime voice adapter is disabled" });
+      try {
+        if (!(await voiceAdapter.authorize(req.headers["x-monika-voice-token"]))) {
+          return json(res, 401, { error: "unauthorized" });
+        }
+      } catch (error) {
+        if (error instanceof VoiceAdapterError) return json(res, error.status, { error: error.code, message: error.message });
+        throw error;
+      }
+    }
+    if (method === "POST" && url.pathname === "/v1/voice/connect") {
+      if (draining) return json(res, 503, { error: "unavailable", message: "agentd is draining for deployment" });
+      const controller = new AbortController();
+      let connectedSessionId = null;
+      const abortConnect = () => {
+        controller.abort();
+        if (connectedSessionId) void voiceAdapter.close(connectedSessionId);
+      };
+      const abortOnResponseClose = () => { if (!res.writableEnded) abortConnect(); };
+      req.once("aborted", abortConnect);
+      res.once("close", abortOnResponseClose);
+      if (req.aborted || res.destroyed) abortConnect();
+      try {
+        const body = await readBody(req);
+        if (draining) return json(res, 503, { error: "unavailable", message: "agentd is draining for deployment" });
+        const result = await voiceAdapter.connect(body, { signal: controller.signal });
+        connectedSessionId = result.session_id;
+        if (controller.signal.aborted || res.destroyed) {
+          await voiceAdapter.close(connectedSessionId);
+          return;
+        }
+        return json(res, 201, result);
+      } catch (error) {
+        if (res.destroyed) return;
+        if (error instanceof VoiceAdapterError) {
+          return json(res, error.status, { error: error.code, message: error.message });
+        }
+        throw error;
+      } finally {
+        req.off("aborted", abortConnect);
+        res.off("close", abortOnResponseClose);
+      }
+    }
+    if (method === "POST" && url.pathname === "/v1/voice/recall") {
+      try {
+        return json(res, 200, await voiceAdapter.recall(await readBody(req)));
+      } catch (error) {
+        if (error instanceof VoiceAdapterError) {
+          return json(res, error.status, { error: error.code, message: error.message });
+        }
+        throw error;
+      }
+    }
+    const voiceSessionMatch = url.pathname.match(/^\/v1\/voice\/sessions\/([0-9a-f-]{36})(?:\/diagnostics)?$/);
+    if (voiceSessionMatch && method === "GET" && url.pathname.endsWith("/diagnostics")) {
+      try {
+        return json(res, 200, voiceAdapter.diagnostics(voiceSessionMatch[1]));
+      } catch (error) {
+        if (error instanceof VoiceAdapterError) return json(res, error.status, { error: error.code, message: error.message });
+        throw error;
+      }
+    }
+    if (voiceSessionMatch && method === "DELETE" && !url.pathname.endsWith("/diagnostics")) {
+      const closed = await voiceAdapter.close(voiceSessionMatch[1]);
+      return json(res, closed ? 200 : 404, { ok: closed });
+    }
     if (method === "GET" && url.pathname === "/v1/pi/sessions")
       return json(res, 200, { sessions: await scanSessions() });
 
@@ -2902,6 +2977,7 @@ async function shutdown(signal) {
   shutdownStarted = true;
   forumCatalogRefresh.stop();
   setDraining(true, { reason: signal.toLowerCase(), autoCancel: false });
+  await voiceAdapter.closeAll();
   const configuredDeadline = Number(process.env.MONIKA_AGENTD_SHUTDOWN_DEADLINE_MS ?? 30_000);
   const deadlineMs = Number.isFinite(configuredDeadline) ? Math.max(1_000, configuredDeadline) : 30_000;
   await runBoundedShutdown({

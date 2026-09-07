@@ -43,6 +43,7 @@ services/agentd/
 ├── pnpm-lock.yaml
 ├── src/
 │   ├── server.mjs                 HTTP/SSE service and Pi runtime ownership
+│   ├── voice-adapter.mjs          Optional isolated Realtime control boundary
 │   ├── drain-state.mjs            Durable deploy-drain lease state
 │   ├── dispatch-acceptance.mjs    Pre-acceptance failure marker vocabulary
 │   ├── session-resolution.mjs     Direct canonical-path validation
@@ -75,7 +76,10 @@ exposes these conceptual groups:
   compact, handoff, and close;
 - **artifacts** — legacy descriptor-safe export from canonical allowlisted roots;
 - **administration** — quiescence, drain, subagent workload/repair/retention, and
-  privacy-safe aggregate analytics.
+  privacy-safe aggregate analytics;
+- **Realtime Voice Lab** — disabled-by-default, internal-token-protected SDP connect,
+  bounded recall, diagnostics, and close routes used only by the exact voice BFF proxy.
+  This adapter never creates or dispatches a Pi session.
 
 `GET /healthz` is a lightweight liveness/readiness dependency: request handling
 uses only O(1) in-memory state and never scans lifecycle or Pi session archives,
@@ -249,6 +253,17 @@ compatibility reader opens with `O_NOFOLLOW`, validates the opened descriptor is
 regular file whose current inode and canonical path remain inside an allowed root,
 and reads bytes from that descriptor. Symlinks, containment escapes, and path
 replacement during validation fail closed.
+
+## Realtime Voice Lab adapter
+
+The optional voice adapter owns pool credential use, ephemeral credential minting,
+Realtime SDP exchange, and a server-side sideband WebSocket. Only the bounded read-only
+`recall_past_context` function is advertised. The browser receives an SDP answer but no
+credential and cannot execute tools. Provider/media/sideband destinations are fixed HTTPS/WSS
+configuration rather than request parameters, and upstream error bodies are never relayed.
+The adapter is disabled unless `MONIKA_VOICE_ENABLED=1` and then requires external provider
+and internal-token files. See [`../../docs/voice.md`](../../docs/voice.md) for the complete
+Gate 1 boundary and configuration.
 
 ## Development
 
