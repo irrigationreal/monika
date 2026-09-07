@@ -28,6 +28,7 @@ jobs:
           BASE=$(git merge-base origin/main "${{ github.sha }}" 2>/dev/null || echo "")
           if [ -z "$BASE" ] || git diff --name-only "$BASE" "${{ github.sha }}" -- \
             'services/voice/' \
+            'config/persona/SPOKEN.md' \
             'services/agentd/src/voice-adapter.mjs' \
             'services/agentd/src/memstore-rpc.mjs' \
             'services/agentd/test/memstore-rpc.test.mjs' \

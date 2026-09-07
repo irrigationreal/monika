@@ -197,6 +197,7 @@ COPY config/stateful-memory.json /app/.pi/agent/stateful-memory.json
 COPY config/persona/SOUL.md                /app/.pi/stateful-memory/SOUL.md
 COPY config/persona/STYLE.md               /app/.pi/stateful-memory/STYLE.md
 COPY config/persona/REGISTER.md            /app/.pi/stateful-memory/REGISTER.md
+COPY config/persona/SPOKEN.md              /app/.pi/stateful-memory/SPOKEN.md
 COPY config/persona/PERSONALITY_MATRIX.md  /app/.pi/stateful-memory/PERSONALITY_MATRIX.md
 COPY config/persona/persona_topics/        /app/.pi/stateful-memory/persona_topics/
 

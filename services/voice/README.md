@@ -11,9 +11,12 @@ Realtime credential: agentd mints the latter, exchanges browser SDP with the
 configured media endpoint, and retains it for the sideband control connection.
 Audio then flows directly between WebRTC peers. Before a call, the browser offers all ten
 current Realtime voices, a microphone-free fixed-text preview (which uses API credits),
-and locally persisted delivery/VAD/length/playback/reasoning preferences. Agentd validates
-all settings and locks provider destinations and tool capabilities. The UI locks call
-settings until disconnect.
+and locally persisted spoken-style/VAD/length/playback/reasoning preferences. The optional
+spoken-style field tunes phrasing and vocal delivery; the deployment-level `SPOKEN.md`
+remains authoritative. Voice context deliberately omits written `STYLE.md`, `REGISTER.md`,
+and the topic-routing matrix; topic addenda are selected separately.
+Agentd validates all settings and locks provider destinations and tool capabilities. The UI
+locks call settings until disconnect.
 
 ## Authentication
 

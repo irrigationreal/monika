@@ -161,7 +161,7 @@ test("connect keeps ephemeral key server-side, attaches sideband, executes only 
   assert.deepEqual(mintedSession.reasoning, { effort: "low" });
   assert.equal(mintedSession.audio.output.speed, 1);
   assert.equal(mintedSession.audio.input.turn_detection.eagerness, "auto");
-  assert.match(mintedSession.instructions, /Do not speak Markdown/i);
+  assert.doesNotMatch(mintedSession.instructions, /Speech direction \(delivery only\)/i);
   assert.match(mintedSession.instructions, /core identity/i);
   assert.deepEqual(mintedSession.tools[0].parameters.required.sort(), ["limit", "query"]);
   assert.equal(mintedSession.tools[0].parameters.additionalProperties, false);
@@ -293,7 +293,7 @@ test("opening topic enriches from current observations, sessions, bounded topics
   assert.equal(session.audio.input.turn_detection.eagerness, "low");
   assert.deepEqual(session.reasoning, { effort: "high" });
   assert.match(session.instructions, /Use an even spoken cadence/);
-  assert.match(session.instructions, /thorough spoken answer/);
+  assert.match(session.instructions, /Explore the topic thoroughly/);
   assert.match(session.instructions, /Session #41/);
   assert.match(session.instructions, /Current observation #91/);
   assert.match(session.instructions, /Piano-specific persona guidance/);

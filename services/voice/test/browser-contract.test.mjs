@@ -7,6 +7,9 @@ const indexUrl = new URL("../public/index.html", import.meta.url);
 const appUrl = new URL("../public/app.js", import.meta.url);
 const bffUrl = new URL("../src/server.mjs", import.meta.url);
 const adapterUrl = new URL("../../agentd/src/voice-adapter.mjs", import.meta.url);
+const composeUrl = new URL("../../../tests/compose.voice-poc.yaml", import.meta.url);
+const containerfileUrl = new URL("../../../Containerfile", import.meta.url);
+const spokenUrl = new URL("../../../config/persona/SPOKEN.md", import.meta.url);
 
 function numericConstant(source, name) {
   const match = source.match(new RegExp(`const ${name} = ([0-9_]+);`));
@@ -47,6 +50,24 @@ test("browser entrypoint remains an executable module with cancellable bounded s
   const stop = app.indexOf("stopLocalMedia(pc, dc, stream);", disconnect);
   const record = app.indexOf("await recordFor(recordId", disconnect);
   assert.ok(stop >= 0 && record > stop, "disconnect must stop local media before record I/O");
+});
+
+test("voice context uses a first-class spoken register instead of written style files", async () => {
+  const [adapter, compose, containerfile, spoken] = await Promise.all([
+    readFile(adapterUrl, "utf8"),
+    readFile(composeUrl, "utf8"),
+    readFile(containerfileUrl, "utf8"),
+    readFile(spokenUrl, "utf8"),
+  ]);
+  assert.match(adapter, /SOUL\.md:\/app\/\.pi\/stateful-memory\/SPOKEN\.md/);
+  const adapterDefault = adapter.match(/MONIKA_VOICE_PERSONA_FILES \?\? "([^"]+)"/)?.[1] ?? "";
+  assert.doesNotMatch(adapterDefault, /STYLE\.md|REGISTER\.md|PERSONALITY_MATRIX\.md/);
+  const voicePersona = compose.match(/MONIKA_VOICE_PERSONA_FILES: ([^\n]+)/)?.[1] ?? "";
+  assert.match(voicePersona, /SOUL\.md:.*SPOKEN\.md/);
+  assert.doesNotMatch(voicePersona, /STYLE\.md|REGISTER\.md|PERSONALITY_MATRIX\.md/);
+  assert.match(containerfile, /COPY config\/persona\/SPOKEN\.md\s+\/app\/\.pi\/stateful-memory\/SPOKEN\.md/);
+  assert.match(spoken, /Brevity is a conversational default, not a ceiling/);
+  assert.match(spoken, /Do not pronounce written laughter tokens/);
 });
 
 test("BFF connect deadline covers the adapter deadline and bounded hangup", async () => {

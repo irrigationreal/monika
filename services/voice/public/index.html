@@ -47,8 +47,9 @@
               <select id="response-length"><option value="brief">Brief</option><option value="normal">Normal</option><option value="detailed">Detailed</option></select>
             </label>
           </div>
-          <label>Speech direction (delivery only; separate from identity) <textarea id="speech-direction" maxlength="800" rows="3"></textarea></label>
-          <button id="reset-speech-direction" type="button" class="quiet">Reset speech direction</button>
+          <label>Spoken style override <textarea id="speech-direction" maxlength="800" rows="3" placeholder="Optional tuning for this call"></textarea></label>
+          <small>The deployed spoken register sets the default. This optional per-call instruction can tune phrasing, sentence structure, pacing, and vocal delivery; it cannot replace identity, memory, or tool policy.</small>
+          <button id="reset-speech-direction" type="button" class="quiet">Reset spoken style</button>
           <details>
             <summary>Advanced</summary>
             <div class="settings-grid">

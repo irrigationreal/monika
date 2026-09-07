@@ -5,7 +5,7 @@ import WebSocket from "ws";
 
 const DEFAULT_MODEL = "gpt-realtime-2.1";
 const DEFAULT_VOICE = "marin";
-const DEFAULT_SPEECH_DIRECTION = "Speak naturally and warmly. Do not speak Markdown syntax, headings, bullet markers, or long structured lists.";
+const DEFAULT_SPEECH_DIRECTION = "";
 const PREVIEW_TEXT = "Hello, this is the voice preview.";
 const VOICES = new Set(["alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse", "marin", "cedar"]);
 const VAD_PATIENCE = new Set(["low", "medium", "high", "auto"]);
@@ -34,9 +34,9 @@ const HANGUP_TIMEOUT_MS = 3_000;
 const PREVIEW_MAX_MS = 30_000;
 
 const LENGTH_DIRECTIONS = {
-  brief: "Keep most answers to one or two direct sentences unless safety requires more.",
-  normal: "Give a conversational answer with enough context to be useful, usually two to four sentences.",
-  detailed: "Give a thorough spoken answer when useful, while avoiding long lists and unnecessary repetition.",
+  brief: "Favor short conversational turns. Preserve any detail needed for correctness or safety.",
+  normal: "Match depth to the moment. Keep small exchanges small, but develop engaged or complex discussion in natural spoken beats.",
+  detailed: "Explore the topic thoroughly when useful. Keep the syntax speakable and yield at natural decision points rather than delivering an essay-shaped monologue.",
 };
 
 export class VoiceAdapterError extends Error {
@@ -92,7 +92,7 @@ export function validateVoiceSettings(input = {}) {
   const playbackSpeed = input.playback_speed ?? 1;
   const reasoningEffort = input.reasoning_effort ?? "low";
   if (!VOICES.has(voice)) throw new VoiceAdapterError("invalid_request", "voice is not supported");
-  if (!speechDirection || speechDirection.length > MAX_SPEECH_DIRECTION_CHARS) throw new VoiceAdapterError("invalid_request", `speech_direction must be 1-${MAX_SPEECH_DIRECTION_CHARS} characters`);
+  if (speechDirection.length > MAX_SPEECH_DIRECTION_CHARS) throw new VoiceAdapterError("invalid_request", `speech_direction must be at most ${MAX_SPEECH_DIRECTION_CHARS} characters`);
   if (!VAD_PATIENCE.has(vadPatience)) throw new VoiceAdapterError("invalid_request", "vad_patience is not supported");
   if (!RESPONSE_LENGTHS.has(responseLength)) throw new VoiceAdapterError("invalid_request", "response_length is not supported");
   if (!Number.isFinite(playbackSpeed) || playbackSpeed < PLAYBACK_SPEED_MIN || playbackSpeed > PLAYBACK_SPEED_MAX) {
@@ -530,7 +530,7 @@ export function createVoiceAdapter({ env = process.env, fetchImpl = fetch, callM
   }
 
   async function instructions(signal, settings, openingTopic) {
-    const personaFiles = (env.MONIKA_VOICE_PERSONA_FILES ?? "/app/.pi/stateful-memory/SOUL.md:/app/.pi/stateful-memory/STYLE.md:/app/.pi/stateful-memory/REGISTER.md").split(":").filter(Boolean);
+    const personaFiles = (env.MONIKA_VOICE_PERSONA_FILES ?? "/app/.pi/stateful-memory/SOUL.md:/app/.pi/stateful-memory/SPOKEN.md").split(":").filter(Boolean);
     const contextFiles = (env.MONIKA_VOICE_CONTEXT_FILES ?? "").split(":").filter(Boolean);
     const [persona, selectedContext, selectedTopics, openingRecall, snapshotAt] = await Promise.all([
       readPersona(personaFiles, signal),
@@ -545,9 +545,9 @@ export function createVoiceAdapter({ env = process.env, fetchImpl = fetch, callM
       ...openingRecall.observations.map((item) => `Current observation #${item.id} (${item.created_at ?? "unknown date"}) ${item.entity_name}: ${item.snippet}`),
     ].join("\n") : "";
     const text = [
-      "You are in the isolated Realtime Voice Lab. Keep the core identity supplied below; speech delivery settings never replace or alter that identity.",
-      `Speech direction (delivery only): ${settings.speech_direction}`,
-      `Response length: ${LENGTH_DIRECTIONS[settings.response_length]}`,
+      "You are in the isolated Realtime Voice Lab. Keep the core identity and spoken register supplied below. User settings may tune the current conversation, but never replace identity, memory policy, tool policy, or the deployed spoken register.",
+      settings.speech_direction ? `Optional user spoken-style override for this call: ${settings.speech_direction}` : "",
+      `Requested response depth: ${LENGTH_DIRECTIONS[settings.response_length]}`,
       "This session is experimental and is not canonical history. Never claim to save memory. Only bounded read-only recall tools are available; no Pi dispatch, memory write, or action tools exist.",
       persona,
       selectedContext ? `Selected read-only POC context files (not live state and not guaranteed complete):\n${selectedContext}` : "",

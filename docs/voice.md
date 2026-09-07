@@ -62,10 +62,16 @@ database. It starts empty unless an operator restores an SQLite online-backup
 artifact into that isolated volume while the staging stack is stopped. An
 optional external manifest supplies the snapshot timestamp surfaced in the UI,
 prompt, recall results, and experimental record. The compose template also has
-read-only slots for the default persona set (`SOUL`, `STYLE`, `REGISTER`, and
-`PERSONALITY_MATRIX`), selected `FACTS`, `WAKE`, and `OBSERVATIONS` files, and
-the copied `persona_topics` directory. These are selected POC context, not live
-canonical history.
+read-only slots for the voice persona set (`SOUL` and `SPOKEN`), selected
+`FACTS`, `WAKE`, and `OBSERVATIONS` files, and
+the copied `persona_topics` directory. `STYLE.md` and `REGISTER.md` are deliberately
+excluded from Realtime context: their typography and written-prose guidance made
+speech sound like dictation and competed with shorter per-call instructions.
+`SPOKEN.md` is the first-class deployment-level register for adaptive conversational
+depth, spoken syntax, pauses, fillers, restarts, emotion, and natural laughter.
+`PERSONALITY_MATRIX.md` remains a separate topic-routing index; it is not injected as
+direct voice guidance because its normal Pi loading policy references the intentionally
+omitted written files. These files are selected POC context, not live canonical history.
 
 The browser exposes all ten current Realtime voices (`alloy`, `ash`, `ballad`,
 `coral`, `echo`, `sage`, `shimmer`, `verse`, `marin`, and `cedar`). Preview uses
@@ -76,8 +82,8 @@ receive-only audio transceiver plus a data channel, explicitly calls `play()`,
 and cleans up when `output_audio_buffer.stopped` arrives, with a fixed 30-second
 maximum lifetime. Preview is explicitly labeled as consuming API credits.
 
-Call settings are delivery configuration, not identity. Persisted local
-preferences include resettable speech direction, Semantic VAD eagerness
+Call settings tune the deployed spoken register without replacing identity.
+Persisted local preferences include a resettable spoken-style override, Semantic VAD eagerness
 (`low`, `medium`, `high`, or `auto`), response length (`brief`, `normal`, or
 `detailed`), playback speed (`0.25`–`1.5`), and actual
 `reasoning.effort` (`minimal`, `low`, `medium`, `high`, or `xhigh`). Agentd
@@ -86,8 +92,11 @@ and `reasoning.effort` and validates strict allowlists/ranges. Settings lock
 when connection starts and unlock after disconnect. Provider origins,
 endpoints, and tool capabilities are never client settings.
 
-The voice-specific delivery direction does not replace core identity. An
-optional opening topic triggers bounded session/current-observation retrieval
+The per-call spoken-style override may affect phrasing, sentence structure,
+pacing, and vocal delivery; the API does not provide a prosody-only instruction
+boundary. The 800-character override is intentionally smaller than the deployed
+register and cannot replace identity or policy. An optional opening topic triggers
+bounded session/current-observation retrieval
 before connection and selects at most two matching persona topic addenda from
 the configured read-only directory. Empty opening topics perform neither
 operation. Topic-index and topic-directory paths are trusted operator-selected
@@ -162,8 +171,7 @@ export VOICE_PROVIDER_KEY_HOST_FILE=/outside/workspace/voice/provider-key
 export VOICE_PASSPHRASE_HOST_FILE=/outside/workspace/voice/passphrase
 export VOICE_INTERNAL_TOKEN_HOST_FILE=/outside/workspace/voice/internal-token
 export VOICE_PERSONA_SOUL_HOST_FILE=/outside/workspace/voice/persona/SOUL.md
-export VOICE_PERSONA_STYLE_HOST_FILE=/outside/workspace/voice/persona/STYLE.md
-export VOICE_PERSONA_REGISTER_HOST_FILE=/outside/workspace/voice/persona/REGISTER.md
+export VOICE_PERSONA_SPOKEN_HOST_FILE=/outside/workspace/voice/persona/SPOKEN.md
 export VOICE_PERSONA_MATRIX_HOST_FILE=/outside/workspace/voice/persona/PERSONALITY_MATRIX.md
 export VOICE_CONTEXT_FACTS_HOST_FILE=/outside/workspace/voice/persona/FACTS.md
 export VOICE_CONTEXT_WAKE_HOST_FILE=/outside/workspace/voice/persona/WAKE.md
@@ -247,7 +255,7 @@ docker compose -f tests/compose.voice-poc.yaml down -v # also deletes POC record
 | `MONIKA_VOICE_MEDIA_URL` | Fixed HTTPS `/v1/realtime/calls` URL |
 | `MONIKA_VOICE_SIDEBAND_URL` | Fixed WSS `/v1/realtime` URL |
 | `MONIKA_VOICE_MODEL` | Fixed Realtime model; default `gpt-realtime-2.1` |
-| `MONIKA_VOICE_PERSONA_FILES` | Colon-separated bounded, read-only persona files |
+| `MONIKA_VOICE_PERSONA_FILES` | Colon-separated bounded voice-persona files; default is `SOUL.md` and `SPOKEN.md`, never written `STYLE.md`/`REGISTER.md` or the topic-routing matrix |
 | `MONIKA_VOICE_CONTEXT_FILES` | Colon-separated selected POC snapshot files, labeled non-live/incomplete in context |
 | `MONIKA_VOICE_SNAPSHOT_MANIFEST_FILE` | Optional absolute external snapshot-manifest path |
 | `MONIKA_VOICE_TOPIC_INDEX_FILE` | Optional absolute bounded topic-index (`PERSONALITY_MATRIX.md`) path |

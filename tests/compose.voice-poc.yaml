@@ -20,8 +20,7 @@ services:
       - ${VOICE_PROVIDER_KEY_HOST_FILE:-/dev/null}:/run/voice-secrets/provider-key:ro
       - ${VOICE_INTERNAL_TOKEN_HOST_FILE:-/dev/null}:/run/voice-secrets/internal-token:ro
       - ${VOICE_PERSONA_SOUL_HOST_FILE:-/dev/null}:/voice-persona/SOUL.md:ro
-      - ${VOICE_PERSONA_STYLE_HOST_FILE:-/dev/null}:/voice-persona/STYLE.md:ro
-      - ${VOICE_PERSONA_REGISTER_HOST_FILE:-/dev/null}:/voice-persona/REGISTER.md:ro
+      - ${VOICE_PERSONA_SPOKEN_HOST_FILE:-/dev/null}:/voice-persona/SPOKEN.md:ro
       - ${VOICE_PERSONA_MATRIX_HOST_FILE:-/dev/null}:/voice-persona/PERSONALITY_MATRIX.md:ro
       - ${VOICE_CONTEXT_FACTS_HOST_FILE:-/dev/null}:/voice-context/FACTS.md:ro
       - ${VOICE_CONTEXT_WAKE_HOST_FILE:-/dev/null}:/voice-context/WAKE.md:ro
@@ -45,7 +44,9 @@ services:
       MONIKA_VOICE_MEDIA_URL: ${MONIKA_VOICE_MEDIA_URL:-https://api.openai.com/v1/realtime/calls}
       MONIKA_VOICE_SIDEBAND_URL: ${MONIKA_VOICE_SIDEBAND_URL:-wss://api.openai.com/v1/realtime}
       MONIKA_VOICE_MODEL: ${MONIKA_VOICE_MODEL:-gpt-realtime-2.1}
-      MONIKA_VOICE_PERSONA_FILES: /voice-persona/SOUL.md:/voice-persona/STYLE.md:/voice-persona/REGISTER.md:/voice-persona/PERSONALITY_MATRIX.md
+      # Voice deliberately excludes STYLE.md and REGISTER.md: their written/text
+      # mechanics conflict with the first-class spoken register.
+      MONIKA_VOICE_PERSONA_FILES: /voice-persona/SOUL.md:/voice-persona/SPOKEN.md
       MONIKA_VOICE_CONTEXT_FILES: /voice-context/FACTS.md:/voice-context/WAKE.md:/voice-context/OBSERVATIONS.md
       MONIKA_VOICE_SNAPSHOT_MANIFEST_FILE: ${MONIKA_VOICE_SNAPSHOT_MANIFEST_FILE:-}
       MONIKA_VOICE_TOPIC_INDEX_FILE: ${MONIKA_VOICE_TOPIC_INDEX_FILE:-}

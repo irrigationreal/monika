@@ -1,6 +1,7 @@
 const $ = (id) => document.getElementById(id);
-const DEFAULT_SPEECH_DIRECTION = "Speak naturally and warmly. Do not speak Markdown syntax, headings, bullet markers, or long structured lists.";
-const PREFERENCE_KEY = "monika.voice.preferences.v1";
+const DEFAULT_SPEECH_DIRECTION = "";
+// v2 intentionally drops the old baked-in written-style override from existing browsers.
+const PREFERENCE_KEY = "monika.voice.preferences.v2";
 const PREFERENCE_IDS = ["voice", "speech-direction", "vad-patience", "response-length", "playback-speed", "reasoning-effort"];
 const PREVIEW_MAX_MS = 30_000;
 const state = {
@@ -34,7 +35,6 @@ function effectiveSettings() {
   const speed = Number($("playback-speed").value);
   if (!Number.isFinite(speed) || speed < 0.25 || speed > 1.5) throw new Error("Playback speed must be from 0.25 to 1.5");
   const direction = $("speech-direction").value.trim();
-  if (!direction) throw new Error("Speech direction cannot be empty");
   return {
     voice: $("voice").value,
     speech_direction: direction,
