@@ -13,10 +13,33 @@ export class ForumForkConflictError extends Error {
   }
 }
 
-function textContent(content) {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content.filter((part) => part?.type === 'text').map((part) => part.text ?? '').join('\n');
+export function classifyForumForkBoundaryEntries(branch) {
+  let sawUser = false;
+  const eligible = [];
+  for (const entry of branch) {
+    if (entry.type !== 'message' || entry.message?.role !== 'user') continue;
+    if (sawUser) eligible.push(entry.id);
+    sawUser = true;
+  }
+  return eligible;
+}
+
+function boundarySnapshot(manager) {
+  const header = manager.getHeader();
+  if (!header || header.version !== CURRENT_SESSION_VERSION) {
+    throw new ForumForkConflictError('legacy_session', 'Only the current Pi session format can be forked');
+  }
+  const branch = manager.getBranch();
+  return {
+    leaf_entry_id: manager.getLeafId(),
+    active_entry_ids: branch.map((entry) => entry.id),
+    eligible_boundary_entry_ids: classifyForumForkBoundaryEntries(branch),
+  };
+}
+
+export function readForumForkBoundarySnapshot(conv) {
+  if (!conv.sessionPath) throw new ForumForkConflictError('legacy_session', 'Persisted Pi session is required');
+  return boundarySnapshot(SessionManager.open(conv.sessionPath, undefined, conv.cwd));
 }
 
 function stableRequest(input) {
@@ -162,21 +185,14 @@ export async function forkConversationBeforeUser({ conv, input, ledger }) {
   if (!conv.sessionPath) throw new ForumForkConflictError('legacy_session', 'Persisted Pi session is required');
   const sourceBefore = await readFile(conv.sessionPath);
   const manager = SessionManager.open(conv.sessionPath, undefined, conv.cwd);
-  const header = manager.getHeader();
-  if (!header || header.version !== CURRENT_SESSION_VERSION) {
-    throw new ForumForkConflictError('legacy_session', 'Only the current Pi session format can be forked');
-  }
-  const actualLeafId = manager.getLeafId();
+  const snapshot = boundarySnapshot(manager);
+  const actualLeafId = snapshot.leaf_entry_id;
   if (actualLeafId !== expectedLeafId) throw new ForumForkConflictError('stale_leaf', 'Conversation leaf changed before fork', { expected_leaf_id: expectedLeafId, actual_leaf_id: actualLeafId });
   const branch = manager.getBranch();
   const boundaryIndex = branch.findIndex((entry) => entry.id === boundaryEntryId);
   const boundary = branch[boundaryIndex];
-  if (!boundary || boundary.type !== 'message' || boundary.message?.role !== 'user') {
-    throw new ForumForkConflictError('invalid_boundary', 'Fork boundary must be a canonical user message on the active branch');
-  }
-  const response = branch.slice(boundaryIndex + 1).find((entry) => entry.type === 'message' && (entry.message?.role === 'user' || entry.message?.role === 'assistant'));
-  if (!response || response.message?.role !== 'assistant' || !textContent(response.message.content).trim() || !['stop', 'length'].includes(response.message.stopReason)) {
-    throw new ForumForkConflictError('missing_assistant_response', 'Fork boundary has no inherited completed assistant response');
+  if (!snapshot.eligible_boundary_entry_ids.includes(boundaryEntryId) || !boundary) {
+    throw new ForumForkConflictError('invalid_boundary', 'Fork boundary is not an eligible canonical user message on the active branch');
   }
 
   const createdAt = existing?.created_at ?? new Date().toISOString();

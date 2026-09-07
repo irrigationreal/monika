@@ -54,7 +54,7 @@ Current CI gates:
 
 - `monika-container-checks` from `CI / Monika Container` — builds the Monika runtime image and runs `tests/smoke/monika-runtime.sh` when runtime-relevant files change.
 - `forum-container-checks` from `CI / Forum Container` — runs forum unit/E2E tests and builds the forum image when forum-relevant files change.
-- `integration-checks` from `CI / Integration` — currently a documented placeholder that always passes/skips; grow this into agentd/forum compatibility checks.
+- `integration-checks` from `CI / Integration` — runs focused agentd/forum compatibility tests when either service or the integration contract changes.
 
 Image publishing workflows:
 

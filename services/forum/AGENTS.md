@@ -76,8 +76,8 @@ change.
 ## CI expectations
 
 Forum container build checks live at `.github/workflows/ci-forum-container.yml` and expose `forum-container-checks` as
-the branch-protection gate. Cross-service agentd/forum compatibility belongs in `.github/workflows/ci-integration.yml`;
-it is currently a placeholder gate named `integration-checks`.
+the branch-protection gate. Cross-service agentd/forum compatibility belongs in `.github/workflows/ci-integration.yml`
+and exposes the stable `integration-checks` gate.
 
 The forum image definition is `services/forum/Containerfile`. `Image / Forum` publishes path-filtered development
 images. `Release / Nightly` builds a coordinated Monika and Forum candidate from one commit, and `Release / Stable`

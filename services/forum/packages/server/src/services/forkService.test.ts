@@ -29,6 +29,26 @@ describe('ForkService', () => {
     await rm(uploads, { recursive: true, force: true });
   });
 
+  function forkSnapshot(
+    eligibleBoundaryEntryIds: string[] = ['user-2'],
+    leafEntryId = 'custom-leaf',
+    activeEntryIds: string[] = ['user-1', 'assistant-1', 'user-2', 'assistant-2', 'custom-leaf']
+  ) {
+    return {
+      leaf_entry_id: leafEntryId,
+      active_entry_ids: activeEntryIds,
+      eligible_boundary_entry_ids: eligibleBoundaryEntryIds,
+    };
+  }
+
+  function storeForkSnapshot(eligibleBoundaryEntryIds: string[] = ['user-2']) {
+    const snapshot = forkSnapshot(eligibleBoundaryEntryIds);
+    return {
+      activeEntryIds: snapshot.active_entry_ids,
+      eligibleBoundaryEntryIds: new Set(snapshot.eligible_boundary_entry_ids),
+    };
+  }
+
   async function seed() {
     const forum = store.createForum('Forum', undefined, '/workspace/project');
     const admin = store.createIdentity('Admin', 'admin');
@@ -99,11 +119,11 @@ describe('ForkService', () => {
 
   it('rejects a new fork before async leaf/prestage work while deployment admission is acquired', async () => {
     const seeded = await seed();
-    const getTopicCompactionLeaf = vi.fn().mockResolvedValue('custom-leaf');
+    const getTopicForkBoundarySnapshot = vi.fn().mockResolvedValue(forkSnapshot());
     const service = new ForkService(
       store,
       {
-        getTopicCompactionLeaf,
+        getTopicForkBoundarySnapshot,
         forkTopicConversation: vi.fn(),
         acknowledgeFork: vi.fn(),
       },
@@ -124,7 +144,7 @@ describe('ForkService', () => {
         openingBody: 'edited opening',
       })
     ).rejects.toBeInstanceOf(DispatchAdmissionFencedError);
-    expect(getTopicCompactionLeaf).not.toHaveBeenCalled();
+    expect(getTopicForkBoundarySnapshot).not.toHaveBeenCalled();
     expect(store.getForkOperation('fork-fenced')).toBeNull();
     coordinator.close();
   });
@@ -142,7 +162,7 @@ describe('ForkService', () => {
     const service = new ForkService(
       store,
       {
-        getTopicCompactionLeaf: vi.fn().mockResolvedValue('custom-leaf'),
+        getTopicForkBoundarySnapshot: vi.fn().mockResolvedValue(forkSnapshot()),
         forkTopicConversation,
         acknowledgeFork,
       },
@@ -216,7 +236,11 @@ describe('ForkService', () => {
       lineage_kind: 'fork',
       parent_pi_session_id: 'parent-pi',
     });
-    expect(forkTopicConversation).toHaveBeenCalledTimes(1);
+    expect(forkTopicConversation).toHaveBeenCalledWith(seeded.topic.id, {
+      operationId: 'fork-1',
+      expectedLeafId: 'custom-leaf',
+      boundaryEntryId: 'user-2',
+    });
     expect(acknowledgeFork).toHaveBeenCalledWith('fork-1', 'child-pi');
     expect(store.hasForkFence(seeded.topic.id)).toBe(false);
     expect(service.state(seeded.topic.id)).toMatchObject({
@@ -233,7 +257,7 @@ describe('ForkService', () => {
     const service = new ForkService(
       store,
       {
-        getTopicCompactionLeaf: vi.fn(),
+        getTopicForkBoundarySnapshot: vi.fn().mockResolvedValue(forkSnapshot()),
         forkTopicConversation: vi.fn(),
         acknowledgeFork: vi.fn(),
       },
@@ -251,23 +275,63 @@ describe('ForkService', () => {
     await expect(service.boundaries(seeded.topic.id)).rejects.toBeInstanceOf(ForkBoundariesUnavailableError);
   });
 
-  it('excludes grouped and incomplete/deleted projection boundaries', async () => {
+  it('returns no candidates rather than an outage for a valid empty canonical snapshot', async () => {
     const seeded = await seed();
-    const candidates = store.listEligibleForkBoundaries(seeded.topic.id);
+    const service = new ForkService(
+      store,
+      {
+        getTopicForkBoundarySnapshot: vi.fn().mockResolvedValue({
+          leaf_entry_id: null,
+          active_entry_ids: [],
+          eligible_boundary_entry_ids: [],
+        }),
+        forkTopicConversation: vi.fn(),
+        acknowledgeFork: vi.fn(),
+      },
+      { wake: vi.fn() },
+      { intervalMs: 60_000, uploadsDir: uploads, refreshBoundaries: vi.fn() }
+    );
+    services.push(service);
+
+    await expect(service.boundaries(seeded.topic.id)).resolves.toEqual([]);
+  });
+
+  it('intersects canonical eligibility with grouped and inherited projection rules', async () => {
+    const seeded = await seed();
+    const candidates = store.listEligibleForkBoundaries(seeded.topic.id, storeForkSnapshot());
     expect(candidates.map((candidate) => candidate.postId)).toContain(seeded.boundary.id);
     expect(candidates.map((candidate) => candidate.postId)).not.toContain(seeded.first.id);
+    expect(store.listEligibleForkBoundaries(seeded.topic.id, storeForkSnapshot([]))).toEqual([]);
+
     db.prepare('update pi_message_links set metadata_json=? where pi_session_id=? and pi_message_id=?').run(
       JSON.stringify({ contributorPostIds: ['a', 'b'] }),
       'parent-pi',
       'user-2'
     );
-    expect(store.listEligibleForkBoundaries(seeded.topic.id).map((candidate) => candidate.postId)).not.toContain(
-      seeded.boundary.id
+    expect(
+      store.listEligibleForkBoundaries(seeded.topic.id, storeForkSnapshot()).map((candidate) => candidate.postId)
+    ).not.toContain(seeded.boundary.id);
+
+    db.prepare('update pi_message_links set metadata_json=? where pi_session_id=? and pi_message_id=?').run(
+      JSON.stringify({ contributorPostIds: [seeded.boundary.id] }),
+      'parent-pi',
+      'user-2'
     );
     db.prepare(
       'update posts set deleted_at=? where id=(select post_id from pi_message_links where pi_session_id=? and pi_message_id=?)'
     ).run(new Date().toISOString(), 'parent-pi', 'assistant-1');
-    expect(store.listEligibleForkBoundaries(seeded.topic.id)).toEqual([]);
+    expect(store.listEligibleForkBoundaries(seeded.topic.id, storeForkSnapshot())).toEqual([]);
+  });
+
+  it('does not require a completed projected response after the discarded selected turn', async () => {
+    const seeded = await seed();
+    db.prepare(
+      'update posts set deleted_at=? where id=(select post_id from pi_message_links where pi_session_id=? and pi_message_id=?)'
+    ).run(new Date().toISOString(), 'parent-pi', 'assistant-2');
+
+    expect(
+      store.listEligibleForkBoundaries(seeded.topic.id, storeForkSnapshot()).map((candidate) => candidate.postId)
+    ).toContain(seeded.boundary.id);
   });
 
   it('keeps the forum source fenced without retrying an ambiguous child that needs manual review', async () => {
@@ -280,7 +344,7 @@ describe('ForkService', () => {
     const service = new ForkService(
       store,
       {
-        getTopicCompactionLeaf: vi.fn().mockResolvedValue('custom-leaf'),
+        getTopicForkBoundarySnapshot: vi.fn().mockResolvedValue(forkSnapshot()),
         forkTopicConversation,
         acknowledgeFork: vi.fn(),
       },
@@ -318,14 +382,14 @@ describe('ForkService', () => {
 
   it('cleans prestaged attachments after a definitive agentd rejection', async () => {
     const seeded = await seed();
-    const rejection = Object.assign(new Error('invalid boundary'), {
-      status: 400,
+    const rejection = Object.assign(new Error('ECHS 409: {"error":"invalid_boundary"}'), {
+      status: 409,
       details: { error: 'invalid_boundary' },
     });
     const service = new ForkService(
       store,
       {
-        getTopicCompactionLeaf: vi.fn().mockResolvedValue('custom-leaf'),
+        getTopicForkBoundarySnapshot: vi.fn().mockResolvedValue(forkSnapshot()),
         forkTopicConversation: vi.fn().mockRejectedValue(rejection),
         acknowledgeFork: vi.fn(),
       },
@@ -343,6 +407,9 @@ describe('ForkService', () => {
       openingBody: 'edited',
     });
     await vi.waitFor(() => expect(service.get(seeded.topic.id, 'fork-definitive-failure').status).toBe('failed'));
+    expect(service.get(seeded.topic.id, 'fork-definitive-failure').errorMessage).toBe(
+      'The selected post is no longer an eligible canonical fork point. Reopen Fork and choose again.'
+    );
     await expect(stat(join(uploads, 'fork-prestage', 'fork-definitive-failure'))).rejects.toMatchObject({
       code: 'ENOENT',
     });
@@ -360,7 +427,7 @@ describe('ForkService', () => {
     const service = new ForkService(
       store,
       {
-        getTopicCompactionLeaf: vi.fn(),
+        getTopicForkBoundarySnapshot: vi.fn().mockResolvedValue(forkSnapshot()),
         forkTopicConversation: vi.fn(),
         acknowledgeFork: vi.fn(),
       },

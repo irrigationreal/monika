@@ -71,6 +71,12 @@ export interface EchsConversationState {
   conversation: EchsConversationRecord;
 }
 
+export interface EchsForkBoundarySnapshot {
+  leaf_entry_id: string | null;
+  active_entry_ids: string[];
+  eligible_boundary_entry_ids: string[];
+}
+
 export interface EchsCancellationResult {
   ok: boolean;
   operation_id: string;
@@ -277,6 +283,12 @@ export class EchsClient {
       timeoutMs: 10 * 60_000,
     })) as Record<string, unknown>;
   }
+  async getForkBoundarySnapshot(conversationId: string): Promise<EchsForkBoundarySnapshot> {
+    return (await this.request(
+      `/v1/conversations/${encodeURIComponent(conversationId)}/fork-boundaries`
+    )) as EchsForkBoundarySnapshot;
+  }
+
   async forkConversation(
     conversationId: string,
     opts: { operationId: string; expectedLeafId: string; boundaryEntryId: string }

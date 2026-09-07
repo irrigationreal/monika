@@ -26,6 +26,7 @@ import type {
   EchsCancellationResult,
   EchsConversationRecord,
   EchsEvent,
+  EchsForkBoundarySnapshot,
   EchsSubagentRetention,
   EchsSubagentWorkload,
 } from './echsClient';
@@ -677,6 +678,11 @@ export class EchsBridge {
     const response = await this.client.getConversationContext(opened.conversationId);
     const context = (response as any)?.context ?? response;
     return typeof context?.leafEntryId === 'string' ? context.leafEntryId : null;
+  }
+
+  async getTopicForkBoundarySnapshot(topicId: string): Promise<EchsForkBoundarySnapshot> {
+    const opened = await this.openTopicConversation(topicId);
+    return this.client.getForkBoundarySnapshot(opened.conversationId);
   }
 
   async forkTopicConversation(

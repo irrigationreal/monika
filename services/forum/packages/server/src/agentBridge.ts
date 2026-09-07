@@ -8,7 +8,7 @@ import type {
   UtteranceOrigin,
 } from '@irrigationreal/codex-forum-core';
 
-import type { EchsSubagentRetention, EchsSubagentWorkload } from './echsClient';
+import type { EchsForkBoundarySnapshot, EchsSubagentRetention, EchsSubagentWorkload } from './echsClient';
 import type { AssistantProjectionInput, AssistantProjectionService } from './services/assistantProjectionService';
 import type { ForumStore } from './store';
 import type { StreamBusInterface } from './streamBus';
@@ -223,6 +223,10 @@ export class AgentBridge {
 
   async getTopicCompactionLeaf(topicId: string): Promise<string | null> {
     return this.echs.getTopicCompactionLeaf(topicId);
+  }
+
+  async getTopicForkBoundarySnapshot(topicId: string): Promise<EchsForkBoundarySnapshot> {
+    return this.runRobotWork(() => this.echs.getTopicForkBoundarySnapshot(topicId));
   }
 
   async forkTopicConversation(

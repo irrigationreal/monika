@@ -11,6 +11,7 @@ interface TrackedBackend {
   sendUserMessage: ReturnType<typeof vi.fn>;
   steerUserMessage: ReturnType<typeof vi.fn>;
   dispatchPostToAgent: ReturnType<typeof vi.fn>;
+  getTopicForkBoundarySnapshot: ReturnType<typeof vi.fn>;
   forkTopicConversation: ReturnType<typeof vi.fn>;
   acknowledgeFork: ReturnType<typeof vi.fn>;
   compactTopicConversation: ReturnType<typeof vi.fn>;
@@ -44,6 +45,11 @@ describe('AgentBridge deployment admission tracking', () => {
     backend.sendUserMessage = vi.fn(async () => undefined);
     backend.steerUserMessage = vi.fn(async () => undefined);
     backend.dispatchPostToAgent = vi.fn(async () => undefined);
+    backend.getTopicForkBoundarySnapshot = vi.fn(async () => ({
+      leaf_entry_id: 'leaf',
+      active_entry_ids: [],
+      eligible_boundary_entry_ids: [],
+    }));
     backend.forkTopicConversation = vi.fn(async () => ({
       child_session_id: 'child',
       child_session_path: '/tmp/child.jsonl',
@@ -65,6 +71,7 @@ describe('AgentBridge deployment admission tracking', () => {
     await bridge.sendUserMessage(topicId, 'send', postId);
     await bridge.steerUserMessage(topicId, 'steer', postId);
     await bridge.dispatchPostToAgent(topicId, postId);
+    await bridge.getTopicForkBoundarySnapshot(topicId);
     await bridge.forkTopicConversation(topicId, {
       operationId: 'fork',
       expectedLeafId: 'leaf',
@@ -73,8 +80,8 @@ describe('AgentBridge deployment admission tracking', () => {
     await bridge.acknowledgeFork('fork', 'child');
     await bridge.compactTopicConversation(topicId, { operationId: 'compact', expectedLeafId: 'leaf' });
 
-    expect(begin).toHaveBeenCalledTimes(8);
-    expect(release).toHaveBeenCalledTimes(8);
+    expect(begin).toHaveBeenCalledTimes(9);
+    expect(release).toHaveBeenCalledTimes(9);
   });
 
   it('does not release a delayed operation until its await settles', async () => {

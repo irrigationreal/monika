@@ -21,6 +21,7 @@ import {
   ForumForkLedger,
   filterForumForkSessionDiscovery,
   forkConversationBeforeUser,
+  readForumForkBoundarySnapshot,
 } from './forum-fork-operation.mjs';
 import {
   ForumCreationConflictError,
@@ -2563,6 +2564,16 @@ const server = http.createServer(async (req, res) => {
         } catch (err) {
           if (err instanceof ConversationConflictError) return conflict(res, err);
           if (err instanceof TypeError) return badRequest(res, err.message);
+          throw err;
+        }
+      }
+      if (method === 'GET' && tail === 'fork-boundaries') {
+        try {
+          return await withSessionOperation(conv.piSessionId, async () =>
+            json(res, 200, readForumForkBoundarySnapshot(conv))
+          );
+        } catch (err) {
+          if (err instanceof ForumForkConflictError) return conflict(res, err);
           throw err;
         }
       }

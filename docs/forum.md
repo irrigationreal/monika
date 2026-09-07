@@ -191,13 +191,18 @@ Implemented in `services/forum`:
   forum post ID (the UI labels it with the forum post number). Opening the selector
   performs a targeted canonical export/reconciliation so existing links self-repair;
   refresh failure is reported as unavailable rather than as an empty candidate list.
-  Eligibility uses v2 contributor provenance for the user boundary, while the following
-  canonical assistant entry needs its ordinary unique projected link rather than
-  user-contributor metadata. Grouped prompts remain ineligible. Agentd performs Pi's
-  exact before-user branch extraction with a detached manager, leaving parent bytes
-  and the loaded parent runtime unchanged. The forum copies the inherited active
-  projection and attachments, seeds the child's inherited dispatch generation, and
-  queues the edited opening replay only after materialization. Copied posts retain their
+  Agentd returns canonical eligible user-entry IDs, the active branch, and its leaf in
+  one snapshot, then uses the same classifier again when executing the fork. The forum
+  intersects that authority with v2 singleton contributor provenance, an undeleted and
+  complete inherited projection, and the V1 inherited-assistant requirement. Grouped
+  prompts and the first-user special case remain ineligible. Whether the selected turn
+  later completed is intentionally irrelevant: Pi's exact before-user extraction
+  discards the selected user entry and the entire suffix. Source idleness, durable
+  operation fencing, and the snapshot leaf protect the inherited branch instead. The
+  detached manager leaves parent bytes and the loaded parent runtime unchanged. The
+  forum copies the inherited active projection and attachments, seeds the child's
+  inherited dispatch generation, and queues the edited opening replay only after
+  materialization. Copied posts retain their
   `follow_up` and remapped parent topology; the edited opening uses the selected source
   post's remapped parent rather than the chronological projection tail. Attachment custody
   is prestaged to operation-specific paths and verified against recorded size and SHA-256;

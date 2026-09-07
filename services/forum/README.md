@@ -392,9 +392,12 @@ For full deployment guidance, see `docs/DEPLOYMENT.md`.
 - **Fork** is an admin-only, idle-only native Pi branch operation. The administrator selects an eligible forum-numbered
   user post, edits the replay, and receives a new topic containing independent copies of the inherited active-branch
   posts and attachments plus a non-numbered fork boundary. Opening the responsive dialog refreshes the linked canonical
-  session and repairs v2 contributor metadata before listing boundaries; grouped prompts stay excluded, while export
-  failures are shown as unavailable rather than as a false empty list. Agentd preserves the parent runtime, canonical
-  dispatch generation, and crash-safe child quarantine; the forum resumes pending operations after reload and keeps ambiguous
+  session and repairs v2 contributor metadata before listing boundaries. Agentd returns canonical eligible user-entry
+  IDs and the optimistic leaf in one snapshot; the forum intersects them with its complete-prefix, singleton-provenance,
+  deletion, and inherited-history requirements. The selected turn's later completion is intentionally irrelevant because
+  before-user extraction discards that turn; grouped prompts and the first-user special case remain excluded. Export or
+  snapshot failures are shown as unavailable rather than as a false empty list. Agentd preserves the parent runtime,
+  canonical dispatch generation, and crash-safe child quarantine; the forum resumes pending operations after reload and keeps ambiguous
   recovery fenced for operator review. V1 creation remains in the same forum and cwd; finalized parent and child topics
   move independently.
 - Canonical parent-session automatic compaction is a default-off, admin-controlled topic setting. The forum persists the
