@@ -214,6 +214,11 @@ const forkBoundaries = ref<ForkBoundaryDto[]>([]);
 const forkBoundaryPostId = ref('');
 const forkTitle = ref('');
 const forkOpeningBody = ref('');
+const forkModel = ref('');
+const forkReasoningEffort = ref('');
+const forkEffectiveModel = computed(() => forkModel.value || state.defaultModel.value || '');
+const forkSupportsReasoning = computed(() => state.modelSupportsReasoning(forkEffectiveModel.value));
+const forkReasoningOptions = computed(() => state.modelReasoningOptions(forkEffectiveModel.value));
 const forkOperation = ref<ForkOperationDto | null>(null);
 const forkState = ref<TopicForkStateDto>({ active: null, latest: null });
 const forkError = ref('');
@@ -227,6 +232,8 @@ interface ForkIntent {
   boundaryPostId: string;
   title: string;
   openingBody: string;
+  model: string | null;
+  reasoningEffort: string | null;
   createdAt: string;
   status: 'submitting' | ForkOperationDto['status'];
 }
@@ -635,6 +642,10 @@ async function openForkModal(): Promise<void> {
   forkBoundaries.value = [];
   forkBoundaryPostId.value = '';
   forkOpeningBody.value = '';
+  const sourceModel = state.sessionContext.value?.model ?? state.robotState.value?.model ?? '';
+  const sourceReasoning = state.sessionContext.value?.thinkingLevel ?? state.robotState.value?.reasoningEffort ?? '';
+  forkModel.value = replyModels.value.includes(sourceModel) ? sourceModel : '';
+  forkReasoningEffort.value = forkReasoningOptions.value.includes(sourceReasoning) ? sourceReasoning : '';
   forkTitle.value = `Fork: ${state.selectedTopic.value?.title ?? 'Topic'}`;
   forkBoundariesLoading.value = true;
   showForkModal.value = true;
@@ -656,6 +667,10 @@ async function openForkModal(): Promise<void> {
     forkBoundaryPostId.value = boundary.postId;
     forkOpeningBody.value = intendedBoundary && intent ? intent.openingBody : boundary.body;
     forkTitle.value = intendedBoundary && intent ? intent.title : forkTitle.value;
+    if (intendedBoundary && intent) {
+      forkModel.value = intent.model ?? '';
+      forkReasoningEffort.value = intent.reasoningEffort ?? '';
+    }
   } catch (error) {
     if (routeTopicId.value === topicId && requestGeneration === forkBoundaryRequestGeneration) {
       forkError.value = error instanceof Error ? error.message : 'Could not refresh canonical fork boundaries.';
@@ -752,6 +767,8 @@ async function refreshForkState(topicId: string): Promise<void> {
         boundaryPostId: intent.boundaryPostId,
         title: intent.title,
         openingBody: intent.openingBody,
+        model: intent.model,
+        reasoningEffort: intent.reasoningEffort,
       });
       if (routeTopicId.value !== topicId) return;
       forkOperation.value = operation;
@@ -768,7 +785,12 @@ async function refreshForkState(topicId: string): Promise<void> {
     if (routeTopicId.value === topicId) {
       forkError.value = error instanceof Error ? error.message : 'Could not refresh fork status.';
       const intent = loadForkIntent(topicId);
-      if (intent) scheduleForkPoll(topicId, intent.operationId);
+      const status = error && typeof error === 'object' && 'status' in error ? Number(error.status) : 0;
+      if (intent && status >= 400 && status < 500 && ![408, 425, 429].includes(status)) {
+        clearForkIntent(topicId);
+      } else if (intent) {
+        scheduleForkPoll(topicId, intent.operationId);
+      }
     }
   }
 }
@@ -791,6 +813,8 @@ async function submitFork(): Promise<void> {
     boundaryPostId: forkBoundaryPostId.value,
     title: forkTitle.value.trim(),
     openingBody: forkOpeningBody.value.trim(),
+    model: forkModel.value.trim() || null,
+    reasoningEffort: forkSupportsReasoning.value ? forkReasoningEffort.value.trim() || null : null,
     createdAt: new Date().toISOString(),
     status: 'submitting' as const,
   };
@@ -802,6 +826,8 @@ async function submitFork(): Promise<void> {
       boundaryPostId: intent.boundaryPostId,
       title: intent.title,
       openingBody: intent.openingBody,
+      model: intent.model,
+      reasoningEffort: intent.reasoningEffort,
     });
     if (routeTopicId.value !== topicId) return;
     forkOperation.value = operation;
@@ -812,6 +838,12 @@ async function submitFork(): Promise<void> {
       forkError.value = operation.errorMessage ?? 'Fork needs operator review; the source remains fenced.';
     }
   } catch (error) {
+    const status = error && typeof error === 'object' && 'status' in error ? Number(error.status) : 0;
+    if (status >= 400 && status < 500 && ![408, 425, 429].includes(status)) {
+      clearForkIntent(topicId);
+      forkError.value = error instanceof Error ? error.message : 'Fork request was rejected.';
+      return;
+    }
     try {
       const operation = await api.getFork(topicId, operationId);
       if (routeTopicId.value !== topicId) return;
@@ -1154,6 +1186,14 @@ watch(
 watch(autoRunModel, (model) => {
   if (autoRunReasoning.value) {
     autoRunReasoning.value = normalizeReasoning(model, autoRunReasoning.value);
+  }
+});
+
+watch(forkModel, (model) => {
+  if (forkSupportsReasoning.value) {
+    forkReasoningEffort.value = normalizeReasoning(model, forkReasoningEffort.value);
+  } else {
+    forkReasoningEffort.value = '';
   }
 });
 
@@ -2446,7 +2486,12 @@ onUnmounted(() => {
     v-model:boundary-post-id="forkBoundaryPostId"
     v-model:title="forkTitle"
     v-model:opening-body="forkOpeningBody"
+    v-model:model="forkModel"
+    v-model:reasoning-effort="forkReasoningEffort"
     :boundaries="forkBoundaries"
+    :model-options="replyModels"
+    :supports-reasoning="forkSupportsReasoning"
+    :reasoning-options="forkReasoningOptions"
     :loading="forkBoundariesLoading"
     :submitting="forkSubmitting"
     :operation-status="forkOperation?.status ?? null"

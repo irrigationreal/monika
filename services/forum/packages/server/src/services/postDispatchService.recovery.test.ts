@@ -321,6 +321,45 @@ describe('durable post dispatch recovery fence', () => {
     expect(store.getPostDispatch(second.id)?.status).toBe('dispatched');
   });
 
+  it('dispatches a fork opening with its selected model before later same-origin work', async () => {
+    const { topic, session, post, author } = fixture();
+    const opening = store.createPostDispatch({
+      topicId: topic.id,
+      sessionId: session.id,
+      postId: post.id,
+      mode: 'fork-opening',
+      model: 'openai/gpt-5.6-terra',
+      reasoningEffort: 'high',
+    });
+    const laterPost = store.createPost({ topicId: topic.id, authorId: author.id, body: 'later contributor' });
+    const later = store.createPostDispatch({
+      topicId: topic.id,
+      sessionId: session.id,
+      postId: laterPost.id,
+      model: 'anthropic/claude-sonnet-4-6',
+      reasoningEffort: 'low',
+    });
+    const agent = { dispatchPostToAgent: vi.fn(async () => {}) };
+    const service = new PostDispatchService(store, agent as any);
+
+    await processOnce(service);
+    expect(agent.dispatchPostToAgent).toHaveBeenCalledWith(
+      topic.id,
+      post.id,
+      expect.objectContaining({
+        model: 'openai/gpt-5.6-terra',
+        reasoningEffort: 'high',
+        dispatchId: opening.id,
+        contributorPostIds: [post.id],
+      })
+    );
+    expect(store.getPostDispatch(opening.id)?.status).toBe('dispatched');
+    expect(store.getPostDispatch(later.id)?.status).toBe('pending');
+
+    await processOnce(service);
+    expect(store.getPostDispatch(later.id)?.status).toBe('dispatched');
+  });
+
   it('retains the original durable contributor order when a grouped dispatch retries', async () => {
     const { topic, session, post, author } = fixture();
     store.createPostDispatch({ topicId: topic.id, sessionId: session.id, postId: post.id });

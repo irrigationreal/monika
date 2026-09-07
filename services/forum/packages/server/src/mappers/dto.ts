@@ -110,6 +110,8 @@ export function mapForkOperationToDto(operation: ForkOperation): ForkOperationDt
     id: operation.id,
     sourceTopicId: operation.sourceTopicId,
     boundaryPostId: operation.boundaryPostId,
+    model: operation.model,
+    reasoningEffort: operation.reasoningEffort,
     status: operation.status,
     childTopicId: operation.childTopicId,
     errorMessage: operation.errorMessage,

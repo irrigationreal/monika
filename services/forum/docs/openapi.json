@@ -4345,6 +4345,14 @@
                         "boundaryPostId": {
                           "type": "string"
                         },
+                        "model": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "reasoningEffort": {
+                          "type": "string",
+                          "nullable": true
+                        },
                         "status": {
                           "type": "string",
                           "enum": [
@@ -4379,6 +4387,8 @@
                         "id",
                         "sourceTopicId",
                         "boundaryPostId",
+                        "model",
+                        "reasoningEffort",
                         "status",
                         "childTopicId",
                         "errorMessage",
@@ -4400,6 +4410,14 @@
                         "boundaryPostId": {
                           "type": "string"
                         },
+                        "model": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "reasoningEffort": {
+                          "type": "string",
+                          "nullable": true
+                        },
                         "status": {
                           "type": "string",
                           "enum": [
@@ -4434,6 +4452,8 @@
                         "id",
                         "sourceTopicId",
                         "boundaryPostId",
+                        "model",
+                        "reasoningEffort",
                         "status",
                         "childTopicId",
                         "errorMessage",
@@ -4494,6 +4514,14 @@
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 100000
+                  },
+                  "model": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "reasoningEffort": {
+                    "type": "string",
+                    "nullable": true
                   }
                 },
                 "required": [
@@ -4522,6 +4550,14 @@
                     },
                     "boundaryPostId": {
                       "type": "string"
+                    },
+                    "model": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "reasoningEffort": {
+                      "type": "string",
+                      "nullable": true
                     },
                     "status": {
                       "type": "string",
@@ -4557,6 +4593,8 @@
                     "id",
                     "sourceTopicId",
                     "boundaryPostId",
+                    "model",
+                    "reasoningEffort",
                     "status",
                     "childTopicId",
                     "errorMessage",
@@ -4675,6 +4713,14 @@
                     "boundaryPostId": {
                       "type": "string"
                     },
+                    "model": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "reasoningEffort": {
+                      "type": "string",
+                      "nullable": true
+                    },
                     "status": {
                       "type": "string",
                       "enum": [
@@ -4709,6 +4755,8 @@
                     "id",
                     "sourceTopicId",
                     "boundaryPostId",
+                    "model",
+                    "reasoningEffort",
                     "status",
                     "childTopicId",
                     "errorMessage",

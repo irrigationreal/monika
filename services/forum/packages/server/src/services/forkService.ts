@@ -53,11 +53,23 @@ export class ForkBoundariesUnavailableError extends Error {}
 export class ForkConflictError extends Error {}
 export class ForkNotFoundError extends Error {}
 
+interface ForkEnqueueInput {
+  operationId: string;
+  topicId: string;
+  boundaryPostId: string;
+  initiatedBy: string;
+  title: string;
+  openingBody: string;
+  model?: string | null;
+  reasoningEffort?: string | null;
+}
+
 export class ForkService {
   private timer: ReturnType<typeof setInterval> | null = null;
   private processing: Promise<void> | null = null;
   private stopped = true;
   private cleanupPending = true;
+  private readonly enqueueing = new Map<string, Promise<ForkOperation>>();
 
   constructor(
     private readonly store: ForumStore,
@@ -83,6 +95,12 @@ export class ForkService {
       intervalMs?: number;
       uploadsDir?: string;
       refreshBoundaries?: (topicId: string) => Promise<void>;
+      modelCatalog?: {
+        listModels(): Promise<{
+          items: Array<{ id: string; supportsReasoning?: boolean; supportedThinkingLevels?: string[] }>;
+          defaultModel?: string | null;
+        }>;
+      };
     } = {}
   ) {}
 
@@ -218,15 +236,25 @@ export class ForkService {
     await rm(stageRoot, { recursive: true, force: true });
   }
 
-  async enqueue(input: {
-    operationId: string;
-    topicId: string;
-    boundaryPostId: string;
-    initiatedBy: string;
-    title: string;
-    openingBody: string;
-  }): Promise<ForkOperation> {
+  async enqueue(input: ForkEnqueueInput): Promise<ForkOperation> {
+    const active = this.enqueueing.get(input.operationId);
+    if (active) {
+      await active.catch(() => undefined);
+      return this.enqueue(input);
+    }
+    const operation = this.enqueueOnce(input);
+    this.enqueueing.set(input.operationId, operation);
+    try {
+      return await operation;
+    } finally {
+      if (this.enqueueing.get(input.operationId) === operation) this.enqueueing.delete(input.operationId);
+    }
+  }
+
+  private async enqueueOnce(input: ForkEnqueueInput): Promise<ForkOperation> {
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(input.operationId)) throw new ForkConflictError('Invalid fork operation id');
+    const requestedModel = input.model?.trim() || null;
+    const requestedReasoningEffort = input.reasoningEffort?.trim() || null;
     const existing = this.store.getForkOperation(input.operationId);
     if (existing) {
       if (
@@ -234,7 +262,9 @@ export class ForkService {
         existing.boundaryPostId !== input.boundaryPostId ||
         existing.initiatedBy !== input.initiatedBy ||
         existing.title !== input.title.trim() ||
-        existing.openingBody !== input.openingBody.trim()
+        existing.openingBody !== input.openingBody.trim() ||
+        existing.requestedModel?.toLowerCase() !== requestedModel?.toLowerCase() ||
+        existing.reasoningEffort !== requestedReasoningEffort
       )
         throw new ForkConflictError('operationId is already used by another fork request');
       if (existing.status === 'pending' || existing.status === 'running') this.wake();
@@ -254,6 +284,27 @@ export class ForkService {
       // observed from a different source state.
       const expectedLeafId = canonicalSnapshot.leafEntryId;
       if (!expectedLeafId) throw new ForkConflictError('Linked canonical Pi session leaf is unavailable');
+
+      let model = requestedModel;
+      let reasoningEffort = requestedReasoningEffort;
+      if (this.opts.modelCatalog) {
+        const catalog = await this.opts.modelCatalog.listModels();
+        const effectiveModelId = model ?? catalog.defaultModel ?? null;
+        const modelInfo = effectiveModelId
+          ? catalog.items.find((item) => item.id.toLowerCase() === effectiveModelId.toLowerCase())
+          : null;
+        if (!modelInfo) throw new ForkConflictError('Selected model is not currently available');
+        model = modelInfo.id;
+        if (reasoningEffort) {
+          if (!modelInfo || modelInfo.supportsReasoning === false)
+            throw new ForkConflictError('Selected model does not support reasoning controls');
+          const supported = modelInfo.supportedThinkingLevels?.length
+            ? modelInfo.supportedThinkingLevels
+            : ['low', 'medium', 'high', 'xhigh'];
+          if (!supported.includes(reasoningEffort))
+            throw new ForkConflictError('Selected reasoning level is not supported by this model');
+        }
+      }
 
       const stageRoot = join(this.prestageRoot(), input.operationId);
       const sourcePosts = this.store.listPosts(input.topicId, 1, 100_000);
@@ -358,6 +409,9 @@ export class ForkService {
           initiatedBy: input.initiatedBy,
           title: input.title.trim(),
           openingBody: input.openingBody.trim(),
+          requestedModel,
+          model,
+          reasoningEffort,
           prestagedAttachments: prestaged,
         });
         this.wake();
@@ -366,6 +420,8 @@ export class ForkService {
         await rm(stageRoot, { recursive: true, force: true });
         if (error instanceof Error && error.message === 'fork_conflict')
           throw new ForkConflictError('Topic must be idle with no unresolved operation or dispatch');
+        if (error instanceof Error && error.message === 'fork_operation_mismatch')
+          throw new ForkConflictError('operationId is already used by another fork request');
         throw error;
       }
     } finally {

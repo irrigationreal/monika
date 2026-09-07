@@ -18,6 +18,11 @@ function mountDialog(overrides: Record<string, unknown> = {}) {
       boundaryPostId: boundary.postId,
       title: 'Fork: Parent',
       openingBody: boundary.body,
+      modelOptions: ['anthropic/claude-sonnet-4-6', 'openai/gpt-5.6-terra'],
+      model: 'anthropic/claude-sonnet-4-6',
+      reasoningEffort: 'medium',
+      supportsReasoning: true,
+      reasoningOptions: ['low', 'medium', 'high'],
       loading: false,
       submitting: false,
       operationStatus: null,
@@ -41,12 +46,18 @@ describe('ForkTopicDialog', () => {
     expect(wrapper.get('#fork-boundary').classes()).toContain('vb-modal-select');
     expect(wrapper.get('#fork-title').classes()).toContain('vb-modal-input');
     expect(wrapper.get('#fork-opening').classes()).toContain('vb-modal-textarea');
+    expect(wrapper.get('#fork-model').classes()).toContain('vb-modal-select');
+    expect(wrapper.get('#fork-reasoning').classes()).toContain('vb-modal-select');
     expect(wrapper.get('#fork-boundary option').text()).toContain('#2');
 
     await wrapper.get('#fork-title').setValue('Fork: Edited');
     await wrapper.get('#fork-opening').setValue('Edited replay');
+    await wrapper.get('#fork-model').setValue('openai/gpt-5.6-terra');
+    await wrapper.get('#fork-reasoning').setValue('high');
     expect(wrapper.emitted('update:title')?.at(-1)).toEqual(['Fork: Edited']);
     expect(wrapper.emitted('update:openingBody')?.at(-1)).toEqual(['Edited replay']);
+    expect(wrapper.emitted('update:model')?.at(-1)).toEqual(['openai/gpt-5.6-terra']);
+    expect(wrapper.emitted('update:reasoningEffort')?.at(-1)).toEqual(['high']);
     wrapper.unmount();
   });
 
@@ -60,7 +71,12 @@ describe('ForkTopicDialog', () => {
     }
 
     {
-      const wrapper = mountDialog({ boundaries: [], boundaryPostId: '', canSubmit: false, error: 'No stable boundary.' });
+      const wrapper = mountDialog({
+        boundaries: [],
+        boundaryPostId: '',
+        canSubmit: false,
+        error: 'No stable boundary.',
+      });
       expect(wrapper.get('[role="alert"]').text()).toBe('No stable boundary.');
       expect(wrapper.get('#fork-boundary').text()).toContain('No eligible boundary');
       expect(wrapper.get('.vb-fork-modal-actions .vb-btn').attributes()).toHaveProperty('disabled');

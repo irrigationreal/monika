@@ -356,6 +356,9 @@ export interface EnqueueForkOperationInput {
   initiatedBy: string;
   title: string;
   openingBody: string;
+  requestedModel: string | null;
+  model: string | null;
+  reasoningEffort: string | null;
   prestagedAttachments: Array<{
     sourcePostId: string;
     filename: string;
@@ -2618,7 +2621,27 @@ export class ForumStore {
   enqueueForkOperation(input: EnqueueForkOperationInput): ForkOperation {
     return this.db.transaction(() => {
       const existing = this.getForkOperation(input.id);
-      if (existing) return existing;
+      if (existing) {
+        const row = this.db.prepare('select * from fork_operations where id = ?').get(input.id) as ForkOperationRow;
+        const sameRequest =
+          row.source_topic_id === input.sourceTopicId &&
+          row.source_session_id === input.sourceSessionId &&
+          row.source_pi_session_id === input.sourcePiSessionId &&
+          row.source_pi_session_path === input.sourcePiSessionPath &&
+          row.boundary_post_id === input.boundaryPostId &&
+          row.boundary_pi_message_id === input.boundaryPiMessageId &&
+          row.boundary_entry_id === input.boundaryEntryId &&
+          row.expected_leaf_id === input.expectedLeafId &&
+          row.initiated_by === input.initiatedBy &&
+          row.title === input.title &&
+          row.opening_body === input.openingBody &&
+          row.requested_model === input.requestedModel &&
+          row.model === input.model &&
+          row.reasoning_effort === input.reasoningEffort &&
+          row.prestaged_attachments_json === JSON.stringify(input.prestagedAttachments);
+        if (!sameRequest) throw new Error('fork_operation_mismatch');
+        return existing;
+      }
       this.assertRobotWorkAdmission();
       const topic = this.getTopic(input.sourceTopicId);
       const robotState = this.getRobotState(input.sourceTopicId);
@@ -2638,8 +2661,8 @@ export class ForumStore {
           `insert into fork_operations
            (id, source_topic_id, source_session_id, source_pi_session_id, source_pi_session_path,
             boundary_post_id, boundary_pi_message_id, boundary_entry_id, expected_leaf_id, initiated_by,
-            title, opening_body, status, prestaged_attachments_json, attempt_count, created_at)
-           values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, 0, ?)`
+            title, opening_body, requested_model, model, reasoning_effort, status, prestaged_attachments_json, attempt_count, created_at)
+           values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, 0, ?)`
         )
         .run(
           input.id,
@@ -2654,6 +2677,9 @@ export class ForumStore {
           input.initiatedBy,
           input.title,
           input.openingBody,
+          input.requestedModel,
+          input.model,
+          input.reasoningEffort,
           JSON.stringify(input.prestagedAttachments),
           now
         );
@@ -2840,7 +2866,9 @@ export class ForumStore {
         topicId: created.topic.id,
         postId: opening.id,
         sessionId: childSession.id,
-        mode: 'auto',
+        mode: 'fork-opening',
+        model: row.model,
+        reasoningEffort: row.reasoning_effort,
       });
       // Do not let the already-running dispatcher open the quarantined child.
       // completeForkOperation releases this only after agentd acknowledgement.

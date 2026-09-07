@@ -191,6 +191,9 @@ describe('DeploymentAdmissionCoordinator', () => {
       initiatedBy: forkFixture.post.author_id,
       title: 'Fork',
       openingBody: 'Opening',
+      requestedModel: null,
+      model: null,
+      reasoningEffort: null,
       prestagedAttachments: [],
     };
     expect(store.enqueueCompactionOperationIfIdle(compactionInput)?.id).toBe(compactionInput.id);

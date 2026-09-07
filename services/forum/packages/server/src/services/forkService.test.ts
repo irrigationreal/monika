@@ -167,7 +167,22 @@ describe('ForkService', () => {
         acknowledgeFork,
       },
       { wake },
-      { intervalMs: 60_000, uploadsDir: uploads }
+      {
+        intervalMs: 60_000,
+        uploadsDir: uploads,
+        modelCatalog: {
+          listModels: vi.fn().mockResolvedValue({
+            items: [
+              {
+                id: 'openai/gpt-5.6-terra',
+                supportsReasoning: true,
+                supportedThinkingLevels: ['low', 'medium', 'high'],
+              },
+            ],
+            defaultModel: 'openai/gpt-5.6-terra',
+          }),
+        },
+      }
     );
     services.push(service);
     service.start();
@@ -182,8 +197,26 @@ describe('ForkService', () => {
       initiatedBy: seeded.admin.id,
       title: 'Forked topic',
       openingBody: 'edited opening',
+      model: 'openai/gpt-5.6-terra',
+      reasoningEffort: 'high',
     });
-    expect(accepted.status).toBe('pending');
+    expect(accepted).toMatchObject({
+      status: 'pending',
+      model: 'openai/gpt-5.6-terra',
+      reasoningEffort: 'high',
+    });
+    await expect(
+      service.enqueue({
+        operationId: 'fork-1',
+        topicId: seeded.topic.id,
+        boundaryPostId: seeded.boundary.id,
+        initiatedBy: seeded.admin.id,
+        title: 'Forked topic',
+        openingBody: 'edited opening',
+        model: 'openai/gpt-5.6-terra',
+        reasoningEffort: 'low',
+      })
+    ).rejects.toThrow('operationId is already used by another fork request');
     expect(service.state(seeded.topic.id)).toMatchObject({
       active: { id: 'fork-1' },
       latest: { id: 'fork-1' },
@@ -199,7 +232,12 @@ describe('ForkService', () => {
     expect(posts.map((post) => post.body)).toEqual(['first', 'first answer', 'edited opening']);
     expect(posts.map((post) => Boolean(post.follow_up))).toEqual([true, false, true]);
     expect(posts[2]!.parent_post_id).toBe(posts[0]!.id);
-    expect(store.getPostDispatchByPost(posts[2]!.id)).toMatchObject({ generation: 7, status: 'pending' });
+    expect(store.getPostDispatchByPost(posts[2]!.id)).toMatchObject({
+      generation: 7,
+      status: 'pending',
+      model: 'openai/gpt-5.6-terra',
+      reasoning_effort: 'high',
+    });
     expect(db.prepare('select count(*) count from post_dispatches where topic_id=?').get(child!.id)).toEqual({
       count: 1,
     });
@@ -249,6 +287,101 @@ describe('ForkService', () => {
     });
     await expect(stat(join(uploads, 'fork-prestage', 'fork-1'))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(wake).toHaveBeenCalled();
+  });
+
+  it('rejects unavailable models and unsupported reasoning before creating durable fork state', async () => {
+    const seeded = await seed();
+    const service = new ForkService(
+      store,
+      {
+        getTopicForkBoundarySnapshot: vi.fn().mockResolvedValue(forkSnapshot()),
+        forkTopicConversation: vi.fn(),
+        acknowledgeFork: vi.fn(),
+      },
+      { wake: vi.fn() },
+      {
+        intervalMs: 60_000,
+        uploadsDir: uploads,
+        modelCatalog: {
+          listModels: vi.fn().mockResolvedValue({
+            items: [{ id: 'local/plain', supportsReasoning: false }],
+            defaultModel: 'local/plain',
+          }),
+        },
+      }
+    );
+    services.push(service);
+
+    const base = {
+      topicId: seeded.topic.id,
+      boundaryPostId: seeded.boundary.id,
+      initiatedBy: seeded.admin.id,
+      title: 'Forked topic',
+      openingBody: 'edited opening',
+    };
+    await expect(service.enqueue({ ...base, operationId: 'fork-unknown', model: 'missing/model' })).rejects.toThrow(
+      'Selected model is not currently available'
+    );
+    await expect(
+      service.enqueue({ ...base, operationId: 'fork-reasoning', model: 'local/plain', reasoningEffort: 'high' })
+    ).rejects.toThrow('Selected model does not support reasoning controls');
+    expect(store.getForkOperation('fork-unknown')).toBeNull();
+    expect(store.getForkOperation('fork-reasoning')).toBeNull();
+
+    const defaultFork = await service.enqueue({ ...base, operationId: 'fork-default' });
+    expect(defaultFork).toMatchObject({ model: 'local/plain', reasoningEffort: null });
+    await expect(service.enqueue({ ...base, operationId: 'fork-default' })).resolves.toMatchObject({
+      id: defaultFork.id,
+      model: 'local/plain',
+      reasoningEffort: null,
+    });
+  });
+
+  it('serializes concurrent same-id acceptance so a rejected collision cannot remove winner custody', async () => {
+    const seeded = await seed();
+    const service = new ForkService(
+      store,
+      {
+        getTopicForkBoundarySnapshot: vi.fn().mockResolvedValue(forkSnapshot()),
+        forkTopicConversation: vi.fn(),
+        acknowledgeFork: vi.fn(),
+      },
+      { wake: vi.fn() },
+      {
+        intervalMs: 60_000,
+        uploadsDir: uploads,
+        modelCatalog: {
+          listModels: vi.fn().mockResolvedValue({
+            items: [
+              {
+                id: 'openai/gpt-5.6-terra',
+                supportsReasoning: true,
+                supportedThinkingLevels: ['low', 'high'],
+              },
+            ],
+            defaultModel: 'openai/gpt-5.6-terra',
+          }),
+        },
+      }
+    );
+    services.push(service);
+    const base = {
+      operationId: 'fork-concurrent',
+      topicId: seeded.topic.id,
+      boundaryPostId: seeded.boundary.id,
+      initiatedBy: seeded.admin.id,
+      title: 'Forked topic',
+      openingBody: 'edited opening',
+      model: 'openai/gpt-5.6-terra',
+    };
+
+    const results = await Promise.allSettled([
+      service.enqueue({ ...base, reasoningEffort: 'low' }),
+      service.enqueue({ ...base, reasoningEffort: 'high' }),
+    ]);
+    expect(results.map((result) => result.status).sort()).toEqual(['fulfilled', 'rejected']);
+    expect(store.getForkOperation('fork-concurrent')).toMatchObject({ reasoningEffort: 'low' });
+    await expect(stat(join(uploads, 'fork-prestage', 'fork-concurrent'))).resolves.toMatchObject({});
   });
 
   it('refreshes canonical projection before listing boundaries and reports refresh outages distinctly', async () => {

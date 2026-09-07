@@ -738,12 +738,16 @@ export const CreateForkRequestSchema: z.ZodType<CreateForkRequestDto> = z.object
   boundaryPostId: z.string().min(1),
   title: z.string().trim().min(1).max(300),
   openingBody: z.string().trim().min(1).max(100_000),
+  model: optionalNullableString,
+  reasoningEffort: optionalNullableString,
 });
 
 export const ForkOperationDtoSchema: z.ZodType<ForkOperationDto> = z.object({
   id: z.string(),
   sourceTopicId: z.string(),
   boundaryPostId: z.string(),
+  model: z.string().nullable(),
+  reasoningEffort: z.string().nullable(),
   status: z.enum(['pending', 'running', 'needs_manual_review', 'succeeded', 'failed']),
   childTopicId: z.string().nullable(),
   errorMessage: z.string().nullable(),

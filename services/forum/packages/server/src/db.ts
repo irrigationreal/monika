@@ -369,6 +369,9 @@ export interface ForkOperationRow {
   initiated_by: string;
   title: string;
   opening_body: string;
+  requested_model: string | null;
+  model: string | null;
+  reasoning_effort: string | null;
   status: 'pending' | 'running' | 'needs_manual_review' | 'succeeded' | 'failed';
   prestaged_attachments_json: string;
   agent_result_json: string | null;
