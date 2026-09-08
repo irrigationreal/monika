@@ -8,7 +8,12 @@ import type {
   UtteranceOrigin,
 } from '@irrigationreal/codex-forum-core';
 
-import type { EchsForkBoundarySnapshot, EchsSubagentRetention, EchsSubagentWorkload } from './echsClient';
+import type {
+  EchsCloneSnapshot,
+  EchsForkBoundarySnapshot,
+  EchsSubagentRetention,
+  EchsSubagentWorkload,
+} from './echsClient';
 import type { AssistantProjectionInput, AssistantProjectionService } from './services/assistantProjectionService';
 import type { ForumStore } from './store';
 import type { StreamBusInterface } from './streamBus';
@@ -223,6 +228,26 @@ export class AgentBridge {
 
   async getTopicCompactionLeaf(topicId: string): Promise<string | null> {
     return this.echs.getTopicCompactionLeaf(topicId);
+  }
+
+  async getTopicCloneSnapshot(topicId: string): Promise<EchsCloneSnapshot> {
+    return this.runRobotWork(() => this.echs.getTopicCloneSnapshot(topicId));
+  }
+
+  async cloneTopicConversation(
+    topicId: string,
+    opts: { operationId: string; expectedLeafId: string }
+  ): Promise<{
+    child_session_id: string;
+    child_session_path: string;
+    inherited_generation: number;
+    active_entry_ids: string[];
+  }> {
+    return this.runRobotWork(() => this.echs.cloneTopicConversation(topicId, opts));
+  }
+
+  async acknowledgeClone(operationId: string, childSessionId: string): Promise<void> {
+    return this.runRobotWork(() => this.echs.acknowledgeClone(operationId, childSessionId));
   }
 
   async getTopicForkBoundarySnapshot(topicId: string): Promise<EchsForkBoundarySnapshot> {

@@ -25,6 +25,13 @@ import {
   readForumForkBoundarySnapshot,
 } from './forum-fork-operation.mjs';
 import {
+  ForumCloneConflictError,
+  ForumCloneLedger,
+  cloneConversationAtLeaf,
+  filterForumCloneSessionDiscovery,
+  readForumCloneSnapshot,
+} from './forum-clone-operation.mjs';
+import {
   ForumCreationConflictError,
   ForumCreationLedger,
   forumCreationRequestHash,
@@ -141,6 +148,10 @@ const FORUM_FORK_OPERATION_ROOT = path.resolve(
   process.env.MONIKA_AGENTD_FORUM_FORK_OPERATION_ROOT ?? '/data/agentd-operations/forum-forks',
 );
 const forumForkLedger = new ForumForkLedger(FORUM_FORK_OPERATION_ROOT);
+const FORUM_CLONE_OPERATION_ROOT = path.resolve(
+  process.env.MONIKA_AGENTD_FORUM_CLONE_OPERATION_ROOT ?? '/data/agentd-operations/forum-clones',
+);
+const forumCloneLedger = new ForumCloneLedger(FORUM_CLONE_OPERATION_ROOT);
 const FORUM_CREATION_OPERATION_ROOT = path.resolve(
   process.env.MONIKA_AGENTD_FORUM_CREATION_OPERATION_ROOT ?? '/data/agentd-operations/forum-creations',
 );
@@ -436,7 +447,7 @@ async function memstoreDeployState() {
 
 function conversationIsActive(conv) {
   return Boolean(
-    conv.current || conv.pendingMutations > 0 || conv.forkOperation || hasActiveBackgroundWork(conv),
+    conv.current || conv.pendingMutations > 0 || conv.forkOperation || conv.cloneOperation || hasActiveBackgroundWork(conv),
   );
 }
 
@@ -1251,6 +1262,7 @@ async function conversationFromRuntime(runtime, cwd) {
     subagentLifecycle: runtime.services.subagentLifecycle,
     unsubscribe: null,
     forkOperation: null,
+    cloneOperation: null,
   };
   // A prior process may have persisted both the assistant response and its
   // canonical completion provenance before crashing ahead of result-file ack.
@@ -1374,7 +1386,7 @@ async function withOwnershipAdmission(operation) {
 }
 
 async function withMutableSessionOperation(sessionId, operation) {
-  return withForumMutableSessionOperation(sessionOperations, forumForkLedger, sessionId, operation);
+  return withForumMutableSessionOperation(sessionOperations, [forumForkLedger, forumCloneLedger], sessionId, operation);
 }
 
 async function openConversation(opts = {}) {
@@ -1510,17 +1522,17 @@ async function sessionSummaryFromPath(p) {
   const [firstLine, stat] = await Promise.all([readFirstLine(p), fs.stat(p)]);
   const header = JSON.parse(firstLine || "{}");
   if (header.type !== "session") return null;
-  let forumFork = false;
+  let forumLineage = null;
   if (!isPathWithin(SUBAGENT_SESSION_ROOT, p)) {
     try {
-      forumFork = SessionManager.open(p, undefined, header.cwd)
+      forumLineage = SessionManager.open(p, undefined, header.cwd)
         .getBranch()
-        .some((entry) =>
+        .findLast?.((entry) =>
           entry.type === 'custom' &&
           entry.customType === 'monika.lineage' &&
-          entry.data?.kind === 'fork' &&
+          (entry.data?.kind === 'fork' || entry.data?.kind === 'clone') &&
           entry.data?.source === 'forum'
-        );
+        )?.data?.kind ?? null;
     } catch {}
   }
   return {
@@ -1532,9 +1544,11 @@ async function sessionSummaryFromPath(p) {
     timestamp: header.timestamp,
     kind: isPathWithin(SUBAGENT_SESSION_ROOT, p)
       ? "subagent"
-      : forumFork || p.includes("/forks/")
-        ? "fork"
-        : "normal",
+      : forumLineage === 'clone'
+        ? "clone"
+        : forumLineage === 'fork' || p.includes("/forks/")
+          ? "fork"
+          : "normal",
     parent_session_path: header.parentSession ?? null,
     parent_session_id: header.parentSession
       ? path.basename(header.parentSession, ".jsonl").split("_").pop()
@@ -1567,7 +1581,11 @@ async function scanSessions() {
   }
   await walk(root);
   const forkRecords = await forumForkLedger.records();
-  const visible = filterForumForkSessionDiscovery(out, forkRecords);
+  const cloneRecords = await forumCloneLedger.records();
+  const visible = filterForumCloneSessionDiscovery(
+    filterForumForkSessionDiscovery(out, forkRecords),
+    cloneRecords,
+  );
   visible.sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
   return visible;
 }
@@ -1580,7 +1598,10 @@ async function directSession(sessionPath, expectedId = null) {
     expectedId,
   });
   if (!session) return null;
-  const visible = filterForumForkSessionDiscovery([session], await forumForkLedger.records());
+  const visible = filterForumCloneSessionDiscovery(
+    filterForumForkSessionDiscovery([session], await forumForkLedger.records()),
+    await forumCloneLedger.records(),
+  );
   return visible[0] ?? null;
 }
 
@@ -2639,6 +2660,17 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
+    const cloneAckMatch = url.pathname.match(/^\/v1\/forum-clones\/([^/]+)\/ack$/);
+    if (method === 'POST' && cloneAckMatch) {
+      const body = await readBody(req);
+      const acknowledged = await forumCloneLedger.acknowledge(
+        decodeURIComponent(cloneAckMatch[1]),
+        typeof body.child_session_id === 'string' ? body.child_session_id : '',
+      );
+      if (!acknowledged) return conflict(res, new ForumCloneConflictError('clone_ack_conflict', 'Clone is not ready for this acknowledgement'));
+      return json(res, 200, { acknowledged: true });
+    }
+
     const forkAckMatch = url.pathname.match(/^\/v1\/forum-forks\/([^/]+)\/ack$/);
     if (method === 'POST' && forkAckMatch) {
       const body = await readBody(req);
@@ -2725,6 +2757,39 @@ const server = http.createServer(async (req, res) => {
           throw err;
         }
       }
+      if (method === 'GET' && tail === 'clone-snapshot') {
+        try {
+          return await withSessionOperation(conv.piSessionId, async () =>
+            json(res, 200, readForumCloneSnapshot(conv))
+          );
+        } catch (err) {
+          if (err instanceof ForumCloneConflictError) return conflict(res, err);
+          throw err;
+        }
+      }
+      if (method === 'POST' && tail === 'clone') {
+        const body = await readBody(req);
+        try {
+          return await withSessionOperation(conv.piSessionId, async () => {
+            const operationId = typeof body.operation_id === 'string' ? body.operation_id : null;
+            const forkFenced = await forumForkLedger.hasSourceFence(conv.piSessionId);
+            const otherCloneFenced = await forumCloneLedger.hasSourceFenceExcept(conv.piSessionId, operationId);
+            if (forkFenced || otherCloneFenced)
+              throw new ForumCloneConflictError('clone_in_progress', 'Another canonical branch operation is unresolved');
+            const pendingMessageCount = Number(conv.session.pendingMessageCount ?? 0);
+            if (conv.current || conv.session.isStreaming || conv.session.isCompacting || pendingMessageCount > 0 || conv.session.agent?.hasQueuedMessages?.() || conv.compactionOperation || hasActiveBackgroundWork(conv))
+              throw new ForumCloneConflictError('conversation_busy', 'Conversation must be idle before clone');
+            const operation = cloneConversationAtLeaf({ conv, input: body, ledger: forumCloneLedger });
+            conv.cloneOperation = operation;
+            try { return json(res, 200, await operation); }
+            finally { if (conv.cloneOperation === operation) conv.cloneOperation = null; }
+          });
+        } catch (err) {
+          if (err instanceof ForumCloneConflictError) return conflict(res, err);
+          if (err instanceof TypeError) return badRequest(res, err.message);
+          throw err;
+        }
+      }
       if (method === 'POST' && tail === 'fork') {
         const body = await readBody(req);
         try {
@@ -2734,10 +2799,11 @@ const server = http.createServer(async (req, res) => {
             throw new ForumForkConflictError('fork_in_progress', 'Another canonical fork is unresolved');
           }
           return await withSessionOperation(conv.piSessionId, async () => {
-            const lockedSourceFenced = await forumForkLedger.hasSourceFence(conv.piSessionId);
-            const lockedRetryRecord = typeof body.operation_id === 'string' ? await forumForkLedger.read(body.operation_id) : null;
-            if (lockedSourceFenced && lockedRetryRecord?.source_session_id !== conv.piSessionId) {
-              throw new ForumForkConflictError('fork_in_progress', 'Another canonical fork is unresolved');
+            const operationId = typeof body.operation_id === 'string' ? body.operation_id : null;
+            const otherForkFenced = await forumForkLedger.hasSourceFenceExcept(conv.piSessionId, operationId);
+            const cloneSourceFenced = await forumCloneLedger.hasSourceFence(conv.piSessionId);
+            if (cloneSourceFenced || otherForkFenced) {
+              throw new ForumForkConflictError('fork_in_progress', 'Another canonical branch operation is unresolved');
             }
             const pendingMessageCount = Number(conv.session.pendingMessageCount ?? 0);
             if (conv.current || conv.session.isStreaming || conv.session.isCompacting || pendingMessageCount > 0 || conv.session.agent?.hasQueuedMessages?.() || conv.compactionOperation || hasActiveBackgroundWork(conv)) {

@@ -1651,7 +1651,8 @@
 
 .vb-fork-modal-overlay,
 .vb-compaction-modal-overlay,
-.vb-confirmation-modal-overlay {
+.vb-confirmation-modal-overlay,
+.vb-duplicate-modal-overlay {
   box-sizing: border-box;
   height: 100vh;
   height: 100dvh;
@@ -1659,7 +1660,8 @@
     max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
   overscroll-behavior: contain;
 }
-.vb-fork-modal {
+.vb-fork-modal,
+.vb-duplicate-modal {
   display: flex;
   flex-direction: column;
   width: min(680px, 100%);
@@ -1667,10 +1669,12 @@
   max-height: 100%;
   min-height: 0;
 }
-.vb-fork-modal .vb-modal-header {
+.vb-fork-modal .vb-modal-header,
+.vb-duplicate-modal .vb-modal-header {
   flex: 0 0 auto;
 }
-.vb-fork-modal .vb-modal-body {
+.vb-fork-modal .vb-modal-body,
+.vb-duplicate-modal .vb-modal-body {
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -1679,7 +1683,8 @@
   box-sizing: border-box;
   width: 100%;
 }
-.vb-fork-modal-actions {
+.vb-fork-modal-actions,
+.vb-duplicate-modal-actions {
   flex: 0 0 auto;
   padding: 12px;
   background: var(--bg-surface-alt);

@@ -1957,6 +1957,44 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    version: 51,
+    name: 'durable-forum-native-clones',
+    up: (db) => {
+      db.exec(`
+        create table clone_operations (
+          id text primary key,
+          source_topic_id text not null,
+          source_session_id text not null,
+          source_pi_session_id text not null,
+          source_pi_session_path text not null,
+          expected_leaf_id text not null,
+          source_snapshot_json text not null,
+          initiated_by text not null,
+          title text not null,
+          status text not null default 'pending'
+            check (status in ('pending', 'running', 'needs_manual_review', 'succeeded', 'failed')),
+          prestaged_attachments_json text not null default '[]',
+          agent_result_json text,
+          child_topic_id text,
+          child_session_id text,
+          child_session_path text,
+          attempt_count integer not null default 0,
+          next_attempt_at text,
+          error_message text,
+          created_at text not null,
+          started_at text,
+          finished_at text,
+          foreign key (source_topic_id) references topics(id) on delete cascade,
+          foreign key (initiated_by) references identities(id),
+          foreign key (child_topic_id) references topics(id) on delete set null
+        );
+        create unique index idx_clone_operations_active_source
+          on clone_operations(source_topic_id) where status in ('pending', 'running', 'needs_manual_review');
+        create index idx_clone_operations_due on clone_operations(status, next_attempt_at, created_at);
+      `);
+    },
+  },
 ];
 
 export const SCHEMA_VERSION: number = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;

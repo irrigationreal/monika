@@ -186,6 +186,20 @@ Implemented in `services/forum`:
 - Forum-native handoff is implemented with disposable draft generation and final
   confirmation that creates the destination topic, parented Pi session, lineage
   metadata, edited draft post, and first robot turn.
+- Forum-native Duplicate Thread is an admin-only, open-and-idle durable operation distinct from Handoff and Fork.
+  Handoff authors and dispatches a new continuation; Fork cuts the branch before a selected earlier user message and
+  dispatches an edited replacement. Duplicate instead calls agentd's detached Pi-native
+  `SessionManager.createBranchedSession(currentLeaf)` path, equivalent to `runtime.fork(leaf, { position: 'at' })`, and
+  creates no opening prompt, model turn, or post dispatch. The accepted snapshot must be the complete, non-divergent
+  active projection. The child remains in the same forum/cwd, inherits only robot mode and auto-compaction, and copies
+  post authorship/body, threading, follow-up/silent state, remapped grouped-contributor provenance, and independently
+  size/SHA-256-verified attachments. Agentd leaves parent bytes and its loaded runtime unchanged, records explicit
+  `clone` lineage, and quarantines the child until forum materialization is acknowledged. Clone, fork, compaction, and
+  dispatch share mutual source fences. Browser, forum, and agentd each reuse the stable operation ID after an ambiguous
+  result or restart; an unprovable child outcome becomes `needs_manual_review`, remains visible, and keeps the source
+  fenced rather than risking another child. Forum startup drains due clone and fork materialization before Pi sync and
+  post dispatch. The admin API is `GET/POST /api/topics/:topicId/clones` and
+  `GET /api/topics/:topicId/clones/:operationId`. The child exposes `Duplicated from parent thread` lineage.
 - Forum-native fork is an admin-only, idle-only durable operation. V1 forks in the
   same forum and cwd, from a canonical single-post user boundary selected by stable
   forum post ID (the UI labels it with the forum post number). Opening the selector
@@ -291,7 +305,7 @@ caller-supplied `operationId`, bounded `waitTimeoutMs`, and expiring `leaseMs`,
 followed by operation-scoped `POST /api/deploy/admission/cancel`. Acquire enters
 `PREPARING` synchronously, closing robot-work admission before it pauses new Pi
 sync cycles and waits for an in-flight cycle. It then checks active/queued turns,
-non-idle robot state, pending/running forks, compactions, tracked direct agent/model
+non-idle robot state, pending/running forks and clones, compactions, tracked direct agent/model
 work, and the global count of current-generation `pending`, `dispatching`, and
 retryable `failed` dispatch rows with a non-null `next_attempt_at`. Terminal `failed`
 rows without a next attempt, stale-generation, `dispatched`, `superseded`, and
@@ -314,11 +328,11 @@ robot-off topics, and non-mention posts in mention mode remain intentional
 non-dispatch cases; admission never converts an eligible accepted post into a
 silent or missing-dispatch post. HTTP success still means durable dispatch intent,
 not synchronous agentd acknowledgement. AgentBridge holds tracked admission around
-handoff drafting/linking, send/steer/direct dispatch, canonical fork, and compaction
+handoff drafting/linking, send/steer/direct dispatch, canonical fork/clone, and compaction
 awaits; Auto Run holds it before Director/model launch through cleanup. Work beginning
 in `PREPARING` revokes deployment and proceeds, while work already in flight blocks
-acquisition until its idempotent release. Existing fork-operation reads/retries remain
-idempotent, but a new fork cannot be initiated while `ACQUIRED`.
+acquisition until its idempotent release. Existing fork/clone operation reads and retries remain idempotent, but a new branch operation cannot be initiated while
+`ACQUIRED`.
 
 Pi's internal `agent_settled` event means the runtime reached the idle boundary;
 it is not a request to aggregate text or publish an unpersisted raw completion.
@@ -505,6 +519,9 @@ work can proceed.
 
 Forum endpoints (admin only except operational-event visibility):
 
+- `GET /api/topics/:topicId/clones` (active/latest state for reload reconciliation)
+- `POST /api/topics/:topicId/clones` (`202 Accepted`, durable and idempotent)
+- `GET /api/topics/:topicId/clones/:operationId`
 - `GET /api/topics/:topicId/forks` (active/latest state for reload reconciliation)
 - `GET /api/topics/:topicId/forks/boundaries`
 - `POST /api/topics/:topicId/forks` (`202 Accepted`, durable and idempotent)

@@ -52,7 +52,9 @@ import type {
   ChatRoomDto,
   ChatRoomListDto,
   ChatTypingDto,
+  CloneOperationDto,
   CompactionOperationDto,
+  CreateCloneRequestDto,
   CreateCompactionRequestDto,
   CreateForkRequestDto,
   DeploymentAdmissionAcquireRequestDto,
@@ -116,6 +118,7 @@ import type {
   ToolRunDto,
   TopicAttachmentsDto,
   TopicAutoRunDto,
+  TopicCloneStateDto,
   TopicCompactionStateDto,
   TopicDto,
   TopicForkStateDto,
@@ -274,7 +277,7 @@ export const ForumDtoSchema: z.ZodType<ForumDto> = z.object({
 });
 
 export const TopicLineageDtoSchema: z.ZodType<TopicLineageDto> = z.object({
-  kind: z.enum(['handoff', 'delegate', 'sleep', 'parent']),
+  kind: z.enum(['handoff', 'fork', 'clone', 'delegate', 'sleep', 'parent']),
   parentTopicId: optionalNullableString,
 });
 
@@ -759,6 +762,31 @@ export const ForkOperationDtoSchema: z.ZodType<ForkOperationDto> = z.object({
 export const TopicForkStateDtoSchema: z.ZodType<TopicForkStateDto> = z.object({
   active: ForkOperationDtoSchema.nullable(),
   latest: ForkOperationDtoSchema.nullable(),
+});
+
+export const CreateCloneRequestSchema: z.ZodType<CreateCloneRequestDto> = z.object({
+  operationId: z
+    .string()
+    .min(1)
+    .max(128)
+    .regex(/^[A-Za-z0-9_-]+$/, 'operationId contains invalid characters'),
+  title: z.string().trim().min(1).max(300),
+});
+
+export const CloneOperationDtoSchema: z.ZodType<CloneOperationDto> = z.object({
+  id: z.string(),
+  sourceTopicId: z.string(),
+  status: z.enum(['pending', 'running', 'needs_manual_review', 'succeeded', 'failed']),
+  childTopicId: z.string().nullable(),
+  errorMessage: z.string().nullable(),
+  createdAt: z.string(),
+  startedAt: z.string().nullable(),
+  finishedAt: z.string().nullable(),
+});
+
+export const TopicCloneStateDtoSchema: z.ZodType<TopicCloneStateDto> = z.object({
+  active: CloneOperationDtoSchema.nullable(),
+  latest: CloneOperationDtoSchema.nullable(),
 });
 
 export const SessionContextDtoSchema = z.object({

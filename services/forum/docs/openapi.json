@@ -2626,6 +2626,8 @@
                                 "type": "string",
                                 "enum": [
                                   "handoff",
+                                  "fork",
+                                  "clone",
                                   "delegate",
                                   "sleep",
                                   "parent"
@@ -2837,6 +2839,8 @@
                           "type": "string",
                           "enum": [
                             "handoff",
+                            "fork",
+                            "clone",
                             "delegate",
                             "sleep",
                             "parent"
@@ -2973,6 +2977,8 @@
                           "type": "string",
                           "enum": [
                             "handoff",
+                            "fork",
+                            "clone",
                             "delegate",
                             "sleep",
                             "parent"
@@ -3126,6 +3132,8 @@
                           "type": "string",
                           "enum": [
                             "handoff",
+                            "fork",
+                            "clone",
                             "delegate",
                             "sleep",
                             "parent"
@@ -3321,6 +3329,8 @@
                           "type": "string",
                           "enum": [
                             "handoff",
+                            "fork",
+                            "clone",
                             "delegate",
                             "sleep",
                             "parent"
@@ -3478,6 +3488,8 @@
                           "type": "string",
                           "enum": [
                             "handoff",
+                            "fork",
+                            "clone",
                             "delegate",
                             "sleep",
                             "parent"
@@ -4300,6 +4312,331 @@
                     "active",
                     "latest",
                     "checkpointDispatch"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/topics/{topicId}/clones": {
+      "get": {
+        "tags": [
+          "topics"
+        ],
+        "summary": "Get the active and latest durable forum-native clone operations",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "topicId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "active": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "sourceTopicId": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "pending",
+                            "running",
+                            "needs_manual_review",
+                            "succeeded",
+                            "failed"
+                          ]
+                        },
+                        "childTopicId": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "errorMessage": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "createdAt": {
+                          "type": "string"
+                        },
+                        "startedAt": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "finishedAt": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "sourceTopicId",
+                        "status",
+                        "childTopicId",
+                        "errorMessage",
+                        "createdAt",
+                        "startedAt",
+                        "finishedAt"
+                      ]
+                    },
+                    "latest": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "sourceTopicId": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "pending",
+                            "running",
+                            "needs_manual_review",
+                            "succeeded",
+                            "failed"
+                          ]
+                        },
+                        "childTopicId": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "errorMessage": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "createdAt": {
+                          "type": "string"
+                        },
+                        "startedAt": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "finishedAt": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "sourceTopicId",
+                        "status",
+                        "childTopicId",
+                        "errorMessage",
+                        "createdAt",
+                        "startedAt",
+                        "finishedAt"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "active",
+                    "latest"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "topics"
+        ],
+        "summary": "Duplicate the current active canonical branch into an idle topic",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "topicId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9_-]+$"
+                  },
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300
+                  }
+                },
+                "required": [
+                  "operationId",
+                  "title"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "sourceTopicId": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "running",
+                        "needs_manual_review",
+                        "succeeded",
+                        "failed"
+                      ]
+                    },
+                    "childTopicId": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "errorMessage": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "createdAt": {
+                      "type": "string"
+                    },
+                    "startedAt": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "finishedAt": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "sourceTopicId",
+                    "status",
+                    "childTopicId",
+                    "errorMessage",
+                    "createdAt",
+                    "startedAt",
+                    "finishedAt"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/topics/{topicId}/clones/{operationId}": {
+      "get": {
+        "tags": [
+          "topics"
+        ],
+        "summary": "Get a durable forum-native clone operation",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "topicId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "operationId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "sourceTopicId": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "running",
+                        "needs_manual_review",
+                        "succeeded",
+                        "failed"
+                      ]
+                    },
+                    "childTopicId": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "errorMessage": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "createdAt": {
+                      "type": "string"
+                    },
+                    "startedAt": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "finishedAt": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "sourceTopicId",
+                    "status",
+                    "childTopicId",
+                    "errorMessage",
+                    "createdAt",
+                    "startedAt",
+                    "finishedAt"
                   ]
                 }
               }
@@ -5834,6 +6171,8 @@
                                 "type": "string",
                                 "enum": [
                                   "handoff",
+                                  "fork",
+                                  "clone",
                                   "delegate",
                                   "sleep",
                                   "parent"
@@ -10256,6 +10595,150 @@
                   },
                   "required": [
                     "items"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/topics/{topicId}/post-dispatches": {
+      "get": {
+        "tags": [
+          "robot"
+        ],
+        "summary": "Get admin-only durable post dispatch status and attempt history",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "topicId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "topicId": {
+                      "type": "string"
+                    },
+                    "polling": {
+                      "type": "boolean"
+                    },
+                    "current": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "dispatchId": {
+                            "type": "string"
+                          },
+                          "postId": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "pending",
+                              "dispatching",
+                              "failed"
+                            ]
+                          },
+                          "attemptCount": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "nextAttemptAt": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "updatedAt": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "dispatchId",
+                          "postId",
+                          "status",
+                          "attemptCount",
+                          "nextAttemptAt",
+                          "updatedAt"
+                        ]
+                      }
+                    },
+                    "attempts": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "dispatchId": {
+                            "type": "string"
+                          },
+                          "attemptNumber": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "event": {
+                            "type": "string",
+                            "enum": [
+                              "claimed",
+                              "dispatched",
+                              "retry_scheduled",
+                              "terminal_failure",
+                              "abandoned",
+                              "superseded"
+                            ]
+                          },
+                          "classification": {
+                            "type": "string",
+                            "nullable": true,
+                            "enum": [
+                              "transport",
+                              "application",
+                              "lifecycle"
+                            ]
+                          },
+                          "retryAt": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "errorMessage": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "dispatchId",
+                          "attemptNumber",
+                          "event",
+                          "classification",
+                          "retryAt",
+                          "errorMessage",
+                          "createdAt"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "topicId",
+                    "polling",
+                    "current",
+                    "attempts"
                   ]
                 }
               }
@@ -15724,6 +16207,8 @@
                               "type": "string",
                               "enum": [
                                 "handoff",
+                                "fork",
+                                "clone",
                                 "delegate",
                                 "sleep",
                                 "parent"

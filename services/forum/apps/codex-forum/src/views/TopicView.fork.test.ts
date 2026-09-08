@@ -7,14 +7,13 @@ describe('TopicView fork controls', () => {
   const source = readFileSync(resolve(process.cwd(), 'src/views/TopicView.vue'), 'utf8');
   const dialog = readFileSync(resolve(process.cwd(), 'src/components/ForkTopicDialog.vue'), 'utf8');
 
-  it('keeps Fork admin-only beside Handoff and Compact', () => {
-    expect(source).toContain(
-      '<button v-if="isAdmin" class="vb-btn" :disabled="!canFork" @click="openForkModal">Fork</button>'
-    );
-    expect(source.indexOf('>Handoff</button>')).toBeLessThan(source.indexOf('@click="openForkModal">Fork</button>'));
-    expect(source.indexOf('@click="openForkModal">Fork</button>')).toBeLessThan(
-      source.indexOf('@click="openCompactionModal">Compact</button>')
-    );
+  it('keeps Fork admin-only inside the reusable Branch menu beside direct Handoff and Compact actions', () => {
+    expect(source.match(/<BranchMenu/g)).toHaveLength(2);
+    expect(source).toContain('v-if="isAdmin"');
+    expect(source).toContain(':fork-disabled="!canFork"');
+    expect(source).toContain('@fork="openForkModal"');
+    expect(source.indexOf('>Handoff</button>')).toBeLessThan(source.indexOf('<BranchMenu'));
+    expect(source.indexOf('<BranchMenu')).toBeLessThan(source.indexOf('@click="openCompactionModal">Compact</button>'));
   });
 
   it('displays forum post numbers while selecting and submitting stable post ids', () => {

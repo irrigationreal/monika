@@ -63,13 +63,13 @@ packages/
   provenance into forum state. Ambiguous disconnect/markerless-5xx outages retain the exact durable dispatch ID,
   generation, origin, and ordered contributors indefinitely, retrying deterministically after roughly 30s, 60s, 2m, then
   at a 5m cap. Agentd failures explicitly marked `dispatch_acceptance: "not_accepted"` are lifecycle outcomes; only an
-  additional `dispatch_retry: "safe"` marker schedules exact-identity automatic retry (used while agentd drains).
-  Other marked and definite setup failures are terminal/manual regardless of status. A failed current-generation post
-  dispatch can be retried by its author or an admin; superseded/abandoned work cannot be resurrected. Claims and outcomes
-  append immutable attempt-audit rows; the mutable dispatch error is not the diagnostic source of truth. Ordinary
-  durable post-dispatch creation also supplies that identity as agentd `creation_id` with `durable_session: true`, so a
-  lost create response reopens the same anchored session. Non-dispatch operations never manufacture a missing canonical
-  link; they may repair one only from a currently loaded conversation carrying canonical session ID and path.
+  additional `dispatch_retry: "safe"` marker schedules exact-identity automatic retry (used while agentd drains). Other
+  marked and definite setup failures are terminal/manual regardless of status. A failed current-generation post dispatch
+  can be retried by its author or an admin; superseded/abandoned work cannot be resurrected. Claims and outcomes append
+  immutable attempt-audit rows; the mutable dispatch error is not the diagnostic source of truth. Ordinary durable
+  post-dispatch creation also supplies that identity as agentd `creation_id` with `durable_session: true`, so a lost
+  create response reopens the same anchored session. Non-dispatch operations never manufacture a missing canonical link;
+  they may repair one only from a currently loaded conversation carrying canonical session ID and path.
 - A canonical utterance is channel-neutral. One agent run may persist zero, one, or several ordered assistant messages;
   Pi's internal `agent_settled` is idle-only, and agentd maps it to wire `turn_completed`; neither asks the forum to
   publish a raw aggregate.
@@ -94,11 +94,11 @@ packages/
 - Topic view exposes live reasoning + tool runs and supports inline moderation. Admins also receive a dedicated,
   topic-scoped dispatch projection: delayed or failed work is anchored beneath its source post with retry time, attempt
   count, and expandable bounded history. The endpoint and errors are server-authorized and unavailable to non-admins;
-  polling runs only while unsettled dispatch work exists and is completion-scheduled/visibility-aware. The latest-item pager control targets
-  the active response placeholder while a reply is in progress, including its tentative next page, and otherwise retains
-  the canonical numbered permalink for the latest settled post. Explicit delayed `follow_up` subagent continuations
-  render beneath their origin with a **Follow-up** badge; `awaited` work stays part of the claiming parent synthesis and
-  `silent` work creates no public continuation.
+  polling runs only while unsettled dispatch work exists and is completion-scheduled/visibility-aware. The latest-item
+  pager control targets the active response placeholder while a reply is in progress, including its tentative next page,
+  and otherwise retains the canonical numbered permalink for the latest settled post. Explicit delayed `follow_up`
+  subagent continuations render beneath their origin with a **Follow-up** badge; `awaited` work stays part of the
+  claiming parent synthesis and `silent` work creates no public continuation.
 - Completed `mermaid` fences render all built-in Mermaid diagram types in an isolated, website-themed sandbox with
   source access and sanitized SVG open/download actions.
 - Developer Portal provides API documentation for logged-in users and API key + impersonation token management for
@@ -249,8 +249,7 @@ and uses the unified draft service; publishing atomically consumes the exact Not
 optional titles, normalized structured tags, owner-scoped text search, clickable frequency-sorted tag filters, one
 pinned note per account, copy, explicit revision-checked editing, and permanent deletion. Note previews and saved bodies
 use the same sanitized Markdown/BBCode presentation and sandboxed Mermaid enhancement as ordinary forum content; note
-titles remain plain text.
-Pinned notes are shown once above the ordinary feed and retain their chosen expiration.
+titles remain plain text. Pinned notes are shown once above the ordinary feed and retain their chosen expiration.
 
 New notes default to 30-day expiration and may instead use 1 day, 1 week, 2 weeks, 6 months, 1 year, or never. Editing
 keeps the existing absolute expiration unless the user explicitly chooses a new preset, which is calculated from the
@@ -316,32 +315,32 @@ curl -sS \
 
 Key env vars (see `packages/server/src/runtimeConfig.ts` for the full list):
 
-| Variable                                   | Purpose                                                                                                                         | Default                          |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
-| `CODEX_FORUM_PORT`                         | API server port                                                                                                                 | `4310`                           |
-| `CODEX_FORUM_DB`                           | SQLite database path                                                                                                            | `/var/lib/codex-forum/data.db`   |
-| `CODEX_FORUM_BASE_URL`                     | Public base URL                                                                                                                 | `http://localhost:4310`          |
-| `CODEX_FORUM_API_PREFIX`                   | API route prefix                                                                                                                | `/api`                           |
-| `CODEX_FORUM_CORS_ORIGINS`                 | Allowed CORS origins (comma-separated)                                                                                          | unset (allow all)                |
-| `CODEX_FORUM_BOOTSTRAP_ADMIN_USERNAME`     | Bootstrap admin username                                                                                                        | unset                            |
-| `CODEX_FORUM_BOOTSTRAP_ADMIN_PASSWORD`     | Bootstrap admin password                                                                                                        | unset                            |
-| `CODEX_FORUM_BOOTSTRAP_ADMIN_DISPLAY_NAME` | Bootstrap admin display name                                                                                                    | `Admin`                          |
-| `CODEX_FORUM_UPLOADS_DIR`                  | Unified file blob, attachment, staging, and avatar storage root                                                                 | `/mnt/storage/forum-attachments` |
-| `CODEX_FORUM_INTERNAL_API_TOKEN`           | Shared secret required for internal agent pending-attachment uploads; send as `x-internal-token` or `Authorization: Bearer ...` | unset                            |
+| Variable                                   | Purpose                                                                                                                            | Default                          |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| `CODEX_FORUM_PORT`                         | API server port                                                                                                                    | `4310`                           |
+| `CODEX_FORUM_DB`                           | SQLite database path                                                                                                               | `/var/lib/codex-forum/data.db`   |
+| `CODEX_FORUM_BASE_URL`                     | Public base URL                                                                                                                    | `http://localhost:4310`          |
+| `CODEX_FORUM_API_PREFIX`                   | API route prefix                                                                                                                   | `/api`                           |
+| `CODEX_FORUM_CORS_ORIGINS`                 | Allowed CORS origins (comma-separated)                                                                                             | unset (allow all)                |
+| `CODEX_FORUM_BOOTSTRAP_ADMIN_USERNAME`     | Bootstrap admin username                                                                                                           | unset                            |
+| `CODEX_FORUM_BOOTSTRAP_ADMIN_PASSWORD`     | Bootstrap admin password                                                                                                           | unset                            |
+| `CODEX_FORUM_BOOTSTRAP_ADMIN_DISPLAY_NAME` | Bootstrap admin display name                                                                                                       | `Admin`                          |
+| `CODEX_FORUM_UPLOADS_DIR`                  | Unified file blob, attachment, staging, and avatar storage root                                                                    | `/mnt/storage/forum-attachments` |
+| `CODEX_FORUM_INTERNAL_API_TOKEN`           | Shared secret required for internal agent pending-attachment uploads; send as `x-internal-token` or `Authorization: Bearer ...`    | unset                            |
 | `CODEX_FORUM_DEPLOY_TOKEN`                 | Shared secret required for `/deploy/quiescence` and `/deploy/admission/*`; send as `x-deploy-token` or `Authorization: Bearer ...` | unset                            |
-| `CODEX_FORUM_REDIS_STREAM_BUS`             | Redis stream bus toggle                                                                                                         | `0`                              |
-| `CODEX_FORUM_ENABLE_AUTH`                  | Auth toggle                                                                                                                     | `0`                              |
-| `CODEX_FORUM_REGISTRATION_MODE`            | Self-registration policy: `disabled`, `invite-only`, or `public`                                                                | `disabled`                       |
-| `CODEX_FORUM_PASSWORD_LOGIN_ENABLED`       | Enable password login and all password credential creation/change paths                                                         | `1`                              |
-| `CODEX_FORUM_WEBAUTHN_RP_ID`               | Optional WebAuthn RP ID override (defaults to exact base URL hostname)                                                          | unset                            |
-| `CODEX_FORUM_WEBAUTHN_RP_NAME`             | WebAuthn relying-party display name                                                                                             | `Monika Forum`                   |
-| `CODEX_FORUM_ENABLE_RATE_LIMITING`         | Route-specific rate limit toggle for auth/write/search endpoints; safe authenticated reads are not globally throttled           | `0`                              |
-| `CODEX_FORUM_TRUST_PROXY`                  | Fastify trusted proxy setting (`0`, `1`, hop count, or CIDR/list string) for deployments behind Cloudflare Tunnel/reverse proxy | `0`                              |
-| `CODEX_FORUM_ENABLE_SEARCH`                | Search toggle                                                                                                                   | `0`                              |
-| `MONIKA_AGENTD_BASE_URL`                   | Internal Monika agentd URL                                                                                                      | unset                            |
-| `CODEX_FORUM_AGENT_BACKEND`                | Agent backend selector; Monika deployment uses `monika-pi`                                                                      | unset                            |
-| `CODEX_FORUM_AGENT_MODEL`                  | Default Pi model                                                                                                                | `codex/gpt-5.6-sol`              |
-| `CODEX_FORUM_ECHS_BASE_URL`                | Legacy/generic ECHS compatibility backend; not used by the Monika deployment                                                    | unset                            |
+| `CODEX_FORUM_REDIS_STREAM_BUS`             | Redis stream bus toggle                                                                                                            | `0`                              |
+| `CODEX_FORUM_ENABLE_AUTH`                  | Auth toggle                                                                                                                        | `0`                              |
+| `CODEX_FORUM_REGISTRATION_MODE`            | Self-registration policy: `disabled`, `invite-only`, or `public`                                                                   | `disabled`                       |
+| `CODEX_FORUM_PASSWORD_LOGIN_ENABLED`       | Enable password login and all password credential creation/change paths                                                            | `1`                              |
+| `CODEX_FORUM_WEBAUTHN_RP_ID`               | Optional WebAuthn RP ID override (defaults to exact base URL hostname)                                                             | unset                            |
+| `CODEX_FORUM_WEBAUTHN_RP_NAME`             | WebAuthn relying-party display name                                                                                                | `Monika Forum`                   |
+| `CODEX_FORUM_ENABLE_RATE_LIMITING`         | Route-specific rate limit toggle for auth/write/search endpoints; safe authenticated reads are not globally throttled              | `0`                              |
+| `CODEX_FORUM_TRUST_PROXY`                  | Fastify trusted proxy setting (`0`, `1`, hop count, or CIDR/list string) for deployments behind Cloudflare Tunnel/reverse proxy    | `0`                              |
+| `CODEX_FORUM_ENABLE_SEARCH`                | Search toggle                                                                                                                      | `0`                              |
+| `MONIKA_AGENTD_BASE_URL`                   | Internal Monika agentd URL                                                                                                         | unset                            |
+| `CODEX_FORUM_AGENT_BACKEND`                | Agent backend selector; Monika deployment uses `monika-pi`                                                                         | unset                            |
+| `CODEX_FORUM_AGENT_MODEL`                  | Default Pi model                                                                                                                   | `codex/gpt-5.6-sol`              |
+| `CODEX_FORUM_ECHS_BASE_URL`                | Legacy/generic ECHS compatibility backend; not used by the Monika deployment                                                       | unset                            |
 
 `CODEX_FORUM_ENABLE_AUTH=1` does not open registration by itself. Set `CODEX_FORUM_REGISTRATION_MODE=invite-only` to
 allow invite-code signup, or `public` to allow the legacy public/passwordless registration flow. Internet-facing
@@ -366,10 +365,10 @@ is private behind a trusted reverse proxy or Cloudflare Tunnel, so forwarded cli
 direct public traffic.
 
 Public `/healthz` and `/api/healthz` responses are intentionally minimal liveness checks. Minimal `/readyz` and
-`/api/readyz` return only `{ok}` and HTTP 503 unless the selected Monika Pi backend is reachable, healthy, and undrained;
-the standalone Compose deployment uses readiness for container health. Operational deploy diagnostics are available through `/api/deploy/quiescence`; race-safe host deployment uses
-`POST /api/deploy/admission/acquire` and `/cancel`. All require `CODEX_FORUM_DEPLOY_TOKEN`, while `/api/models` requires
-an authenticated forum user.
+`/api/readyz` return only `{ok}` and HTTP 503 unless the selected Monika Pi backend is reachable, healthy, and
+undrained; the standalone Compose deployment uses readiness for container health. Operational deploy diagnostics are
+available through `/api/deploy/quiescence`; race-safe host deployment uses `POST /api/deploy/admission/acquire` and
+`/cancel`. All require `CODEX_FORUM_DEPLOY_TOKEN`, while `/api/models` requires an authenticated forum user.
 
 For full deployment guidance, see `docs/DEPLOYMENT.md`.
 
@@ -389,17 +388,27 @@ For full deployment guidance, see `docs/DEPLOYMENT.md`.
   claim and Pi settlement; the forum creates a recovery checkpoint only after canonical compaction succeeds. A failed
   checkpoint dispatch can be retried independently without repeating compaction. The mobile dialog is dynamic-viewport
   bounded and internally scrollable.
-- **Fork** is an admin-only, idle-only native Pi branch operation. The administrator selects an eligible forum-numbered
-  user post, edits the replay, and receives a new topic containing independent copies of the inherited active-branch
-  posts and attachments plus a non-numbered fork boundary. Opening the responsive dialog refreshes the linked canonical
-  session and repairs v2 contributor metadata before listing boundaries. Agentd returns canonical eligible user-entry
-  IDs and the optimistic leaf in one snapshot; the forum intersects them with its complete-prefix, singleton-provenance,
-  deletion, and inherited-history requirements. The selected turn's later completion is intentionally irrelevant because
-  before-user extraction discards that turn; grouped prompts and the first-user special case remain excluded. Export or
-  snapshot failures are shown as unavailable rather than as a false empty list. Agentd preserves the parent runtime,
-  canonical dispatch generation, and crash-safe child quarantine; the forum resumes pending operations after reload and keeps ambiguous
-  recovery fenced for operator review. V1 creation remains in the same forum and cwd; finalized parent and child topics
-  move independently.
+- **Handoff** starts a newly authored continuation: the administrator reviews a generated draft, may change its forum,
+  cwd, model, and reasoning, and confirmation creates and dispatches the destination's opening prompt.
+- The reusable **Branch** menu separates two different Pi branch operations. **Duplicate current thread** is admin-only
+  and idle-only: it creates an independent topic and canonical child at the exact current leaf, with no new prompt,
+  model turn, or post dispatch. The child stays in the same forum/cwd, inherits only robot mode and automatic-compaction
+  policy, and receives faithful copies of the complete active projection, remapped grouped-contributor provenance,
+  threading/follow-up/silent flags, and independently verified attachments. Incomplete or divergent projection fails
+  closed. Its durable browser/forum/agentd operation ID survives ambiguous responses and reloads; unresolved child
+  creation becomes visible manual review while parent writes and all other branch/compaction operations remain fenced.
+- **Fork from an earlier message** is an admin-only, idle-only native Pi branch operation. The administrator selects an
+  eligible forum-numbered user post, edits the replay, and receives a new topic containing independent copies of the
+  inherited active-branch posts and attachments plus a non-numbered fork boundary. Opening the responsive dialog
+  refreshes the linked canonical session and repairs v2 contributor metadata before listing boundaries. Agentd returns
+  canonical eligible user-entry IDs and the optimistic leaf in one snapshot; the forum intersects them with its
+  complete-prefix, singleton-provenance, deletion, and inherited-history requirements. The selected turn's later
+  completion is intentionally irrelevant because before-user extraction discards that turn; grouped prompts and the
+  first-user special case remain excluded. Export or snapshot failures are shown as unavailable rather than as a false
+  empty list. Agentd preserves the parent runtime, canonical dispatch generation, and crash-safe child quarantine; the
+  forum resumes pending operations after reload and keeps ambiguous recovery fenced for operator review. V1 creation
+  remains in the same forum and cwd; finalized parent and child topics move independently. Unlike Duplicate, Fork adds
+  an edited opening prompt and dispatches its first model turn.
 - Canonical parent-session automatic compaction is a default-off, admin-controlled topic setting. The forum persists the
   policy and sends it to agentd; Pi performs native threshold and overflow-retry compaction. Automatic compaction
   creates maintenance events but never the manual recovery-checkpoint post. Direct Pi CLI and disposable child policies

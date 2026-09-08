@@ -170,7 +170,8 @@
 
   .vb-fork-modal-overlay,
   .vb-compaction-modal-overlay,
-  .vb-confirmation-modal-overlay {
+  .vb-confirmation-modal-overlay,
+  .vb-duplicate-modal-overlay {
     align-items: flex-start;
     padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right))
       max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
@@ -178,7 +179,8 @@
 
   .vb-fork-modal,
   .vb-compaction-modal,
-  .vb-confirmation-modal {
+  .vb-confirmation-modal,
+  .vb-duplicate-modal {
     width: 100%;
     max-height: 100%;
   }
@@ -190,34 +192,41 @@
   }
 
   .vb-fork-modal .vb-modal-select,
-  .vb-fork-modal .vb-modal-input {
+  .vb-fork-modal .vb-modal-input,
+  .vb-duplicate-modal .vb-modal-input {
+    min-height: 44px;
     font-size: 16px;
   }
 
   .vb-fork-modal-actions,
   .vb-compaction-modal-actions,
-  .vb-confirmation-modal-actions {
+  .vb-confirmation-modal-actions,
+  .vb-duplicate-modal-actions {
     flex-direction: column;
   }
 
   .vb-fork-modal-actions .vb-btn,
   .vb-compaction-modal-actions .vb-btn,
   .vb-confirmation-modal-actions .vb-btn,
+  .vb-duplicate-modal-actions .vb-btn,
   .vb-fork-modal .vb-modal-close,
   .vb-compaction-modal .vb-modal-close,
-  .vb-confirmation-modal .vb-modal-close {
+  .vb-confirmation-modal .vb-modal-close,
+  .vb-duplicate-modal .vb-modal-close {
     min-height: 44px;
   }
 
   .vb-fork-modal-actions .vb-btn,
   .vb-compaction-modal-actions .vb-btn,
-  .vb-confirmation-modal-actions .vb-btn {
+  .vb-confirmation-modal-actions .vb-btn,
+  .vb-duplicate-modal-actions .vb-btn {
     width: 100%;
   }
 
   .vb-fork-modal .vb-modal-close,
   .vb-compaction-modal .vb-modal-close,
-  .vb-confirmation-modal .vb-modal-close {
+  .vb-confirmation-modal .vb-modal-close,
+  .vb-duplicate-modal .vb-modal-close {
     min-width: 44px;
     padding: 8px;
   }

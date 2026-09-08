@@ -19,13 +19,15 @@ export class SessionOperationCoordinator {
   }
 }
 
-export async function withForumMutableSessionOperation(coordinator, ledger, sessionId, operation) {
+export async function withForumMutableSessionOperation(coordinator, ledgers, sessionId, operation) {
   return coordinator.run(sessionId, async () => {
     // This check intentionally lives inside the same critical section as the
-    // mutation. A fork that wins the lock publishes its durable source fence
-    // before a queued writer is allowed to inspect mutability.
+    // mutation. A branch operation that wins the lock publishes its durable
+    // source fence before a queued writer may inspect mutability.
     const { assertForumForkSourceMutable } = await import('./forum-fork-operation.mjs');
-    await assertForumForkSourceMutable(ledger, sessionId);
+    for (const ledger of Array.isArray(ledgers) ? ledgers : [ledgers]) {
+      await assertForumForkSourceMutable(ledger, sessionId);
+    }
     return operation();
   });
 }
