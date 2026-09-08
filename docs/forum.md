@@ -271,7 +271,14 @@ HTTP requests, connection resets, agentd 5xx responses, and backend outages are
 ambiguous transport outcomes: the durable dispatch remains pending with the same
 ID, generation, and ordered contributors at a bounded retry cadence. Definite
 application rejection can become terminal; superseded or abandoned work cannot be
-resurrected through the manual failed-dispatch retry path.
+resurrected through the manual failed-dispatch retry path. Unresolved Stop Robot
+state is reconciled at startup and in batches started about every 30 seconds through
+only agentd's canonical cancellation GET. A single-flight pass concurrently checks
+at most 20 oldest-attempted records; null/404 rotates a record without changing its
+activity. It never opens or loads a conversation, creates a cancellation operation,
+consumes results, or dispatches work. Results and failures mutate activity only while
+the observed generation and unresolved state remain current, and shutdown joins any
+in-flight pass before SQLite closes.
 Discord and Matrix adapters can only offer best-effort behavior at their external
 API boundary; their forum post, external dedupe reference, and local dispatch are
 transactional, but remote acknowledgement or outbound publication is not
@@ -288,7 +295,12 @@ non-idle robot state, pending/running forks, compactions, tracked direct agent/m
 work, and the global count of current-generation `pending`, `dispatching`, and
 retryable `failed` dispatch rows with a non-null `next_attempt_at`. Terminal `failed`
 rows without a next attempt, stale-generation, `dispatched`, `superseded`, and
-`abandoned` rows are nonblocking. Diagnostic
+`abandoned` rows are nonblocking. Actionable-dispatch and non-idle-robot blockers
+retain their aggregate `code`/`count` and add at most 20 deterministically ordered,
+opaque items: dispatch items contain topic, dispatch, session, and status IDs/state;
+robot items contain topic/session IDs and activity. Truncation fields report the
+cap and omitted count. Titles, bodies, prompts, errors, actors, paths, attachments,
+and origin data are excluded. Diagnostic
 `GET /api/deploy/quiescence` may still show sync running, but the host script uses
 admission rather than treating that one-shot observation as a lock.
 

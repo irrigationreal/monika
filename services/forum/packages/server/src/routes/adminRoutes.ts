@@ -7,6 +7,7 @@ import type { Database } from 'better-sqlite3';
 import type { ForumStore } from '../store';
 import type { AgentBridge } from '../agentBridge';
 import type { PiSessionSyncService } from '../services/piSessionSyncService';
+import { actionablePostDispatchBlocker, nonIdleRobotStateBlocker } from '../services/deploymentBlockerDiagnostics';
 import type { MessageTamperContext } from '@irrigationreal/codex-forum-core';
 import type { AccessHelpers } from '../utils/access';
 import { hashPassword } from '../utils/auth';
@@ -175,19 +176,15 @@ export function registerAdminRoutes({
     if (activeTurns.length > 0) blockers.push({ code: 'active_robot_turns', count: activeTurns.length });
     if (queuedTurns.length > 0) blockers.push({ code: 'queued_robot_turns', count: queuedTurns.length });
 
-    const actionableDispatches = store.countGlobalActionablePostDispatches();
-    if (actionableDispatches > 0) blockers.push({ code: 'actionable_post_dispatches', count: actionableDispatches });
+    const actionableDispatches = actionablePostDispatchBlocker(store);
+    if (actionableDispatches) blockers.push(actionableDispatches);
 
     // Pi sync is telemetry here, not a blocker: deploy-if-safe acquires forum
     // admission, pauses new cycles, and boundedly waits for an in-flight cycle.
     // DB-persisted robot state (ex: waiting). We deliberately ignore "error"
     // states since they are "concluded" from a deploy-safety standpoint.
-    const blockingRobotStates = store
-      .listRobotStates()
-      .filter((state) => !['idle', 'stopped', 'error'].includes(state.activity));
-    if (blockingRobotStates.length > 0) {
-      blockers.push({ code: 'non_idle_robot_states', count: blockingRobotStates.length });
-    }
+    const blockingRobotStates = nonIdleRobotStateBlocker(store);
+    if (blockingRobotStates) blockers.push(blockingRobotStates);
     return blockers;
   }
 

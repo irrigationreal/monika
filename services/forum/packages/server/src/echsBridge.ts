@@ -431,6 +431,8 @@ export class EchsBridge {
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private healthPollTimer: ReturnType<typeof setInterval> | null = null;
   private threadHealthTimer: ReturnType<typeof setInterval> | null = null;
+  private cancellationReconcileTimer: ReturnType<typeof setInterval> | null = null;
+  private cancellationReconcileInFlight: Promise<void> | null = null;
   private echs_queue_depth: number | null = null;
   private echs_active_threads: number | null = null;
   private activeTurnThreads = new Set<string>();
@@ -498,13 +500,18 @@ export class EchsBridge {
     this.startHeartbeat();
     this.startHealthPoll();
     this.startThreadHealthCheck();
+    this.startCancellationReconciliationLoop();
   }
 
   async stop(): Promise<void> {
     this.stopped = true;
+    if (this.cancellationReconcileTimer) clearInterval(this.cancellationReconcileTimer);
+    this.cancellationReconcileTimer = null;
+    const cancellationReconcileInFlight = this.cancellationReconcileInFlight;
     for (const timer of this.assistantBackfillTimers.values()) clearTimeout(timer);
     this.assistantBackfillTimers.clear();
 
+    if (cancellationReconcileInFlight) await Promise.allSettled([cancellationReconcileInFlight]);
     await this.attachmentHandoffs.stop();
     await Promise.allSettled(this.projectionTails.values());
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
@@ -823,30 +830,69 @@ export class EchsBridge {
     return { paused, skipped };
   }
 
+  private startCancellationReconciliationLoop(): void {
+    if (this.cancellationReconcileTimer) return;
+    this.cancellationReconcileTimer = setInterval(() => {
+      if (this.stopped) return;
+      void this.reconcileUnresolvedCancellations().catch((error) => {
+        console.warn(
+          '[ECHS] periodic cancellation reconciliation failed:',
+          error instanceof Error ? error.message : error
+        );
+      });
+    }, 30_000);
+    this.cancellationReconcileTimer.unref();
+  }
+
+  /**
+   * Reconcile only durable cancellation state through agentd's canonical GET.
+   * This pass is deliberately independent of loaded conversations and is
+   * single-flight so startup, the periodic loop, and shutdown cannot overlap.
+   */
+  reconcileUnresolvedCancellations(): Promise<void> {
+    if (this.cancellationReconcileInFlight) return this.cancellationReconcileInFlight;
+    if (this.stopped) return Promise.resolve();
+    const pass = this.runCancellationReconciliationPass();
+    const tracked = pass.finally(() => {
+      if (this.cancellationReconcileInFlight === tracked) this.cancellationReconcileInFlight = null;
+    });
+    this.cancellationReconcileInFlight = tracked;
+    return tracked;
+  }
+
+  private async runCancellationReconciliationPass(): Promise<void> {
+    const links = this.store.listPiSessionLinksWithUnresolvedCancellation(20);
+    await Promise.all(
+      links.map(async (link) => {
+        try {
+          const cancellation = await this.client.reconcilePiSessionCancellation(link.pi_session_id);
+          if (!cancellation || cancellation.generation !== link.observed_generation) {
+            this.store.touchUnresolvedCancellation(link.topic_id, link.observed_generation);
+            return;
+          }
+          if (this.store.applyCancellationReconciliation(link.topic_id, link.observed_generation, cancellation.state)) {
+            this.emitState(link.topic_id);
+          }
+        } catch (error) {
+          console.warn(
+            `[ECHS] cancellation reconcile failed topicId=${link.topic_id}:`,
+            error instanceof Error ? error.message : error
+          );
+          if (this.store.applyCancellationReconciliation(link.topic_id, link.observed_generation, 'uncertain')) {
+            this.emitState(link.topic_id);
+          }
+        }
+      })
+    );
+  }
+
   /**
    * Passively reconcile forum projection state with conversations already held
    * by this agentd process. This must never open a Pi session: after a full
    * runtime restart historical sessions stay unloaded until explicit new work.
    */
   async reconcileLoadedThreads(opts?: { sinceMs?: number }): Promise<{ reattached: number; missing: number }> {
-    // Reconcile durable canonical cancellation independently of whether agentd
-    // currently has the conversation loaded.
-    for (const link of this.store.listPiSessionLinksWithUnresolvedCancellation()) {
-      try {
-        const cancellation = await this.client.reconcilePiSessionCancellation(link.pi_session_id);
-        if (cancellation && this.store.isTopicDispatchGenerationCurrent(link.topic_id, cancellation.generation)) {
-          this.store.setRobotActivity(link.topic_id, cancellation.state);
-        }
-        this.emitState(link.topic_id);
-      } catch (error) {
-        console.warn(
-          `[ECHS] cancellation reconcile failed topicId=${link.topic_id}:`,
-          error instanceof Error ? error.message : error
-        );
-        this.store.setRobotActivity(link.topic_id, 'uncertain');
-        this.emitState(link.topic_id);
-      }
-    }
+    await this.reconcileUnresolvedCancellations();
     const sessions = this.store.listSessionsWithThreads({
       ...(opts?.sinceMs !== undefined ? { sinceMs: opts.sinceMs } : {}),
       backend: 'echs',
