@@ -71,6 +71,11 @@ export interface EchsConversationState {
   conversation: EchsConversationRecord;
 }
 
+export interface EchsCloneSnapshot {
+  leaf_entry_id: string | null;
+  active_entry_ids: string[];
+}
+
 export interface EchsForkBoundarySnapshot {
   leaf_entry_id: string | null;
   active_entry_ids: string[];
@@ -283,6 +288,40 @@ export class EchsClient {
       timeoutMs: 10 * 60_000,
     })) as Record<string, unknown>;
   }
+  async getCloneSnapshot(conversationId: string): Promise<EchsCloneSnapshot> {
+    return (await this.request(
+      `/v1/conversations/${encodeURIComponent(conversationId)}/clone-snapshot`
+    )) as EchsCloneSnapshot;
+  }
+
+  async cloneConversation(
+    conversationId: string,
+    opts: { operationId: string; expectedLeafId: string }
+  ): Promise<{
+    child_session_id: string;
+    child_session_path: string;
+    inherited_generation: number;
+    active_entry_ids: string[];
+  }> {
+    return (await this.request(`/v1/conversations/${encodeURIComponent(conversationId)}/clone`, {
+      method: 'POST',
+      body: { operation_id: opts.operationId, expected_leaf_id: opts.expectedLeafId },
+      timeoutMs: 10 * 60_000,
+    })) as {
+      child_session_id: string;
+      child_session_path: string;
+      inherited_generation: number;
+      active_entry_ids: string[];
+    };
+  }
+
+  async acknowledgeForumClone(operationId: string, childSessionId: string): Promise<void> {
+    await this.request(`/v1/forum-clones/${encodeURIComponent(operationId)}/ack`, {
+      method: 'POST',
+      body: { child_session_id: childSessionId },
+    });
+  }
+
   async getForkBoundarySnapshot(conversationId: string): Promise<EchsForkBoundarySnapshot> {
     return (await this.request(
       `/v1/conversations/${encodeURIComponent(conversationId)}/fork-boundaries`

@@ -1,4 +1,5 @@
 import {
+  CreateCloneRequestSchema,
   CreateCompactionRequestSchema,
   CreateForkRequestSchema,
   CreatePostRequestSchema,
@@ -6,11 +7,13 @@ import {
 } from '@irrigationreal/codex-forum-contracts';
 
 import {
+  mapCloneOperationToDto,
   mapCompactionOperationToDto,
   mapForkOperationToDto,
   mapTopicCompactionStateToDto,
   mapTopicOperationalEventToDto,
 } from '../mappers/dto';
+import { CloneConflictError, CloneNotFoundError, CloneUnavailableError } from '../services/cloneService';
 import { CompactionConflictError, CompactionNotFoundError } from '../services/compactionService';
 import { ForkBoundariesUnavailableError, ForkConflictError, ForkNotFoundError } from '../services/forkService';
 import { serializePost, serializeTopic } from '../utils/serializers';
@@ -20,6 +23,7 @@ import type { FastifyInstance } from 'fastify';
 
 import type { AgentBridge } from '../agentBridge';
 import type { FeatureFlags } from '../config';
+import type { CloneService } from '../services/cloneService';
 import type { CompactionService } from '../services/compactionService';
 import type { ForkService } from '../services/forkService';
 import type { PostDispatchService } from '../services/postDispatchService';
@@ -37,6 +41,7 @@ export function registerForumRoutes({
   bus,
   postDispatchService,
   compactionService,
+  cloneService,
   forkService,
   access,
   webIdentityId,
@@ -49,6 +54,7 @@ export function registerForumRoutes({
   bus: StreamBusInterface;
   postDispatchService?: Pick<PostDispatchService, 'wake'>;
   compactionService?: CompactionService;
+  cloneService?: CloneService;
   forkService?: ForkService;
   access: AccessHelpers;
   webIdentityId: string;
@@ -79,17 +85,23 @@ export function registerForumRoutes({
     topic: Parameters<typeof serializeTopic>[0],
     request: Parameters<typeof getIdentityFromRequest>[0]
   ): ReturnType<typeof serializeTopic> & {
-    lineage?: { kind: 'handoff' | 'fork' | 'delegate' | 'sleep' | 'parent'; parentTopicId: string | null };
+    lineage?: { kind: 'handoff' | 'fork' | 'clone' | 'delegate' | 'sleep' | 'parent'; parentTopicId: string | null };
   } {
     const dto = serializeTopic(topic) as ReturnType<typeof serializeTopic> & {
-      lineage?: { kind: 'handoff' | 'fork' | 'delegate' | 'sleep' | 'parent'; parentTopicId: string | null };
+      lineage?: { kind: 'handoff' | 'fork' | 'clone' | 'delegate' | 'sleep' | 'parent'; parentTopicId: string | null };
     };
     const link = store.getPiSessionLinkByTopic(topic.id);
     if (!link?.parent_pi_session_id && !link?.parent_pi_session_path) return dto;
 
     const rawKind = link.lineage_kind?.trim().toLowerCase();
     const kind =
-      rawKind === 'handoff' || rawKind === 'fork' || rawKind === 'delegate' || rawKind === 'sleep' ? rawKind : 'parent';
+      rawKind === 'handoff' ||
+      rawKind === 'fork' ||
+      rawKind === 'clone' ||
+      rawKind === 'delegate' ||
+      rawKind === 'sleep'
+        ? rawKind
+        : 'parent';
     const parentLink = link.parent_pi_session_id
       ? store.getPiSessionLinkByPiSessionId(link.parent_pi_session_id)
       : link.parent_pi_session_path
@@ -519,6 +531,55 @@ export function registerForumRoutes({
     } catch (error) {
       if (error instanceof CompactionNotFoundError) throw app.httpErrors.notFound(error.message);
       if (error instanceof CompactionConflictError) throw app.httpErrors.conflict(error.message);
+      throw error;
+    }
+  });
+
+  app.get('/topics/:topicId/clones', async (request) => {
+    requireAdmin(request);
+    const { topicId } = request.params as { topicId: string };
+    requireTopicVisible(topicId, request);
+    if (!cloneService) throw app.httpErrors.serviceUnavailable('Clone service is unavailable');
+    const state = cloneService.state(topicId);
+    return {
+      active: state.active ? mapCloneOperationToDto(state.active) : null,
+      latest: state.latest ? mapCloneOperationToDto(state.latest) : null,
+    };
+  });
+
+  app.post('/topics/:topicId/clones', async (request, reply) => {
+    const user = requireAdmin(request);
+    const { topicId } = request.params as { topicId: string };
+    requireTopicVisible(topicId, request);
+    if (!cloneService) throw app.httpErrors.serviceUnavailable('Clone service is unavailable');
+    const parsed = CreateCloneRequestSchema.safeParse(request.body);
+    if (!parsed.success) throw app.httpErrors.badRequest(parsed.error.issues[0]?.message ?? 'Invalid clone request');
+    try {
+      const operation = await cloneService.enqueue({
+        operationId: parsed.data.operationId,
+        topicId,
+        initiatedBy: user.identityId,
+        title: parsed.data.title,
+      });
+      reply.code(202);
+      reply.header('Location', `${request.url}/${encodeURIComponent(operation.id)}`);
+      return mapCloneOperationToDto(operation);
+    } catch (error) {
+      if (error instanceof CloneUnavailableError) throw app.httpErrors.serviceUnavailable(error.message);
+      if (error instanceof CloneConflictError) throw app.httpErrors.conflict(error.message);
+      throw error;
+    }
+  });
+
+  app.get('/topics/:topicId/clones/:operationId', async (request) => {
+    requireAdmin(request);
+    const { topicId, operationId } = request.params as { topicId: string; operationId: string };
+    requireTopicVisible(topicId, request);
+    if (!cloneService) throw app.httpErrors.serviceUnavailable('Clone service is unavailable');
+    try {
+      return mapCloneOperationToDto(cloneService.get(topicId, operationId));
+    } catch (error) {
+      if (error instanceof CloneNotFoundError) throw app.httpErrors.notFound(error.message);
       throw error;
     }
   });

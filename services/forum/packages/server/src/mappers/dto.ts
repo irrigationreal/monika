@@ -4,6 +4,7 @@ import type {
   ChatCategoryDto,
   ChatMessageDto,
   ChatRoomDto,
+  CloneOperationDto,
   CompactionCheckpointDispatchDto,
   CompactionOperationDto,
   DeploymentAdmissionCancelResponseDto,
@@ -37,6 +38,7 @@ import type {
   WebAuthnCredentialDto,
 } from '@irrigationreal/codex-forum-contracts';
 import type {
+  CloneOperation,
   CompactionOperation,
   ExternalRef,
   ForkOperation,
@@ -103,6 +105,19 @@ export function mapDeploymentAdmissionCancelResponseToDto(
   result: ReturnType<DeploymentAdmissionCoordinator['cancel']>
 ): DeploymentAdmissionCancelResponseDto {
   return { ...result };
+}
+
+export function mapCloneOperationToDto(operation: CloneOperation): CloneOperationDto {
+  return {
+    id: operation.id,
+    sourceTopicId: operation.sourceTopicId,
+    status: operation.status,
+    childTopicId: operation.childTopicId,
+    errorMessage: operation.errorMessage,
+    createdAt: operation.createdAt,
+    startedAt: operation.startedAt,
+    finishedAt: operation.finishedAt,
+  };
 }
 
 export function mapForkOperationToDto(operation: ForkOperation): ForkOperationDto {

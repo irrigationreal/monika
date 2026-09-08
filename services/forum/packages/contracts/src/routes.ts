@@ -880,6 +880,32 @@ export const apiRoutes: ApiRoute[] = [
     response: { schema: schemas.TopicCompactionStateDtoSchema },
   },
 
+  // Forum-native clones
+  {
+    method: 'get',
+    path: '/topics/{topicId}/clones',
+    summary: 'Get the active and latest durable forum-native clone operations',
+    tags: ['topics'],
+    request: { params: stringParam('topicId') },
+    response: { schema: schemas.TopicCloneStateDtoSchema },
+  },
+  {
+    method: 'post',
+    path: '/topics/{topicId}/clones',
+    summary: 'Duplicate the current active canonical branch into an idle topic',
+    tags: ['topics'],
+    request: { params: stringParam('topicId'), body: { schema: schemas.CreateCloneRequestSchema } },
+    response: { schema: schemas.CloneOperationDtoSchema, statusCode: 202, description: 'Accepted' },
+  },
+  {
+    method: 'get',
+    path: '/topics/{topicId}/clones/{operationId}',
+    summary: 'Get a durable forum-native clone operation',
+    tags: ['topics'],
+    request: { params: z.object({ topicId: z.string(), operationId: z.string() }) },
+    response: { schema: schemas.CloneOperationDtoSchema },
+  },
+
   // Forum-native forks
   {
     method: 'get',

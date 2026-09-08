@@ -174,7 +174,7 @@ export interface ChatTypingDto {
 }
 
 export interface TopicLineageDto {
-  kind: 'handoff' | 'fork' | 'delegate' | 'sleep' | 'parent';
+  kind: 'handoff' | 'fork' | 'clone' | 'delegate' | 'sleep' | 'parent';
   parentTopicId?: string | null;
 }
 
@@ -623,6 +623,27 @@ export interface ForkOperationDto {
 export interface TopicForkStateDto {
   active: ForkOperationDto | null;
   latest: ForkOperationDto | null;
+}
+
+export interface CreateCloneRequestDto {
+  operationId: string;
+  title: string;
+}
+
+export interface CloneOperationDto {
+  id: string;
+  sourceTopicId: string;
+  status: ForkOperationStatus;
+  childTopicId: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+export interface TopicCloneStateDto {
+  active: CloneOperationDto | null;
+  latest: CloneOperationDto | null;
 }
 
 /** Best available Pi context-usage snapshot for one canonical session. */

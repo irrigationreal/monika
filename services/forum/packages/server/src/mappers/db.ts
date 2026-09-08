@@ -1,4 +1,5 @@
 import type {
+  CloneOperation,
   CompactionOperation,
   ExternalRef,
   ExternalRefKind,
@@ -22,6 +23,7 @@ import type {
 
 import type {
   AttachmentRow,
+  CloneOperationRow,
   CompactionOperationRow,
   ExternalRefRow,
   ForkOperationRow,
@@ -54,6 +56,23 @@ export function mapPostDispatchAttemptRowToDomain(row: PostDispatchAttemptRow): 
     retryAt: row.retry_at,
     errorMessage: row.error_message,
     createdAt: row.created_at,
+  };
+}
+
+export function mapCloneOperationRowToDomain(row: CloneOperationRow): CloneOperation {
+  return {
+    id: row.id,
+    sourceTopicId: row.source_topic_id,
+    expectedLeafId: row.expected_leaf_id,
+    initiatedBy: row.initiated_by,
+    title: row.title,
+    status: row.status,
+    childTopicId: row.child_topic_id,
+    childSessionId: row.child_session_id,
+    errorMessage: row.error_message,
+    createdAt: row.created_at,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
   };
 }
 

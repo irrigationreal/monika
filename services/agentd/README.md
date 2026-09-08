@@ -48,6 +48,8 @@ services/agentd/
 │   ├── session-resolution.mjs     Direct canonical-path validation
 │   ├── http-safety.mjs            Disconnect-safe HTTP/SSE writes
 │   ├── compaction-operation.mjs   Idempotent canonical compaction recognition
+│   ├── forum-fork-operation.mjs   Durable before-user branch extraction
+│   ├── forum-clone-operation.mjs  Durable exact-current-leaf branch extraction
 │   ├── message-provenance.mjs     Subagent continuation provenance and settlement
 │   └── subagent-cancellation.mjs  Scoped descendant cancellation support
 └── test/                          Provider-independent lifecycle tests
@@ -72,7 +74,7 @@ exposes these conceptual groups:
 - **health and models** — runtime health and available authenticated models;
 - **Pi sessions** — list, export, context, ownership, and durable cancellation;
 - **conversations** — create/open, history/context, SSE events, prompt, interrupt,
-  compact, handoff, and close;
+  compact, fork, exact-current-leaf clone, handoff, and close;
 - **artifacts** — legacy descriptor-safe export from canonical allowlisted roots;
 - **administration** — quiescence, drain, subagent workload/repair/retention, and
   privacy-safe aggregate analytics.
@@ -98,7 +100,7 @@ never included.
 Conversation records expose canonical `session_id` and `session_path`. When both
 are supplied on reopen, agentd opens and validates exactly that canonical path:
 it must remain under the session root, be a non-symlink regular file, match the
-header ID, and remain outside unresolved fork quarantine. Loaded branch checks use
+header ID, and remain outside unresolved fork/clone quarantine. Loaded branch checks use
 the same target-only path. Archive-wide discovery remains only for explicit session
 listing and ID-only legacy callers. Model and thinking settings use Pi model
 identifiers directly.
@@ -181,6 +183,25 @@ directly so it does not recursively deadlock on its own newly published fence. M
 thinking selection are intentionally not part of branch extraction: the forum persists
 them with the fork operation and opening dispatch, then agentd applies them through Pi's
 session configuration before accepting the child conversation's opening prompt.
+
+## Forum-native exact duplicates
+
+Agentd exposes `GET /v1/conversations/:id/clone-snapshot`,
+`POST /v1/conversations/:id/clone`, and `POST /v1/forum-clones/:operationId/ack` as a
+separate durable operation. Clone takes the current active Pi leaf and uses a detached
+`SessionManager.createBranchedSession(currentLeaf)`, the same native branch extraction as
+`runtime.fork(leaf, { position: 'at' })`, without replacing the parent runtime. It preserves
+compaction and other entries on that exact branch and does not enqueue a prompt or start a
+model turn. Expected-leaf validation rejects stale snapshots, and parent JSONL bytes are
+verified unchanged before success is recorded.
+
+The clone ledger has its own operation namespace and request hash. Exact retries return the
+same child; a creating-state retry adopts only a child carrying the matching operation marker.
+Missing or multiple marked evidence becomes `clone_manual_recovery`, not another allocation.
+Unacknowledged and ambiguous candidates are quarantined from list/find discovery. Fork and
+clone ledgers are checked together under the per-session operation coordinator, so either
+operation fences dispatch, compaction, cancellation, ownership changes, and the other branch
+operation until acknowledgement. Forum-created clone sessions carry explicit `clone` lineage.
 
 ## Compaction
 

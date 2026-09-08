@@ -3,8 +3,10 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router';
 
 import AutoCompactOption from '../components/AutoCompactOption.vue';
+import BranchMenu from '../components/BranchMenu.vue';
 import ConfirmationDialog from '../components/ConfirmationDialog.vue';
 import DraftStatus from '../components/DraftStatus.vue';
+import DuplicateThreadDialog from '../components/DuplicateThreadDialog.vue';
 import ForkTopicDialog from '../components/ForkTopicDialog.vue';
 import MessageTemplatePicker from '../components/MessageTemplatePicker.vue';
 import OperationalEventBar from '../components/OperationalEventBar.vue';
@@ -23,6 +25,7 @@ import { isMobileQuickReplyViewport, resolveQuickReplyMode } from '../lib/quickR
 
 import type {
   AttachmentDto,
+  CloneOperationDto,
   CompactionOperationDto,
   ForkBoundaryDto,
   ForkOperationDto,
@@ -30,6 +33,7 @@ import type {
   MessageTemplateDto,
   PostDto,
   RobotPersonaDto,
+  TopicCloneStateDto,
   TopicCompactionStateDto,
   TopicForkStateDto,
   TopicOperationalEventDto,
@@ -209,6 +213,20 @@ const compactionError = ref('');
 const compactionSubmitting = ref(false);
 const compactionRetryingCheckpoint = ref(false);
 const compactionModalRef = ref<HTMLElement | null>(null);
+const showDuplicateModal = ref(false);
+const duplicateTitle = ref('');
+const cloneOperation = ref<CloneOperationDto | null>(null);
+const cloneState = ref<TopicCloneStateDto>({ active: null, latest: null });
+const cloneError = ref('');
+const cloneSubmitting = ref(false);
+let clonePollTimer: number | null = null;
+interface CloneIntent {
+  operationId: string;
+  topicId: string;
+  title: string;
+  createdAt: string;
+  status: 'submitting' | CloneOperationDto['status'];
+}
 const showForkModal = ref(false);
 const forkBoundaries = ref<ForkBoundaryDto[]>([]);
 const forkBoundaryPostId = ref('');
@@ -265,8 +283,29 @@ const forkFence = computed(() => {
 const forkNeedsManualReview = computed(
   () => (forkState.value.active ?? forkOperation.value)?.status === 'needs_manual_review'
 );
+const cloneFence = computed(() => {
+  const operation = cloneState.value.active ?? cloneOperation.value;
+  return (
+    operation?.status === 'pending' || operation?.status === 'running' || operation?.status === 'needs_manual_review'
+  );
+});
+const cloneNeedsManualReview = computed(
+  () => (cloneState.value.active ?? cloneOperation.value)?.status === 'needs_manual_review'
+);
 const compactionFence = computed(
-  () => compactionActive.value || checkpointDispatchPending.value || checkpointNeedsRecovery.value || forkFence.value
+  () =>
+    compactionActive.value ||
+    checkpointDispatchPending.value ||
+    checkpointNeedsRecovery.value ||
+    forkFence.value ||
+    cloneFence.value
+);
+const canDuplicate = computed(
+  () =>
+    isAdmin.value && !isRobotBusy.value && !state.isTopicLocked() && !compactionFence.value && !cloneSubmitting.value
+);
+const canSubmitDuplicate = computed(
+  () => canDuplicate.value && showDuplicateModal.value && Boolean(duplicateTitle.value.trim())
 );
 const canFork = computed(
   () =>
@@ -598,6 +637,178 @@ async function retryCompactionCheckpoint(): Promise<void> {
   }
 }
 
+function cloneIntentKey(topicId: string): string {
+  return `codex-forum:clone-intent:${topicId}`;
+}
+
+function persistCloneIntent(intent: CloneIntent): void {
+  try {
+    window.localStorage.setItem(cloneIntentKey(intent.topicId), JSON.stringify(intent));
+  } catch {
+    // The durable server operation remains authoritative when storage is unavailable.
+  }
+}
+
+function loadCloneIntent(topicId: string): CloneIntent | null {
+  try {
+    const raw = window.localStorage.getItem(cloneIntentKey(topicId));
+    if (!raw) return null;
+    const intent = JSON.parse(raw) as CloneIntent;
+    return intent.topicId === topicId && /^[A-Za-z0-9_-]{1,128}$/.test(intent.operationId) ? intent : null;
+  } catch {
+    return null;
+  }
+}
+
+function clearCloneIntent(topicId: string): void {
+  try {
+    window.localStorage.removeItem(cloneIntentKey(topicId));
+  } catch {
+    // The terminal durable operation remains authoritative.
+  }
+}
+
+function persistCloneOperationState(topicId: string, operation: CloneOperationDto): void {
+  const intent = loadCloneIntent(topicId);
+  if (intent?.operationId === operation.id) persistCloneIntent({ ...intent, status: operation.status });
+}
+
+function openDuplicateModal(): void {
+  const topicId = routeTopicId.value;
+  if (!topicId || !canDuplicate.value) return;
+  const intent = loadCloneIntent(topicId);
+  duplicateTitle.value = intent?.title ?? `Copy of ${state.selectedTopic.value?.title ?? 'Thread'}`;
+  cloneError.value = '';
+  showDuplicateModal.value = true;
+}
+
+function closeDuplicateModal(): void {
+  if (!cloneSubmitting.value) showDuplicateModal.value = false;
+}
+
+function scheduleClonePoll(topicId: string, operationId: string): void {
+  if (clonePollTimer !== null) window.clearTimeout(clonePollTimer);
+  clonePollTimer = window.setTimeout(() => void pollClone(topicId, operationId), 1000);
+}
+
+async function observeCloneOperation(topicId: string, operation: CloneOperationDto): Promise<void> {
+  if (routeTopicId.value !== topicId) return;
+  cloneOperation.value = operation;
+  persistCloneOperationState(topicId, operation);
+  cloneState.value = {
+    active:
+      operation.status === 'pending' || operation.status === 'running' || operation.status === 'needs_manual_review'
+        ? operation
+        : null,
+    latest: operation,
+  };
+  const intent = loadCloneIntent(topicId);
+  const initiatedLocally = intent?.operationId === operation.id;
+  if (operation.status === 'pending' || operation.status === 'running') {
+    scheduleClonePoll(topicId, operation.id);
+  } else if (operation.status === 'succeeded') {
+    if (!initiatedLocally) return;
+    clearCloneIntent(topicId);
+    if (!operation.childTopicId) {
+      cloneError.value = 'Duplicate completed without a child thread identifier. Operator review is required.';
+      return;
+    }
+    showDuplicateModal.value = false;
+    await router.push({ name: 'topic.view', params: { topicId: operation.childTopicId } });
+  } else if (operation.status === 'needs_manual_review') {
+    if (intent?.operationId === operation.id) clearCloneIntent(topicId);
+    cloneError.value = operation.errorMessage ?? 'Duplicate needs operator review; the source remains fenced.';
+  } else {
+    if (intent?.operationId === operation.id) clearCloneIntent(topicId);
+    cloneError.value = operation.errorMessage ?? 'Duplicate failed.';
+  }
+}
+
+async function pollClone(topicId: string, operationId: string): Promise<void> {
+  try {
+    await observeCloneOperation(topicId, await api.getClone(topicId, operationId));
+  } catch {
+    if (routeTopicId.value !== topicId) return;
+    await refreshCloneState(topicId);
+    if (routeTopicId.value === topicId && loadCloneIntent(topicId)?.operationId === operationId)
+      scheduleClonePoll(topicId, operationId);
+  }
+}
+
+async function refreshCloneState(topicId: string): Promise<void> {
+  try {
+    const next = await api.getCloneState(topicId);
+    if (routeTopicId.value !== topicId) return;
+    cloneState.value = next;
+    const intent = loadCloneIntent(topicId);
+    const matching = intent
+      ? ([next.active, next.latest].find((operation) => operation?.id === intent.operationId) ?? null)
+      : null;
+    if (matching) {
+      await observeCloneOperation(topicId, matching);
+      return;
+    }
+    if (next.active) {
+      await observeCloneOperation(topicId, next.active);
+      return;
+    }
+    if (intent) {
+      await observeCloneOperation(
+        topicId,
+        await api.createClone(topicId, { operationId: intent.operationId, title: intent.title })
+      );
+      return;
+    }
+    cloneOperation.value = next.latest;
+  } catch (error) {
+    if (routeTopicId.value !== topicId) return;
+    cloneError.value = error instanceof Error ? error.message : 'Could not refresh duplicate status.';
+    const intent = loadCloneIntent(topicId);
+    const status = error && typeof error === 'object' && 'status' in error ? Number(error.status) : 0;
+    if (intent && status >= 400 && status < 500 && status !== 408 && status !== 425 && status !== 429) {
+      clearCloneIntent(topicId);
+    } else if (intent) {
+      scheduleClonePoll(topicId, intent.operationId);
+    }
+  }
+}
+
+async function submitDuplicate(): Promise<void> {
+  const topicId = routeTopicId.value;
+  if (!topicId || !canSubmitDuplicate.value) return;
+  cloneSubmitting.value = true;
+  cloneError.value = '';
+  const intent = loadCloneIntent(topicId) ?? {
+    operationId: createClientOperationId(),
+    topicId,
+    title: duplicateTitle.value.trim(),
+    createdAt: new Date().toISOString(),
+    status: 'submitting' as const,
+  };
+  persistCloneIntent(intent);
+  try {
+    await observeCloneOperation(
+      topicId,
+      await api.createClone(topicId, { operationId: intent.operationId, title: intent.title })
+    );
+  } catch (error) {
+    const status = error && typeof error === 'object' && 'status' in error ? Number(error.status) : 0;
+    if (status >= 400 && status < 500 && status !== 408 && status !== 425 && status !== 429) {
+      clearCloneIntent(topicId);
+      cloneError.value = error instanceof Error ? error.message : 'Duplicate request was rejected.';
+    } else {
+      try {
+        await observeCloneOperation(topicId, await api.getClone(topicId, intent.operationId));
+      } catch {
+        cloneError.value = `${error instanceof Error ? error.message : 'Duplicate request failed.'} The outcome is unknown; the same durable operation will be reconciled automatically.`;
+        scheduleClonePoll(topicId, intent.operationId);
+      }
+    }
+  } finally {
+    if (routeTopicId.value === topicId) cloneSubmitting.value = false;
+  }
+}
+
 function forkIntentKey(topicId: string): string {
   return `codex-forum:fork-intent:${topicId}`;
 }
@@ -904,6 +1115,7 @@ const topicLineageLabel = computed(() => {
   if (!kind) return null;
   if (kind === 'handoff') return 'Handoff from parent session';
   if (kind === 'fork') return 'Forked from parent session';
+  if (kind === 'clone') return 'Duplicated from parent thread';
   if (kind === 'delegate') return 'Delegate fork from parent session';
   if (kind === 'sleep') return 'Sleep fork from parent session';
   return 'Parent session';
@@ -2048,6 +2260,7 @@ async function loadTopic(topicId: string): Promise<void> {
         compactionState.value = { ...compactionState.value, active: intent };
       }
       await refreshCompactionState(topicId);
+      await refreshCloneState(topicId);
       await refreshForkState(topicId);
       await postDispatchPoller.refreshAfterCurrent();
     }
@@ -2281,6 +2494,14 @@ watch(
     compactionRetryingCheckpoint.value = false;
     compactionState.value = { active: null, latest: null, checkpointDispatch: null };
     compactionError.value = '';
+    if (clonePollTimer !== null) window.clearTimeout(clonePollTimer);
+    clonePollTimer = null;
+    showDuplicateModal.value = false;
+    duplicateTitle.value = '';
+    cloneOperation.value = null;
+    cloneState.value = { active: null, latest: null };
+    cloneError.value = '';
+    cloneSubmitting.value = false;
     if (forkPollTimer !== null) window.clearTimeout(forkPollTimer);
     forkPollTimer = null;
     forkBoundaryRequestGeneration += 1;
@@ -2341,6 +2562,7 @@ onUnmounted(() => {
   stopCompactionPolling();
   postDispatchPoller.stop();
   postDispatchRequestGeneration += 1;
+  if (clonePollTimer !== null) window.clearTimeout(clonePollTimer);
   if (forkPollTimer !== null) window.clearTimeout(forkPollTimer);
   if (showCompactionModal.value) document.body.style.overflow = bodyOverflowBeforeCompactionModal;
   window.removeEventListener('scroll', handleScroll);
@@ -2481,6 +2703,17 @@ onUnmounted(() => {
     @cancel="showDiscardDraftConfirm = false"
   />
 
+  <DuplicateThreadDialog
+    v-if="showDuplicateModal"
+    v-model:title="duplicateTitle"
+    :submitting="cloneSubmitting"
+    :operation-status="cloneOperation?.status ?? null"
+    :error="cloneError"
+    :can-submit="canSubmitDuplicate"
+    @submit="submitDuplicate"
+    @close="closeDuplicateModal"
+  />
+
   <ForkTopicDialog
     v-if="showForkModal"
     v-model:boundary-post-id="forkBoundaryPostId"
@@ -2612,6 +2845,16 @@ onUnmounted(() => {
   <div v-if="isAdmin && compactionError && !showCompactionModal" class="vb-error vb-compaction-status" role="alert">
     {{ compactionError }}
   </div>
+  <div
+    v-if="isAdmin && cloneFence && !showDuplicateModal"
+    :class="cloneNeedsManualReview ? 'vb-error vb-compaction-status' : 'vb-note vb-compaction-status'"
+    :role="cloneNeedsManualReview ? 'alert' : 'status'"
+    aria-live="polite"
+  >
+    <strong v-if="cloneNeedsManualReview">Duplicate needs operator review; the source remains fenced.</strong>
+    <strong v-else>Duplicate is running on the server; the source remains fenced.</strong>
+    <span v-if="cloneError"> {{ cloneError }}</span>
+  </div>
 
   <div v-if="!topicReady" class="vb-section">
     <div class="vb-empty" role="status">Loading topic…</div>
@@ -2664,7 +2907,13 @@ onUnmounted(() => {
         >
           Handoff
         </button>
-        <button v-if="isAdmin" class="vb-btn" :disabled="!canFork" @click="openForkModal">Fork</button>
+        <BranchMenu
+          v-if="isAdmin"
+          :duplicate-disabled="!canDuplicate"
+          :fork-disabled="!canFork"
+          @duplicate="openDuplicateModal"
+          @fork="openForkModal"
+        />
         <button v-if="isAdmin" class="vb-btn" :disabled="!canCompact" @click="openCompactionModal">Compact</button>
         <button class="vb-btn" @click="goHome">Back to Forum</button>
       </div>
@@ -3175,7 +3424,13 @@ onUnmounted(() => {
         >
           Handoff
         </button>
-        <button v-if="isAdmin" class="vb-btn" :disabled="!canFork" @click="openForkModal">Fork</button>
+        <BranchMenu
+          v-if="isAdmin"
+          :duplicate-disabled="!canDuplicate"
+          :fork-disabled="!canFork"
+          @duplicate="openDuplicateModal"
+          @fork="openForkModal"
+        />
         <button v-if="isAdmin" class="vb-btn" :disabled="!canCompact" @click="openCompactionModal">Compact</button>
         <button class="vb-btn" @click="goHome">Back to Forum</button>
       </div>
@@ -3614,7 +3869,10 @@ onUnmounted(() => {
               <span v-if="sessionContext.model" class="vb-context-model">· {{ sessionContext.model }}</span>
             </div>
             <div v-if="compactionFence" class="vb-reply-options-callout" role="status">
-              <template v-if="forkNeedsManualReview">
+              <template v-if="cloneNeedsManualReview">
+                Replies are paused because a duplicate needs operator review; the canonical source remains fenced.
+              </template>
+              <template v-else-if="forkNeedsManualReview">
                 Replies are paused because a fork needs operator review; the canonical source remains fenced.
               </template>
               <template v-else>Replies are paused while a canonical operation is unresolved.</template>

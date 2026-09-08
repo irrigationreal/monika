@@ -28,8 +28,10 @@ import type {
   ChatRoomDto,
   ChatRoomListDto,
   ChatTypingDto,
+  CloneOperationDto,
   CompactionCheckpointDispatchDto,
   CompactionOperationDto,
+  CreateCloneRequestDto,
   CreateCompactionRequestDto,
   CreateForkRequestDto,
   DiscordBridgeStatusDto,
@@ -97,6 +99,7 @@ import type {
   ToolRunDto,
   TopicAttachmentsDto,
   TopicAutoRunDto,
+  TopicCloneStateDto,
   TopicCompactionStateDto,
   TopicDto,
   TopicForkStateDto,
@@ -226,6 +229,9 @@ export type {
   TopicSubscriptionDto,
   TopicUnreadDto,
   TopicOperationalEventDto,
+  CreateCloneRequestDto,
+  CloneOperationDto,
+  TopicCloneStateDto,
   CreateCompactionRequestDto,
   CompactionOperationDto,
   CompactionCheckpointDispatchDto,
@@ -913,6 +919,11 @@ export function createForumSdk(options?: ForumSdkOptions) {
         `/topics/${topicId}/compactions/${encodeURIComponent(operationId)}/retry-checkpoint`,
         { method: 'POST' }
       ),
+    getCloneState: (topicId: string) => json<TopicCloneStateDto>(`/topics/${topicId}/clones`),
+    createClone: (topicId: string, payload: CreateCloneRequestDto) =>
+      json<CloneOperationDto>(`/topics/${topicId}/clones`, { method: 'POST', body: JSON.stringify(payload) }),
+    getClone: (topicId: string, operationId: string) =>
+      json<CloneOperationDto>(`/topics/${topicId}/clones/${encodeURIComponent(operationId)}`),
     getForkState: (topicId: string) => json<TopicForkStateDto>(`/topics/${topicId}/forks`),
     listForkBoundaries: (topicId: string) => json<{ items: ForkBoundaryDto[] }>(`/topics/${topicId}/forks/boundaries`),
     createFork: (topicId: string, payload: CreateForkRequestDto) =>

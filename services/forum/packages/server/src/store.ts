@@ -4,6 +4,7 @@ import { normalizedOriginKey } from '@irrigationreal/codex-forum-core';
 
 import { nowIso } from './db';
 import {
+  mapCloneOperationRowToDomain,
   mapCompactionOperationRowToDomain,
   mapForkOperationRowToDomain,
   mapTopicOperationalEventRowToDomain,
@@ -16,6 +17,7 @@ import type {
   AccessRuleEffect,
   AccessRulePrincipalKind,
   AccessRuleScopeKind,
+  CloneOperation,
   CompactionOperation,
   CreatePostInput,
   CreateTopicInput,
@@ -41,6 +43,7 @@ import type {
   ChatCategoryRow,
   ChatMessageRow,
   ChatRoomRow,
+  CloneOperationRow,
   CompactionOperationRow,
   ExternalRefRow,
   FileBlobRow,
@@ -341,6 +344,49 @@ export interface CreateCompactionOperationInput {
   expectedLeafId: string;
   customInstructions?: string | null;
   recoveryPrompt: string;
+}
+
+export interface EnqueueCloneOperationInput {
+  id: string;
+  sourceTopicId: string;
+  sourceSessionId: string;
+  sourcePiSessionId: string;
+  sourcePiSessionPath: string;
+  expectedLeafId: string;
+  initiatedBy: string;
+  title: string;
+  sourceSnapshot: CloneProjectionSnapshot;
+  prestagedAttachments: Array<{
+    sourcePostId: string;
+    filename: string;
+    mimeType: string;
+    sizeBytes: number;
+    storagePath: string;
+    sha256: string | null;
+  }>;
+}
+
+export interface CloneProjectionSnapshot {
+  activeEntryIds: string[];
+  posts: Array<{
+    id: string;
+    authorId: string;
+    parentPostId: string | null;
+    body: string;
+    silent: boolean;
+    followUp: boolean;
+    editedAt: string | null;
+    deletedAt: string | null;
+    attachments: Array<{
+      id: string;
+      filename: string;
+      mimeType: string;
+      sizeBytes: number;
+      storagePath: string;
+      sha256: string | null;
+    }>;
+  }>;
+  links: Array<{ entryId: string; postId: string; role: string; metadata: Record<string, unknown> | null }>;
 }
 
 export interface EnqueueForkOperationInput {
@@ -2571,6 +2617,392 @@ export class ForumStore {
     return boundaries;
   }
 
+  buildCloneProjectionSnapshot(topicId: string, activeEntryIds: readonly string[]): CloneProjectionSnapshot {
+    const link = this.getPiSessionLinkByTopic(topicId);
+    if (!link) throw new Error('Linked canonical Pi session is unavailable');
+    const posts = this.db
+      .prepare('select * from posts where topic_id = ? order by rowid asc')
+      .all(topicId) as PostRow[];
+    if (posts.length === 0 || posts.some((post) => post.deleted_at))
+      throw new Error('The active conversation is not completely projectable because a required post is deleted');
+    const byPostId = new Map(posts.map((post) => [post.id, post]));
+    const included = new Set<string>();
+    const links: CloneProjectionSnapshot['links'] = [];
+    for (const entryId of activeEntryIds) {
+      const entry = this.db
+        .prepare('select role, has_visible_text from pi_entry_index where pi_session_id = ? and entry_id = ?')
+        .get(link.pi_session_id, entryId) as { role: string | null; has_visible_text: number } | undefined;
+      if (!entry?.has_visible_text || (entry.role !== 'user' && entry.role !== 'assistant')) continue;
+      const message = this.db
+        .prepare('select * from pi_message_links where pi_session_id = ? and pi_message_id = ? limit 1')
+        .get(link.pi_session_id, entryId) as PiMessageLinkRow | undefined;
+      if (!message?.post_id || !byPostId.has(message.post_id))
+        throw new Error('The active conversation is not completely projected into this topic');
+      let metadata: Record<string, unknown> | null = null;
+      try {
+        metadata = JSON.parse(message.metadata_json ?? 'null') as Record<string, unknown> | null;
+      } catch {
+        throw new Error('Canonical message provenance is malformed');
+      }
+      const contributors = Array.isArray(metadata?.['contributorPostIds'])
+        ? metadata['contributorPostIds']
+        : [message.post_id];
+      if (
+        contributors.length === 0 ||
+        contributors.some((postId) => typeof postId !== 'string' || !byPostId.has(postId))
+      )
+        throw new Error('Canonical message contributor provenance is incomplete');
+      for (const postId of contributors as string[]) included.add(postId);
+      included.add(message.post_id);
+      links.push({ entryId, postId: message.post_id, role: message.role ?? entry.role, metadata });
+    }
+    if (links.length === 0 || posts.some((post) => !included.has(post.id)))
+      throw new Error('The topic contains posts that cannot be represented by the current canonical active branch');
+    return {
+      activeEntryIds: [...activeEntryIds],
+      posts: posts.map((post) => ({
+        id: post.id,
+        authorId: post.author_id,
+        parentPostId: post.parent_post_id,
+        body: post.body,
+        silent: Boolean(post.silent),
+        followUp: Boolean(post.follow_up),
+        editedAt: post.edited_at,
+        deletedAt: post.deleted_at,
+        attachments: this.listAttachmentsByPost(post.id)
+          .filter((attachment) => !attachment.deleted_at)
+          .map((attachment) => ({
+            id: attachment.id,
+            filename: attachment.filename,
+            mimeType: attachment.mime_type,
+            sizeBytes: attachment.size_bytes,
+            storagePath: attachment.storage_path,
+            sha256: attachment.sha256,
+          })),
+      })),
+      links,
+    };
+  }
+
+  getCloneOperation(id: string): CloneOperation | null {
+    const row = this.db.prepare('select * from clone_operations where id = ?').get(id) as CloneOperationRow | undefined;
+    return row ? mapCloneOperationRowToDomain(row) : null;
+  }
+
+  getActiveCloneOperation(topicId: string): CloneOperation | null {
+    const row = this.db
+      .prepare(
+        "select * from clone_operations where source_topic_id = ? and status in ('pending', 'running', 'needs_manual_review') order by created_at desc limit 1"
+      )
+      .get(topicId) as CloneOperationRow | undefined;
+    return row ? mapCloneOperationRowToDomain(row) : null;
+  }
+
+  getLatestCloneOperation(topicId: string): CloneOperation | null {
+    const row = this.db
+      .prepare('select * from clone_operations where source_topic_id = ? order by created_at desc limit 1')
+      .get(topicId) as CloneOperationRow | undefined;
+    return row ? mapCloneOperationRowToDomain(row) : null;
+  }
+
+  hasCloneFence(topicId: string): boolean {
+    const row = this.db
+      .prepare(
+        `select 1 from clone_operations
+         where (source_topic_id = ? or child_topic_id = ?)
+           and status in ('pending', 'running', 'needs_manual_review')
+         limit 1`
+      )
+      .get(topicId, topicId);
+    return Boolean(row);
+  }
+
+  countPendingOrRunningCloneOperations(): number {
+    const row = this.db
+      .prepare("select count(*) as count from clone_operations where status in ('pending', 'running')")
+      .get() as { count: number };
+    return row.count;
+  }
+
+  enqueueCloneOperation(input: EnqueueCloneOperationInput): CloneOperation {
+    return this.db.transaction(() => {
+      const existing = this.getCloneOperation(input.id);
+      const snapshotJson = JSON.stringify(input.sourceSnapshot);
+      const attachmentsJson = JSON.stringify(input.prestagedAttachments);
+      if (existing) {
+        const row = this.db.prepare('select * from clone_operations where id = ?').get(input.id) as CloneOperationRow;
+        if (
+          row.source_topic_id !== input.sourceTopicId ||
+          row.source_session_id !== input.sourceSessionId ||
+          row.source_pi_session_id !== input.sourcePiSessionId ||
+          row.source_pi_session_path !== input.sourcePiSessionPath ||
+          row.expected_leaf_id !== input.expectedLeafId ||
+          row.initiated_by !== input.initiatedBy ||
+          row.title !== input.title ||
+          row.source_snapshot_json !== snapshotJson ||
+          row.prestaged_attachments_json !== attachmentsJson
+        )
+          throw new Error('clone_operation_mismatch');
+        return existing;
+      }
+      this.assertRobotWorkAdmission();
+      const topic = this.getTopic(input.sourceTopicId);
+      const robotState = this.getRobotState(input.sourceTopicId);
+      const autoRun = this.getTopicAutoRun(input.sourceTopicId);
+      if (
+        !topic ||
+        topic.status !== 'open' ||
+        robotState?.activity !== 'idle' ||
+        autoRun?.status === 'running' ||
+        this.countActionablePostDispatches(input.sourceTopicId) > 0 ||
+        this.hasCompactionFence(input.sourceTopicId)
+      )
+        throw new Error('clone_conflict');
+      const now = nowIso();
+      this.db
+        .prepare(
+          `insert into clone_operations
+        (id, source_topic_id, source_session_id, source_pi_session_id, source_pi_session_path,
+         expected_leaf_id, source_snapshot_json, initiated_by, title, status,
+         prestaged_attachments_json, attempt_count, created_at)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, 0, ?)`
+        )
+        .run(
+          input.id,
+          input.sourceTopicId,
+          input.sourceSessionId,
+          input.sourcePiSessionId,
+          input.sourcePiSessionPath,
+          input.expectedLeafId,
+          snapshotJson,
+          input.initiatedBy,
+          input.title,
+          attachmentsJson,
+          now
+        );
+      return this.getCloneOperation(input.id) as CloneOperation;
+    })();
+  }
+
+  listPendingCloneOperationRows(limit = 10): CloneOperationRow[] {
+    return this.db
+      .prepare(
+        "select * from clone_operations where status = 'pending' and (next_attempt_at is null or next_attempt_at <= ?) order by created_at asc limit ?"
+      )
+      .all(nowIso(), Math.max(1, Math.trunc(limit))) as CloneOperationRow[];
+  }
+
+  requeueRunningCloneOperations(): number {
+    return this.db
+      .prepare("update clone_operations set status = 'pending', next_attempt_at = null where status = 'running'")
+      .run().changes;
+  }
+
+  claimCloneOperation(id: string): CloneOperationRow | null {
+    const now = nowIso();
+    const result = this.db
+      .prepare(
+        "update clone_operations set status = 'running', started_at = coalesce(started_at, ?), attempt_count = attempt_count + 1, next_attempt_at = null where id = ? and status = 'pending' and (next_attempt_at is null or next_attempt_at <= ?)"
+      )
+      .run(now, id, now);
+    return result.changes === 1
+      ? (this.db.prepare('select * from clone_operations where id = ?').get(id) as CloneOperationRow)
+      : null;
+  }
+
+  requeueCloneOperation(id: string, message: string, retryAt: string): void {
+    this.db
+      .prepare(
+        "update clone_operations set status = 'pending', error_message = ?, next_attempt_at = ? where id = ? and status = 'running'"
+      )
+      .run(message.slice(0, 1000), retryAt, id);
+  }
+
+  failCloneOperation(id: string, message: string): void {
+    this.db
+      .prepare(
+        "update clone_operations set status = 'failed', error_message = ?, next_attempt_at = null, finished_at = ? where id = ? and status = 'running'"
+      )
+      .run(message.slice(0, 1000), nowIso(), id);
+  }
+
+  markCloneNeedsManualReview(id: string, message: string): void {
+    this.db
+      .prepare(
+        "update clone_operations set status = 'needs_manual_review', error_message = ?, next_attempt_at = null where id = ? and status = 'running'"
+      )
+      .run(message.slice(0, 1000), id);
+  }
+
+  finalizeCloneAttachmentPaths(id: string, fromRoot: string, toRoot: string): void {
+    this.db.transaction(() => {
+      const row = this.db.prepare('select prestaged_attachments_json from clone_operations where id = ?').get(id) as {
+        prestaged_attachments_json: string;
+      };
+      const prestaged = JSON.parse(
+        row.prestaged_attachments_json
+      ) as EnqueueCloneOperationInput['prestagedAttachments'];
+      const normalizedFrom = `${fromRoot.replace(/\/$/, '')}/`;
+      const normalizedTo = `${toRoot.replace(/\/$/, '')}/`;
+      const finalized = prestaged.map((attachment) => ({
+        ...attachment,
+        storagePath: attachment.storagePath.startsWith(normalizedFrom)
+          ? `${normalizedTo}${attachment.storagePath.slice(normalizedFrom.length)}`
+          : attachment.storagePath,
+      }));
+      for (let index = 0; index < prestaged.length; index += 1) {
+        if (prestaged[index]!.storagePath !== finalized[index]!.storagePath) {
+          this.db
+            .prepare('update attachments set storage_path = ? where storage_path = ?')
+            .run(finalized[index]!.storagePath, prestaged[index]!.storagePath);
+          this.db
+            .prepare('update file_blobs set storage_path = ?, updated_at = ? where storage_path = ?')
+            .run(finalized[index]!.storagePath, nowIso(), prestaged[index]!.storagePath);
+        }
+      }
+      this.db
+        .prepare('update clone_operations set prestaged_attachments_json = ? where id = ?')
+        .run(JSON.stringify(finalized), id);
+    })();
+  }
+
+  materializeCloneOperation(
+    id: string,
+    result: {
+      child_session_id: string;
+      child_session_path: string;
+      inherited_generation: number;
+      active_entry_ids: string[];
+    }
+  ): CloneOperation {
+    return this.db.transaction(() => {
+      const row = this.db.prepare('select * from clone_operations where id = ?').get(id) as CloneOperationRow;
+      if (row.child_topic_id) return this.getCloneOperation(id) as CloneOperation;
+      if (row.status !== 'running') throw new Error('clone operation is not running');
+      const sourceTopic = this.getTopic(row.source_topic_id);
+      if (!sourceTopic) throw new Error('source topic not found');
+      const sourcePosts = this.db
+        .prepare('select * from posts where topic_id = ? order by rowid asc')
+        .all(row.source_topic_id) as PostRow[];
+      const snapshot = JSON.parse(row.source_snapshot_json) as CloneProjectionSnapshot;
+      const currentSnapshot = this.buildCloneProjectionSnapshot(row.source_topic_id, snapshot.activeEntryIds);
+      if (JSON.stringify(snapshot) !== JSON.stringify(currentSnapshot))
+        throw new Error('source topic changed before clone materialization');
+      if (
+        !result.child_session_id ||
+        !result.child_session_path ||
+        !Number.isInteger(result.inherited_generation) ||
+        result.inherited_generation < 0 ||
+        !Array.isArray(result.active_entry_ids) ||
+        !result.active_entry_ids.every((entryId) => typeof entryId === 'string') ||
+        result.active_entry_ids.length < snapshot.activeEntryIds.length ||
+        snapshot.activeEntryIds.some((entryId, index) => result.active_entry_ids[index] !== entryId) ||
+        snapshot.activeEntryIds.at(-1) !== row.expected_leaf_id
+      )
+        throw new Error('cloned canonical branch does not match the accepted source snapshot');
+      const first = sourcePosts[0];
+      if (!first) throw new Error('source topic has no posts');
+      const created = this.createTopic({
+        forumId: sourceTopic.forum_id,
+        title: row.title,
+        body: first.body,
+        authorId: first.author_id,
+        robotMode: sourceTopic.robot_mode as 'auto' | 'mention' | 'off',
+        autoCompactEnabled: Boolean(sourceTopic.auto_compact_enabled),
+        silent: Boolean(first.silent),
+      });
+      if (first.follow_up) this.db.prepare('update posts set follow_up = 1 where id = ?').run(created.post.id);
+      const childSession = this.ensureSession({ topicId: created.topic.id });
+      const postMap = new Map<string, string>([[first.id, created.post.id]]);
+      for (const source of sourcePosts.slice(1)) {
+        const copied = this.createPost({
+          topicId: created.topic.id,
+          authorId: source.author_id,
+          body: source.body,
+          parentPostId: source.parent_post_id ? (postMap.get(source.parent_post_id) ?? null) : null,
+          silent: Boolean(source.silent),
+        });
+        if (source.follow_up) this.db.prepare('update posts set follow_up = 1 where id = ?').run(copied.id);
+        postMap.set(source.id, copied.id);
+      }
+      const activeIds = new Set(result.active_entry_ids);
+      for (const sourceLink of snapshot.links) {
+        if (!activeIds.has(sourceLink.entryId)) throw new Error('cloned canonical branch is incomplete');
+        const mappedPostId = postMap.get(sourceLink.postId);
+        if (!mappedPostId) throw new Error('clone post mapping is incomplete');
+        const metadata = sourceLink.metadata ? { ...sourceLink.metadata } : null;
+        if (metadata && Array.isArray(metadata['contributorPostIds'])) {
+          metadata['contributorPostIds'] = metadata['contributorPostIds'].map((postId) =>
+            typeof postId === 'string' ? (postMap.get(postId) ?? postId) : postId
+          );
+        }
+        this.createPiMessageLink({
+          piSessionId: result.child_session_id,
+          piMessageId: sourceLink.entryId,
+          postId: mappedPostId,
+          role: sourceLink.role,
+          metadata,
+        });
+      }
+      const prestaged = JSON.parse(
+        row.prestaged_attachments_json
+      ) as EnqueueCloneOperationInput['prestagedAttachments'];
+      for (const attachment of prestaged) {
+        const postId = postMap.get(attachment.sourcePostId);
+        if (!postId) throw new Error('clone attachment post mapping is incomplete');
+        this.createAttachment({
+          postId,
+          filename: attachment.filename,
+          mimeType: attachment.mimeType,
+          sizeBytes: attachment.sizeBytes,
+          storagePath: attachment.storagePath,
+          sha256: attachment.sha256,
+        });
+      }
+      this.upsertPiSessionLink({
+        piSessionId: result.child_session_id,
+        piSessionPath: result.child_session_path,
+        topicId: created.topic.id,
+        sessionId: childSession.id,
+        cwd: this.getForum(sourceTopic.forum_id)?.cwd ?? null,
+        kind: 'normal',
+        metadata: { source: 'forum-clone', operationId: id },
+        parentPiSessionId: row.source_pi_session_id,
+        parentPiSessionPath: row.source_pi_session_path,
+        lineageKind: 'clone',
+        lineageSource: 'forum',
+      });
+      const now = nowIso();
+      this.db
+        .prepare(
+          `insert into post_dispatch_generations(topic_id, generation, updated_at) values (?, ?, ?)
+        on conflict(topic_id) do update set generation = excluded.generation, updated_at = excluded.updated_at`
+        )
+        .run(created.topic.id, Math.max(0, Math.trunc(result.inherited_generation)), now);
+      this.setSessionLastDispatchedPostId(childSession.id, postMap.get(sourcePosts.at(-1)!.id) ?? null);
+      this.upsertRobotState({
+        topicId: created.topic.id,
+        sessionId: childSession.id,
+        activity: 'idle',
+        currentPlanId: null,
+      });
+      this.db
+        .prepare(
+          'update clone_operations set agent_result_json = ?, child_topic_id = ?, child_session_id = ?, child_session_path = ?, error_message = null where id = ?'
+        )
+        .run(JSON.stringify(result), created.topic.id, result.child_session_id, result.child_session_path, id);
+      return this.getCloneOperation(id) as CloneOperation;
+    })();
+  }
+
+  completeCloneOperation(id: string): void {
+    this.db
+      .prepare(
+        "update clone_operations set status = 'succeeded', error_message = null, next_attempt_at = null, finished_at = ? where id = ? and status = 'running'"
+      )
+      .run(nowIso(), id);
+  }
+
   getForkOperation(id: string): ForkOperation | null {
     const row = this.db.prepare('select * from fork_operations where id = ?').get(id) as ForkOperationRow | undefined;
     return row ? mapForkOperationRowToDomain(row) : null;
@@ -2971,7 +3403,8 @@ export class ForumStore {
   hasCompactionFence(topicId: string): boolean {
     // Topic mutation routes use this shared fence. A forum-native fork must
     // freeze the source just as strictly as compaction until materialization is acknowledged.
-    if (this.hasActiveCompactionOperation(topicId) || this.hasForkFence(topicId)) return true;
+    if (this.hasActiveCompactionOperation(topicId) || this.hasForkFence(topicId) || this.hasCloneFence(topicId))
+      return true;
     const row = this.db
       .prepare(
         `select 1 from compaction_operations c
@@ -3345,29 +3778,36 @@ export class ForumStore {
   }
 
   listPostDispatchesForTopic(topicId: string): PostDispatchRow[] {
-    return this.db.prepare('select * from post_dispatches where topic_id = ? order by created_at asc, rowid asc')
+    return this.db
+      .prepare('select * from post_dispatches where topic_id = ? order by created_at asc, rowid asc')
       .all(topicId) as PostDispatchRow[];
   }
 
   listPostDispatchAttempts(dispatchIds: string[], limit = 100): PostDispatchAttemptRow[] {
     if (dispatchIds.length === 0) return [];
-    return this.db.prepare(
-      `select * from post_dispatch_attempts where dispatch_id in (select value from json_each(?))
+    return this.db
+      .prepare(
+        `select * from post_dispatch_attempts where dispatch_id in (select value from json_each(?))
        order by created_at desc, rowid desc limit ?`
-    ).all(JSON.stringify(dispatchIds), Math.max(1, Math.min(200, Math.trunc(limit)))) as PostDispatchAttemptRow[];
+      )
+      .all(JSON.stringify(dispatchIds), Math.max(1, Math.min(200, Math.trunc(limit)))) as PostDispatchAttemptRow[];
   }
 
   private nextPostDispatchAuditAttemptNumber(dispatchId: string): number {
-    const row = this.db.prepare(
-      "select coalesce(max(attempt_number), 0) + 1 as attempt_number from post_dispatch_attempts where dispatch_id = ? and event = 'claimed'"
-    ).get(dispatchId) as { attempt_number: number };
+    const row = this.db
+      .prepare(
+        "select coalesce(max(attempt_number), 0) + 1 as attempt_number from post_dispatch_attempts where dispatch_id = ? and event = 'claimed'"
+      )
+      .get(dispatchId) as { attempt_number: number };
     return row.attempt_number;
   }
 
   private claimedPostDispatchAuditAttemptNumber(dispatchId: string, claimToken: string, fallback: number): number {
-    const row = this.db.prepare(
-      "select attempt_number from post_dispatch_attempts where dispatch_id = ? and event = 'claimed' and claim_token = ? order by rowid desc limit 1"
-    ).get(dispatchId, claimToken) as { attempt_number: number } | undefined;
+    const row = this.db
+      .prepare(
+        "select attempt_number from post_dispatch_attempts where dispatch_id = ? and event = 'claimed' and claim_token = ? order by rowid desc limit 1"
+      )
+      .get(dispatchId, claimToken) as { attempt_number: number } | undefined;
     return row?.attempt_number ?? fallback;
   }
 
@@ -3381,17 +3821,29 @@ export class ForumStore {
     claimToken?: string | null;
     createdAt: string;
   }): void {
-    const sanitizedError = input.errorMessage
-      ?.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, 500) || null;
-    this.db.prepare(
-      `insert into post_dispatch_attempts
+    const sanitizedError =
+      input.errorMessage
+        ?.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 500) || null;
+    this.db
+      .prepare(
+        `insert into post_dispatch_attempts
        (id, dispatch_id, attempt_number, event, classification, retry_at, error_message, claim_token, created_at)
        values (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(randomUUID(), input.dispatchId, input.attemptNumber, input.event, input.classification ?? null,
-      input.retryAt ?? null, sanitizedError, input.claimToken ?? null, input.createdAt);
+      )
+      .run(
+        randomUUID(),
+        input.dispatchId,
+        input.attemptNumber,
+        input.event,
+        input.classification ?? null,
+        input.retryAt ?? null,
+        sanitizedError,
+        input.claimToken ?? null,
+        input.createdAt
+      );
   }
 
   getActiveTurnOrigin(topicId: string): ActiveTurnOriginRow | null {
@@ -3609,8 +4061,15 @@ export class ForumStore {
               "update post_dispatches set status = 'superseded', next_attempt_at = null, error_message = ?, updated_at = ? where id = ? and status in ('pending', 'dispatching')"
             )
             .run(reason, now, row.id);
-          if (result.changes === 1) this.insertPostDispatchAttempt({ dispatchId: row.id,
-            attemptNumber: row.attempt_count, event: 'superseded', classification: 'lifecycle', errorMessage: reason, createdAt: now });
+          if (result.changes === 1)
+            this.insertPostDispatchAttempt({
+              dispatchId: row.id,
+              attemptNumber: row.attempt_count,
+              event: 'superseded',
+              classification: 'lifecycle',
+              errorMessage: reason,
+              createdAt: now,
+            });
         }
         this.db
           .prepare(
@@ -3637,8 +4096,13 @@ export class ForumStore {
       if (result.changes !== 1) return null;
       const claimed = this.getPostDispatch(id);
       if (!claimed || claimed.claim_token !== claimToken) return null;
-      this.insertPostDispatchAttempt({ dispatchId: id, attemptNumber: this.nextPostDispatchAuditAttemptNumber(id),
-        event: 'claimed', claimToken, createdAt: now });
+      this.insertPostDispatchAttempt({
+        dispatchId: id,
+        attemptNumber: this.nextPostDispatchAuditAttemptNumber(id),
+        event: 'claimed',
+        claimToken,
+        createdAt: now,
+      });
       return claimed;
     })();
   }
@@ -3677,9 +4141,14 @@ export class ForumStore {
         )
         .run(now, now, id, claimToken);
       const row = this.getPostDispatch(id);
-      if (result.changes === 1 && row) this.insertPostDispatchAttempt({ dispatchId: id,
-        attemptNumber: this.claimedPostDispatchAuditAttemptNumber(id, claimToken, row.attempt_count),
-        event: 'dispatched', claimToken, createdAt: now });
+      if (result.changes === 1 && row)
+        this.insertPostDispatchAttempt({
+          dispatchId: id,
+          attemptNumber: this.claimedPostDispatchAuditAttemptNumber(id, claimToken, row.attempt_count),
+          event: 'dispatched',
+          claimToken,
+          createdAt: now,
+        });
       return row;
     })();
   }
@@ -3690,12 +4159,21 @@ export class ForumStore {
   ): PostDispatchRow | null {
     const now = nowIso();
     return this.db.transaction(() => {
-      const result = this.db.prepare(
-        `update post_dispatches set status = 'superseded', next_attempt_at = null, error_message = ?, updated_at = ? where id = ? and status in ('pending', 'dispatching')`
-      ).run(reason, now, id);
+      const result = this.db
+        .prepare(
+          `update post_dispatches set status = 'superseded', next_attempt_at = null, error_message = ?, updated_at = ? where id = ? and status in ('pending', 'dispatching')`
+        )
+        .run(reason, now, id);
       const row = this.getPostDispatch(id);
-      if (result.changes === 1 && row) this.insertPostDispatchAttempt({ dispatchId: id,
-        attemptNumber: row.attempt_count, event: 'superseded', classification: 'lifecycle', errorMessage: reason, createdAt: now });
+      if (result.changes === 1 && row)
+        this.insertPostDispatchAttempt({
+          dispatchId: id,
+          attemptNumber: row.attempt_count,
+          event: 'superseded',
+          classification: 'lifecycle',
+          errorMessage: reason,
+          createdAt: now,
+        });
       return row;
     })();
   }
@@ -3703,14 +4181,23 @@ export class ForumStore {
   markPostDispatchAbandoned(id: string, reason: string): PostDispatchRow | null {
     const now = nowIso();
     return this.db.transaction(() => {
-      const result = this.db.prepare(
-        `update post_dispatches set status = 'abandoned', next_attempt_at = null, error_message = ?, updated_at = ?
+      const result = this.db
+        .prepare(
+          `update post_dispatches set status = 'abandoned', next_attempt_at = null, error_message = ?, updated_at = ?
          where id = ? and status in ('pending', 'dispatching') and generation =
            (select generation from post_dispatch_generations where topic_id = post_dispatches.topic_id)`
-      ).run(reason, now, id);
+        )
+        .run(reason, now, id);
       const row = this.getPostDispatch(id);
-      if (result.changes === 1 && row) this.insertPostDispatchAttempt({ dispatchId: id,
-        attemptNumber: row.attempt_count, event: 'abandoned', classification: 'lifecycle', errorMessage: reason, createdAt: now });
+      if (result.changes === 1 && row)
+        this.insertPostDispatchAttempt({
+          dispatchId: id,
+          attemptNumber: row.attempt_count,
+          event: 'abandoned',
+          classification: 'lifecycle',
+          errorMessage: reason,
+          createdAt: now,
+        });
       return row;
     })();
   }
@@ -3734,11 +4221,17 @@ export class ForumStore {
         )
         .run(status, opts?.retryAt ?? null, message.slice(0, 1000), now, id, claimToken);
       const row = this.getPostDispatch(id);
-      if (result.changes === 1 && row) this.insertPostDispatchAttempt({ dispatchId: id,
-        attemptNumber: this.claimedPostDispatchAuditAttemptNumber(id, claimToken, row.attempt_count),
-        event: opts?.retryAt ? 'retry_scheduled' : 'terminal_failure',
-        classification: opts?.classification ?? 'application', retryAt: opts?.retryAt ?? null,
-        errorMessage: message, claimToken, createdAt: now });
+      if (result.changes === 1 && row)
+        this.insertPostDispatchAttempt({
+          dispatchId: id,
+          attemptNumber: this.claimedPostDispatchAuditAttemptNumber(id, claimToken, row.attempt_count),
+          event: opts?.retryAt ? 'retry_scheduled' : 'terminal_failure',
+          classification: opts?.classification ?? 'application',
+          retryAt: opts?.retryAt ?? null,
+          errorMessage: message,
+          claimToken,
+          createdAt: now,
+        });
       return row;
     })();
   }
@@ -3760,17 +4253,28 @@ export class ForumStore {
     const now = nowIso();
     const reason = 'Cancelled by a newer topic dispatch generation.';
     return this.db.transaction(() => {
-      const rows = this.db.prepare(
-        `select * from post_dispatches where status in ('pending', 'dispatching') and generation <> coalesce(
+      const rows = this.db
+        .prepare(
+          `select * from post_dispatches where status in ('pending', 'dispatching') and generation <> coalesce(
           (select generation from post_dispatch_generations where topic_id = post_dispatches.topic_id), 0)`
-      ).all() as PostDispatchRow[];
-      const result = this.db.prepare(
-        `update post_dispatches set status = 'superseded', next_attempt_at = null,
+        )
+        .all() as PostDispatchRow[];
+      const result = this.db
+        .prepare(
+          `update post_dispatches set status = 'superseded', next_attempt_at = null,
         error_message = ?, updated_at = ? where status in ('pending', 'dispatching') and generation <> coalesce(
           (select generation from post_dispatch_generations where topic_id = post_dispatches.topic_id), 0)`
-      ).run(reason, now);
-      for (const row of rows) this.insertPostDispatchAttempt({ dispatchId: row.id, attemptNumber: row.attempt_count,
-        event: 'superseded', classification: 'lifecycle', errorMessage: reason, createdAt: now });
+        )
+        .run(reason, now);
+      for (const row of rows)
+        this.insertPostDispatchAttempt({
+          dispatchId: row.id,
+          attemptNumber: row.attempt_count,
+          event: 'superseded',
+          classification: 'lifecycle',
+          errorMessage: reason,
+          createdAt: now,
+        });
       return result.changes;
     })();
   }
@@ -3782,9 +4286,9 @@ export class ForumStore {
     const now = nowIso();
     return this.db.transaction(() => {
       this.ensurePostDispatchGeneration(topicId, now);
-      const pending = this.db.prepare(
-        "select * from post_dispatches where topic_id = ? and status in ('pending', 'dispatching')"
-      ).all(topicId) as PostDispatchRow[];
+      const pending = this.db
+        .prepare("select * from post_dispatches where topic_id = ? and status in ('pending', 'dispatching')")
+        .all(topicId) as PostDispatchRow[];
       this.db
         .prepare(`update post_dispatch_generations set generation = generation + 1, updated_at = ? where topic_id = ?`)
         .run(now, topicId);
@@ -3794,8 +4298,15 @@ export class ForumStore {
         error_message = ?, updated_at = ? where topic_id = ? and status in ('pending', 'dispatching')`
         )
         .run(reason.slice(0, 1000), now, topicId).changes;
-      for (const row of pending) this.insertPostDispatchAttempt({ dispatchId: row.id,
-        attemptNumber: row.attempt_count, event: 'superseded', classification: 'lifecycle', errorMessage: reason, createdAt: now });
+      for (const row of pending)
+        this.insertPostDispatchAttempt({
+          dispatchId: row.id,
+          attemptNumber: row.attempt_count,
+          event: 'superseded',
+          classification: 'lifecycle',
+          errorMessage: reason,
+          createdAt: now,
+        });
       this.db.prepare('delete from active_turn_origins where topic_id = ?').run(topicId);
       this.db
         .prepare(

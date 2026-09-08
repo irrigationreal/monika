@@ -91,9 +91,14 @@ export class ForumForkLedger {
   }
 
   async hasSourceFence(sessionId) {
+    return this.hasSourceFenceExcept(sessionId, null);
+  }
+
+  async hasSourceFenceExcept(sessionId, operationId) {
     return (await this.records()).some((record) =>
       record.source_session_id === sessionId &&
-      (record.state === 'creating' || record.state === 'manual_recovery' || record.state === 'child_created' || record.state === 'canonical_completed' || (record.state === 'failed' && record.child_session_id))
+      record.operation_id !== operationId &&
+      (record.state === 'creating' || record.state === 'manual_recovery' || record.state === 'child_created' || record.state === 'canonical_completed' || (record.state === 'failed' && (record.child_session_id || record.child_session_path)))
     );
   }
 

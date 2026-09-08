@@ -24,6 +24,7 @@ import type {
 import type { AssistantProjectionRow } from './db';
 import type {
   EchsCancellationResult,
+  EchsCloneSnapshot,
   EchsConversationRecord,
   EchsEvent,
   EchsForkBoundarySnapshot,
@@ -685,6 +686,28 @@ export class EchsBridge {
     const response = await this.client.getConversationContext(opened.conversationId);
     const context = (response as any)?.context ?? response;
     return typeof context?.leafEntryId === 'string' ? context.leafEntryId : null;
+  }
+
+  async getTopicCloneSnapshot(topicId: string): Promise<EchsCloneSnapshot> {
+    const opened = await this.openTopicConversation(topicId);
+    return this.client.getCloneSnapshot(opened.conversationId);
+  }
+
+  async cloneTopicConversation(
+    topicId: string,
+    opts: { operationId: string; expectedLeafId: string }
+  ): Promise<{
+    child_session_id: string;
+    child_session_path: string;
+    inherited_generation: number;
+    active_entry_ids: string[];
+  }> {
+    const opened = await this.openTopicConversation(topicId);
+    return this.client.cloneConversation(opened.conversationId, opts);
+  }
+
+  async acknowledgeClone(operationId: string, childSessionId: string): Promise<void> {
+    await this.client.acknowledgeForumClone(operationId, childSessionId);
   }
 
   async getTopicForkBoundarySnapshot(topicId: string): Promise<EchsForkBoundarySnapshot> {

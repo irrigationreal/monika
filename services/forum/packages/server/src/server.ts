@@ -92,6 +92,7 @@ import {
 } from './runtimeConfig';
 import { AnalyticsService } from './services/analyticsService';
 import { AutoRunDirector } from './services/autoRunDirector';
+import { CloneService } from './services/cloneService';
 import { CompactionService } from './services/compactionService';
 import { DeploymentAdmissionCoordinator } from './services/deploymentAdmissionCoordinator';
 import { actionablePostDispatchBlocker, nonIdleRobotStateBlocker } from './services/deploymentBlockerDiagnostics';
@@ -293,6 +294,17 @@ const piSessionSync = MONIKA_PI_SYNC_ENABLED
       assistantProjections: codex.assistantProjectionService,
     })
   : null;
+const cloneService = new CloneService(store, codex, {
+  refresh: piSessionSync
+    ? async (topicId) => {
+        const link = store.getPiSessionLinkByTopic(topicId);
+        if (!link) throw new Error('Linked canonical Pi session is unavailable');
+        const result = await piSessionSync.refreshSession(link.pi_session_id);
+        if (!result.ok || result.sessionsChecked !== 1)
+          throw new Error(result.ok ? 'Linked canonical Pi session could not be exported' : result.message);
+      }
+    : undefined,
+});
 const forkService = new ForkService(store, codex, postDispatchService, {
   refreshBoundaries: piSessionSync
     ? async (topicId) => {
@@ -320,6 +332,8 @@ const getForumDeploymentBlockers = (includePiSync: boolean) => {
   if (activeCompactions > 0) blockers.push({ code: 'active_compactions', count: activeCompactions });
   const activeForks = store.countPendingOrRunningForkOperations();
   if (activeForks > 0) blockers.push({ code: 'active_forks', count: activeForks });
+  const activeClones = store.countPendingOrRunningCloneOperations();
+  if (activeClones > 0) blockers.push({ code: 'active_clones', count: activeClones });
   const blockingRobotStates = nonIdleRobotStateBlocker(store);
   if (blockingRobotStates) blockers.push(blockingRobotStates);
   return blockers;
@@ -354,10 +368,11 @@ try {
   throw err;
 }
 const recoveredCompactions = compactionService.start();
+const recoveredClones = cloneService.start();
 const recoveredForks = forkService.start();
 // Agentd quarantines unacknowledged children. Finish any immediately due
 // materialization before sync can discover acknowledged children or dispatch can catch up.
-await forkService.waitForIdle();
+await Promise.all([cloneService.waitForIdle(), forkService.waitForIdle()]);
 piSessionSync?.start();
 postDispatchService.start();
 if (recoveredCompactions > 0) {
@@ -365,6 +380,8 @@ if (recoveredCompactions > 0) {
 }
 if (recoveredForks > 0)
   console.warn(`Requeued ${recoveredForks} interrupted fork operation(s) for canonical reconciliation.`);
+if (recoveredClones > 0)
+  console.warn(`Requeued ${recoveredClones} interrupted clone operation(s) for canonical reconciliation.`);
 
 const app = Fastify({ logger: true, bodyLimit: MAX_REQUEST_BODY_BYTES, trustProxy: TRUST_PROXY });
 const access = createAccessHelpers(app, store);
@@ -376,9 +393,10 @@ app.addHook('onClose', async () => {
   deploymentAdmission.close();
   const postDispatchStop = postDispatchService.stop();
   const compactionStop = compactionService.stop();
+  const cloneStop = cloneService.stop();
   const forkStop = forkService.stop();
   await piSessionSync?.waitForIdle();
-  await Promise.all([postDispatchStop, compactionStop, forkStop]);
+  await Promise.all([postDispatchStop, compactionStop, cloneStop, forkStop]);
   await autoRunDirector.stop();
   await codex.stop();
   if (bus instanceof RedisStreamBus) {
@@ -513,6 +531,7 @@ const registerApiRoutes: FastifyPluginAsync = async (api) => {
     bus,
     postDispatchService,
     compactionService,
+    cloneService,
     forkService,
     access,
     webIdentityId: bootstrapResult.webIdentityId,
