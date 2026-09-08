@@ -16,6 +16,7 @@ import {
   compactConversation,
   ConversationConflictError,
 } from "./compaction-operation.mjs";
+import { subagentRunBlocker } from './deploy-blockers.mjs';
 import {
   ForumForkConflictError,
   ForumForkLedger,
@@ -640,12 +641,22 @@ async function deployState() {
   const backgroundRuns = snapshot.active_count;
   const effectsUnknownRuns = snapshot.effects_unknown_count ?? 0;
   if (backgroundRuns > 0)
-    blockers.push({ code: "active_subagent_runs", count: backgroundRuns });
+    blockers.push(subagentRunBlocker(
+      "active_subagent_runs",
+      snapshot.runs,
+      backgroundRuns,
+      (run) => Boolean(run.blocking),
+    ));
   // Effects uncertainty is independent from process ownership. A terminal run
   // remains quiescent, but deployment fails closed until the effects evidence
   // is reconciled or the audited operator endpoint changes the durable state.
   if (effectsUnknownRuns > 0)
-    blockers.push({ code: "subagent_effects_unknown", count: effectsUnknownRuns });
+    blockers.push(subagentRunBlocker(
+      "subagent_effects_unknown",
+      snapshot.runs,
+      effectsUnknownRuns,
+      (run) => run.lifecycle_artifact_version >= 4 && run.effects_state === "unknown",
+    ));
   if (externalLeases.length > 0)
     blockers.push({
       code: "interactive_pi_sessions",

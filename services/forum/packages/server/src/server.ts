@@ -94,6 +94,7 @@ import { AnalyticsService } from './services/analyticsService';
 import { AutoRunDirector } from './services/autoRunDirector';
 import { CompactionService } from './services/compactionService';
 import { DeploymentAdmissionCoordinator } from './services/deploymentAdmissionCoordinator';
+import { actionablePostDispatchBlocker, nonIdleRobotStateBlocker } from './services/deploymentBlockerDiagnostics';
 import { getEmailService } from './services/emailService';
 import { FileStorageMaintenance } from './services/fileStorageMaintenance';
 import { ForkService } from './services/forkService';
@@ -313,18 +314,14 @@ const getForumDeploymentBlockers = (includePiSync: boolean) => {
   if (activeTurns > 0) blockers.push({ code: 'active_robot_turns', count: activeTurns });
   if (queuedTurns > 0) blockers.push({ code: 'queued_robot_turns', count: queuedTurns });
   if (includePiSync && piSessionSync?.getStatus().running) blockers.push({ code: 'pi_session_sync_running' });
-  const actionableDispatches = store.countGlobalActionablePostDispatches();
-  if (actionableDispatches > 0) blockers.push({ code: 'actionable_post_dispatches', count: actionableDispatches });
+  const actionableDispatches = actionablePostDispatchBlocker(store);
+  if (actionableDispatches) blockers.push(actionableDispatches);
   const activeCompactions = store.countActiveCompactionOperations();
   if (activeCompactions > 0) blockers.push({ code: 'active_compactions', count: activeCompactions });
   const activeForks = store.countPendingOrRunningForkOperations();
   if (activeForks > 0) blockers.push({ code: 'active_forks', count: activeForks });
-  const blockingRobotStates = store
-    .listRobotStates()
-    .filter((state) => !['idle', 'stopped', 'error'].includes(state.activity));
-  if (blockingRobotStates.length > 0) {
-    blockers.push({ code: 'non_idle_robot_states', count: blockingRobotStates.length });
-  }
+  const blockingRobotStates = nonIdleRobotStateBlocker(store);
+  if (blockingRobotStates) blockers.push(blockingRobotStates);
   return blockers;
 };
 

@@ -186,13 +186,24 @@ For another reverse proxy, preserve:
 ## Updates and recovery
 
 Do not recreate the forum or Monika container in the middle of Pi work. The root
-[`deploy-if-safe`](../../../scripts/deploy-if-safe) flow acquires the forum's expiring process-local admission lease before backup or drain,
-then revalidates and renews the same owned lease immediately before Compose. Admission pauses/waits Pi sync and checks
-current actionable durable dispatch, pending/running fork, compaction, tracked direct agent/model work, projection,
-agentd, memstore, interactive ownership, and delegated work before replacing containers. A lost/expired renewal fails
-closed. Compose begins while the old forum lease exists; forum replacement clears that process-local fence, so the
-post-readiness cancel is an idempotent no-op. Monika-only and backup-only explicitly cancel the surviving lease, and the
-trap uses bounded best-effort cancellation on abort.
+[`deploy-if-safe`](../../../scripts/deploy-if-safe) flow acquires the forum's expiring process-local admission lease
+before backup or drain, then revalidates and renews the same owned lease immediately before Compose. Admission
+pauses/waits Pi sync and checks current actionable durable dispatch, pending/running fork, compaction, tracked direct
+agent/model work, projection, agentd, memstore, interactive ownership, and delegated work before replacing containers.
+Actionable-dispatch and non-idle-robot blockers preserve aggregate `code`/`count` and include at most 20 deterministic
+opaque identifiers/state items plus `item_limit`, `truncated`, and `omitted_count`; they exclude titles, bodies,
+prompts, errors, actors, paths, attachments, and origin data. Agentd's active/effects-unknown subagent blockers use the
+same cap metadata and expose only run key/ID plus execution/effects state. A lost/expired renewal fails closed. Compose
+begins while the old forum lease exists; forum replacement clears that process-local fence, so the post-readiness cancel
+is an idempotent no-op. Monika-only and backup-only explicitly cancel the surviving lease, and the trap uses bounded
+best-effort cancellation on abort.
+
+Unresolved Stop Robot `stopping`/`uncertain` state is checked at startup and on an unref'd, single-flight loop that
+starts a batch about every 30 seconds. Each pass concurrently checks at most 20 oldest-attempted records through only
+agentd's canonical cancellation GET; ambiguous null/404 responses rotate to the back without changing their activity.
+Results and failures apply only while both the observed generation and unresolved activity remain current. The pass
+never opens or loads conversations, creates cancellation operations, consumes results, or dispatches work, and forum
+shutdown joins an in-flight pass before closing SQLite.
 
 See:
 

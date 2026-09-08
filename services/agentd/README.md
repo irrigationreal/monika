@@ -89,6 +89,11 @@ null timestamps and conservative counts before the first successful scan.
 size of durable claimed and pending ownership records and can temporarily include
 expired records. Use `GET /v1/admin/quiescence`, not health, for authoritative
 quiescence; that endpoint freshly prunes and reports both kinds of interactive blocker.
+Active-subagent and effects-unknown blockers preserve aggregate `code`/`count` and
+include at most 20 deterministically ordered opaque items containing only
+`run_key`, `run_id`, `execution_state`, and `effects_state`. `item_limit`,
+`truncated`, and `omitted_count` describe capping; paths, tasks, and output are
+never included.
 
 Conversation records expose canonical `session_id` and `session_path`. When both
 are supplied on reopen, agentd opens and validates exactly that canonical path:

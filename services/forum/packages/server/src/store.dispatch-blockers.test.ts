@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { migrate } from './db';
+import { actionablePostDispatchBlocker, nonIdleRobotStateBlocker } from './services/deploymentBlockerDiagnostics';
 import { ForumStore } from './store';
 
 describe('global actionable durable dispatch blocker', () => {
@@ -76,6 +77,52 @@ describe('global actionable durable dispatch blocker', () => {
     expect(store.countPendingOrRunningForkOperations()).toBe(1);
     db.prepare("update fork_operations set status = 'needs_manual_review' where id = ?").run(operation.id);
     expect(store.countPendingOrRunningForkOperations()).toBe(0);
+  });
+
+  it('returns deterministic capped opaque diagnostics for dispatch and robot blockers', () => {
+    for (let index = 0; index < 25; index += 1) {
+      const current = fixture(`Sensitive title ${index}`);
+      store.createPostDispatch({
+        topicId: current.topic.id,
+        postId: current.post.id,
+        sessionId: current.session.id,
+      });
+      store.upsertRobotState({
+        topicId: current.topic.id,
+        sessionId: current.session.id,
+        activity: index % 2 === 0 ? 'thinking' : 'waiting',
+        currentPlanId: null,
+      });
+    }
+
+    const dispatchBlocker = actionablePostDispatchBlocker(store);
+    expect(dispatchBlocker).toMatchObject({
+      code: 'actionable_post_dispatches',
+      count: 25,
+      item_limit: 20,
+      truncated: true,
+      omitted_count: 5,
+    });
+    const dispatchItems = dispatchBlocker?.['items'] as Array<Record<string, unknown>>;
+    expect(dispatchItems).toHaveLength(20);
+    expect(dispatchItems.map((item) => item['topic_id'])).toEqual(
+      dispatchItems.map((item) => item['topic_id']).toSorted()
+    );
+    expect(Object.keys(dispatchItems[0] ?? {}).sort()).toEqual(['dispatch_id', 'session_id', 'status', 'topic_id']);
+
+    const robotBlocker = nonIdleRobotStateBlocker(store);
+    expect(robotBlocker).toMatchObject({
+      code: 'non_idle_robot_states',
+      count: 25,
+      item_limit: 20,
+      truncated: true,
+      omitted_count: 5,
+    });
+    const robotItems = robotBlocker?.['items'] as Array<Record<string, unknown>>;
+    expect(robotItems).toHaveLength(20);
+    expect(robotItems.map((item) => item['topic_id'])).toEqual(robotItems.map((item) => item['topic_id']).toSorted());
+    expect(Object.keys(robotItems[0] ?? {}).sort()).toEqual(['activity', 'session_id', 'topic_id']);
+    expect(JSON.stringify([dispatchBlocker, robotBlocker])).not.toContain('Sensitive title');
   });
 
   it('counts only pending, dispatching, and retryable failed rows in the current generation', () => {

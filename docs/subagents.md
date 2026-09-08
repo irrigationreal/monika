@@ -147,14 +147,26 @@ The result remains typed as:
 - `stopped` — local termination and cancellation barrier proven;
 - `uncertain` — parent or child state cannot yet be proven.
 
+Forum retries unresolved `stopping`/`uncertain` state at startup and on a
+single-flight loop that starts a batch roughly every 30 seconds using only the
+canonical cancellation GET. Each pass checks at most 20 oldest-attempted records
+concurrently; null/404 rotates a record without changing its activity. This passive
+pass cannot load/open a conversation, create another cancellation, consume results,
+or wake work. Results and failures apply only while the observed dispatch generation
+and unresolved activity remain current, and shutdown waits for a running pass before
+closing forum storage.
+
 Cancelled result bytes remain retained. Stop does not rewrite unknown SSH effects
 as rollback. Scheduled package runs are disabled and outside the current causal
 descendant contract.
 
 Deployment drain rejects new launches and prevents completed results from waking a
 parent while shutdown is being prepared. Pending delivery alone does not block
-shutdown; active, uncertain, and effects-unknown work does. See
-[`redeployment.md`](redeployment.md) for quiescence and repair operations.
+shutdown; active, uncertain, and effects-unknown work does. Agentd quiescence
+blockers preserve aggregate counts and include at most 20 deterministically ordered
+opaque run diagnostics (`run_key`, `run_id`, `execution_state`, and
+`effects_state`), with cap/truncation metadata and no task, output, or path data.
+See [`redeployment.md`](redeployment.md) for quiescence and repair operations.
 
 ## Execution targets
 

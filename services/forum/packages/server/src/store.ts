@@ -460,6 +460,10 @@ export interface PiSessionLinkRow {
   lineage_source: string | null;
 }
 
+export interface UnresolvedCancellationLink extends PiSessionLinkRow {
+  observed_generation: number;
+}
+
 export interface PiMessageLinkRow {
   id: string;
   pi_session_id: string;
@@ -2042,6 +2046,25 @@ export class ForumStore {
       .all(activity) as RobotStateRow[];
   }
 
+  countDeploymentBlockingRobotStates(): number {
+    const row = this.db
+      .prepare("select count(*) as count from robot_state where activity not in ('idle', 'stopped', 'error')")
+      .get() as { count: number } | undefined;
+    return row?.count ?? 0;
+  }
+
+  listDeploymentBlockingRobotStateItems(limit = 20): Array<{
+    topic_id: string;
+    session_id: string;
+    activity: string;
+  }> {
+    return this.db
+      .prepare(
+        "select topic_id, session_id, activity from robot_state where activity not in ('idle', 'stopped', 'error') order by topic_id asc, session_id asc limit ?"
+      )
+      .all(Math.max(1, Math.trunc(limit))) as Array<{ topic_id: string; session_id: string; activity: string }>;
+  }
+
   setSessionAgentThread(sessionId: string, backend: string, threadId: string): SessionRow {
     const now = nowIso();
     this.db
@@ -3527,6 +3550,30 @@ export class ForumStore {
     return row?.count ?? 0;
   }
 
+  listGlobalActionablePostDispatchItems(limit = 20): Array<{
+    topic_id: string;
+    dispatch_id: string;
+    session_id: string;
+    status: string;
+  }> {
+    return this.db
+      .prepare(
+        `select d.topic_id, d.id as dispatch_id, d.session_id, d.status
+         from post_dispatches d
+         join post_dispatch_generations g on g.topic_id = d.topic_id and g.generation = d.generation
+         where (d.status in ('pending', 'dispatching')
+            or (d.status = 'failed' and d.next_attempt_at is not null))
+         order by d.topic_id asc, d.id asc
+         limit ?`
+      )
+      .all(Math.max(1, Math.trunc(limit))) as Array<{
+      topic_id: string;
+      dispatch_id: string;
+      session_id: string;
+      status: string;
+    }>;
+  }
+
   claimPostDispatchGroup(rows: PostDispatchRow[]): PostDispatchRow | null {
     if (rows.length === 0) return null;
     const trigger = rows.at(-1) as PostDispatchRow;
@@ -4283,12 +4330,41 @@ export class ForumStore {
     return !otherDispatch;
   }
 
-  listPiSessionLinksWithUnresolvedCancellation(): PiSessionLinkRow[] {
+  listPiSessionLinksWithUnresolvedCancellation(limit = 20): UnresolvedCancellationLink[] {
     return this.db
       .prepare(
-        "select l.* from pi_session_links l join robot_state r on r.topic_id = l.topic_id where r.activity in ('stopping', 'uncertain')"
+        `select l.*, coalesce(g.generation, 0) as observed_generation
+         from pi_session_links l
+         join robot_state r on r.topic_id = l.topic_id
+         left join post_dispatch_generations g on g.topic_id = l.topic_id
+         where r.activity in ('stopping', 'uncertain')
+         order by r.last_updated_at asc, l.topic_id asc
+         limit ?`
       )
-      .all() as PiSessionLinkRow[];
+      .all(Math.max(1, Math.trunc(limit))) as UnresolvedCancellationLink[];
+  }
+
+  applyCancellationReconciliation(topicId: string, observedGeneration: number, activity: string): boolean {
+    const currentPlanIdExpr = activity === 'stopped' ? 'null' : 'current_plan_id';
+    const result = this.db
+      .prepare(
+        `update robot_state set activity = ?, current_plan_id = ${currentPlanIdExpr}, last_updated_at = ?
+         where topic_id = ? and activity in ('stopping', 'uncertain')
+           and coalesce((select generation from post_dispatch_generations where topic_id = ?), 0) = ?`
+      )
+      .run(activity, nowIso(), topicId, topicId, observedGeneration);
+    return result.changes === 1;
+  }
+
+  touchUnresolvedCancellation(topicId: string, observedGeneration: number): boolean {
+    const result = this.db
+      .prepare(
+        `update robot_state set last_updated_at = ?
+         where topic_id = ? and activity in ('stopping', 'uncertain')
+           and coalesce((select generation from post_dispatch_generations where topic_id = ?), 0) = ?`
+      )
+      .run(nowIso(), topicId, topicId, observedGeneration);
+    return result.changes === 1;
   }
 
   getPiSessionLinkByPiSessionId(piSessionId: string): PiSessionLinkRow | null {

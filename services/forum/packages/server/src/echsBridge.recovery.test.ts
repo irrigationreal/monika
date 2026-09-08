@@ -81,6 +81,7 @@ describe('passive ECHS startup reconciliation', () => {
       last_dispatched_post_id: 'post-1',
     };
     let activity = 'idle';
+    let generation = 4;
     const store = {
       listPiSessionLinksWithUnresolvedCancellation: vi.fn(() => []),
       listSessionsWithThreads: vi.fn(() => [session]),
@@ -88,10 +89,19 @@ describe('passive ECHS startup reconciliation', () => {
       setRobotActivity: vi.fn((_topicId: string, next: string) => {
         activity = next;
       }),
+      applyCancellationReconciliation: vi.fn((_topicId: string, observedGeneration: number, next: string) => {
+        if (generation !== observedGeneration || !['stopping', 'uncertain'].includes(activity)) return false;
+        activity = next;
+        return true;
+      }),
+      touchUnresolvedCancellation: vi.fn(
+        (_topicId: string, observedGeneration: number) =>
+          generation === observedGeneration && ['stopping', 'uncertain'].includes(activity)
+      ),
       clearActiveTurnOrigin: vi.fn(),
       getRobotState: vi.fn(() => ({ current_plan_id: null, activity })),
-      getTopicDispatchGeneration: vi.fn(() => 0),
-      isTopicDispatchGenerationCurrent: vi.fn(() => true),
+      getTopicDispatchGeneration: vi.fn(() => generation),
+      isTopicDispatchGenerationCurrent: vi.fn((_topicId: string, observed: number) => generation === observed),
       upsertRobotState: vi.fn(),
       getLatestPostId: vi.fn(),
       setSessionLastDispatchedPostId: vi.fn(),
@@ -108,7 +118,17 @@ describe('passive ECHS startup reconciliation', () => {
     const ensureSubscribed = vi.spyOn(bridge as any, 'ensureSubscribed').mockResolvedValue(undefined);
     vi.spyOn(bridge as any, 'emitState').mockImplementation(() => {});
     const open = vi.spyOn(bridge as any, 'openTopicConversation');
-    return { bridge, store, open, create, enqueue, ensureSubscribed };
+    return {
+      bridge,
+      store,
+      open,
+      create,
+      enqueue,
+      ensureSubscribed,
+      setActivity: (next: string) => {
+        activity = next;
+      },
+    };
   }
 
   it('fails closed for non-dispatch operations when a topic has no canonical link', async () => {
@@ -164,9 +184,10 @@ describe('passive ECHS startup reconciliation', () => {
   });
 
   it('reconciles unresolved canonical cancellation without requiring a loaded conversation', async () => {
-    const { bridge, store } = bridgeFixture(null);
+    const { bridge, store, setActivity } = bridgeFixture(null);
+    setActivity('stopping');
     store.listPiSessionLinksWithUnresolvedCancellation.mockReturnValue([
-      { pi_session_id: 'pi-parent', topic_id: 'topic-1' },
+      { pi_session_id: 'pi-parent', topic_id: 'topic-1', observed_generation: 4 },
     ]);
     vi.spyOn((bridge as any).client, 'reconcilePiSessionCancellation').mockResolvedValue({
       ok: false,
@@ -180,9 +201,167 @@ describe('passive ECHS startup reconciliation', () => {
       message: 'stopping',
     });
     await bridge.reconcileLoadedThreads();
-    expect(store.setRobotActivity).toHaveBeenCalledWith('topic-1', 'stopping');
+    expect(store.applyCancellationReconciliation).toHaveBeenCalledWith('topic-1', 4, 'stopping');
     expect(store.setRobotActivity).not.toHaveBeenCalledWith('topic-1', 'idle');
   });
+
+  it('periodically proves unresolved cancellation stopped without opening or dispatching a conversation', async () => {
+    vi.useFakeTimers();
+    try {
+      const { bridge, store, open, create, enqueue, setActivity } = bridgeFixture(null);
+      setActivity('stopping');
+      store.listPiSessionLinksWithUnresolvedCancellation.mockReturnValue([
+        { pi_session_id: 'pi-parent', topic_id: 'topic-1', observed_generation: 4 },
+      ]);
+      const reconcile = vi.spyOn((bridge as any).client, 'reconcilePiSessionCancellation').mockResolvedValue({
+        generation: 4,
+        state: 'stopped',
+      });
+      const getConversation = vi.spyOn((bridge as any).client, 'getConversation');
+
+      (bridge as any).startCancellationReconciliationLoop();
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      expect(reconcile).toHaveBeenCalledWith('pi-parent');
+      expect(store.listPiSessionLinksWithUnresolvedCancellation).toHaveBeenCalledWith(20);
+      expect(store.applyCancellationReconciliation).toHaveBeenCalledWith('topic-1', 4, 'stopped');
+      expect(getConversation).not.toHaveBeenCalled();
+      expect(open).not.toHaveBeenCalled();
+      expect(create).not.toHaveBeenCalled();
+      expect(enqueue).not.toHaveBeenCalled();
+      await bridge.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('coalesces overlapping periodic cancellation passes', async () => {
+    vi.useFakeTimers();
+    try {
+      const { bridge, store } = bridgeFixture(null);
+      store.listPiSessionLinksWithUnresolvedCancellation.mockReturnValue([
+        { pi_session_id: 'pi-parent', topic_id: 'topic-1', observed_generation: 4 },
+      ]);
+      let resolveReconcile!: (value: null) => void;
+      const pending = new Promise<null>((resolve) => {
+        resolveReconcile = resolve;
+      });
+      const reconcile = vi.spyOn((bridge as any).client, 'reconcilePiSessionCancellation').mockReturnValue(pending);
+
+      (bridge as any).startCancellationReconciliationLoop();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(reconcile).toHaveBeenCalledTimes(1);
+
+      resolveReconcile(null);
+      await pending;
+      await vi.advanceTimersByTimeAsync(0);
+      await bridge.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('joins an in-flight cancellation pass during shutdown', async () => {
+    const { bridge, store } = bridgeFixture(null);
+    store.listPiSessionLinksWithUnresolvedCancellation.mockReturnValue([
+      { pi_session_id: 'pi-parent', topic_id: 'topic-1', observed_generation: 4 },
+    ]);
+    let resolveReconcile!: (value: null) => void;
+    vi.spyOn((bridge as any).client, 'reconcilePiSessionCancellation').mockReturnValue(
+      new Promise<null>((resolve) => {
+        resolveReconcile = resolve;
+      })
+    );
+
+    void bridge.reconcileUnresolvedCancellations();
+    let stopped = false;
+    const stopping = bridge.stop().then(() => {
+      stopped = true;
+    });
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+    resolveReconcile(null);
+    await stopping;
+    expect(stopped).toBe(true);
+  });
+
+  it('leaves cancellation state unchanged for stale generations and ambiguous null results', async () => {
+    const { bridge, store, setActivity } = bridgeFixture(null);
+    setActivity('stopping');
+    store.listPiSessionLinksWithUnresolvedCancellation.mockReturnValue([
+      { pi_session_id: 'pi-parent', topic_id: 'topic-1', observed_generation: 4 },
+    ]);
+    const reconcile = vi
+      .spyOn((bridge as any).client, 'reconcilePiSessionCancellation')
+      .mockResolvedValueOnce({ generation: 3, state: 'stopped' })
+      .mockResolvedValueOnce(null);
+
+    await bridge.reconcileUnresolvedCancellations();
+    await bridge.reconcileUnresolvedCancellations();
+
+    expect(reconcile).toHaveBeenCalledTimes(2);
+    expect(store.applyCancellationReconciliation).not.toHaveBeenCalled();
+    expect(store.touchUnresolvedCancellation).toHaveBeenCalledTimes(2);
+  });
+
+  it('starts every cancellation request in the bounded batch concurrently', async () => {
+    const { bridge, store, setActivity } = bridgeFixture(null);
+    setActivity('stopping');
+    store.listPiSessionLinksWithUnresolvedCancellation.mockReturnValue([
+      { pi_session_id: 'pi-1', topic_id: 'topic-1', observed_generation: 4 },
+      { pi_session_id: 'pi-2', topic_id: 'topic-2', observed_generation: 4 },
+    ]);
+    const resolvers: Array<(value: null) => void> = [];
+    const reconcile = vi.spyOn((bridge as any).client, 'reconcilePiSessionCancellation').mockImplementation(
+      () =>
+        new Promise<null>((resolve) => {
+          resolvers.push(resolve);
+        })
+    );
+
+    const pass = bridge.reconcileUnresolvedCancellations();
+    await Promise.resolve();
+
+    expect(reconcile).toHaveBeenCalledTimes(2);
+    resolvers.forEach((resolve) => resolve(null));
+    await pass;
+  });
+
+  it.each([
+    { newerActivity: 'thinking', outcome: 'stopped result' },
+    { newerActivity: 'waiting', outcome: 'failure' },
+  ])(
+    'does not let an old cancellation $outcome overwrite newer $newerActivity activity',
+    async ({ newerActivity, outcome }) => {
+      const { bridge, store, setActivity } = bridgeFixture(null);
+      setActivity('stopping');
+      store.listPiSessionLinksWithUnresolvedCancellation.mockReturnValue([
+        { pi_session_id: 'pi-parent', topic_id: 'topic-1', observed_generation: 4 },
+      ]);
+      let resolve!: (value: { generation: number; state: string }) => void;
+      let reject!: (reason: Error) => void;
+      vi.spyOn((bridge as any).client, 'reconcilePiSessionCancellation').mockReturnValue(
+        new Promise((promiseResolve, promiseReject) => {
+          resolve = promiseResolve;
+          reject = promiseReject;
+        })
+      );
+
+      const pass = bridge.reconcileUnresolvedCancellations();
+      await Promise.resolve();
+      setActivity(newerActivity);
+      if (outcome === 'failure') reject(new Error('old request failed'));
+      else resolve({ generation: 4, state: 'stopped' });
+      await pass;
+
+      expect(store.getRobotState().activity).toBe(newerActivity);
+      expect(store.applyCancellationReconciliation).toHaveBeenCalledWith(
+        'topic-1',
+        4,
+        outcome === 'failure' ? 'uncertain' : 'stopped'
+      );
+    }
+  );
 
   it('clears an unproven active origin before subscribing for turn replay', async () => {
     const { bridge, store, ensureSubscribed } = bridgeFixture({
