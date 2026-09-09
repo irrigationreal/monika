@@ -58,14 +58,17 @@ Important browser events:
 
 Topic navigation is an ownership boundary for browser state. The shared forum store clears the previous topic's posts,
 robot state, context, trace, attachments, and enrichment before fetching the destination record, leaving a neutral
-“Loading topic…” shell until that record is selected. Each topic selection and EventSource has a monotonic generation;
-topic-hydration completions, stream callbacks, reconnect timers, and assistant-message reloads commit only while both
-their captured topic and generation remain current. Robot-state hydration also captures the live-state revision, so an
-HTTP snapshot cannot overwrite a newer event from the active stream. Reconnect waits for the replacement subscription's
-open boundary before starting reconciliation hydration; replacement events invalidate that older snapshot. Closing an
-EventSource is not treated as sufficient cancellation because an event may already be queued by the browser. This
-transition is local and does not add another hydration request or stream—the destination uses the same request sequence
-as ordinary topic selection.
+“Loading topic…” shell until that record is selected. Pagination is different: the route and `TopicView` own the
+requested page, so projection cleanup must not replace `?page=N` with page 1 while destination hydration is pending.
+Once canonical posts load, the view bounds plain page links against the destination's real page count and canonicalizes
+an obsolete or malformed query. Numeric post anchors and `postId` links retain their own page-resolution paths. Each
+topic selection and EventSource has a monotonic generation; topic-hydration completions, stream callbacks, reconnect
+timers, and assistant-message reloads commit only while both their captured topic and generation remain current.
+Robot-state hydration also captures the live-state revision, so an HTTP snapshot cannot overwrite a newer event from the
+active stream. Reconnect waits for the replacement subscription's open boundary before starting reconciliation
+hydration; replacement events invalidate that older snapshot. Closing an EventSource is not treated as sufficient
+cancellation because an event may already be queued by the browser. This transition is local and does not add another
+hydration request or stream—the destination uses the same request sequence as ordinary topic selection.
 
 ## Append-only live ordering
 
@@ -138,7 +141,9 @@ confirmation and never interrupts directly.
 5. Idle state cannot retain a live current plan.
 6. Completion reloads cannot resurrect stale trace state.
 7. Topic navigation clears the outgoing projection before destination hydration, and stale HTTP/SSE generations cannot
-   mutate a later selection—even after navigating away and back to the same topic ID.
+   mutate a later selection—even after navigating away and back to the same topic ID. Projection cleanup does not reset
+   route-owned pagination; the requested destination page remains stable while slower hydration and admin enrichment
+   finish.
 8. Equal tool timestamps use deterministic storage ordering.
 9. One renderer and one canonical chronological ordering model serve preview and complete Trace; workspace direction is
    an immutable presentation projection only.
@@ -152,6 +157,9 @@ Coverage belongs in:
 - `apps/codex-forum/src/views/TopicView.traceWorkspace.test.ts` for canonical surface and dead-implementation removal;
 - `apps/codex-forum/src/views/TopicView.quickReplyDock.test.ts` for non-blocking admin enrichment;
 - `apps/codex-forum/src/composables/useForumState.topic-selection.test.ts` and
-  `useForumState.topic-stream-isolation.test.ts` for navigation reset, request-generation, and EventSource isolation;
+  `useForumState.topic-stream-isolation.test.ts` for projection cleanup, route-owned pagination, request-generation, and
+  EventSource isolation;
+- `apps/codex-forum/e2e/forum-discovery.spec.ts` for forum-list page links remaining active while topic state hydration
+  is delayed;
 - Robot UI Playwright coverage for mobile containment, fixed chronological preview ordering, temporary workspace
   direction, workspace tabs, focus, and confirmed Stop behavior.

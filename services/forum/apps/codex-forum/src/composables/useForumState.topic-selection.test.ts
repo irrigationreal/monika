@@ -128,6 +128,7 @@ describe('topic selection request fencing', () => {
       recentToolRuns: [],
     };
 
+    state.setPage(7);
     const destination = deferred<TopicDto>();
     mocks.getTopic.mockReturnValue(destination.promise);
     const selection = state.selectTopicById('destination', { hydrateState: false });
@@ -136,6 +137,7 @@ describe('topic selection request fencing', () => {
     expect(state.posts.value).toEqual([]);
     expect(state.robotState.value).toBeNull();
     expect(state.hasPendingAssistantTurn.value).toBe(false);
+    expect(state.currentPage.value).toBe(7);
 
     destination.resolve(topic('destination'));
     await selection;

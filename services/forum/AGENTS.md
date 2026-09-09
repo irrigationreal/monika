@@ -241,7 +241,8 @@ Robot controls.
    later state/turn-completed boundary to conclude robot activity.
 8. **Reasoning headings split only at line starts.** Inline bold Markdown is not a reasoning-step boundary.
 9. **Topic navigation is a state-ownership boundary.** Clear the outgoing topic projection before destination hydration,
-   and fence topic-hydration completions, SSE callbacks, reconnect timers, and assistant-message reloads by topic plus
-   selection generation. `EventSource.close()` alone does not invalidate an event already queued by the browser.
+   but do not reset route-owned pagination while hydration is pending. Fence topic-hydration completions, SSE callbacks,
+   reconnect timers, and assistant-message reloads by topic plus selection generation. `EventSource.close()` alone does
+   not invalidate an event already queued by the browser.
 
 See `docs/LIVE_TRACE.md` for the full event and projection design.
