@@ -104,6 +104,16 @@ packages/
 - Developer Portal provides API documentation for logged-in users and API key + impersonation token management for
   admins.
 
+### Theme-safe component styling
+
+Reusable UI surfaces use the semantic tokens defined by `apps/codex-forum/src/styles/theme.css`, such as
+`--bg-surface-alt`, `--bg-surface-hover`, `--text-primary`, `--text-disabled`, `--border-strong`, and `--status-info`.
+Component styles must not introduce fallback colors for an undefined token: a fallback can silently combine one theme's
+inherited text with an unrelated hard-coded background. The component token-contract test rejects unresolved custom
+properties, while computed-style browser coverage verifies new floating and modal surfaces across every registered
+non-system theme. Theme-specific selectors remain appropriate for intentional ornamentation, not ordinary contrast or
+surface colors.
+
 ## Quick start (local)
 
 > Requires Node 22.13+ and pnpm 11.21.0.

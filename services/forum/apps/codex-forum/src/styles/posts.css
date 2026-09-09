@@ -984,6 +984,7 @@
 
 .vb-modal-body {
   background: var(--bg-surface-alt);
+  color: var(--text-primary);
   padding: 12px;
   display: flex;
   flex-direction: column;
