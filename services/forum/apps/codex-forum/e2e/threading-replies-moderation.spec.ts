@@ -16,6 +16,8 @@ import type {
 } from '@irrigationreal/codex-forum-contracts';
 import type { BrowserContext, Page, Request, Route } from '@playwright/test';
 
+import { FORUM_THEMES } from '../src/themes/forumThemes';
+
 type ForumRecord = ForumDto;
 type TopicRecord = TopicDto;
 type PostRecord = PostDto;
@@ -1104,7 +1106,7 @@ function quickReplyBox(page: Page) {
 async function themedStyleSnapshot(
   page: Page,
   selector: string,
-  tokens: { background?: string; color?: string; border?: string }
+  tokens: { background?: string; color?: string; border?: string; outline?: string }
 ): Promise<{ actual: Record<string, string>; expected: Record<string, string> }> {
   return page.locator(selector).evaluate((element, requestedTokens) => {
     const probe = document.createElement('div');
@@ -1119,6 +1121,7 @@ async function themedStyleSnapshot(
     if (requestedTokens.background) probe.style.background = `var(${requestedTokens.background})`;
     if (requestedTokens.color) probe.style.color = `var(${requestedTokens.color})`;
     if (requestedTokens.border) probe.style.border = `1px solid var(${requestedTokens.border})`;
+    if (requestedTokens.outline) probe.style.outline = `1px solid var(${requestedTokens.outline})`;
     document.body.appendChild(probe);
     const actualStyle = getComputedStyle(element);
     const expectedStyle = getComputedStyle(probe);
@@ -1143,15 +1146,37 @@ async function themedStyleSnapshot(
       actual['borderColor'] = actualStyle.borderLeftColor;
       expected['borderColor'] = expectedStyle.borderLeftColor;
     }
+    if (requestedTokens.outline) {
+      actual['outlineColor'] = actualStyle.outlineColor;
+      expected['outlineColor'] = expectedStyle.outlineColor;
+    }
     probe.remove();
     return { actual, expected };
   }, tokens);
 }
 
+function rgbContrast(colorA: string, colorB: string): number {
+  const luminance = (color: string): number => {
+    const channels = color.match(/[\d.]+/g)?.slice(0, 3).map(Number);
+    if (!channels || channels.length !== 3) throw new Error(`Expected computed RGB color, got ${color}`);
+    const [redValue, greenValue, blueValue] = channels;
+    if (redValue === undefined || greenValue === undefined || blueValue === undefined)
+      throw new Error(`Expected three RGB channels, got ${color}`);
+    const convert = (channel: number): number => {
+      const value = channel / 255;
+      return value <= 0.03928 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
+    };
+    return 0.2126 * convert(redValue) + 0.7152 * convert(greenValue) + 0.0722 * convert(blueValue);
+  };
+  const first = luminance(colorA);
+  const second = luminance(colorB);
+  return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+}
+
 async function expectThemedStyle(
   page: Page,
   selector: string,
-  tokens: { background?: string; color?: string; border?: string }
+  tokens: { background?: string; color?: string; border?: string; outline?: string }
 ): Promise<void> {
   await expect
     .poll(
@@ -1869,6 +1894,82 @@ test.describe('Threading and reply flows', () => {
     await page.fill('.vb-editor-textarea', '');
     await picker.locator('[data-testid="message-template-insert"]').click();
     await expect(page.locator('#thread-title')).toHaveValue('Project kickoff thread');
+  });
+
+  test('Branch and Duplicate surfaces resolve semantic colors across every theme', async ({ page, context }) => {
+    const state = createMockState();
+    await attachMockApi(page, state);
+    await setAuthTokens(context, MODERATOR_TOKEN);
+    await page.goto('/');
+    const fixture = await createFixture(page, { postCount: 2, includeLocked: true });
+    const themeKeys = FORUM_THEMES.map(({ key }) => key).filter((key) => key !== 'system');
+
+    await page.goto(`/topics/${fixture.topicId}`);
+    await page.addStyleTag({ content: '* { transition: none !important; }' });
+    const branchTrigger = page.getByRole('button', { name: 'Branch' }).first();
+    await branchTrigger.click();
+    const menu = page.getByRole('menu').first();
+    const duplicateItem = menu.getByRole('menuitem', { name: 'Duplicate current thread' });
+    for (const theme of themeKeys) {
+      await page.evaluate((themeKey) => document.documentElement.setAttribute('data-theme', themeKey), theme);
+      await expectThemedStyle(page, '.vb-branch-menu-popover', {
+        background: '--bg-surface-alt',
+        color: '--text-primary',
+        border: '--border-strong',
+      });
+      await expectThemedStyle(page, '.vb-branch-menu-popover [role="menuitem"]:first-child', {
+        color: '--text-primary',
+      });
+      await duplicateItem.hover();
+      await expectThemedStyle(page, '.vb-branch-menu-popover [role="menuitem"]:hover', {
+        background: '--bg-surface-hover',
+      });
+      await branchTrigger.focus();
+      await page.keyboard.press('ArrowDown');
+      await expect(duplicateItem).toBeFocused();
+      await expectThemedStyle(page, '.vb-branch-menu-popover [role="menuitem"]:focus-visible', {
+        background: '--bg-surface-hover',
+        outline: '--text-primary',
+      });
+      const focusColors = await duplicateItem.evaluate((element) => {
+        const style = getComputedStyle(element);
+        return { background: style.backgroundColor, outline: style.outlineColor };
+      });
+      expect(rgbContrast(focusColors.background, focusColors.outline), `${theme} focus indicator contrast`).toBeGreaterThanOrEqual(3);
+    }
+
+    await duplicateItem.click();
+    const dialog = page.getByRole('dialog', { name: 'Duplicate Thread' });
+    await expect(dialog).toBeVisible();
+    const titleInput = page.locator('.vb-duplicate-modal .vb-modal-input');
+    for (const theme of themeKeys) {
+      await page.evaluate((themeKey) => document.documentElement.setAttribute('data-theme', themeKey), theme);
+      await titleInput.focus();
+      await expectThemedStyle(page, '.vb-duplicate-modal .vb-modal-input:focus', { border: '--textarea-focus-color' });
+      await titleInput.evaluate((element) => element.blur());
+      await expectThemedStyle(page, '.vb-duplicate-modal .vb-modal-body', {
+        background: '--bg-surface-alt',
+        color: '--text-primary',
+      });
+      await expectThemedStyle(page, '.vb-duplicate-modal .vb-modal-input', {
+        background: '--bg-input',
+        color: '--text-primary',
+        border: '--text-muted',
+      });
+    }
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+
+    await page.goto(`/topics/${fixture.lockedTopicId}`);
+    await page.getByRole('button', { name: 'Branch' }).first().click();
+    const disabledItem = page.getByRole('menu').first().getByRole('menuitem', { name: 'Duplicate current thread' });
+    await expect(disabledItem).toBeDisabled();
+    for (const theme of themeKeys) {
+      await page.evaluate((themeKey) => document.documentElement.setAttribute('data-theme', themeKey), theme);
+      await expectThemedStyle(page, '.vb-branch-menu-popover [role="menuitem"]:first-child:disabled', {
+        background: '--bg-surface-muted',
+        color: '--text-disabled',
+      });
+    }
   });
 
   test('message template controls follow theme tokens and remain aligned', async ({ page, context }) => {

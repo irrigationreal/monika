@@ -133,10 +133,11 @@ onUnmounted(() => {
   display: grid;
   min-width: min(18rem, calc(100vw - 2rem));
   padding: 0.3rem;
-  border: 1px solid var(--border-color, #777);
+  border: 1px solid var(--border-strong);
   border-radius: 0.35rem;
-  background: var(--panel-bg, #fff);
-  box-shadow: 0 0.4rem 1rem rgb(0 0 0 / 18%);
+  background: var(--bg-surface-alt);
+  color: var(--text-primary);
+  box-shadow: 0 0.4rem 1rem var(--shadow-strong);
 }
 
 .vb-branch-menu-popover button {
@@ -144,22 +145,34 @@ onUnmounted(() => {
   border: 0;
   border-radius: 0.25rem;
   background: transparent;
-  color: inherit;
+  color: var(--text-primary);
   font: inherit;
   text-align: left;
   white-space: normal;
   cursor: pointer;
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast);
 }
 
-.vb-branch-menu-popover button:focus-visible,
-.vb-branch-menu-popover button:hover:not(:disabled) {
-  background: rgb(127 127 127 / 18%);
-  outline: none;
+.vb-branch-menu-popover button:focus-visible {
+  outline: 2px solid var(--text-primary);
+  outline-offset: -2px;
+}
+
+.vb-branch-menu-popover button:hover:not(:disabled),
+.vb-branch-menu-popover button:focus-visible:not(:disabled) {
+  background: var(--bg-surface-hover);
 }
 
 .vb-branch-menu-popover button:disabled {
+  background: var(--bg-surface-muted);
+  color: var(--text-disabled);
   cursor: not-allowed;
-  opacity: 0.55;
+}
+
+.vb-branch-menu-popover button + button {
+  border-top: 1px solid var(--border-default);
 }
 
 @media (max-width: 600px) {

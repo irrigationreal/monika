@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { nextTick } from 'vue';
 
 import { mount } from '@vue/test-utils';
@@ -10,6 +12,22 @@ afterEach(() => {
 });
 
 describe('BranchMenu', () => {
+  it('uses the forum theme contract for every visible menu state', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/components/BranchMenu.vue'), 'utf8');
+
+    expect(source).toContain('background: var(--bg-surface-alt);');
+    expect(source).toContain('color: var(--text-primary);');
+    expect(source).toContain('border: 1px solid var(--border-strong);');
+    expect(source).toContain('box-shadow: 0 0.4rem 1rem var(--shadow-strong);');
+    expect(source).toContain('background: var(--bg-surface-hover);');
+    expect(source).toContain('outline: 2px solid var(--text-primary);');
+    expect(source).toContain('background: var(--bg-surface-muted);');
+    expect(source).toContain('color: var(--text-disabled);');
+    expect(source).toContain('border-top: 1px solid var(--border-default);');
+    expect(source).not.toContain('--panel-bg');
+    expect(source).not.toContain('--border-color');
+  });
+
   it('opens an accessible menu and emits both distinct branch actions', async () => {
     const wrapper = mount(BranchMenu, { attachTo: document.body });
     const trigger = wrapper.get<HTMLButtonElement>('.vb-branch-trigger');
