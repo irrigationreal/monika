@@ -654,7 +654,6 @@ export function useForumState() {
     identities.value = {};
     robotPersonas.value = {};
     attachmentsByPost.value = {};
-    currentPage.value = 1;
     resetTopicState();
   }
 

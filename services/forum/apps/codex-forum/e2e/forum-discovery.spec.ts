@@ -92,6 +92,11 @@ test.describe('Forum discovery + navigation (read-only)', () => {
       Object.defineProperty(navigator, 'clipboard', { value: clipboard, configurable: true });
     });
     await fixture.attach(page);
+    const topicStateGate = Promise.withResolvers<void>();
+    await page.route(`**/api/topics/${longTopic.id}/state*`, async (route) => {
+      await topicStateGate.promise;
+      await route.fallback();
+    });
     await page.goto('/');
 
     await expect(page.locator('.vb-welcome')).toContainText('Welcome');
@@ -126,7 +131,16 @@ test.describe('Forum discovery + navigation (read-only)', () => {
     await expect(paginationBlock).toContainText('…');
 
     await paginationBlock.locator('.vb-thread-pages-link', { hasText: '8' }).click();
-    await expect(page).toHaveURL(new RegExp(`/topics/${longTopic.id}\\?page=8$`));
+    try {
+      await expect(page).toHaveURL(new RegExp(`/topics/${longTopic.id}\\?page=8$`));
+      await expect(
+        page.locator('.vb-pagination-controls').first().locator('.vb-page-btn', { hasText: '8' })
+      ).toHaveClass(/vb-page-active/);
+      await expect(page.getByRole('link', { name: '#57', exact: true })).toBeVisible();
+      await expect(page.getByRole('link', { name: '#1', exact: true })).toHaveCount(0);
+    } finally {
+      topicStateGate.resolve();
+    }
 
     await page.locator('.vb-pagination-controls .vb-page-btn[title="Jump to latest post"]').first().click();
     await expect(page).toHaveURL(new RegExp(`/topics/${longTopic.id}\\?page=8#60$`));

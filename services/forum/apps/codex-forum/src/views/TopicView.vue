@@ -2249,10 +2249,32 @@ async function handleDeleteTopic(): Promise<void> {
   }
 }
 
+function normalizedRoutePage(value = routePage.value): number {
+  return Number.isFinite(value) && value > 0 ? Math.trunc(value) : 1;
+}
+
+async function reconcilePageAfterTopicLoad(): Promise<void> {
+  // Numeric post anchors and postId links have their own canonicalization
+  // watchers. Plain page links are bounded once the destination post count is
+  // known so the rendered slice and URL cannot disagree.
+  if (routeAnchor.value || routePostId.value) return;
+
+  const requestedPage = normalizedRoutePage();
+  const page = Math.min(requestedPage, state.totalPages.value);
+  state.setPage(page);
+
+  const rawPage = route.query['page'];
+  const routePageIsCanonical = typeof rawPage === 'string' && rawPage === String(page);
+  if (rawPage !== undefined && !routePageIsCanonical) {
+    await router.replace({ query: buildPageQuery(page), hash: '' });
+  }
+}
+
 async function loadTopic(topicId: string): Promise<void> {
   try {
     await state.selectTopicById(topicId);
     if (routeTopicId.value !== topicId || state.selectedTopic.value?.id !== topicId) return;
+    await reconcilePageAfterTopicLoad();
     if (isAdmin.value) {
       const intent = loadCompactionIntent(topicId);
       if (intent) {
@@ -2264,8 +2286,6 @@ async function loadTopic(topicId: string): Promise<void> {
       await refreshForkState(topicId);
       await postDispatchPoller.refreshAfterCurrent();
     }
-    const page = Number.isFinite(routePage.value) && routePage.value > 0 ? routePage.value : 1;
-    state.setPage(page);
   } catch (err) {
     state.setError(err instanceof Error ? err.message : 'Failed to load topic.');
     await goHome();
@@ -2388,10 +2408,11 @@ async function goToLatest(): Promise<void> {
 }
 
 watch(
-  routePage,
-  (value) => {
-    const page = Number.isFinite(value) && value > 0 ? value : 1;
-    state.setPage(page);
+  [routeTopicId, routePage],
+  ([, value]) => {
+    // The route owns pagination. Include topicId so navigation between two
+    // topics requesting the same page still establishes destination state.
+    state.setPage(normalizedRoutePage(value));
   },
   { immediate: true }
 );
