@@ -26,6 +26,16 @@ supervise_foreground_command() {
   read -r -a essential_pids <<< "${SUPERVISED_ESSENTIAL_PIDS:-}"
   wait_pids=("$SUPERVISED_COMMAND_PID" "${essential_pids[@]}")
 
+  # Optional readiness acknowledgement for callers that must coordinate an
+  # external signal or essential-child failure without inferring startup state.
+  if [ -n "${SUPERVISED_COMMAND_READY_FILE:-}" ] && ! : > "$SUPERVISED_COMMAND_READY_FILE"; then
+    forward_supervised_signal TERM
+    wait "$SUPERVISED_COMMAND_PID" 2>/dev/null || true
+    trap - SIGTERM SIGINT
+    SUPERVISED_COMMAND_PID=""
+    return 1
+  fi
+
   while true; do
     exited_pid=""
     wait -n -p exited_pid "${wait_pids[@]}"

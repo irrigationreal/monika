@@ -81,6 +81,54 @@ endsection() {
 pass() { printf '✓ %s\n' "$1"; }
 info() { printf '  %s\n' "$1"; }
 
+wait_for_container_path() {
+  local container="$1"
+  local path="$2"
+  local description="$3"
+  local wait_status
+
+  set +e
+  timeout --signal=TERM --kill-after=2s 10s \
+    docker exec "$container" sh -eu -c \
+      'while [ ! -e "$1" ]; do sleep 0.05; done' sh "$path" \
+    >/dev/null 2>&1
+  wait_status=$?
+  set -e
+  if [ "$wait_status" -eq 124 ] || [ "$wait_status" -eq 137 ]; then
+    echo "timed out waiting for $description" >&2
+    return 1
+  fi
+  if [ "$wait_status" -ne 0 ]; then
+    echo "$container exited or Docker failed before $description" >&2
+    return 1
+  fi
+}
+
+wait_for_container_exit() {
+  local container="$1"
+  local description="$2"
+  local wait_output wait_status
+
+  set +e
+  wait_output="$(timeout --signal=TERM --kill-after=2s 15s docker wait "$container" 2>&1)"
+  wait_status=$?
+  set -e
+  if [ "$wait_status" -eq 124 ] || [ "$wait_status" -eq 137 ]; then
+    echo "timed out waiting for $description" >&2
+    return 1
+  fi
+  if [ "$wait_status" -ne 0 ]; then
+    echo "docker wait failed for $description: $wait_output" >&2
+    return 1
+  fi
+  if [[ ! "$wait_output" =~ ^[0-9]+$ ]]; then
+    echo "docker wait returned an invalid status for $description: $wait_output" >&2
+    return 1
+  fi
+
+  printf '%s\n' "$wait_output"
+}
+
 cleanup() {
   status=$?
   if [ "$status" -ne 0 ]; then
@@ -373,14 +421,17 @@ command_logs="$(docker logs "$RUNNER_CONTAINER" 2>&1)"
 grep -q 'shutting down...' <<<"$command_logs"
 docker rm "$RUNNER_CONTAINER" >/dev/null
 
+# Memstore socket readiness precedes command-mode trap installation. Wait for
+# the supervisor's own acknowledgement after it has captured the command PID,
+# so signal and essential-child checks have no startup-timing assumption.
+SUPERVISION_READY_PATH="/tmp/monika-command-supervision-ready"
 RUNNER_CONTAINER="monika-command-signal-$$"
-docker run -d --name "$RUNNER_CONTAINER" -e MONIKA_AGENTD_ENABLED=0 "$IMAGE" sleep 30 >/dev/null
-for _ in {1..60}; do
-  docker exec "$RUNNER_CONTAINER" test -S /tmp/memstore.sock 2>/dev/null && break
-  sleep 0.1
-done
+docker run -d --name "$RUNNER_CONTAINER" -e MONIKA_AGENTD_ENABLED=0 \
+  -e SUPERVISED_COMMAND_READY_FILE="$SUPERVISION_READY_PATH" \
+  "$IMAGE" sleep infinity >/dev/null
+wait_for_container_path "$RUNNER_CONTAINER" "$SUPERVISION_READY_PATH" "command supervision readiness"
 docker kill --signal TERM "$RUNNER_CONTAINER" >/dev/null
-signal_exit="$(docker wait "$RUNNER_CONTAINER")"
+signal_exit="$(wait_for_container_exit "$RUNNER_CONTAINER" "forwarded SIGTERM shutdown")"
 if [ "$signal_exit" -ne 143 ]; then
   echo "entrypoint did not preserve forwarded SIGTERM status: $signal_exit"
   exit 1
@@ -390,18 +441,17 @@ grep -q 'shutting down...' <<<"$command_logs"
 docker rm "$RUNNER_CONTAINER" >/dev/null
 
 RUNNER_CONTAINER="monika-command-essential-$$"
-docker run -d --name "$RUNNER_CONTAINER" -e MONIKA_AGENTD_ENABLED=0 "$IMAGE" sleep 30 >/dev/null
-for _ in {1..60}; do
-  docker exec "$RUNNER_CONTAINER" test -S /tmp/memstore.sock 2>/dev/null && break
-  sleep 0.1
-done
+docker run -d --name "$RUNNER_CONTAINER" -e MONIKA_AGENTD_ENABLED=0 \
+  -e SUPERVISED_COMMAND_READY_FILE="$SUPERVISION_READY_PATH" \
+  "$IMAGE" sleep infinity >/dev/null
+wait_for_container_path "$RUNNER_CONTAINER" "$SUPERVISION_READY_PATH" "command supervision readiness"
 MEMSTORE_COMMAND_PID="$(docker exec "$RUNNER_CONTAINER" sh -lc 'for proc in /proc/[0-9]*; do [ "$(cat "$proc/comm" 2>/dev/null)" = memstore ] && { basename "$proc"; break; }; done')"
 if [ -z "$MEMSTORE_COMMAND_PID" ]; then
   echo "could not locate memstore PID in command-mode supervision container"
   exit 1
 fi
 docker exec "$RUNNER_CONTAINER" kill "$MEMSTORE_COMMAND_PID"
-essential_exit="$(docker wait "$RUNNER_CONTAINER")"
+essential_exit="$(wait_for_container_exit "$RUNNER_CONTAINER" "essential-child failure shutdown")"
 if [ "$essential_exit" -eq 0 ]; then
   echo "foreground command mode ignored essential memstore death"
   exit 1

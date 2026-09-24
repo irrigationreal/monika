@@ -176,6 +176,10 @@ bounded to runner-owned paths, runtime Git configuration survives scratch `HOME`
 foreground command exit/signal status is preserved. The
 container smoke separately exercises both runner archive policies, essential-child
 failure during command mode, and PID 1's graceful memstore shutdown with isolated data.
+Command-mode signal checks wait for an explicit acknowledgement created by the
+supervisor after it captures the foreground command PID rather than inferring readiness
+from memstore startup; bounded deadlines only prevent a broken fixture from hanging the
+test.
 
 ## SSH transport and relocation
 
@@ -213,7 +217,7 @@ The script verifies:
 1. the container starts with bundled `/app/.pi` state and ephemeral `/data`;
 2. memstore creates its Unix socket;
 3. agentd answers `/healthz`;
-4. default and save-session one-shot runners complete before their short timeout with ambient stateful-memory and isolated data; the default writes no transcript archive, while save-session uses a real JSONL origin and waits for its exact durable save; PID 1 preserves foreground exit/signal status, treats essential-child death as fatal during command mode, and gracefully stops memstore;
+4. default and save-session one-shot runners complete before their short timeout with ambient stateful-memory and isolated data; the default writes no transcript archive, while save-session uses a real JSONL origin and waits for its exact durable save; after an event-driven foreground-command readiness handshake, PID 1 preserves exit/signal status, treats essential-child death as fatal during command mode, and gracefully stops memstore;
 5. `pi --version` reports the repository's exact Pi pin; ordinary startup has `PI_OFFLINE=1`; settings/npm/git are linked to isolated `/data/pi-agent-packages`; overlapping custody roots fail before initialization; image defaults, browser seed, nutrient-skills absence, deterministic local failed-install immutability, object-form package filters, stale temp siblings, and Pi-managed listing/loading after replacement are verified;
 6. npm's 10-day dependency cooldown, pnpm 11.21.0 with fail-closed 10-day release-age enforcement, and the pinned agent-browser version are active;
 7. the reviewed pi-subagents 0.37.2 gitHead (`8063333661476ca48afbca826dc4aab8707c72d3`) is installed, the dedicated runtime/session/operator roots are global, the operator root exists with mode `0700`, unsafe relative or shared top-level operator-root overrides fail startup, a container runtime identity exists, durable pre-spawn launch/drain and artifact-finalization patches are present, forked children use per-run directories, `defaultExtensions=[]` and isolated child profiles are configured, and legacy force-tools/delegate extensions are absent;
