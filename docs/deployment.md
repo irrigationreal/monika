@@ -267,12 +267,15 @@ upstream.
 The `high`, `medium`, and `low` IDs are explicit upstream model variants; do not
 assume that changing Pi's thinking setting changes their server-side tier. The
 `tiered` ID may instead select a model whose reasoning tier is negotiated per
-request. Upstream has not yet made the distinction and override behavior
-sufficiently unambiguous for Monika to normalize it. Do not add these four IDs
-to `enabledModels` until the upstream contract is resolved and each exact ID
-passes the text and tool canaries above. Do not collapse them into one alias or
-promise that a Pi thinking level maps to a fixed provider tier until upstream
-resolves the ambiguity.
+request. The pool currently exposes both controls, so Monika preserves the four
+IDs without claiming that a Pi thinking level overrides a fixed model tier. The
+semantics remain tracked in the upstream pool issue and should be revisited if
+that contract changes.
+
+As of the September 24, 2026 pool deployment, all four IDs have passed isolated
+text and tool-result canaries against the live `/v1/chat/completions` route and
+are included in `enabledModels`. Repeat those canaries after a pool catalog or
+Pi transport change before enabling additional variants.
 
 ### Web search configuration
 
