@@ -32,7 +32,7 @@ for (const signal of ["SIGTERM", "SIGINT"]) {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "monika-supervision-"));
     const ready = path.join(root, "ready");
     t.after(() => fs.rm(root, { recursive: true, force: true }));
-    const child = runSupervisor(`touch ${ready}; exec sleep 30`);
+    const child = runSupervisor("exec sleep 30", { SUPERVISED_COMMAND_READY_FILE: ready });
     for (let i = 0; i < 100; i += 1) {
       try { await fs.access(ready); break; } catch { await new Promise((r) => setTimeout(r, 10)); }
     }
@@ -41,6 +41,15 @@ for (const signal of ["SIGTERM", "SIGINT"]) {
     assert.deepEqual(await completed(child), { code: signal === "SIGTERM" ? 143 : 130, signal: null });
   });
 }
+
+test("supervisor fails closed when readiness acknowledgement cannot be published", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "monika-supervision-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const child = runSupervisor("exec sleep 30", {
+    SUPERVISED_COMMAND_READY_FILE: path.join(root, "missing", "ready"),
+  });
+  assert.deepEqual(await completed(child), { code: 1, signal: null });
+});
 
 test("supervisor stops the command when an essential child exits", async () => {
   const child = spawn("bash", ["-c", `
