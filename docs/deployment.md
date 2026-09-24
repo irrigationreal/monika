@@ -229,6 +229,51 @@ normal pull request; never generate that policy automatically from the private
 catalog. Explicit model pins in `config/agents/` are likewise deliberate routing
 choices and do not change merely because the pool advertises a newer family.
 
+#### Candidate acceptance canary
+
+A catalog entry is not accepted because `pi --list-models` can parse it. Before
+activating a new model, an operator must validate each exact model ID with the
+Pi version shipped in the image:
+
+1. run a text canary that requires the exact response
+   `MONIKA_MODEL_CANARY_V1`; and
+2. run a real tool round trip in which Pi sends a read-tool call, receives the
+   result, and gets the exact follow-up text `MONIKA_TOOL_CANARY_V1`.
+
+Use a throwaway container or another explicitly isolated environment containing
+only the candidate catalog and the required provider credentials. Do not run a
+candidate catalog in the live runtime or in an environment containing unrelated
+shell credentials. Review `apiKey` and header values before loading the file:
+Pi supports command-valued credentials, so a catalog is executable
+configuration, not inert data. A successful catalog parse or text-only request
+is not sufficient; the tool-result request must complete before activation.
+
+#### OpenAI Chat Completions compatibility
+
+Antigravity entries currently use Pi's `openai-completions` transport. The
+provider catalog must describe an OpenAI-compatible base URL whose `/v1` API
+serves `POST /v1/chat/completions`; it must not be treated as an OpenAI
+Responses endpoint. Compatibility is an upstream/provider-catalog contract,
+not a Monika translation layer. In particular, `compat.requiresToolResultName`
+is the Pi metadata switch for providers that require a tool result message to
+carry the originating function name. Preserve that upstream metadata and prove
+it with the tool round trip above. Do not make Monika the source of truth or
+silently patch request shapes in `config/settings.json`; if the endpoint rejects
+this contract, leave the model inactive and resolve the catalog/provider issue
+upstream.
+
+#### Fixed tiers versus tiered reasoning
+
+The `high`, `medium`, and `low` IDs are explicit upstream model variants; do not
+assume that changing Pi's thinking setting changes their server-side tier. The
+`tiered` ID may instead select a model whose reasoning tier is negotiated per
+request. Upstream has not yet made the distinction and override behavior
+sufficiently unambiguous for Monika to normalize it. Do not add these four IDs
+to `enabledModels` until the upstream contract is resolved and each exact ID
+passes the text and tool canaries above. Do not collapse them into one alias or
+promise that a Pi thinking level maps to a fixed provider tier until upstream
+resolves the ambiguity.
+
 ### Web search configuration
 
 `web_search` defaults to the sequential order `native, exa, brave, tavily`.
