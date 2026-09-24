@@ -9,10 +9,10 @@ describe('parseTrustProxyValue', () => {
     expect(parseTrustProxyValue('false')).toBe(false);
   });
 
-  it('distinguishes an explicit boolean from a bounded hop count', () => {
+  it('supports an explicit boolean without allowing unrestricted numeric hop counts', () => {
     expect(parseTrustProxyValue('true')).toBe(true);
-    expect(parseTrustProxyValue('1')).toBe(1);
-    expect(parseTrustProxyValue('2')).toBe(2);
+    expect(() => parseTrustProxyValue('1')).toThrow(/explicit trusted proxy IP\/CIDR list/);
+    expect(() => parseTrustProxyValue('2')).toThrow(/explicit trusted proxy IP\/CIDR list/);
   });
 
   it('passes CIDR and address expressions through to Fastify', () => {

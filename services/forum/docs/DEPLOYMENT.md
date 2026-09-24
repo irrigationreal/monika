@@ -165,8 +165,9 @@ Public search should be paired with `CODEX_FORUM_ENABLE_RATE_LIMITING=1`. Limits
 registration, topic creation, replies, and search are limited, while ordinary authenticated reads are not globally
 throttled.
 
-Set `CODEX_FORUM_TRUST_PROXY` only when the origin is private behind the exact trusted proxy or tunnel. Trusting
-forwarded headers while the origin remains public lets clients spoof IP identity and bypass anonymous limits.
+Set `CODEX_FORUM_TRUST_PROXY` only when the origin is private behind the exact trusted proxy or tunnel. Use an explicit
+trusted proxy IP/CIDR list; numeric hop-count values are rejected because they cannot authenticate the immediate peer.
+Trusting forwarded headers while the origin remains public lets clients spoof IP identity and bypass anonymous limits.
 
 ## Public ingress
 
