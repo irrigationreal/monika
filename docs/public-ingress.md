@@ -80,14 +80,16 @@ backup-included repository `.env` file:
 
 ```env
 CODEX_FORUM_BASE_URL=https://www.vmonika.com
-CODEX_FORUM_TRUST_PROXY=1
+CODEX_FORUM_TRUST_PROXY=172.21.0.0/16
 CODEX_FORUM_ENABLE_RATE_LIMITING=1
 MONIKA_FORUM_BIND=127.0.0.1:4310:4310
 ```
 
-Trusting one proxy hop is safe only because direct non-loopback origin access is
-removed. Do not restore an all-interface forum binding while forwarded client IPs
-are trusted; callers could spoof proxy headers and evade anonymous rate limits.
+Trusting the private ingress network is safe only because direct non-loopback origin access is
+removed. Numeric hop-count trust is rejected because it cannot authenticate the immediate peer. Do not restore an
+all-interface forum binding while forwarded client IPs are trusted; callers could spoof proxy headers and evade
+anonymous rate limits. If the Compose ingress subnet changes, update this value to the actual trusted proxy CIDR
+before the next Forum recreation.
 
 Authentication stays enabled, self-registration stays disabled, and route-specific
 rate limiting stays enabled. Before exposing a restored database, inspect public

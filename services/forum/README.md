@@ -345,7 +345,7 @@ Key env vars (see `packages/server/src/runtimeConfig.ts` for the full list):
 | `CODEX_FORUM_WEBAUTHN_RP_ID`               | Optional WebAuthn RP ID override (defaults to exact base URL hostname)                                                             | unset                            |
 | `CODEX_FORUM_WEBAUTHN_RP_NAME`             | WebAuthn relying-party display name                                                                                                | `Monika Forum`                   |
 | `CODEX_FORUM_ENABLE_RATE_LIMITING`         | Route-specific rate limit toggle for auth/write/search endpoints; safe authenticated reads are not globally throttled              | `0`                              |
-| `CODEX_FORUM_TRUST_PROXY`                  | Fastify trusted proxy setting (`0`, `1`, hop count, or CIDR/list string) for deployments behind Cloudflare Tunnel/reverse proxy    | `0`                              |
+| `CODEX_FORUM_TRUST_PROXY`                  | Fastify trusted proxy setting (`0`, `true`, or an explicit trusted proxy IP/CIDR list) for deployments behind Cloudflare Tunnel/reverse proxy | `0`                              |
 | `CODEX_FORUM_ENABLE_SEARCH`                | Search toggle                                                                                                                      | `0`                              |
 | `MONIKA_AGENTD_BASE_URL`                   | Internal Monika agentd URL                                                                                                         | unset                            |
 | `CODEX_FORUM_AGENT_BACKEND`                | Agent backend selector; Monika deployment uses `monika-pi`                                                                         | unset                            |
@@ -371,8 +371,8 @@ When `CODEX_FORUM_ENABLE_RATE_LIMITING=1`, limits are route-specific rather than
 registration, topic creation, replies, and search are limited; normal authenticated read routes are not globally
 throttled. Authenticated rate-limit buckets use the forum identity for browser sessions and the token id for API
 keys/impersonation tokens; anonymous buckets use `request.ip`. Set `CODEX_FORUM_TRUST_PROXY` only when the forum origin
-is private behind a trusted reverse proxy or Cloudflare Tunnel, so forwarded client IP headers cannot be spoofed by
-direct public traffic.
+is private behind a trusted reverse proxy or Cloudflare Tunnel, and use the proxy's explicit IP/CIDR network rather than
+a numeric hop count. Forwarded client IP headers cannot be trusted from direct public traffic.
 
 Public `/healthz` and `/api/healthz` responses are intentionally minimal liveness checks. Minimal `/readyz` and
 `/api/readyz` return only `{ok}` and HTTP 503 unless the selected Monika Pi backend is reachable, healthy, and

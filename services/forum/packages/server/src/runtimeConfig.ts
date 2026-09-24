@@ -66,16 +66,19 @@ function readStringEnv(name: string): string | null {
   return value || null;
 }
 
-export function parseTrustProxyValue(raw: string | undefined): boolean | string | number {
+export function parseTrustProxyValue(raw: string | undefined): boolean | string {
   const value = raw?.trim();
   if (!value || value === '0' || value.toLowerCase() === 'false') return false;
   if (value.toLowerCase() === 'true') return true;
-  const numeric = Number(value);
-  if (Number.isInteger(numeric) && numeric >= 0) return numeric;
+  if (/^\d+$/.test(value)) {
+    throw new Error(
+      'Numeric CODEX_FORUM_TRUST_PROXY values are unsupported; use an explicit trusted proxy IP/CIDR list instead.'
+    );
+  }
   return value;
 }
 
-function readTrustProxyEnv(name: string): boolean | string | number {
+function readTrustProxyEnv(name: string): boolean | string {
   return parseTrustProxyValue(process.env[name]);
 }
 
@@ -135,7 +138,7 @@ export const PROMPT_ENHANCER_ENABLED: boolean = process.env['CODEX_FORUM_PROMPT_
 export const BASE_URL: string = process.env['CODEX_FORUM_BASE_URL'] ?? `http://localhost:${PORT}`;
 export const API_BASE_URL: string = process.env['CODEX_FORUM_API_BASE_URL'] ?? `http://localhost:${PORT}`;
 export const API_PREFIX: string = process.env['CODEX_FORUM_API_PREFIX'] ?? '/api';
-export const TRUST_PROXY: boolean | string | number = readTrustProxyEnv('CODEX_FORUM_TRUST_PROXY');
+export const TRUST_PROXY: boolean | string = readTrustProxyEnv('CODEX_FORUM_TRUST_PROXY');
 export const PASSWORD_LOGIN_ENABLED: boolean = process.env['CODEX_FORUM_PASSWORD_LOGIN_ENABLED'] !== '0';
 export const WEBAUTHN_ORIGIN: string = new URL(BASE_URL).origin;
 export const WEBAUTHN_RP_ID: string = readStringEnv('CODEX_FORUM_WEBAUTHN_RP_ID') ?? new URL(BASE_URL).hostname;
