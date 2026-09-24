@@ -196,6 +196,39 @@ reviewed `pi-agent-browser` npm package from immutable image state produced by
 Do not commit `runtime/` or store public-ingress connector credentials anywhere
 inside the mounted workspace tree.
 
+### Pool model catalog maintenance
+
+The pool-generated `models.json` is an input to deployment maintenance, not an
+installer to run inside Monika. Its setup URL and generated catalog contain
+credentials. Fetch them into private temporary files, compare model metadata
+without printing credential values, and remove the temporary copies after the
+review. Running the installer in the container is incorrect because
+`/app/.pi/agent/models.json` points to the deployment-owned, read-only
+`runtime/secrets/models.json`.
+
+Treat the generated provider/model catalog as the metadata baseline, but make
+credential rotation an explicit choice. Pi currently accepts text and image
+inputs only; remove unsupported audio/video declarations before activation.
+Models intended to generate non-text output should remain excluded until the
+runtime has an explicit output and attachment contract for them.
+
+Before replacing the active file:
+
+1. retain a mode-`0600` rollback copy outside the repository;
+2. validate the complete candidate with the Pi version in the deployed image;
+3. inspect validation diagnostics as well as the exit status, because
+   `pi --list-models` may report an invalid schema while exiting successfully;
+4. replace `runtime/secrets/models.json` atomically while preserving private
+   ownership and permissions;
+5. verify newly selected models with isolated, inexpensive requests; and
+6. recreate Monika only through the normal quiescent deployment path.
+
+`config/settings.json` is the reviewed, image-owned selection policy for models
+shown by default. Keep model additions, removals, and default changes there in a
+normal pull request; never generate that policy automatically from the private
+catalog. Explicit model pins in `config/agents/` are likewise deliberate routing
+choices and do not change merely because the pool advertises a newer family.
+
 ### Web search configuration
 
 `web_search` defaults to the sequential order `native, exa, brave, tavily`.
