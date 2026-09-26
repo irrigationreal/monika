@@ -20,6 +20,20 @@ live memstore database or host-mode Monika mounts.
 - **Readable** — logs should show the image under test, what was verified, and the
 first useful diagnostic on failure without dumping large raw payloads.
 
+## Art workshop tests
+
+The offline art-workshop suite checks SVG safety and private-project tooling without
+network access or artwork files:
+
+```bash
+tests/art-workshop.sh
+```
+
+It covers the semantic SVG helper's XML escaping, deterministic output, stable named
+layer IDs, and shape/gradient builders. The static viewer is intentionally not a
+browser automation target: it accepts only user-selected local files, shows PNGs,
+and displays SVG as source text rather than executing it.
+
 ## Forum tests
 
 Forum source tests live under `services/forum/`. Repo-level wrappers live in
@@ -350,3 +364,18 @@ template. Use `compose.yaml.example` for real deployments.
 docker compose -f tests/compose.monika-runtime.yaml up -d
 docker exec -it monika-test pi
 ```
+
+## Art workshop
+
+The optional, offline SVG art-workshop CLI has dependency-light safety and
+snapshot tests. With CairoSVG/Pillow installed (or in its pinned virtualenv),
+run:
+
+```bash
+tests/art-workshop.sh
+```
+
+The suite rejects active/external SVG inputs, checks bundle hashes and symlink
+policy, exercises sheet defaults, and reconstructs an OpenRaster stack against
+its merged PNG. Rendered pixel output can vary with platform fonts and Cairo
+versions as documented in `services/art-workshop/README.md`.
