@@ -1,62 +1,13 @@
 /**
- * Claude Code Use — pi-claude-code-use fork with dynamic tool discovery
+ * Claude Code compatibility adapter with dynamic tool discovery.
  *
- * ## Upstream
+ * This runtime-owned extension adapts requests destined for the Monika pool's
+ * Anthropic route and Pi's native Anthropic route. Its payload and tool
+ * transformations are informed by current Claude Code compatibility behavior;
+ * its header profile is applied when Pi provides the header hook.
  *
- * Based on: https://github.com/ben-vargas/pi-packages
- * Package: @benvargas/pi-claude-code-use (v1.0.1)
- * Commit: 384e595 (latest as of 2026-04-14)
- *
- * Original purpose: Patch Anthropic OAuth payloads for Claude Code-style subscription use.
- * This fork replaces the hardcoded companion list with dynamic tool discovery so it works
- * with any extension's flat-named tools without coordination.
- *
- * ## What This Extension Does
- *
- * When Pi is using Anthropic OAuth, this extension intercepts outbound API requests via
- * `before_provider_request` and:
- *
- * 1. System prompt rewrite — rewrites Pi-identifying phrases:
- *    `pi itself` → `the cli itself`
- *    `pi .md files` → `cli .md files`
- *    `pi packages` → `cli packages`
- *
- * 2. Tool filtering — removes unknown flat-named extension tools from the request payload.
- *    Core Claude Code tools and MCP-prefixed tools always pass through.
- *
- * 3. MCP alias remapping — flat extension tools that were registered under an MCP-style
- *    alias get their flat names replaced with the alias in the payload.
- *
- * 4. Dynamic alias registration — instead of a hardcoded companion list, this extension
- *    dynamically discovers all registered tools on every agent turn and registers MCP-style
- *    aliases (`mcp__<extension>__<toolName>`) for any flat-named tool not on the allowlist.
- *    This means any extension's tools survive the filter automatically, with no coordination
- *    required between extensions and this package.
- *
- * 5. Message history rewriting — tool_use blocks in conversation history are rewritten
- *    to use MCP aliases so the model sees consistent names across the conversation.
- *
- * 6. tool_choice remapping — if tool_choice references a flat name that was remapped,
- *    the reference is updated to the MCP alias.
- *
- * Non-OAuth Anthropic requests and non-Anthropic providers are left completely unchanged.
- *
- * ## Removing This Extension
- *
- * Delete this file and uninstall the upstream pi-claude-code-use package if installed.
- * All MCP aliases disappear, tool filtering disappears, and every extension reverts to
- * flat names. No coordination with individual extensions required.
- *
- * ## Maintenance
- *
- * When syncing with upstream:
- * 1. Pull the latest version from https://github.com/ben-vargas/pi-packages
- * 2. Diff against this file, specifically the helper functions in the "Payload Transform"
- *    section below
- * 3. Replace the relevant blocks below, then re-apply the dynamic alias registration
- *    in before_agent_start and session_start
- * 4. The system prompt rewrite, filter logic, message remapping, and tool_choice remapping
- *    are copy-pasted from upstream with minimal changes — track them with upstream commits
+ * Authentication and transport remain owned by the selected provider. The pool
+ * is a routing layer, not an exemption from compatibility shaping.
  */
 
 import { appendFileSync } from "node:fs";
@@ -141,6 +92,21 @@ function lower(name: string | undefined): string {
 }
 
 /**
+ * Claude Code compatibility is for Anthropic-destined routes only. The API
+ * format alone is not sufficient: another provider may speak the same wire
+ * protocol without accepting Claude Code's tool and prompt conventions.
+ *
+ * `claude` is the Monika pool route; `anthropic` is Pi's native route. Keep
+ * this allowlist explicit so new providers do not inherit the transformation
+ * accidentally.
+ */
+function isAnthropicTarget(model: { api?: string; provider?: string } | undefined): boolean {
+	if (!model || model.api !== "anthropic-messages") return false;
+	const provider = lower(model.provider);
+	return provider === "claude" || provider === "anthropic";
+}
+
+/**
  * Derive an MCP alias name from a tool's sourceInfo.
  * Returns e.g. "mcp__stateful-memory__remember" for a tool registered from
  * ~/.pi/agent/extensions/stateful-memory/extension.js
@@ -196,10 +162,14 @@ function deriveMcpAlias(tool: ToolInfo, flatName: string): string | null {
 // ============================================================================
 // System prompt rewrite
 //
-// Replace "pi itself" → "the cli itself" in system prompt text.
-// Preserves cache_control, non-text blocks, and payload shape.
-// Copied from upstream: https://github.com/ben-vargas/pi-packages/blob/main/packages/pi-claude-code-use/extensions/index.ts
+// Replace Pi-identifying text with Claude Code-compatible wording. The
+// identity preamble is deliberately added only after isAnthropicTarget() has
+// selected an Anthropic-destined route.
 // ============================================================================
+
+const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
+const CLAUDE_CODE_VERSION = process.env.PI_CLAUDE_CODE_USE_VERSION?.trim() || "2.1.275";
+const CLAUDE_CODE_BETAS = ["claude-code-20250219", "oauth-2025-04-20", "interleaved-thinking-2025-05-14"];
 
 function rewritePromptText(text: string): string {
 	return text
@@ -210,18 +180,23 @@ function rewritePromptText(text: string): string {
 
 function rewriteSystemField(system: unknown): unknown {
 	if (typeof system === "string") {
-		return rewritePromptText(system);
+		const rewritten = rewriteAvailableToolsSection(rewritePromptText(system));
+		return ensureClaudeCodeIdentity(rewritten);
 	}
 	if (!Array.isArray(system)) {
 		return system;
 	}
-	return system.map((block) => {
+	let identityPresent = false;
+	const rewrittenBlocks = system.map((block) => {
 		if (!isPlainObject(block) || block.type !== "text" || typeof block.text !== "string") {
 			return block;
 		}
-		const rewritten = rewritePromptText(block.text);
-		return rewritten === block.text ? block : { ...block, text: rewritten };
+		const text = rewriteAvailableToolsSection(rewritePromptText(block.text));
+		if (text.includes(CLAUDE_CODE_IDENTITY)) identityPresent = true;
+		return text === block.text ? block : { ...block, text };
 	});
+	if (identityPresent) return rewrittenBlocks;
+	return [{ type: "text", text: CLAUDE_CODE_IDENTITY, cache_control: { type: "ephemeral" } }, ...rewrittenBlocks];
 }
 
 // ============================================================================
@@ -349,6 +324,11 @@ function remapMessageToolNames(messages: unknown[], survivingNames: Map<string, 
 // System prompt rewrite — Available tools section
 // Replaces flat tool names in the "Available tools:" section with MCP aliases
 // and removes entries for tools that have no MCP alias (they'll fail OAuth anyway).
+function ensureClaudeCodeIdentity(systemText: string): string {
+	if (systemText.includes(CLAUDE_CODE_IDENTITY)) return systemText;
+	return `${CLAUDE_CODE_IDENTITY}\n\n${systemText}`;
+}
+
 function rewriteAvailableToolsSection(systemText: string): string {
 	const marker = "Available tools:";
 	const endMarker = "Guidelines:";
@@ -419,15 +399,12 @@ function rewriteAvailableToolsSection(systemText: string): string {
 function transformPayload(raw: Record<string, unknown>, disableFilter: boolean): Record<string, unknown> {
 	const payload = JSON.parse(JSON.stringify(raw)) as Record<string, unknown>;
 
-	// 1. System prompt rewrite (always applies)
-	if (payload.system !== undefined) {
+	// 1. System prompt rewrite and Claude Code identity (always applies to the
+	// already-selected Anthropic target).
+	if (payload.system === undefined) {
+		payload.system = [{ type: "text", text: CLAUDE_CODE_IDENTITY, cache_control: { type: "ephemeral" } }];
+	} else {
 		payload.system = rewriteSystemField(payload.system);
-		// Also rewrite flat tool names in the "Available tools:" section of the system
-		// prompt to MCP aliases. This prevents the model from trying flat names that
-		// fail with OAuth when it should use the MCP alias instead.
-		if (typeof payload.system === "string") {
-			payload.system = rewriteAvailableToolsSection(payload.system);
-		}
 	}
 
 	// When escape hatch is active, skip all tool filtering/remapping
@@ -495,6 +472,7 @@ function writeDebugLog(payload: unknown): void {
 const registeredMcpAliases = new Set<string>();
 const autoActivatedAliases = new Set<string>();
 let lastManagedToolList: string[] | undefined;
+let anthropicRouteActive = false;
 
 const FLAT_TO_MCP = new Map<string, string>(); // flat → mcp (append-only, never cleared mid-session)
 const FLAT_TOOL_DEFS = new Map<string, ToolInfo>(); // flat name → original tool definition (cleared/rebuilt each turn)
@@ -753,20 +731,36 @@ export default async function claudeCodeUse(pi: ExtensionAPI): Promise<void> {
 	});
 
 	pi.on("before_agent_start", async (_event, ctx) => {
+		anthropicRouteActive = isAnthropicTarget(ctx.model);
 		await registerAliasesForAllTools(pi);
-		// Enable aliases for any request targeting the Anthropic API format — this
-		// includes both direct OAuth and pool-proxy requests, both of which need
-		// MCP-style tool names to avoid rejection at Anthropic's end.
-		const model = ctx.model;
-		const isAnthropicApi = model?.api === "anthropic-messages";
-		syncAliasActivation(pi, isAnthropicApi);
+		// The pool is only a routing layer: Anthropic compatibility must be applied
+		// before both pool and native Anthropic requests leave Pi.
+		const isAnthropicRoute = isAnthropicTarget(ctx.model);
+		syncAliasActivation(pi, isAnthropicRoute);
 	});
+
+	// Pi 0.87 introduced a header hook. Register through a narrow compatibility
+	// cast so this extension remains loadable on older runtimes, where the hook
+	// simply is not emitted. The payload hook below remains authoritative there.
+	(pi.on as unknown as (event: string, handler: (event: { headers: Record<string, string | null> }) => void) => void)(
+		"before_provider_headers",
+		(event) => {
+			if (!anthropicRouteActive) return;
+			event.headers.accept = "application/json";
+			event.headers["anthropic-dangerous-direct-browser-access"] = "true";
+			event.headers["anthropic-beta"] = CLAUDE_CODE_BETAS.join(",");
+			event.headers["user-agent"] = `claude-code/${CLAUDE_CODE_VERSION}`;
+			event.headers["x-app"] = "cli";
+		},
+	);
 
 	pi.on("before_provider_request", (event, ctx) => {
 		const model = ctx.model;
-		// Fire on any request to the Anthropic API format — both direct OAuth and
-		// pool-proxy requests use this format and both need tool name transformation.
-		if (!model || model.api !== "anthropic-messages") {
+		anthropicRouteActive = isAnthropicTarget(model);
+		// The pool forwards to Anthropic; it is not an exemption from Claude Code
+		// compatibility. Restrict this to the explicitly supported Anthropic routes
+		// so other providers remain completely untouched.
+		if (!isAnthropicTarget(model)) {
 			return undefined;
 		}
 		if (!isPlainObject(event.payload)) {
