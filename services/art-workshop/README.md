@@ -1,10 +1,12 @@
 # Art workshop (optional)
 
-This is a small, offline, one-shot CLI for private SVG studies. It is deliberately
+This is a small, offline, one-shot CLI for private SVG studies. Read the
+[art workshop cold-start brief](../../docs/art-workshop.md) for the architecture,
+River case-study boundaries, curriculum, and provenance rules. It is deliberately
 not connected to Monika, Pi, agentd, the forum, or a job queue. Keep real projects
 outside this repository (the example deployment uses `/workspace/art-workshop-projects`).
-The source SVG is the authority: previews and OpenRaster exports are derived files,
-and manual SVG edits should be made in the source before rerunning a command.
+The source SVG is the working authority: previews and OpenRaster exports are derived
+files, and manual SVG edits should be made in the source before rerunning a command.
 Existing outputs are never replaced unless `--force` is explicit, so a hand-edited
 preview is not silently regenerated.
 
@@ -45,6 +47,16 @@ containing source files and a
 `manifest.json` with SHA-256 hashes. Version-control directories, common caches,
 symlinks, special files, and paths outside the project are rejected/excluded.
 
+## Semantic helpers and local viewer
+
+`art_workshop.svg` provides dependency-free, deterministic string builders for
+semantic canvases, named layers, groups, simple shapes, paths, and gradients. The
+SVG remains the working source authority; these helpers are not a generic editor.
+`viewer.html` is a static, file-selection-only comparison aid. It renders local PNG
+previews and presents selected SVG as source text rather than executing it. A future
+semantic helper/viewer direction may improve layer-aware review, but this service
+will remain local and will not grow forum integration or a model-specific editor.
+
 ## Container use
 
 Build from this directory and mount only the private project directory:
@@ -66,8 +78,8 @@ There is no Docker socket, host-shell execution, or live runtime configuration.
 SVG input is parsed before rendering. Scripts, `foreignObject`, XML
 DOCTYPE/ENTITY declarations, CSS imports/fonts, external URLs/files, and unsafe
 references are rejected. Local fragment references (`#id`) and base64 embedded
-PNG/JPEG/GIF/WebP images are allowed. The renderer also uses CairoSVG's safe mode
-and CairoSVG safe mode; validation ensures no network/file URL reaches the renderer.
+PNG/JPEG/GIF/WebP images are allowed. The renderer uses CairoSVG safe mode;
+validation ensures no network/file URL reaches the renderer.
 
 This is not a general-purpose SVG editor: filters and unusual CairoSVG constructs
 may render differently, and only explicitly tagged top-level Inkscape layers are

@@ -20,6 +20,20 @@ live memstore database or host-mode Monika mounts.
 - **Readable** — logs should show the image under test, what was verified, and the
 first useful diagnostic on failure without dumping large raw payloads.
 
+## Art workshop tests
+
+The offline art-workshop suite checks SVG safety and private-project tooling without
+network access or artwork files:
+
+```bash
+tests/art-workshop.sh
+```
+
+It covers the semantic SVG helper's XML escaping, deterministic output, stable named
+layer IDs, and shape/gradient builders. The static viewer is intentionally not a
+browser automation target: it accepts only user-selected local files, shows PNGs,
+and displays SVG as source text rather than executing it.
+
 ## Forum tests
 
 Forum source tests live under `services/forum/`. Repo-level wrappers live in
