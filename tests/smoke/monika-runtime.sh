@@ -482,8 +482,8 @@ fi
 pass "OCI license label is AGPL-3.0-or-later"
 
 PI_VERSION="$(docker exec "$CONTAINER_NAME" pi --version 2>&1)"
-if [ "$PI_VERSION" != "0.85.1" ]; then
-  echo "Expected Pi 0.85.1, got: $PI_VERSION"
+if [ "$PI_VERSION" != "0.87.1" ]; then
+  echo "Expected Pi 0.87.1, got: $PI_VERSION"
   exit 1
 fi
 pass "pi CLI pin active: ${PI_VERSION}"

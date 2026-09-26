@@ -7,7 +7,9 @@ Monika runs as two coordinated application containers:
 
 The tracked [`compose.yaml.example`](../compose.yaml.example) is the canonical
 standalone deployment template. Copy it to ignored `compose.yaml` and keep
-host-specific changes out of Git.
+host-specific changes out of Git. The Monika image currently ships Pi 0.87.1;
+the CLI, agentd SDK, and lockfile are upgraded together so session and extension
+APIs cannot drift between the runtime layers.
 
 ## Start from published images
 

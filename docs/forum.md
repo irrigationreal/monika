@@ -400,8 +400,8 @@ TUI from independently writing the same canonical session. It hooks Pi's cancell
 selected existing canonical ID and extension-supplied path before switching.
 Initial command-line resumes use a guarded `session_start` fallback. A fresh TUI
 whose intended JSONL does not yet exist is only an unmaterialized launcher: startup
-makes no agentd request and publishes no lease, status, or warning. Pi 0.85.1's
-`input` and `user_bash` hooks are fail-closed first-action gates. The first
+makes no agentd request and publishes no lease, status, or warning. The shipped
+Pi release's `input` and `user_bash` hooks are fail-closed first-action gates. The first
 interactive input or launcher bash must obtain a durable pending reservation bound
 to the validated intended ID/path; failure can only retry or exit, never continue
 unprotected. Unused launchers can exit or `/resume` without leaving ownership state. Non-TUI runtimes, including agentd

@@ -210,8 +210,8 @@ function requestHeaders(auth, protocol, { json = true } = {}) {
   for (const [name, value] of Object.entries(resolvedHeaders)) {
     const existing = Object.keys(headers).find((header) => header.toLowerCase() === name.toLowerCase());
     if (existing) delete headers[existing];
-    // Pi 0.84 preserves provider-owned null deletion markers. Native fetch
-    // cannot receive them, but their presence must still suppress fallback auth.
+    // Pi preserves provider-owned null deletion markers. Native fetch cannot
+    // receive them, but their presence must still suppress fallback auth.
     if (value !== null) headers[name] = value;
   }
   if (auth?.apiKey && !hasHeader(resolvedHeaders, "authorization") && !hasHeader(resolvedHeaders, "x-api-key")) {
