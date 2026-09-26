@@ -350,3 +350,18 @@ template. Use `compose.yaml.example` for real deployments.
 docker compose -f tests/compose.monika-runtime.yaml up -d
 docker exec -it monika-test pi
 ```
+
+## Art workshop
+
+The optional, offline SVG art-workshop CLI has dependency-light safety and
+snapshot tests. With CairoSVG/Pillow installed (or in its pinned virtualenv),
+run:
+
+```bash
+tests/art-workshop.sh
+```
+
+The suite rejects active/external SVG inputs, checks bundle hashes and symlink
+policy, exercises sheet defaults, and reconstructs an OpenRaster stack against
+its merged PNG. Rendered pixel output can vary with platform fonts and Cairo
+versions as documented in `services/art-workshop/README.md`.

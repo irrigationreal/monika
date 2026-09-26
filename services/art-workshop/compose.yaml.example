@@ -1,0 +1,22 @@
+services:
+  art-workshop:
+    build:
+      context: .
+      dockerfile: Containerfile
+    image: monika-art-workshop:local
+    # Keep private projects outside this repository. Adjust the host path if needed.
+    volumes:
+      - /workspace/art-workshop-projects:/work:rw
+    working_dir: /work
+    environment:
+      PYTHONPATH: /app
+    network_mode: none
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1g
+    pids_limit: 64
+    entrypoint: ["python", "-m", "art_workshop"]
