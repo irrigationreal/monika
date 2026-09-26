@@ -6,7 +6,7 @@ minimumReleaseAgeStrict: true
 minimumReleaseAgeIgnoreMissingTime: false
 minimumReleaseAgeExclude:
   - '@earendil-works/*'
-  # Pi 0.85.1 pins this SDK; reviewed with the coordinated Pi upgrade.
+  # Pi 0.87.1 pins this SDK; reviewed with the coordinated Pi upgrade.
   - '@anthropic-ai/sdk@0.123.0'
 
 overrides:

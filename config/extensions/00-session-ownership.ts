@@ -615,7 +615,7 @@ export default function sessionOwnershipExtension(pi: ExtensionAPI) {
 			if (canonicalId !== sessionId) throw new Error("Pi session manager identity does not match its JSONL header");
 		} catch (error) {
 			if (isMissingFile(error)) {
-				// Pi 0.85.1 deliberately has no JSONL yet. This is a launcher, not
+				// Pi deliberately has no JSONL yet. This is a launcher, not
 				// an owned session: no request, record, status, or warning is emitted.
 				intendedLauncher = { sessionId, sessionFile };
 				protectionState = "launcher";
