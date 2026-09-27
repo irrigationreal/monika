@@ -33,6 +33,7 @@ Environment:
   RUNNER_SAVE_SESSION          Save a pi session under <output>/sessions when true (default: false)
   RUNNER_NO_TOOLS              Disable all pi tools when true (default: false)
   RUNNER_NO_EXTENSIONS         Disable extension discovery when true (default: false)
+  RUNNER_EXTENSIONS            Path-delimited explicit extension files
   RUNNER_NO_SKILLS             Disable skill discovery when true (default: false)
   RUNNER_NO_PROMPT_TEMPLATES   Disable prompt-template discovery when true (default: false)
   RUNNER_NO_CONTEXT_FILES      Disable context-file discovery when true (default: false)
@@ -186,6 +187,7 @@ async function runTask(cliArgs) {
     : null;
   const noTools = envFlag("RUNNER_NO_TOOLS", false);
   const noExtensions = envFlag("RUNNER_NO_EXTENSIONS", false);
+  const explicitExtensions = (process.env.RUNNER_EXTENSIONS || "").split(path.delimiter).map((value) => value.trim()).filter(Boolean);
   const noSkills = envFlag("RUNNER_NO_SKILLS", false);
   const noPromptTemplates = envFlag("RUNNER_NO_PROMPT_TEMPLATES", false);
   const noContextFiles = envFlag("RUNNER_NO_CONTEXT_FILES", false);
@@ -231,6 +233,7 @@ async function runTask(cliArgs) {
   if (noTools) args.push("--no-tools");
   if (tools) args.push("--tools", tools);
   if (noExtensions) args.push("--no-extensions");
+  for (const extension of explicitExtensions) args.push("--extension", extension);
   if (noSkills) args.push("--no-skills");
   if (noPromptTemplates) args.push("--no-prompt-templates");
   if (noContextFiles) args.push("--no-context-files");
