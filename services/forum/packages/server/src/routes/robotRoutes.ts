@@ -6,6 +6,7 @@ import type { AutoRunDirector } from '../services/autoRunDirector';
 import type { ForumStore } from '../store';
 import { mapTopicPostDispatchProjectionToDto } from '../mappers/dto';
 import { PostDispatchProjectionService } from '../services/postDispatchProjectionService';
+import type { SseLifecycleRegistry } from '../services/sseLifecycle';
 import type { StreamBusInterface, StreamEvent } from '../streamBus';
 import type { AccessHelpers } from '../utils/access';
 
@@ -120,6 +121,7 @@ export function registerRobotRoutes({
   bus,
   access,
   autoRunDirector,
+  sseLifecycle,
 }: {
   app: FastifyInstance;
   store: ForumStore;
@@ -127,6 +129,7 @@ export function registerRobotRoutes({
   bus: StreamBusInterface;
   access: AccessHelpers;
   autoRunDirector: AutoRunDirector;
+  sseLifecycle: SseLifecycleRegistry;
 }): void {
   const { getCurrentUser, requireScope, canPostTopic, requireTopicVisible, requireAdmin, getIdentityFromRequest } =
     access;
@@ -435,32 +438,35 @@ export function registerRobotRoutes({
   app.get('/topics/:topicId/state/stream', async (request, reply) => {
     const { topicId } = request.params as { topicId: string };
     requireTopicVisible(topicId, request);
+    let keepAlive: ReturnType<typeof setInterval> | null = null;
+    let unsubscribe: (() => void) | null = null;
+    const registered = sseLifecycle.register(reply.raw, () => {
+      if (keepAlive) clearInterval(keepAlive);
+      keepAlive = null;
+      unsubscribe?.();
+      unsubscribe = null;
+    });
+    if (!registered) {
+      return reply.code(503).send({ message: 'Server is shutting down' });
+    }
+
+    reply.hijack();
     reply.raw.setHeader('Content-Type', 'text/event-stream');
     reply.raw.setHeader('Cache-Control', 'no-cache');
     reply.raw.setHeader('Connection', 'keep-alive');
     reply.raw.setHeader('X-Accel-Buffering', 'no');
     reply.raw.write('retry: 1000\n\n');
 
-    const keepAliveMs = 15_000;
-    const keepAlive = setInterval(() => {
-      try {
-        reply.raw.write(': keepalive\n\n');
-      } catch {
-        // Ignore write errors; the close handler will clean up.
-      }
-    }, keepAliveMs);
+    keepAlive = setInterval(() => {
+      reply.raw.write(': keepalive\n\n');
+    }, 15_000);
 
     const canViewTrace = canViewTraceDetails(request);
-    const unsubscribe = bus.subscribe(topicId, (event) => {
+    unsubscribe = bus.subscribe(topicId, (event) => {
       const outboundEvent = canViewTrace ? event : redactStreamEventForPublic(event);
       if (!outboundEvent) return;
       reply.raw.write(`event: ${outboundEvent.type}\n`);
       reply.raw.write(`data: ${JSON.stringify(outboundEvent.data)}\n\n`);
-    });
-
-    request.raw.on('close', () => {
-      clearInterval(keepAlive);
-      unsubscribe();
     });
   });
 

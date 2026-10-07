@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { ForumStore } from '../store';
+import type { SseLifecycleRegistry } from '../services/sseLifecycle';
 import type { StreamBusInterface } from '../streamBus';
 import type { AccessHelpers } from '../utils/access';
 import type { NotificationRow } from '../db';
@@ -23,12 +24,14 @@ export function registerNotificationRoutes({
   app,
   store,
   bus,
-  access
+  access,
+  sseLifecycle
 }: {
   app: FastifyInstance;
   store: ForumStore;
   bus: StreamBusInterface;
   access: AccessHelpers;
+  sseLifecycle: SseLifecycleRegistry;
 }): void {
   const { getCurrentUser, requireScope, requireTopicVisible, canViewTopic, getIdentityFromRequest } = access;
 
@@ -91,30 +94,33 @@ export function registerNotificationRoutes({
 
   app.get('/notifications/stream', async (request, reply) => {
     const user = requireScope(getCurrentUser(request), 'read');
+    let keepAlive: ReturnType<typeof setInterval> | null = null;
+    let unsubscribe: (() => void) | null = null;
+    const registered = sseLifecycle.register(reply.raw, () => {
+      if (keepAlive) clearInterval(keepAlive);
+      keepAlive = null;
+      unsubscribe?.();
+      unsubscribe = null;
+    });
+    if (!registered) {
+      return reply.code(503).send({ message: 'Server is shutting down' });
+    }
+
+    reply.hijack();
     reply.raw.setHeader('Content-Type', 'text/event-stream');
     reply.raw.setHeader('Cache-Control', 'no-cache');
     reply.raw.setHeader('Connection', 'keep-alive');
     reply.raw.setHeader('X-Accel-Buffering', 'no');
     reply.raw.write('retry: 1000\n\n');
 
-    const keepAliveMs = 15_000;
-    const keepAlive = setInterval(() => {
-      try {
-        reply.raw.write(': keepalive\n\n');
-      } catch {
-        // Ignore write errors; the close handler will clean up.
-      }
-    }, keepAliveMs);
+    keepAlive = setInterval(() => {
+      reply.raw.write(': keepalive\n\n');
+    }, 15_000);
 
     const channel = `notify:${user.identityId}`;
-    const unsubscribe = bus.subscribe(channel, (event) => {
+    unsubscribe = bus.subscribe(channel, (event) => {
       reply.raw.write(`event: ${event.type}\n`);
       reply.raw.write(`data: ${JSON.stringify(event.data)}\n\n`);
-    });
-
-    request.raw.on('close', () => {
-      clearInterval(keepAlive);
-      unsubscribe();
     });
   });
 

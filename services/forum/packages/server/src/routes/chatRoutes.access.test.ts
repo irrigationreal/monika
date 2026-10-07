@@ -4,6 +4,7 @@ import Fastify from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { migrate } from '../db';
+import { SseLifecycleRegistry } from '../services/sseLifecycle';
 import { ForumStore } from '../store';
 import { StreamBus } from '../streamBus';
 import { createAccessHelpers } from '../utils/access';
@@ -27,7 +28,13 @@ describe('Chat route access controls', () => {
     const app = Fastify({ logger: false });
     await app.register(sensible);
     const access = createAccessHelpers(app, store);
-    registerChatRoutes({ app, store, access, bus: new StreamBus() });
+    registerChatRoutes({
+      app,
+      store,
+      access,
+      bus: new StreamBus(),
+      sseLifecycle: new SseLifecycleRegistry(),
+    });
     await app.ready();
     return app;
   }

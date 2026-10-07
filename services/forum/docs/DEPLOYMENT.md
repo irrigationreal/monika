@@ -206,6 +206,14 @@ Results and failures apply only while both the observed generation and unresolve
 never opens or loads conversations, creates cancellation operations, consumes results, or dispatches work, and forum
 shutdown joins an in-flight pass before closing SQLite.
 
+On SIGTERM/SIGINT, Fastify `preClose` first fences new producer work, clears housekeeping schedules, closes SSE
+admission, and ends all browser topic-state, notification, and chat streams. Ordinary finite HTTP requests still drain.
+`onClose` then joins durable in-flight services and tracked maintenance before Redis and SQLite close. The 60-second
+watchdog is a hard deadline: it logs an emergency, closes remaining connections, and exits nonzero immediately in the
+same callback. Forced transport closure can let Fastify enter `onClose` while an untracked finite HTTP handler remains
+pending, so the fallback must not close SQLite or claim durable cleanup success. The deployment's 10-minute Compose stop
+grace remains intentional and must not be shortened to match startup timing.
+
 See:
 
 - [`../../../docs/redeployment.md`](../../../docs/redeployment.md) for quiescence;

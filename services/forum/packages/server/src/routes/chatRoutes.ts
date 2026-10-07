@@ -13,6 +13,7 @@ import { parseBody } from '../utils/validation';
 import type { ChatPresenceDto } from '@irrigationreal/codex-forum-contracts';
 import type { FastifyInstance } from 'fastify';
 
+import type { SseLifecycleRegistry } from '../services/sseLifecycle';
 import type { ForumStore } from '../store';
 import type { StreamBusInterface } from '../streamBus';
 import type { AccessHelpers } from '../utils/access';
@@ -104,11 +105,13 @@ export function registerChatRoutes({
   store,
   access,
   bus,
+  sseLifecycle,
 }: {
   app: FastifyInstance;
   store: ForumStore;
   access: AccessHelpers;
   bus: StreamBusInterface;
+  sseLifecycle: SseLifecycleRegistry;
 }): void {
   const { getCurrentUser, requireScope, requireAdmin, canViewForum } = access;
 
@@ -354,51 +357,17 @@ export function registerChatRoutes({
     }
 
     let connectionId: string | null = null;
-    if (identity) {
-      connectionId = randomUUID();
-      const join = joinPresence(
-        roomId,
-        {
-          id: identity.id,
-          displayName: identity.display_name,
-          avatarUrl: identity.avatar_url ?? null,
-        },
-        connectionId
-      );
-      if (join.isFirst) {
-        bus.emit(roomId, { type: 'chat_join', data: { roomId, member: join.member } });
-      }
-    }
-
-    reply.raw.setHeader('Content-Type', 'text/event-stream');
-    reply.raw.setHeader('Cache-Control', 'no-cache');
-    reply.raw.setHeader('Connection', 'keep-alive');
-    reply.raw.setHeader('X-Accel-Buffering', 'no');
-    reply.raw.write('retry: 1000\\n\\n');
-
-    const presenceState = listPresence(roomId);
-    reply.raw.write(`event: chat_presence_state\\n`);
-    reply.raw.write(`data: ${JSON.stringify({ roomId, members: presenceState })}\\n\\n`);
-
-    const keepAliveMs = 15_000;
-    const keepAlive = setInterval(() => {
-      try {
-        reply.raw.write(': keepalive\\n\\n');
-      } catch {
-        // Ignore write errors; the close handler will clean up.
-      }
-    }, keepAliveMs);
-
-    const unsubscribe = bus.subscribe(roomId, (event) => {
-      reply.raw.write(`event: ${event.type}\\n`);
-      reply.raw.write(`data: ${JSON.stringify(event.data)}\\n\\n`);
-    });
-
-    request.raw.on('close', () => {
-      clearInterval(keepAlive);
-      unsubscribe();
-      if (connectionId) {
-        const leave = leavePresence(connectionId);
+    let keepAlive: ReturnType<typeof setInterval> | null = null;
+    let unsubscribe: (() => void) | null = null;
+    const registered = sseLifecycle.register(reply.raw, () => {
+      if (keepAlive) clearInterval(keepAlive);
+      keepAlive = null;
+      unsubscribe?.();
+      unsubscribe = null;
+      const closedConnectionId = connectionId;
+      connectionId = null;
+      if (closedConnectionId) {
+        const leave = leavePresence(closedConnectionId);
         if (leave?.isLast) {
           bus.emit(roomId, { type: 'chat_part', data: { roomId: leave.roomId, member: leave.member } });
           bus.emit(roomId, {
@@ -412,6 +381,43 @@ export function registerChatRoutes({
           });
         }
       }
+    });
+    if (!registered) {
+      return reply.code(503).send({ message: 'Server is shutting down' });
+    }
+
+    reply.hijack();
+    connectionId = randomUUID();
+    const join = joinPresence(
+      roomId,
+      {
+        id: identity.id,
+        displayName: identity.display_name,
+        avatarUrl: identity.avatar_url ?? null,
+      },
+      connectionId
+    );
+    if (join.isFirst) {
+      bus.emit(roomId, { type: 'chat_join', data: { roomId, member: join.member } });
+    }
+
+    reply.raw.setHeader('Content-Type', 'text/event-stream');
+    reply.raw.setHeader('Cache-Control', 'no-cache');
+    reply.raw.setHeader('Connection', 'keep-alive');
+    reply.raw.setHeader('X-Accel-Buffering', 'no');
+    reply.raw.write('retry: 1000\\n\\n');
+
+    const presenceState = listPresence(roomId);
+    reply.raw.write(`event: chat_presence_state\\n`);
+    reply.raw.write(`data: ${JSON.stringify({ roomId, members: presenceState })}\\n\\n`);
+
+    keepAlive = setInterval(() => {
+      reply.raw.write(': keepalive\\n\\n');
+    }, 15_000);
+
+    unsubscribe = bus.subscribe(roomId, (event) => {
+      reply.raw.write(`event: ${event.type}\\n`);
+      reply.raw.write(`data: ${JSON.stringify(event.data)}\\n\\n`);
     });
   });
 }

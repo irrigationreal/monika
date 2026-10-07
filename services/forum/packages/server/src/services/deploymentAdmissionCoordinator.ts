@@ -49,6 +49,7 @@ export class DeploymentAdmissionCoordinator {
   private expiryTimer: ReturnType<typeof setTimeout> | null = null;
   private inFlight: Promise<DeploymentAdmissionResult> | null = null;
   private robotWorkInFlight = 0;
+  private shutdownClosed = false;
   private readonly completed = new Map<string, DeploymentAdmissionResult>();
 
   constructor(
@@ -106,6 +107,7 @@ export class DeploymentAdmissionCoordinator {
   }
 
   beginRobotWork(): () => void {
+    if (this.shutdownClosed) throw new DispatchAdmissionFencedError();
     this.expireIfNeeded();
     if (this.state === 'preparing' && this.operationId) {
       this.release('revoked', this.operationId, [{ code: 'robot_work_arrived' }]);
@@ -150,6 +152,18 @@ export class DeploymentAdmissionCoordinator {
     }
     this.clearExpiryTimer();
     this.sync?.resume();
+  }
+
+  /** Permanently fences new robot work for process shutdown. */
+  shutdown(): void {
+    if (this.shutdownClosed) return;
+    this.shutdownClosed = true;
+    if (this.operationId) this.release('cancelled', this.operationId);
+    this.clearExpiryTimer();
+    this.sync?.pause();
+    this.store.setRobotWorkAdmissionGuard(() => {
+      throw new DispatchAdmissionFencedError();
+    });
   }
 
   private async finishAcquire(
