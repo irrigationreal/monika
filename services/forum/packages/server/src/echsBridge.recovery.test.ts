@@ -8,7 +8,7 @@ describe('passive ECHS startup reconciliation', () => {
     const client = new EchsClient({ baseUrl: 'http://agentd.invalid' });
     const request = vi
       .spyOn(client as any, 'request')
-      .mockResolvedValue({ message_id: 'dispatch-1', deduplicated: true });
+      .mockResolvedValue({ message_id: 'dispatch-1', deduplicated: true, dispatch_disposition: 'handled' });
     const result = await client.enqueueConversationMessage('conversation-1', 'work', {
       messageId: 'dispatch-1',
       dispatchId: 'dispatch-1',
@@ -19,7 +19,7 @@ describe('passive ECHS startup reconciliation', () => {
       body: { mode: 'queue', content: 'work', message_id: 'dispatch-1', dispatch_id: 'dispatch-1', generation: 7 },
       timeoutMs: 30_000,
     });
-    expect(result).toMatchObject({ messageId: 'dispatch-1', deduplicated: true });
+    expect(result).toMatchObject({ messageId: 'dispatch-1', deduplicated: true, dispatchDisposition: 'handled' });
   });
 
   it('sends the durable dispatch id as the canonical creation operation id', async () => {

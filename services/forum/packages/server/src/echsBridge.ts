@@ -423,6 +423,7 @@ export function selectTopicContext(
 export class EchsBridge {
   private readonly client: EchsClient;
   private threadMap = new Map<string, ThreadContext>();
+  private pendingThreadContexts = new Map<string, Map<string, ThreadContext>>();
   private toolRunByCallId = new Map<string, string>();
   private spawnToolRunByAgentId = new Map<string, string>();
   private reasoningBackfillRetriesByThread = new Map<string, number>();
@@ -535,6 +536,7 @@ export class EchsBridge {
       }
     }
     this.subscriptions.clear();
+    this.pendingThreadContexts.clear();
     const attachmentStop = this.attachmentHandoffs.stop();
 
     this.stopPromise = (async () => {
@@ -1367,6 +1369,9 @@ export class EchsBridge {
                 this.store.setRobotActivity(ctx.topicId, 'idle');
               ctx.currentTurnId = null;
               ctx.turnStartedAt = null;
+              // Any retained lost-response identity is obsolete once agentd
+              // authoritatively reports no active or queued turn.
+              this.pendingThreadContexts.delete(threadId);
               this.store.clearActiveTurnOrigin?.(ctx.topicId);
               this.activeTurnThreads.delete(threadId);
               this.emitState(ctx.topicId);
@@ -1400,6 +1405,7 @@ export class EchsBridge {
     const current = this.store.getRobotState(topicId)?.activity;
     if (!['stopping', 'stopped', 'uncertain'].includes(current ?? '')) this.store.setRobotActivity(topicId, 'idle');
     this.threadMap.delete(threadId);
+    this.pendingThreadContexts.delete(threadId);
     this.store.clearActiveTurnOrigin?.(topicId);
     this.activeTurnThreads.delete(threadId);
     const sub = this.subscriptions.get(threadId);
@@ -1915,7 +1921,13 @@ export class EchsBridge {
         lastStreamEventAt: existingCtx?.lastStreamEventAt ?? null,
         reasoningCheckpoints: [],
       };
-      this.threadMap.set(threadId, threadCtx);
+      // An active canonical turn remains the sole writer of its trace/context
+      // until Pi identifies the next turn. Stage the replacement by durable
+      // dispatch id so a handled input cannot erase live state, and so a
+      // started/queued input binds the correct parent even if its SSE event
+      // races the enqueue response.
+      let contextReplacementDeferred = conversationWasActive && existingCtx !== undefined;
+      if (!contextReplacementDeferred) this.threadMap.set(threadId, threadCtx);
 
       const tamperContext: MessageTamperContext = {
         topicId,
@@ -1959,6 +1971,16 @@ export class EchsBridge {
         return canSteer ? 'steer' : 'queue';
       };
       await this.ensureSubscribed(threadId, { replay: isFirstMessage });
+      if (contextReplacementDeferred) {
+        const pending = this.pendingThreadContexts.get(threadId) ?? new Map<string, ThreadContext>();
+        pending.set(dispatchId, threadCtx);
+        this.pendingThreadContexts.set(threadId, pending);
+      }
+      const discardPendingContext = (targetThreadId: string) => {
+        const pending = this.pendingThreadContexts.get(targetThreadId);
+        pending?.delete(dispatchId);
+        if (pending?.size === 0) this.pendingThreadContexts.delete(targetThreadId);
+      };
       let enqueueMode = resolveEnqueueMode(threadId, isFirstMessage);
       let enqueueResult: Awaited<ReturnType<EchsClient['enqueueConversationMessage']>>;
       try {
@@ -1982,18 +2004,24 @@ export class EchsBridge {
             : undefined,
         });
       } catch (err) {
-        if (err instanceof EchsDispatchNotAcceptedError) throw err;
+        if (err instanceof EchsDispatchNotAcceptedError) {
+          discardPendingContext(threadId);
+          throw err;
+        }
         const message = err instanceof Error ? err.message : String(err);
         if (message.includes('conversation not found') || message.includes('ECHS 404')) {
           if (!this.store.isTopicDispatchGenerationCurrent(topicId, generation)) {
+            discardPendingContext(threadId);
             throw new Error('stale_dispatch_generation');
           }
           console.warn(`[ECHS] conversation missing for topic ${topicId}; recreating thread`);
+          discardPendingContext(threadId);
           this.threadMap.delete(threadId);
           this.activeTurnThreads.delete(threadId);
           threadId = await createConversation();
           isFirstMessage = true;
           conversationWasActive = false;
+          contextReplacementDeferred = false;
           threadCtx.activeThreadId = null;
           this.threadMap.set(threadId, threadCtx);
           await this.ensureSubscribed(threadId, { replay: true });
@@ -2018,15 +2046,34 @@ export class EchsBridge {
               : undefined,
           });
         } else {
+          discardPendingContext(threadId);
           throw err;
         }
       }
-      // Agentd may have accepted and completed this exact dispatch before a
-      // forum crash or lost HTTP response. Settle the durable forum cursor,
-      // but never manufacture a second local turn for that deduplicated retry.
+      // A steer mutates the active turn and intentionally has no distinct
+      // turn_started boundary to claim a replacement context.
+      if (enqueueMode === 'steer') discardPendingContext(threadId);
+
+      // Agentd may have accepted this exact dispatch before a lost HTTP
+      // response. Its durable fence returns the original Pi disposition. Keep
+      // a staged started/queued identity until its delayed authoritative
+      // boundary arrives; handled, steer, and legacy duplicates cannot claim a
+      // new turn and must not leak staged state.
       if (enqueueResult.deduplicated) {
-        // A duplicate response proves acceptance, but not that this dispatch is
-        // the currently active queued turn. Only turn_started may bind origin.
+        if (enqueueMode === 'steer' || !['started', 'queued'].includes(enqueueResult.dispatchDisposition ?? '')) {
+          discardPendingContext(threadId);
+        }
+        if (parentPostId) this.store.setSessionLastDispatchedPostId(session.id, parentPostId);
+        if (pendingMoveToClear) this.store.clearTopicMovePrompt(pendingMoveToClear);
+        return;
+      }
+
+      // Pi reports "handled" when an input extension consumed the request
+      // without starting or queueing an agent run. The durable dispatch is
+      // accepted, but there will be no turn_started/turn_completed pair; settle
+      // the forum cursor without manufacturing robot activity or a backfill.
+      if (enqueueResult.dispatchDisposition === 'handled') {
+        discardPendingContext(threadId);
         if (parentPostId) this.store.setSessionLastDispatchedPostId(session.id, parentPostId);
         if (pendingMoveToClear) this.store.clearTopicMovePrompt(pendingMoveToClear);
         return;
@@ -2034,6 +2081,19 @@ export class EchsBridge {
 
       if (options?.origin && (enqueueMode === 'steer' || !conversationWasActive)) {
         this.store.recordActiveTurnOrigin?.({ topicId, dispatchId, generation, origin: options.origin });
+      }
+
+      if (contextReplacementDeferred) {
+        // turn_started owns activation of a staged context. It may already have
+        // consumed the entry while enqueue was awaiting agentd; either way, do
+        // not overwrite the stream's newer context with this pre-enqueue copy.
+        if (!this.store.isTopicDispatchGenerationCurrent(topicId, generation)) {
+          discardPendingContext(threadId);
+          return;
+        }
+        if (parentPostId) this.store.setSessionLastDispatchedPostId(session.id, parentPostId);
+        if (pendingMoveToClear) this.store.clearTopicMovePrompt(pendingMoveToClear);
+        return;
       }
 
       // An interrupt may advance the durable generation while enqueue is
@@ -2151,7 +2211,24 @@ export class EchsBridge {
     switch (event.event) {
       case 'turn_started': {
         const data = event.data as any;
-        ctx.currentTurnId = data?.turn_id ?? data?.turnId ?? data?.message_id ?? data?.messageId ?? null;
+        const turnId = data?.turn_id ?? data?.turnId ?? data?.message_id ?? data?.messageId ?? null;
+        const pending = typeof turnId === 'string' ? this.pendingThreadContexts.get(threadId) : undefined;
+        const pendingCtx = typeof turnId === 'string' ? pending?.get(turnId) : undefined;
+        if (pendingCtx) {
+          pending?.delete(turnId);
+          if (pending?.size === 0) this.pendingThreadContexts.delete(threadId);
+          // Carry forward continuity fields at activation time, after any
+          // completion/usage events that raced the enqueue response.
+          pendingCtx.activeThreadId = ctx.activeThreadId;
+          pendingCtx.lastUsage = ctx.lastUsage;
+          pendingCtx.totalInputTokens = ctx.totalInputTokens;
+          pendingCtx.totalOutputTokens = ctx.totalOutputTokens;
+          pendingCtx.activeSubagents = ctx.activeSubagents;
+          pendingCtx.lastStreamEventAt = ctx.lastStreamEventAt;
+          this.threadMap.set(threadId, pendingCtx);
+          ctx = pendingCtx;
+        }
+        ctx.currentTurnId = turnId;
         const boundOrigin =
           typeof ctx.currentTurnId === 'string'
             ? (this.store.recordActiveTurnOriginFromDispatch?.(ctx.topicId, ctx.currentTurnId) ?? null)
@@ -2174,6 +2251,16 @@ export class EchsBridge {
           currentPlanId: ctx.planId,
         });
         this.emitState(ctx.topicId);
+        if (pendingCtx) {
+          this.bus.emit(ctx.topicId, { type: 'assistant_reset', data: { reason: 'new_turn' } });
+          this.runBackground(this.emitContext(ctx.topicId));
+          this.schedulePlanSync(threadId);
+          this.scheduleAssistantBackfill(threadId, {
+            topicId: ctx.topicId,
+            sessionId: ctx.sessionId,
+            parentPostId: ctx.turnParentPostId,
+          });
+        }
         break;
       }
       case 'subagent_continuation': {
@@ -2332,14 +2419,28 @@ export class EchsBridge {
       }
       case 'turn_completed': {
         const completionData = asRecord(event.data);
+        const completedTurnId =
+          nonEmptyId(
+            completionData?.['turn_id'],
+            completionData?.['turnId'],
+            completionData?.['message_id'],
+            completionData?.['messageId']
+          ) ?? ctx.currentTurnId;
         const turnStartedAt = ctx.turnStartedAt;
         const turnParentPostId = ctx.turnParentPostId;
         const missingPiMessageId = nonEmptyId(completionData?.['pi_message_id'], completionData?.['piMessageId']);
+        if (completedTurnId) {
+          const pending = this.pendingThreadContexts.get(threadId);
+          pending?.delete(completedTurnId);
+          if (pending?.size === 0) this.pendingThreadContexts.delete(threadId);
+        }
         this.store.clearActiveTurnOrigin?.(ctx.topicId);
         const projections = this.projectionTails.get(threadId) ?? Promise.resolve();
         this.runBackground(
           projections.finally(() => {
             if (this.projectionTails.get(threadId) === projections) this.projectionTails.delete(threadId);
+            // A successor may start while the completed turn waits for projection.
+            if (this.threadMap.get(threadId) !== ctx || ctx.currentTurnId !== completedTurnId) return;
             ctx.currentTurnId = null;
             ctx.turnStartedAt = null;
             ctx.currentContinuation = null;
@@ -2382,6 +2483,7 @@ export class EchsBridge {
         ctx.currentTurnId = null;
         ctx.turnStartedAt = null;
         ctx.currentContinuation = null;
+        this.pendingThreadContexts.delete(threadId);
         this.store.clearActiveTurnOrigin?.(ctx.topicId, generation);
         const cancellation = interruptionData['cancellation'];
         const cancellationState =

@@ -71,8 +71,8 @@ packages/
   create response reopens the same anchored session. Non-dispatch operations never manufacture a missing canonical link;
   they may repair one only from a currently loaded conversation carrying canonical session ID and path.
 - A canonical utterance is channel-neutral. One agent run may persist zero, one, or several ordered assistant messages;
-  Pi's internal `agent_settled` is idle-only, and agentd maps it to wire `turn_completed`; neither asks the forum to
-  publish a raw aggregate.
+  Pi's internal `agent_settled` is idle-only, and agentd maps it (including its cancellation flag) to wire
+  `turn_completed`; neither asks the forum to publish a raw aggregate.
 - Provenance v1 preserves legacy forum post identity. V2 adds the durable ordered contributor set and normalized origin.
   Same-origin events can group; retries retain that original order and never absorb a different origin.
 - Live SSE and background sync share one deterministic projection/handoff service, including outbound tamper, default

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { SessionManager } from '@earendil-works/pi-coding-agent';
-import { acceptDispatch, advanceDispatchFence, createDispatchPreflightGate, dispatchPreflightHandler, inspectDispatch, prepareDispatch, readDispatchFence, resolveDispatchGeneration } from '../src/dispatch-fence.mjs';
+import { acceptDispatch, advanceDispatchFence, awaitDispatchPreflight, createDispatchPreflightGate, dispatchPreflightHandler, inspectDispatch, prepareDispatch, readDispatchFence, resolveDispatchGeneration } from '../src/dispatch-fence.mjs';
 
 function manager() { return SessionManager.inMemory('/tmp/dispatch-fence-test'); }
 
@@ -15,7 +15,7 @@ test('persists acceptance before execution and deduplicates a lost-response retr
   assert.equal(sessionManager.getBranch().filter((entry) => entry.customType === 'monika.dispatch.fence').length, 1);
 });
 
-test('preparation and rejected Pi preflight leave a dispatch retryable', async () => {
+test('preparation and invalid Pi preflight leave a dispatch retryable', async () => {
   const sessionManager = manager();
   const input = { dispatchId: 'dispatch-retry', generation: 0 };
   await assert.rejects(() => prepareDispatch(sessionManager, input, async () => {
@@ -25,10 +25,10 @@ test('preparation and rejected Pi preflight leave a dispatch retryable', async (
 
   const prepared = await prepareDispatch(sessionManager, input, async () => ({ text: 'ready' }));
   assert.equal(prepared.inspection.status, 'ready');
-  dispatchPreflightHandler(sessionManager, input)(false);
+  assert.throws(() => dispatchPreflightHandler(sessionManager, input)(false), /invalid Pi dispatch disposition/);
   assert.equal(inspectDispatch(sessionManager, input).status, 'ready');
 
-  dispatchPreflightHandler(sessionManager, input)(true);
+  dispatchPreflightHandler(sessionManager, input)('started');
   assert.equal(inspectDispatch(sessionManager, input).status, 'duplicate');
   let duplicatePreparationCalls = 0;
   const duplicate = await prepareDispatch(sessionManager, input, async () => { duplicatePreparationCalls++; return {}; });
@@ -36,22 +36,38 @@ test('preparation and rejected Pi preflight leave a dispatch retryable', async (
   assert.equal(duplicatePreparationCalls, 0);
 });
 
-test('preflight gate resolves only after Pi durably accepts and rejects false', async () => {
-  const acceptedManager = manager();
-  const accepted = createDispatchPreflightGate(acceptedManager, { dispatchId: 'gate-accepted', generation: 0 });
-  let settled = false;
-  accepted.accepted.then(() => { settled = true; });
-  await Promise.resolve();
-  assert.equal(settled, false);
-  accepted.preflightResult(true);
-  await accepted.accepted;
-  assert.equal(inspectDispatch(acceptedManager, { dispatchId: 'gate-accepted', generation: 0 }).status, 'duplicate');
+test('preflight gate durably accepts and preserves every Pi 1.x disposition', async () => {
+  for (const disposition of ['started', 'queued', 'handled']) {
+    const sessionManager = manager();
+    const observed = [];
+    const dispatchId = `gate-${disposition}`;
+    const gate = createDispatchPreflightGate(
+      sessionManager,
+      { dispatchId, generation: 0 },
+      (value) => observed.push(value),
+    );
+    let settled = false;
+    gate.accepted.then(() => { settled = true; });
+    await Promise.resolve();
+    assert.equal(settled, false);
+    gate.preflightResult(disposition);
+    assert.equal(await gate.accepted, disposition);
+    assert.deepEqual(observed, [disposition]);
+    assert.deepEqual(inspectDispatch(sessionManager, { dispatchId, generation: 0 }), {
+      status: 'duplicate', generation: 0, disposition,
+    });
+  }
+});
 
-  const rejectedManager = manager();
-  const rejected = createDispatchPreflightGate(rejectedManager, { dispatchId: 'gate-rejected', generation: 0 });
-  rejected.preflightResult(false);
-  await assert.rejects(rejected.accepted, /not accepted/);
-  assert.equal(inspectDispatch(rejectedManager, { dispatchId: 'gate-rejected', generation: 0 }).status, 'ready');
+test('prompt rejection settles immediately when Pi emits no preflight callback', async () => {
+  const sessionManager = manager();
+  const input = { dispatchId: 'gate-rejected', generation: 0 };
+  const gate = createDispatchPreflightGate(sessionManager, input);
+  await assert.rejects(
+    awaitDispatchPreflight(gate.accepted, Promise.reject(new Error('model authentication unavailable'))),
+    /model authentication unavailable/,
+  );
+  assert.equal(inspectDispatch(sessionManager, input).status, 'ready');
 });
 
 test('preflight acceptance fails closed when durable acceptance cannot be written', () => {
@@ -63,7 +79,7 @@ test('preflight acceptance fails closed when durable acceptance cannot be writte
     { dispatchId: 'dispatch-write-failure', generation: 0 },
     (accepted) => outcomes.push(accepted),
   );
-  assert.throws(() => preflight(true), /disk unavailable/);
+  assert.throws(() => preflight('started'), /disk unavailable/);
   assert.deepEqual(outcomes, []);
   assert.equal(readDispatchFence(sessionManager.getBranch()).accepted.has('dispatch-write-failure'), false);
 });

@@ -54,7 +54,8 @@ Important browser events:
 | `assistant_message` | One canonical outward item has been projected                |
 
 `assistant_message` is not the idle boundary. One settled agent loop may project several outward items. The later
-`state` emitted from wire `turn_completed` determines idle state.
+`state` emitted from wire `turn_completed` determines idle state. Its optional `aborted` flag is a cancellation outcome
+for automation, not a successful empty response; persisted canonical items that precede the boundary remain valid.
 
 Topic navigation is an ownership boundary for browser state. The shared forum store clears the previous topic's posts,
 robot state, context, trace, attachments, and enrichment before fetching the destination record, leaving a neutral

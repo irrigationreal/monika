@@ -53,6 +53,7 @@ import {
 } from "./session-export.mjs";
 import {
   advanceDispatchFence,
+  awaitDispatchPreflight,
   createDispatchPreflightGate,
   inspectDispatch,
   prepareDispatch,
@@ -2834,8 +2835,8 @@ const server = http.createServer(async (req, res) => {
       if (method === 'POST' && tail === 'messages') {
         // Consume the finite body before waiting behind canonical session work.
         // A timed-out client must not leave a dead stream for a later holder.
-        // Pi's preflight callback is the acceptance boundary. Failures before it
-        // are marked not accepted; execution failures after it are asynchronous.
+        // Pi's preflight disposition is the acceptance boundary. Rejections
+        // before one are marked not accepted; later execution is asynchronous.
         let promptInvoked = false;
         try {
           return await runAfterRequestBody(req, readBody, async (body) =>
@@ -2861,7 +2862,7 @@ const server = http.createServer(async (req, res) => {
             inspected = inspectDispatch(conv.session.sessionManager, { dispatchId, generation });
           }
           catch (err) { return notAccepted(res, 400, { error: 'bad_request', message: err instanceof Error ? err.message : String(err) }); }
-          if (inspected.status === 'duplicate') return json(res, 200, { message_id: messageId, turn_id: messageId, thread_id: conv.id, compacted: false, deduplicated: true });
+          if (inspected.status === 'duplicate') return json(res, 200, { message_id: messageId, turn_id: messageId, thread_id: conv.id, compacted: false, deduplicated: true, dispatch_disposition: inspected.disposition });
           if (inspected.status === 'stale') return notAccepted(res, 409, { error: 'stale_dispatch_generation', generation: inspected.generation });
           const baseText = textFromContent(body.content);
           let provenance;
@@ -2888,10 +2889,10 @@ const server = http.createServer(async (req, res) => {
             },
           );
           const { inspection, prepared } = preparedOutcome;
-          if (!prepared && inspection.status === 'duplicate') return json(res, 200, { message_id: messageId, turn_id: messageId, thread_id: conv.id, compacted: false, deduplicated: true });
+          if (!prepared && inspection.status === 'duplicate') return json(res, 200, { message_id: messageId, turn_id: messageId, thread_id: conv.id, compacted: false, deduplicated: true, dispatch_disposition: inspection.disposition });
           if (!prepared && inspection.status === 'stale') return notAccepted(res, 409, { error: 'stale_dispatch_generation', generation: inspection.generation });
           const { attachmentPrompt, text, mode } = prepared;
-          if (inspection.status === 'duplicate') return json(res, 200, { message_id: messageId, turn_id: messageId, thread_id: conv.id, compacted: false, deduplicated: true });
+          if (inspection.status === 'duplicate') return json(res, 200, { message_id: messageId, turn_id: messageId, thread_id: conv.id, compacted: false, deduplicated: true, dispatch_disposition: inspection.disposition });
           if (inspection.status === 'stale') return notAccepted(res, 409, { error: 'stale_dispatch_generation', generation: inspection.generation });
           const dispatch = registerDispatch(conv, {
             turnId: messageId,
@@ -2902,7 +2903,10 @@ const server = http.createServer(async (req, res) => {
           const preflight = createDispatchPreflightGate(
             conv.session.sessionManager,
             { dispatchId, generation },
-            (accepted) => { dispatch.accepted = accepted; },
+            (disposition) => {
+              dispatch.accepted = true;
+              dispatch.disposition = disposition;
+            },
           );
           const promptOptions = {
             source: 'api',
@@ -2912,10 +2916,13 @@ const server = http.createServer(async (req, res) => {
           };
           promptInvoked = true;
           const promptPromise = conv.session.prompt(text, promptOptions);
+          let dispatchDisposition;
           try {
-            // HTTP success is the durable acceptance boundary, not merely the
-            // point at which the async Pi prompt method was invoked.
-            await preflight.accepted;
+            // Pi 1.x does not call preflightResult when prompt setup rejects.
+            // Observe that rejection immediately rather than waiting forever on
+            // the durable acceptance gate. A successful disposition is still
+            // committed before HTTP success, preserving at-most-once identity.
+            dispatchDisposition = await awaitDispatchPreflight(preflight.accepted, promptPromise);
           } catch (error) {
             await promptPromise.catch(() => {});
             dispatch.accepted = false;
@@ -2939,7 +2946,13 @@ const server = http.createServer(async (req, res) => {
               decrementPendingMutations(conv);
             }
           })();
-          return json(res, 200, { message_id: messageId, turn_id: messageId, thread_id: conv.id, compacted: false });
+          return json(res, 200, {
+            message_id: messageId,
+            turn_id: messageId,
+            thread_id: conv.id,
+            compacted: false,
+            dispatch_disposition: dispatchDisposition,
+          });
         } finally {
           if (!mutationTransferredToPrompt) decrementPendingMutations(conv);
         }

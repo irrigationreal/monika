@@ -482,8 +482,8 @@ fi
 pass "OCI license label is AGPL-3.0-or-later"
 
 PI_VERSION="$(docker exec "$CONTAINER_NAME" pi --version 2>&1)"
-if [ "$PI_VERSION" != "0.87.1" ]; then
-  echo "Expected Pi 0.87.1, got: $PI_VERSION"
+if [ "$PI_VERSION" != "1.1.0" ]; then
+  echo "Expected Pi 1.1.0, got: $PI_VERSION"
   exit 1
 fi
 pass "pi CLI pin active: ${PI_VERSION}"
@@ -506,6 +506,10 @@ const fs = require('node:fs');
 const settings = JSON.parse(fs.readFileSync('/app/.pi/agent/settings.json', 'utf8'));
 if (!settings.packages.includes('npm:pi-agent-browser@0.1.0')) throw new Error('browser package choice missing');
 if (!settings.packages.includes('/opt/pi-subagents')) throw new Error('local pi-subagents package choice missing');
+if (settings.tuiMode !== 'regular') throw new Error('regular tmux-compatible TUI mode missing');
+for (const builtin of ['-builtin:mcp', '-builtin:codemode', '-builtin:tool-search']) {
+  if (!settings.extensions?.includes(builtin)) throw new Error(`deferred built-in extension is not disabled: ${builtin}`);
+}
 const sourceOf = (entry) => typeof entry === 'string' ? entry : entry?.source;
 if (settings.packages.some((entry) => sourceOf(entry)?.includes('nutrient-skills'))) throw new Error('nutrient-skills remains configured');
 NODE_PI_PACKAGE_DEFAULTS
@@ -714,7 +718,7 @@ docker exec -i "$CONTAINER_NAME" sh -eu -c '
   script=/tmp/subagent-fork-root-test.cjs
   mkdir -p "$(dirname "$dependency")"
   trap '\''rm -f "$dependency" "$script"'\'' EXIT
-  ln -s /usr/local/lib/node_modules/@earendil-works/pi-coding-agent "$dependency"
+  ln -s /opt/pi-cli/node_modules/@earendil-works/pi-coding-agent "$dependency"
   cat >"$script"
   node "$script"
 ' <<'NODE_SUBAGENT_FORK_ROOT'
@@ -724,7 +728,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { createJiti } = require('/opt/pi-subagents/node_modules/jiti/lib/jiti.cjs');
 const jiti = createJiti(__filename, { interopDefault: true });
-const { SessionManager } = jiti('/usr/local/lib/node_modules/@earendil-works/pi-coding-agent/dist/index.js');
+const { SessionManager } = jiti('/opt/pi-cli/node_modules/@earendil-works/pi-coding-agent/dist/index.js');
 const { createForkContextResolver } = jiti('/opt/pi-subagents/src/shared/fork-context.ts');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subagent-fork-root-'));
 try {

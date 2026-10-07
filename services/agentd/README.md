@@ -251,8 +251,15 @@ to canonical settlement for idempotent retry.
 Error JSON may include the backward-compatible marker
 `dispatch_acceptance: "not_accepted"` only when agentd can prove the request failed
 before prompt dispatch acceptance. Conversation create/open initialization and
-synchronous `POST .../messages` failures before Pi's `preflightResult(true)` are
-marked, and HTTP 200 waits until that callback has durably recorded acceptance.
+synchronous `POST .../messages` failures before Pi reports a `started`, `queued`,
+or `handled` preflight disposition are marked. Pi 1.x omits that callback when
+setup rejects, so agentd observes the prompt rejection concurrently rather than
+waiting on an unresolved gate. HTTP 200 waits until a reported disposition has
+durably recorded acceptance and returns that disposition to the caller. The dispatch
+fence retains that disposition, so an exact deduplicated retry returns the original
+`started`, `queued`, or `handled` value; older fence entries may omit it. This lets a
+caller retain a pending turn identity only for a real delayed boundary instead of
+manufacturing activity for handled work.
 Draining responses additionally carry `dispatch_retry: "safe"`, explicitly allowing
 the same durable identity to retry. Other marked failures require manual retry.
 After acceptance, execution remains asynchronous and failures/transport loss remain

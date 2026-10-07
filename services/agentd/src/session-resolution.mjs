@@ -324,9 +324,9 @@ export function ensureDurableForumSession(sessionManager, requested, creationId 
     throw new SessionResolutionError('session_anchor_failed', 'forum canonical session cannot be anchored');
   }
 
-  // Pi intentionally defers a new session file until its first assistant
-  // message. Forum must persist the canonical link before submitting a prompt,
-  // so create the complete header + invisible anchor atomically and then reload
+  // Pi 1.x creates a new session file with its first user message. Forum must
+  // persist the canonical link before submitting that prompt, so create the
+  // complete header + invisible anchor atomically and then reload
   // the same manager through its public API. Reloading marks subsequent Pi
   // appends as writes to an established session instead of a second create.
   if (!existsSync(sessionFile)) {

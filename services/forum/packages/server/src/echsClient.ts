@@ -508,7 +508,13 @@ export class EchsClient {
         executionOrigins?: UtteranceOrigin[];
       };
     }
-  ): Promise<{ messageId: string; threadId?: string | null; compacted?: boolean; deduplicated?: boolean }> {
+  ): Promise<{
+    messageId: string;
+    threadId?: string | null;
+    compacted?: boolean;
+    deduplicated?: boolean;
+    dispatchDisposition?: 'started' | 'queued' | 'handled';
+  }> {
     const payload: Record<string, unknown> = {
       mode: opts?.mode ?? 'queue',
       content,
@@ -523,13 +529,26 @@ export class EchsClient {
       method: 'POST',
       body: payload,
       timeoutMs: 30_000,
-    })) as { message_id: string; thread_id?: string | null; compacted?: boolean; deduplicated?: boolean };
-    const out: { messageId: string; threadId?: string | null; compacted?: boolean; deduplicated?: boolean } = {
+    })) as {
+      message_id: string;
+      thread_id?: string | null;
+      compacted?: boolean;
+      deduplicated?: boolean;
+      dispatch_disposition?: 'started' | 'queued' | 'handled';
+    };
+    const out: {
+      messageId: string;
+      threadId?: string | null;
+      compacted?: boolean;
+      deduplicated?: boolean;
+      dispatchDisposition?: 'started' | 'queued' | 'handled';
+    } = {
       messageId: result.message_id,
       threadId: result.thread_id ?? null,
     };
     if (result.compacted !== undefined) out.compacted = result.compacted;
     if (result.deduplicated !== undefined) out.deduplicated = result.deduplicated;
+    if (result.dispatch_disposition !== undefined) out.dispatchDisposition = result.dispatch_disposition;
     return out;
   }
 

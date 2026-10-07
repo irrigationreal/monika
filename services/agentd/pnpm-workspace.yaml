@@ -6,8 +6,8 @@ minimumReleaseAgeStrict: true
 minimumReleaseAgeIgnoreMissingTime: false
 minimumReleaseAgeExclude:
   - '@earendil-works/*'
-  # Pi 0.87.1 pins this SDK; reviewed with the coordinated Pi upgrade.
-  - '@anthropic-ai/sdk@0.123.0'
+  # Pi 1.1.0 pins this SDK; reviewed with the coordinated Pi upgrade.
+  - '@anthropic-ai/sdk@0.129.0'
 
 overrides:
   protobufjs: 7.6.5

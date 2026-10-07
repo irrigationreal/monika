@@ -117,7 +117,14 @@ export function handlePiEvent(conv, event, emit, createId = randomUUID) {
       const callId = event.toolCallId ?? event.id ?? createId();
       const toolName = event.toolName ?? conv.current?.toolCalls?.get(callId) ?? "tool";
       const result = event.result ?? event.output ?? event.error ?? null;
-      emit(conv, "tool_completed", { call_id: callId, tool_name: toolName, args: event.args ?? null, result: outwardToolResult(conv, event, callId, result), is_error: Boolean(event.isError) });
+      emit(conv, "tool_completed", {
+        call_id: callId,
+        tool_name: toolName,
+        args: event.args ?? null,
+        result: outwardToolResult(conv, event, callId, result),
+        is_error: Boolean(event.isError),
+        duration_ms: Number.isFinite(event.durationMs) && event.durationMs >= 0 ? event.durationMs : null,
+      });
       break;
     }
     case "message_end": {
@@ -149,6 +156,7 @@ export function handlePiEvent(conv, event, emit, createId = randomUUID) {
     case "agent_settled": {
       if (!conv.current) break;
       const { usage, messageId, userMappings = [], terminalError, assistantUtterances = [] } = conv.current;
+      const aborted = Boolean(event.aborted);
       for (const utterance of assistantUtterances) {
         emit(conv, 'item_completed', {
           item: {
@@ -164,7 +172,7 @@ export function handlePiEvent(conv, event, emit, createId = randomUUID) {
         });
       }
       const lastPiMessageId = assistantUtterances.at(-1)?.piMessageId ?? null;
-      if (terminalError) {
+      if (terminalError && !aborted) {
         emit(conv, "turn_error", {
           error: terminalError, category: classifyProviderError(terminalError),
           turn_id: userMappings.length === 1 ? userMappings[0].turn_id : (messageId ?? null),
@@ -179,6 +187,7 @@ export function handlePiEvent(conv, event, emit, createId = randomUUID) {
         pi_message_id: lastPiMessageId,
         user_pi_message_id: userMappings.length === 1 ? userMappings[0].user_pi_message_id : null,
         user_mappings: userMappings,
+        aborted,
         thread_id: conv.id,
       });
       conv.current = null;

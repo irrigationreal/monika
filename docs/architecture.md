@@ -158,7 +158,9 @@ SSE turn, or a forum channel event. One settled agent run can persist zero, one,
 several ordered outward assistant messages. Pi's internal `agent_settled` event is
 the idle boundary. Agentd emits each persisted outward message separately and maps
 that settlement to wire `turn_completed`; settlement never manufactures a message
-from a raw completion buffer. This model is channel-neutral: forum, CLI, and
+from a raw completion buffer. The idle boundary preserves Pi's explicit aborted
+state, while any canonical message persisted before cancellation remains a normal
+ordered utterance. This model is channel-neutral: forum, CLI, and
 external adapters project the same canonical utterances.
 
 Version 1 provenance preserves the original forum topic/post identity. Version 2

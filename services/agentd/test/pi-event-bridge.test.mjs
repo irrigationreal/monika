@@ -59,7 +59,7 @@ test('normal agent run emits canonical persisted content only after agent_settle
   assert.deepEqual(events.find(({ event }) => event === 'turn_usage').data.usage, { input_tokens: 4, output_tokens: 2, total_tokens: 6 });
   assert.deepEqual(events.find(({ event }) => event === 'turn_completed').data, {
     message_id: 'id-1', pi_message_id: 'pi-assistant-1', user_pi_message_id: 'pi-user-1',
-    user_mappings: [{ turn_id: 'forum-dispatch-1', user_pi_message_id: 'pi-user-1' }], thread_id: 'conversation-1',
+    user_mappings: [{ turn_id: 'forum-dispatch-1', user_pi_message_id: 'pi-user-1' }], aborted: false, thread_id: 'conversation-1',
   });
   assert.equal(conv.current, null);
 });
@@ -128,6 +128,26 @@ test('subagent tool completion redacts exact child bytes while retaining bounded
   assert.equal(JSON.stringify(packet).includes(secret), false);
   assert.deepEqual(packet.data.result.claims, [{ run_id: 'run-1', run_key: 'top:run-1', delivery_disposition: 'awaited', result_sha256: 'a'.repeat(64), result_size_bytes: 123, claim_entry_id: 'claim-entry-1', idempotent: false }]);
   assert.deepEqual(packet.data.result.status, { mode: 'management', state: null, run_id: null, delivery_disposition: null, result_count: 1, claim_count: 1 });
+});
+
+test('tool completion forwards Pi recorded duration without deriving it from wall-clock receipt', () => {
+  const { events, dispatch } = harness();
+  dispatch({ type: 'agent_start' });
+  dispatch({ type: 'tool_execution_start', toolCallId: 'call-duration', toolName: 'read', args: { path: 'README.md' } });
+  dispatch({ type: 'tool_execution_end', toolCallId: 'call-duration', toolName: 'read', result: { content: [] }, durationMs: 37 });
+  assert.equal(events.find(({ event }) => event === 'tool_completed').data.duration_ms, 37);
+});
+
+test('aborted settlement preserves canonical items and marks the idle boundary without a duplicate turn error', () => {
+  const { conv, events, dispatch } = harness();
+  dispatch({ type: 'agent_start' });
+  dispatch({ type: 'message_end', message: { role: 'assistant', stopReason: 'aborted', errorMessage: 'Request aborted' } });
+  conv.current.assistantUtterances = [utterance('pi-partial', 'Persisted before cancellation')];
+  dispatch({ type: 'agent_settled', aborted: true });
+  assert.equal(events.some(({ event }) => event === 'turn_error'), false);
+  assert.equal(events.filter(({ event }) => event === 'item_completed').length, 1);
+  assert.equal(events.find(({ event }) => event === 'turn_completed').data.aborted, true);
+  assert.equal(conv.current, null);
 });
 
 test('agent_settled without outward entries emits no message item and marks idle', () => {
