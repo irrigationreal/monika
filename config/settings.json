@@ -29,6 +29,8 @@
     "claude/claude-opus-4-5-20251101",
     "claude/claude-haiku-4-5-20251001",
     "claude/claude-sonnet-4-5-20250929",
+    "codex/gpt-6.1-sol",
+    "codex/gpt-6.1-sol[1m]",
     "codex/gpt-6-astra",
     "codex/gpt-6-astra[1m]",
     "codex/gpt-6-sol",
@@ -56,6 +58,7 @@
     "minimax/MiniMax-M3",
     "minimax/MiniMax-M2.7",
     "minimax/MiniMax-M2.7-highspeed",
+    "grok/grok-4.7-build-fast",
     "grok/grok-4.7",
     "grok/grok-4.6",
     "grok/grok-4.5"

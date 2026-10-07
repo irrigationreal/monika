@@ -250,6 +250,31 @@ Pi supports command-valued credentials, so a catalog is executable
 configuration, not inert data. A successful catalog parse or text-only request
 is not sufficient; the tool-result request must complete before activation.
 
+#### October 7, 2026 catalog refresh
+
+GPT-6.1 Sol (`codex/gpt-6.1-sol` and `codex/gpt-6.1-sol[1m]`) and
+`grok/grok-4.7-build-fast` passed isolated text and read-tool-result canaries
+with the deployed Pi 0.87.1 image at medium thinking and are included in
+`enabledModels`. Both routes reject the reasoning value sent by Pi when
+thinking is off; use medium thinking for these models. The default remains
+GPT-5.6 Sol, and subagent model assignments are unchanged.
+
+The pool advertises Grok Build Fast with a 500k context window and a 1M output
+limit. Those are upstream metadata, not independently verified limits; the
+small canaries do not establish maximum usable request or output sizes.
+
+The new `pool-mistral` provider remains deferred. Its Large 4, Medium Latest,
+Small Latest, and Magistral Medium Latest models passed text canaries, but all
+four returned HTTP 422 after a real read-tool result at medium thinking.
+Some tool canaries passed with thinking off, which is insufficient for the
+runtime's default reasoning setting. Resolve the upstream reasoning-history /
+tool-result compatibility failure and repeat exact-ID canaries before adding
+these models to the deployment catalog or enabled selection. Mistral model
+references use `pool-mistral/mistral/<id>`; retain the provider and model
+namespaces. Zero prices in generated metadata do not establish free inference.
+
+This refresh does not alter Antigravity entries or rotate existing credentials.
+
 #### OpenAI Chat Completions compatibility
 
 Antigravity entries currently use Pi's `openai-completions` transport. The
