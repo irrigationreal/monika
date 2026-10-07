@@ -582,6 +582,8 @@ Complete runtime setup lives in [Standalone deployment](deployment.md).
 Forum-specific authentication and migration remain in the
 [forum deployment guide](../services/forum/docs/DEPLOYMENT.md).
 
+Forum shutdown has two ordered phases. Fastify `preClose` synchronously fences new producer work, stops housekeeping schedules, rejects late SSE registration, and ends the topic-state, notification, and chat streams so they cannot block HTTP drain. Finite requests continue draining normally. Only after that drain does `onClose` join durable in-flight producers, Pi sync, maintenance, cancellation/projection cleanup, and then close Redis and SQLite. The 60-second watchdog is a hard fail-closed deadline: it logs an emergency, calls `closeAllConnections()`, and exits nonzero immediately in that callback. Fastify can enter `onClose` while an untracked finite HTTP handler is still pending after forced transport closure, so this path neither tears down SQLite nor claims durable cleanup success. This does not replace deploy admission or the Compose 10-minute stop grace.
+
 ## Current caveats
 
 - The forum runtime image contains only the server's production dependency deployment

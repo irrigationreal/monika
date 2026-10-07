@@ -428,8 +428,11 @@ export class EchsBridge {
   private spawnToolRunByAgentId = new Map<string, string>();
   private reasoningBackfillRetriesByThread = new Map<string, number>();
   private assistantBackfillTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private deferredTimers = new Set<ReturnType<typeof setTimeout>>();
+  private backgroundTasks = new Set<Promise<unknown>>();
   private readonly tamperLayer: MessageTamperLayer<MessageTamperContext>;
   private stopped = false;
+  private stopPromise: Promise<void> | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private healthPollTimer: ReturnType<typeof setInterval> | null = null;
   private threadHealthTimer: ReturnType<typeof setInterval> | null = null;
@@ -489,12 +492,13 @@ export class EchsBridge {
   setMaxConcurrentTurns(value: number): void {
     if (Number.isFinite(value) && value > 0) {
       this._maxConcurrentTurns = Math.floor(value);
-      void this.processTurnQueue();
+      this.runBackground(this.processTurnQueue());
     }
   }
 
   async start(): Promise<void> {
     this.stopped = false;
+    this.stopPromise = null;
     // Recover stale leases, crash-window finalization, and pending forum-only
     // completion delivery before ordinary post dispatch starts.
     await this.attachmentHandoffs.recover();
@@ -505,37 +509,84 @@ export class EchsBridge {
     this.startCancellationReconciliationLoop();
   }
 
-  async stop(): Promise<void> {
+  stop(): Promise<void> {
+    if (this.stopPromise) return this.stopPromise;
+
+    // Fence every event/timer producer synchronously before taking any task
+    // snapshot. A subscription can still deliver a queued callback while it is
+    // closing, so handleEvent also observes this fence.
     this.stopped = true;
     if (this.cancellationReconcileTimer) clearInterval(this.cancellationReconcileTimer);
-    this.cancellationReconcileTimer = null;
-    const cancellationReconcileInFlight = this.cancellationReconcileInFlight;
-    for (const timer of this.assistantBackfillTimers.values()) clearTimeout(timer);
-    this.assistantBackfillTimers.clear();
-
-    if (cancellationReconcileInFlight) await Promise.allSettled([cancellationReconcileInFlight]);
-    await this.attachmentHandoffs.stop();
-    await Promise.allSettled(this.projectionTails.values());
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     if (this.healthPollTimer) clearInterval(this.healthPollTimer);
     if (this.threadHealthTimer) clearInterval(this.threadHealthTimer);
+    this.cancellationReconcileTimer = null;
     this.heartbeatTimer = null;
     this.healthPollTimer = null;
     this.threadHealthTimer = null;
-
-    // A projection finalizer may have raced with shutdown; clear once more.
     for (const timer of this.assistantBackfillTimers.values()) clearTimeout(timer);
     this.assistantBackfillTimers.clear();
-
+    for (const timer of this.deferredTimers) clearTimeout(timer);
+    this.deferredTimers.clear();
     for (const sub of this.subscriptions.values()) {
       try {
         sub.close();
       } catch {
-        // ignore close errors during shutdown
+        // One broken subscription must not leave the other producers open.
       }
     }
     this.subscriptions.clear();
     this.pendingThreadContexts.clear();
+    const attachmentStop = this.attachmentHandoffs.stop();
+
+    this.stopPromise = (async () => {
+      if (this.cancellationReconcileInFlight) {
+        await Promise.allSettled([this.cancellationReconcileInFlight]);
+      }
+      // Already accepted work may start another tracked phase (for example a
+      // projection completion starts reasoning sync/TTS), so drain to a fixed
+      // point instead of relying on a one-time Promise snapshot.
+      await this.waitForBackgroundTasks();
+      await Promise.allSettled(this.projectionTails.values());
+      await this.waitForBackgroundTasks();
+      await attachmentStop;
+      await Promise.allSettled(this.projectionTails.values());
+      await this.waitForBackgroundTasks();
+    })();
+    return this.stopPromise;
+  }
+
+  private trackBackground<T>(task: Promise<T>): Promise<T> {
+    this.backgroundTasks.add(task);
+    void task.then(
+      () => this.backgroundTasks.delete(task),
+      () => this.backgroundTasks.delete(task)
+    );
+    return task;
+  }
+
+  private runBackground(task: Promise<unknown>, onError?: (error: unknown) => void): void {
+    const tracked = this.trackBackground(task);
+    void tracked.catch((error: unknown) => onError?.(error));
+  }
+
+  private scheduleDeferred(delayMs: number, task: () => void | Promise<void>): void {
+    if (this.stopped) return;
+    const timer = setTimeout(() => {
+      this.deferredTimers.delete(timer);
+      if (this.stopped) return;
+      this.runBackground(Promise.resolve().then(task), (error) => {
+        console.error('[ECHS] deferred task failed:', error instanceof Error ? error.message : error);
+      });
+    }, delayMs);
+    timer.unref?.();
+    this.deferredTimers.add(timer);
+  }
+
+  private async waitForBackgroundTasks(): Promise<void> {
+    while (this.backgroundTasks.size > 0) {
+      await Promise.allSettled([...this.backgroundTasks]);
+    }
   }
 
   getEchsHealth(): { queue_depth: number | null; active_threads: number | null } {
@@ -744,7 +795,7 @@ export class EchsBridge {
   ): Promise<Record<string, unknown>> {
     const opened = await this.openTopicConversation(topicId);
     const result = await this.client.compactConversation(opened.conversationId, opts);
-    void this.emitContext(topicId);
+    this.runBackground(this.emitContext(topicId));
     return result;
   }
 
@@ -859,7 +910,7 @@ export class EchsBridge {
     if (this.cancellationReconcileTimer) return;
     this.cancellationReconcileTimer = setInterval(() => {
       if (this.stopped) return;
-      void this.reconcileUnresolvedCancellations().catch((error) => {
+      this.runBackground(this.reconcileUnresolvedCancellations(), (error) => {
         console.warn(
           '[ECHS] periodic cancellation reconciliation failed:',
           error instanceof Error ? error.message : error
@@ -1247,9 +1298,9 @@ export class EchsBridge {
         this.echs_active_threads = null;
       }
     };
-    void poll();
+    this.runBackground(poll());
     this.healthPollTimer = setInterval(() => {
-      void poll();
+      if (!this.stopped) this.runBackground(poll());
     }, 30_000);
     this.healthPollTimer.unref?.();
   }
@@ -1257,7 +1308,7 @@ export class EchsBridge {
   private startThreadHealthCheck(): void {
     if (this.threadHealthTimer) return;
     this.threadHealthTimer = setInterval(() => {
-      void this.verifyActiveThreadHealth();
+      if (!this.stopped) this.runBackground(this.verifyActiveThreadHealth());
     }, 30_000);
     this.threadHealthTimer.unref?.();
   }
@@ -1413,11 +1464,11 @@ export class EchsBridge {
       currentPlanId: null,
     });
     this.emitState(turn.topicId);
-    void this.processTurnQueue();
+    this.runBackground(this.processTurnQueue());
   }
 
   private async processTurnQueue(): Promise<void> {
-    if (this.drainingQueue) return;
+    if (this.stopped || this.drainingQueue) return;
     this.drainingQueue = true;
     try {
       while (this.turnQueue.length > 0) {
@@ -1445,7 +1496,7 @@ export class EchsBridge {
         this.turnQueue.length > 0 &&
         this.activeTurnThreads.size + this.inflightDispatches < this._maxConcurrentTurns
       ) {
-        void this.processTurnQueue();
+        this.runBackground(this.processTurnQueue());
       }
     }
   }
@@ -1457,11 +1508,9 @@ export class EchsBridge {
     const timer = setTimeout(() => {
       if (this.stopped || this.assistantBackfillTimers.get(threadId) !== timer) return;
       this.assistantBackfillTimers.delete(threadId);
-      Promise.resolve()
-        .then(backfill)
-        .catch((error: unknown) => {
-          console.error('[ECHS] assistant backfill failed:', error instanceof Error ? error.message : error);
-        });
+      this.runBackground(Promise.resolve().then(backfill), (error) => {
+        console.error('[ECHS] assistant backfill failed:', error instanceof Error ? error.message : error);
+      });
     }, delayMs);
     timer.unref?.();
     this.assistantBackfillTimers.set(threadId, timer);
@@ -2062,7 +2111,7 @@ export class EchsBridge {
         return;
 
       const messageId = enqueueResult.messageId;
-      void this.emitContext(topicId);
+      this.runBackground(this.emitContext(topicId));
       this.schedulePlanSync(threadId);
       if (parentPostId) {
         this.store.setSessionLastDispatchedPostId(session.id, parentPostId);
@@ -2090,6 +2139,7 @@ export class EchsBridge {
   }
 
   private async ensureSubscribed(threadId: string, opts?: { replay?: boolean }): Promise<void> {
+    if (this.stopped) return;
     const existing = this.subscriptions.get(threadId);
     if (existing) {
       await this.waitForSubscriptionReady(existing.ready);
@@ -2125,6 +2175,7 @@ export class EchsBridge {
   }
 
   private handleEvent(threadId: string, event: EchsEvent): void {
+    if (this.stopped) return;
     const ctx = this.threadMap.get(threadId);
     if (!ctx) return;
 
@@ -2202,7 +2253,7 @@ export class EchsBridge {
         this.emitState(ctx.topicId);
         if (pendingCtx) {
           this.bus.emit(ctx.topicId, { type: 'assistant_reset', data: { reason: 'new_turn' } });
-          void this.emitContext(ctx.topicId);
+          this.runBackground(this.emitContext(ctx.topicId));
           this.schedulePlanSync(threadId);
           this.scheduleAssistantBackfill(threadId, {
             topicId: ctx.topicId,
@@ -2359,11 +2410,9 @@ export class EchsBridge {
                 origin: assistant.origin,
               });
             });
-            void this.syncReasoningFromHistory(threadId, ctx);
-            void this.forceReasoningBackfill(threadId);
-            setTimeout(() => {
-              void this.forceReasoningBackfill(threadId);
-            }, 6000);
+            this.runBackground(this.syncReasoningFromHistory(threadId, ctx));
+            this.runBackground(this.forceReasoningBackfill(threadId));
+            this.scheduleDeferred(6000, () => this.forceReasoningBackfill(threadId));
           }
         }
         break;
@@ -2387,34 +2436,35 @@ export class EchsBridge {
         }
         this.store.clearActiveTurnOrigin?.(ctx.topicId);
         const projections = this.projectionTails.get(threadId) ?? Promise.resolve();
-        void projections.finally(() => {
-          if (this.projectionTails.get(threadId) === projections) this.projectionTails.delete(threadId);
-          // Projection is serialized, but turn boundaries are not. A successor
-          // may have started while this completion waited behind persistence;
-          // only the exact context/turn captured above may finalize shared
-          // activity and schedule its parent-scoped recovery.
-          if (this.threadMap.get(threadId) !== ctx || ctx.currentTurnId !== completedTurnId) return;
-          ctx.currentTurnId = null;
-          ctx.turnStartedAt = null;
-          ctx.currentContinuation = null;
-          void this.forceReasoningBackfill(threadId);
-          const currentActivity = this.store.getRobotState(ctx.topicId)?.activity;
-          this.store.upsertRobotState({
-            topicId: ctx.topicId,
-            sessionId: ctx.sessionId,
-            activity: ['stopping', 'stopped', 'uncertain'].includes(currentActivity ?? '') ? currentActivity! : 'idle',
-            model: ctx.model,
-            reasoningEffort: ctx.reasoningEffort,
-            currentPlanId: ctx.planId,
-          });
-          this.emitState(ctx.topicId);
-          void this.emitContext(ctx.topicId);
-          this.activeTurnThreads.delete(threadId);
-          void this.processTurnQueue();
-          this.replaceAssistantBackfillTimer(threadId, 1000, () =>
-            this.ensureAssistantBackfill(threadId, ctx, turnStartedAt, turnParentPostId, missingPiMessageId)
-          );
-        });
+        this.runBackground(
+          projections.finally(() => {
+            if (this.projectionTails.get(threadId) === projections) this.projectionTails.delete(threadId);
+            // A successor may start while the completed turn waits for projection.
+            if (this.threadMap.get(threadId) !== ctx || ctx.currentTurnId !== completedTurnId) return;
+            ctx.currentTurnId = null;
+            ctx.turnStartedAt = null;
+            ctx.currentContinuation = null;
+            this.runBackground(this.forceReasoningBackfill(threadId));
+            const currentActivity = this.store.getRobotState(ctx.topicId)?.activity;
+            this.store.upsertRobotState({
+              topicId: ctx.topicId,
+              sessionId: ctx.sessionId,
+              activity: ['stopping', 'stopped', 'uncertain'].includes(currentActivity ?? '')
+                ? currentActivity!
+                : 'idle',
+              model: ctx.model,
+              reasoningEffort: ctx.reasoningEffort,
+              currentPlanId: ctx.planId,
+            });
+            this.emitState(ctx.topicId);
+            this.runBackground(this.emitContext(ctx.topicId));
+            this.activeTurnThreads.delete(threadId);
+            this.runBackground(this.processTurnQueue());
+            this.replaceAssistantBackfillTimer(threadId, 1000, () =>
+              this.ensureAssistantBackfill(threadId, ctx, turnStartedAt, turnParentPostId, missingPiMessageId)
+            );
+          })
+        );
         break;
       }
       case 'turn_interrupted': {
@@ -2459,7 +2509,7 @@ export class EchsBridge {
         });
         this.emitState(ctx.topicId);
         this.activeTurnThreads.delete(threadId);
-        void this.processTurnQueue();
+        this.runBackground(this.processTurnQueue());
         break;
       }
       case 'turn_usage': {
@@ -2487,7 +2537,7 @@ export class EchsBridge {
         const automatic = reason === 'threshold' || reason === 'overflow';
         const succeeded = !data?.aborted && !data?.error;
         const compactionEntryId = typeof data?.compaction_entry_id === 'string' ? data.compaction_entry_id : null;
-        if (succeeded) void this.emitContext(ctx.topicId);
+        if (succeeded) this.runBackground(this.emitContext(ctx.topicId));
         if (automatic) {
           const sourceId = compactionEntryId ?? `${threadId}:auto-compaction:${reason}:${event.id ?? randomUUID()}`;
           const result = data?.result && typeof data.result === 'object' ? data.result : {};
@@ -2569,7 +2619,7 @@ export class EchsBridge {
           data: { error: errorMsg, thread_id: threadId, event_id: operationalEvent.id },
         });
         this.activeTurnThreads.delete(threadId);
-        void this.processTurnQueue();
+        this.runBackground(this.processTurnQueue());
         break;
       }
       case 'subagent_spawned': {
@@ -2587,7 +2637,7 @@ export class EchsBridge {
         const agentId = data?.agent_id;
         if (agentId) {
           ctx.activeSubagents.delete(agentId);
-          void this.enrichSubagentToolRun(agentId, ctx);
+          this.runBackground(this.enrichSubagentToolRun(agentId, ctx));
           this.emitState(ctx.topicId);
         }
         break;
@@ -2599,8 +2649,8 @@ export class EchsBridge {
         );
         const turnStartedAt = ctx.turnStartedAt;
         const turnParentPostId = ctx.turnParentPostId;
-        void this.ensureAssistantBackfill(threadId, ctx, turnStartedAt, turnParentPostId);
-        void this.syncReasoningFromHistory(threadId, ctx);
+        this.runBackground(this.ensureAssistantBackfill(threadId, ctx, turnStartedAt, turnParentPostId));
+        this.runBackground(this.syncReasoningFromHistory(threadId, ctx));
         break;
       }
       default:
@@ -2707,10 +2757,7 @@ export class EchsBridge {
   }
 
   private schedulePlanSync(threadId: string): void {
-    const delayMs = 2000;
-    setTimeout(() => {
-      void this.forceReasoningBackfill(threadId);
-    }, delayMs);
+    this.scheduleDeferred(2000, () => this.forceReasoningBackfill(threadId));
   }
 
   private async forceReasoningBackfill(threadId: string): Promise<void> {
@@ -2731,10 +2778,7 @@ export class EchsBridge {
       if (retries >= 5) return;
       const next = retries + 1;
       setRetries(next);
-      const delayMs = 2000 * next;
-      setTimeout(() => {
-        void this.forceReasoningBackfill(threadId);
-      }, delayMs);
+      this.scheduleDeferred(2000 * next, () => this.forceReasoningBackfill(threadId));
     };
     try {
       const synced = await this.syncReasoningFromHistory(threadId, ctx, planContext);
@@ -2761,10 +2805,7 @@ export class EchsBridge {
       if (ctx.planId || ctx.reasoningSummary.trim()) return;
       if (ctx.reasoningBackfillRetries >= 3) return;
       ctx.reasoningBackfillRetries += 1;
-      const delayMs = 250 * ctx.reasoningBackfillRetries;
-      setTimeout(() => {
-        void this.backfillReasoningSummary(threadId, ctx);
-      }, delayMs);
+      this.scheduleDeferred(250 * ctx.reasoningBackfillRetries, () => this.backfillReasoningSummary(threadId, ctx));
     };
     try {
       const synced = await this.syncReasoningFromHistory(threadId, ctx);
@@ -2917,10 +2958,10 @@ export class EchsBridge {
       },
     });
     if (payload['requestedTts'] === true) {
-      void this.attachTtsToPost(projection.post_id, text).catch(() => undefined);
+      this.runBackground(this.attachTtsToPost(projection.post_id, text));
     }
     const ctx = threadId ? this.threadMap.get(threadId) : undefined;
-    if (ctx) void this.syncReasoningFromHistory(threadId as string, ctx);
+    if (ctx) this.runBackground(this.syncReasoningFromHistory(threadId as string, ctx));
   }
 
   private enqueueAssistantProjection(threadId: string, project: () => Promise<void>): Promise<void> {

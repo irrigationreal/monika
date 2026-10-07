@@ -692,3 +692,111 @@ describe('passive ECHS startup reconciliation', () => {
     expect(store.setRobotActivity).toHaveBeenCalledWith('topic-1', 'idle');
   });
 });
+
+describe('ECHS bridge shutdown fencing', () => {
+  function shutdownBridge() {
+    const bridge = new EchsBridge({} as any, { emit: vi.fn(), subscribe: vi.fn() } as any, {
+      model: 'model',
+      workDir: '/tmp',
+      echs: { baseUrl: 'http://agentd.invalid' },
+    });
+    const context = {
+      topicId: 'topic-1',
+      sessionId: 'session-1',
+      activeThreadId: 'thread-1',
+      lastUserPostId: 'post-1',
+      turnParentPostId: 'post-1',
+      planId: null,
+      reasoningSummary: '',
+      reasoningBackfillAttempted: false,
+      reasoningBackfillRetries: 0,
+      model: 'model',
+      reasoningEffort: null,
+      currentTurnId: 'turn-1',
+      turnStartedAt: Date.now(),
+      lastUsage: null,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      activeSubagents: new Map(),
+      lastStreamEventAt: null,
+      reasoningCheckpoints: [],
+    };
+    (bridge as any).threadMap.set('conversation-1', context);
+    return { bridge };
+  }
+
+  it('closes subscriptions before joining projections and rejects an item_completed callback queued by close', async () => {
+    const { bridge } = shutdownBridge();
+    let resolveProjection!: () => void;
+    const projection = new Promise<void>((resolve) => {
+      resolveProjection = resolve;
+    });
+    (bridge as any).projectionTails.set('conversation-1', projection);
+    const enqueueProjection = vi.spyOn(bridge as any, 'enqueueAssistantProjection');
+    const close = vi.fn(() => {
+      (bridge as any).handleEvent('conversation-1', {
+        event: 'item_completed',
+        data: {
+          item: {
+            id: 'pi-late',
+            pi_message_id: 'pi-late',
+            utterance_id: 'pi-late',
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'text', text: 'late answer' }],
+          },
+        },
+      });
+    });
+    (bridge as any).subscriptions.set('conversation-1', {
+      close,
+      ready: Promise.resolve(),
+      lastEventId: null,
+      options: {},
+    });
+
+    let stopped = false;
+    const stopping = bridge.stop().then(() => {
+      stopped = true;
+    });
+
+    expect(close).toHaveBeenCalledOnce();
+    expect(enqueueProjection).not.toHaveBeenCalled();
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+    resolveProjection();
+    await stopping;
+    expect(stopped).toBe(true);
+  });
+
+  it('joins already-started reasoning and assistant backfill work after fencing event producers', async () => {
+    const { bridge } = shutdownBridge();
+    let resolveReasoning!: (value: boolean) => void;
+    let resolveBackfill!: () => void;
+    vi.spyOn(bridge as any, 'syncReasoningFromHistory').mockReturnValue(
+      new Promise<boolean>((resolve) => {
+        resolveReasoning = resolve;
+      })
+    );
+    vi.spyOn(bridge as any, 'ensureAssistantBackfill').mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveBackfill = resolve;
+      })
+    );
+
+    (bridge as any).handleEvent('conversation-1', { event: 'events_gap', data: {} });
+    let stopped = false;
+    const stopping = bridge.stop().then(() => {
+      stopped = true;
+    });
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+
+    resolveReasoning(false);
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+    resolveBackfill();
+    await stopping;
+    expect(stopped).toBe(true);
+  });
+});

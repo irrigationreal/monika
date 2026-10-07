@@ -84,6 +84,11 @@ packages/
   after acquisition before any eligible post transaction can become visible. Explicit dispatch clears `silent` and
   creates its outbox row atomically.
 - Feature flags (auth, rate limiting, search, Redis stream bus) are toggled via env vars.
+- Shutdown closes SSE admission and all three browser stream families in Fastify `preClose`, while normal finite
+  requests drain. Durable producers, maintenance, cancellation, and projection work are joined before SQLite closes. The
+  60-second watchdog is a hard deadline: it force-closes transports and exits nonzero immediately. Because Fastify may
+  enter `onClose` while an untracked finite HTTP handler remains pending after that force-close, the fallback neither
+  tears down SQLite nor reports durable cleanup success. It does not shorten the deployment's 10-minute Compose grace.
 
 ### Web UI
 
