@@ -1318,6 +1318,9 @@ export class EchsBridge {
                 this.store.setRobotActivity(ctx.topicId, 'idle');
               ctx.currentTurnId = null;
               ctx.turnStartedAt = null;
+              // Any retained lost-response identity is obsolete once agentd
+              // authoritatively reports no active or queued turn.
+              this.pendingThreadContexts.delete(threadId);
               this.store.clearActiveTurnOrigin?.(ctx.topicId);
               this.activeTurnThreads.delete(threadId);
               this.emitState(ctx.topicId);
@@ -1998,13 +2001,19 @@ export class EchsBridge {
           throw err;
         }
       }
-      // Agentd may have accepted and completed this exact dispatch before a
-      // forum crash or lost HTTP response. Settle the durable forum cursor,
-      // but never manufacture a second local turn for that deduplicated retry.
+      // A steer mutates the active turn and intentionally has no distinct
+      // turn_started boundary to claim a replacement context.
+      if (enqueueMode === 'steer') discardPendingContext(threadId);
+
+      // Agentd may have accepted this exact dispatch before a lost HTTP
+      // response. Its durable fence returns the original Pi disposition. Keep
+      // a staged started/queued identity until its delayed authoritative
+      // boundary arrives; handled, steer, and legacy duplicates cannot claim a
+      // new turn and must not leak staged state.
       if (enqueueResult.deduplicated) {
-        // A duplicate response proves acceptance, but not that this dispatch is
-        // the currently active queued turn. Only turn_started may bind origin.
-        discardPendingContext(threadId);
+        if (enqueueMode === 'steer' || !['started', 'queued'].includes(enqueueResult.dispatchDisposition ?? '')) {
+          discardPendingContext(threadId);
+        }
         if (parentPostId) this.store.setSessionLastDispatchedPostId(session.id, parentPostId);
         if (pendingMoveToClear) this.store.clearTopicMovePrompt(pendingMoveToClear);
         return;
@@ -2361,13 +2370,30 @@ export class EchsBridge {
       }
       case 'turn_completed': {
         const completionData = asRecord(event.data);
+        const completedTurnId =
+          nonEmptyId(
+            completionData?.['turn_id'],
+            completionData?.['turnId'],
+            completionData?.['message_id'],
+            completionData?.['messageId']
+          ) ?? ctx.currentTurnId;
         const turnStartedAt = ctx.turnStartedAt;
         const turnParentPostId = ctx.turnParentPostId;
         const missingPiMessageId = nonEmptyId(completionData?.['pi_message_id'], completionData?.['piMessageId']);
+        if (completedTurnId) {
+          const pending = this.pendingThreadContexts.get(threadId);
+          pending?.delete(completedTurnId);
+          if (pending?.size === 0) this.pendingThreadContexts.delete(threadId);
+        }
         this.store.clearActiveTurnOrigin?.(ctx.topicId);
         const projections = this.projectionTails.get(threadId) ?? Promise.resolve();
         void projections.finally(() => {
           if (this.projectionTails.get(threadId) === projections) this.projectionTails.delete(threadId);
+          // Projection is serialized, but turn boundaries are not. A successor
+          // may have started while this completion waited behind persistence;
+          // only the exact context/turn captured above may finalize shared
+          // activity and schedule its parent-scoped recovery.
+          if (this.threadMap.get(threadId) !== ctx || ctx.currentTurnId !== completedTurnId) return;
           ctx.currentTurnId = null;
           ctx.turnStartedAt = null;
           ctx.currentContinuation = null;

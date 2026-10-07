@@ -2862,7 +2862,7 @@ const server = http.createServer(async (req, res) => {
             inspected = inspectDispatch(conv.session.sessionManager, { dispatchId, generation });
           }
           catch (err) { return notAccepted(res, 400, { error: 'bad_request', message: err instanceof Error ? err.message : String(err) }); }
-          if (inspected.status === 'duplicate') return json(res, 200, { message_id: messageId, turn_id: messageId, thread_id: conv.id, compacted: false, deduplicated: true });
+          if (inspected.status === 'duplicate') return json(res, 200, { message_id: messageId, turn_id: messageId, thread_id: conv.id, compacted: false, deduplicated: true, dispatch_disposition: inspected.disposition });
           if (inspected.status === 'stale') return notAccepted(res, 409, { error: 'stale_dispatch_generation', generation: inspected.generation });
           const baseText = textFromContent(body.content);
           let provenance;
@@ -2889,10 +2889,10 @@ const server = http.createServer(async (req, res) => {
             },
           );
           const { inspection, prepared } = preparedOutcome;
-          if (!prepared && inspection.status === 'duplicate') return json(res, 200, { message_id: messageId, turn_id: messageId, thread_id: conv.id, compacted: false, deduplicated: true });
+          if (!prepared && inspection.status === 'duplicate') return json(res, 200, { message_id: messageId, turn_id: messageId, thread_id: conv.id, compacted: false, deduplicated: true, dispatch_disposition: inspection.disposition });
           if (!prepared && inspection.status === 'stale') return notAccepted(res, 409, { error: 'stale_dispatch_generation', generation: inspection.generation });
           const { attachmentPrompt, text, mode } = prepared;
-          if (inspection.status === 'duplicate') return json(res, 200, { message_id: messageId, turn_id: messageId, thread_id: conv.id, compacted: false, deduplicated: true });
+          if (inspection.status === 'duplicate') return json(res, 200, { message_id: messageId, turn_id: messageId, thread_id: conv.id, compacted: false, deduplicated: true, dispatch_disposition: inspection.disposition });
           if (inspection.status === 'stale') return notAccepted(res, 409, { error: 'stale_dispatch_generation', generation: inspection.generation });
           const dispatch = registerDispatch(conv, {
             turnId: messageId,

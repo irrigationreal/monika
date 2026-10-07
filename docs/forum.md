@@ -344,8 +344,15 @@ remain projectable. The forum marks activity idle only after this wire boundary,
 while live text remains an in-progress trace rather than a post. Pi's accepted
 `handled` dispatch disposition means an input extension consumed the request with
 no agent run, so the forum advances its durable cursor without manufacturing active
-robot state or waiting for a completion event. Tool completion events may also carry
-Pi's recorded `duration_ms`; this is optional trace metadata, not a settlement clock.
+robot state or waiting for a completion event. Agentd's durable dispatch fence also
+returns the original disposition on exact deduplicated retries. While another turn
+is active, the forum retains a retry's parent context only for a `started`/`queued`
+boundary; it discards handled and steer contexts because neither owns a new turn.
+Retained identity is cleared by its matching boundary/completion, cancellation,
+dead-thread cleanup, or authoritative idle health reconciliation. Older fence
+entries without a recorded disposition use the conservative no-retention behavior.
+Tool completion events may also carry Pi's recorded `duration_ms`; this is optional
+trace metadata, not a settlement clock.
 
 Live SSE and sync call the same deterministic assistant-projection service. The
 service applies outbound tamper and default-persona semantics, strips compatibility

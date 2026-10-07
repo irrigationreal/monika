@@ -647,7 +647,7 @@ describe('durable post dispatch recovery fence', () => {
     expect((bridge as any).activeTurnThreads.has('conversation-1')).toBe(false);
   });
 
-  it('preserves the active sole-writer context when a handled dispatch races a stream event', async () => {
+  it('preserves the active sole-writer context for handled work and discards an accepted steer staging entry', async () => {
     const { topic, session, post } = fixture();
     store.setSessionAgentThread(session.id, 'echs', 'conversation-1');
     store.upsertPiSessionLink({
@@ -705,7 +705,7 @@ describe('durable post dispatch recovery fence', () => {
       cwd: '/tmp',
       activity: 'active',
     });
-    vi.spyOn((bridge as any).client, 'enqueueConversationMessage').mockImplementation(async () => {
+    const enqueue = vi.spyOn((bridge as any).client, 'enqueueConversationMessage').mockImplementation(async () => {
       (bridge as any).handleEvent('conversation-1', {
         id: 'stream-during-enqueue',
         event: 'reasoning_delta',
@@ -740,6 +740,36 @@ describe('durable post dispatch recovery fence', () => {
     expect((bridge as any).activeTurnThreads.has('conversation-1')).toBe(true);
     expect((bridge as any).pendingThreadContexts.size).toBe(0);
     expect(bus.emit).not.toHaveBeenCalledWith(topic.id, expect.objectContaining({ type: 'assistant_reset' }));
+
+    const steerPost = store.createPost({ topicId: topic.id, authorId: post.author_id, body: 'steer active turn' });
+    const steerOrigin = store.resolveUtteranceOrigin(steerPost.id);
+    store.recordActiveTurnOrigin({
+      topicId: topic.id,
+      dispatchId: 'active-turn',
+      generation: 0,
+      origin: steerOrigin,
+    });
+    enqueue.mockResolvedValue({
+      messageId: 'dispatch-steer-active',
+      threadId: 'conversation-1',
+      dispatchDisposition: 'started',
+    });
+
+    await bridge.dispatchPostToAgent(topic.id, steerPost.id, {
+      mode: 'steer',
+      dispatchId: 'dispatch-steer-active',
+      generation: 0,
+      contributorPostIds: [steerPost.id],
+      origin: steerOrigin,
+    });
+
+    expect(enqueue).toHaveBeenLastCalledWith(
+      'conversation-1',
+      expect.any(String),
+      expect.objectContaining({ mode: 'steer', dispatchId: 'dispatch-steer-active' })
+    );
+    expect((bridge as any).threadMap.get('conversation-1')).toBe(activeContext);
+    expect((bridge as any).pendingThreadContexts.size).toBe(0);
   });
 
   it('defers an active queued context until turn_started binds its dispatch and parent', async () => {
@@ -1160,7 +1190,7 @@ describe('durable post dispatch recovery fence', () => {
     expect(agent.dispatchPostToAgent).toHaveBeenCalledTimes(1);
   });
 
-  it('a deduplicated lost-response retry settles without manufacturing a thinking turn', async () => {
+  it('retains exact parent identity across a lost response, duplicate retry, and delayed turn boundary', async () => {
     const { topic, session, post } = fixture();
     const cwd = await mkdtemp(join(tmpdir(), 'forum-deduplicated-dispatch-'));
     try {
@@ -1172,12 +1202,34 @@ describe('durable post dispatch recovery fence', () => {
         topicId: topic.id,
         sessionId: session.id,
       });
-      store.setRobotActivity(topic.id, 'idle');
       const bridge = new EchsBridge(store, { emit: vi.fn(), subscribe: vi.fn() } as any, {
         model: 'model',
         workDir: cwd,
         echs: { baseUrl: 'http://agentd.invalid' },
       });
+      const activeContext = {
+        topicId: topic.id,
+        sessionId: session.id,
+        activeThreadId: 'active-branch',
+        lastUserPostId: 'prior-parent',
+        turnParentPostId: 'prior-parent',
+        planId: null,
+        reasoningSummary: 'prior trace',
+        reasoningBackfillAttempted: false,
+        reasoningBackfillRetries: 0,
+        model: 'model',
+        reasoningEffort: null,
+        currentTurnId: 'prior-turn',
+        turnStartedAt: 123,
+        lastUsage: null,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        activeSubagents: new Map(),
+        lastStreamEventAt: 456,
+        reasoningCheckpoints: [],
+      };
+      (bridge as any).threadMap.set('conversation-1', activeContext);
+      (bridge as any).activeTurnThreads.add('conversation-1');
       vi.spyOn((bridge as any).client, 'getConversation').mockResolvedValue({
         conversation_id: 'conversation-1',
         activity: 'active',
@@ -1186,17 +1238,32 @@ describe('durable post dispatch recovery fence', () => {
         messageId: post.id,
         threadId: 'conversation-1',
         deduplicated: true,
+        dispatchDisposition: 'queued',
       });
       vi.spyOn(bridge as any, 'ensureSubscribed').mockResolvedValue(undefined);
-      vi.spyOn(bridge as any, 'emitState').mockImplementation(() => {});
+      vi.spyOn(bridge as any, 'emitContext').mockResolvedValue(undefined);
+      vi.spyOn(bridge as any, 'schedulePlanSync').mockImplementation(() => undefined);
+      vi.spyOn(bridge as any, 'scheduleAssistantBackfill').mockImplementation(() => undefined);
 
       const origin = store.resolveUtteranceOrigin(post.id);
       await bridge.dispatchPostToAgent(topic.id, post.id, { dispatchId: post.id, generation: 0, origin });
 
-      expect(store.getRobotState(topic.id)?.activity).toBe('idle');
-      expect(store.getActiveTurnOrigin(topic.id)).toBeNull();
+      expect((bridge as any).threadMap.get('conversation-1')).toBe(activeContext);
+      expect((bridge as any).pendingThreadContexts.get('conversation-1')?.has(post.id)).toBe(true);
       expect(store.getSession(session.id)?.last_dispatched_post_id).toBe(post.id);
-      expect((bridge as any).activeTurnThreads.size).toBe(0);
+
+      (bridge as any).handleEvent('conversation-1', {
+        event: 'turn_started',
+        data: { turn_id: post.id, thread_id: 'retry-branch' },
+      });
+
+      expect((bridge as any).threadMap.get('conversation-1')).toMatchObject({
+        currentTurnId: post.id,
+        turnParentPostId: post.id,
+        lastUserPostId: post.id,
+        activeThreadId: 'retry-branch',
+      });
+      expect((bridge as any).pendingThreadContexts.size).toBe(0);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

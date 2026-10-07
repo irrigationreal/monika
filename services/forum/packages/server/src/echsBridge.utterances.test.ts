@@ -165,6 +165,87 @@ describe('ECHS canonical utterance projection', () => {
     }
   });
 
+  it('does not let a delayed projection finalizer idle or backfill over a successor turn', async () => {
+    const forum = store.createForum('Forum');
+    const human = store.createIdentity('Author', 'human');
+    const { topic, post: oldParent } = store.createTopic({
+      forumId: forum.id,
+      title: 'Topic',
+      body: 'Old work',
+      authorId: human.id,
+    });
+    const successorParent = store.createPost({ topicId: topic.id, authorId: human.id, body: 'New work' });
+    const session = store.ensureSession({ topicId: topic.id });
+    store.upsertRobotState({
+      topicId: topic.id,
+      sessionId: session.id,
+      activity: 'thinking',
+      model: 'm',
+      reasoningEffort: null,
+      currentPlanId: null,
+    });
+    const bridge = new EchsBridge(store, { emit: vi.fn(), subscribe: vi.fn() } as any, {
+      model: 'm',
+      workDir: '/tmp',
+      echs: { baseUrl: 'http://agentd.invalid' },
+    });
+    const ctx = {
+      topicId: topic.id,
+      sessionId: session.id,
+      activeThreadId: 'thread',
+      lastUserPostId: oldParent.id,
+      turnParentPostId: oldParent.id,
+      planId: null,
+      reasoningSummary: '',
+      reasoningBackfillAttempted: false,
+      reasoningBackfillRetries: 0,
+      model: 'm',
+      reasoningEffort: null,
+      currentTurnId: 'old-turn',
+      turnStartedAt: 123,
+      lastUsage: null,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      activeSubagents: new Map(),
+      lastStreamEventAt: null,
+      reasoningCheckpoints: [],
+    };
+    (bridge as any).threadMap.set('conversation', ctx);
+    (bridge as any).activeTurnThreads.add('conversation');
+    const releaseProjection = Promise.withResolvers<void>();
+    const projection = (bridge as any).enqueueAssistantProjection('conversation', async () => {
+      await releaseProjection.promise;
+    });
+    const backfill = vi.spyOn(bridge as any, 'ensureAssistantBackfill').mockResolvedValue(undefined);
+    vi.spyOn(bridge as any, 'forceReasoningBackfill').mockResolvedValue(undefined);
+    vi.spyOn(bridge as any, 'emitContext').mockResolvedValue(undefined);
+
+    (bridge as any).handleEvent('conversation', {
+      event: 'turn_completed',
+      data: { turn_id: 'old-turn' },
+    });
+    ctx.lastUserPostId = successorParent.id;
+    ctx.turnParentPostId = successorParent.id;
+    (bridge as any).handleEvent('conversation', {
+      event: 'turn_started',
+      data: { turn_id: 'successor-turn', thread_id: 'successor-branch' },
+    });
+
+    releaseProjection.resolve();
+    await projection;
+    await Promise.resolve();
+
+    expect(ctx).toMatchObject({
+      currentTurnId: 'successor-turn',
+      turnParentPostId: successorParent.id,
+      activeThreadId: 'successor-branch',
+    });
+    expect(store.getRobotState(topic.id)?.activity).toBe('thinking');
+    expect((bridge as any).activeTurnThreads.has('conversation')).toBe(true);
+    expect(backfill).not.toHaveBeenCalled();
+    expect((bridge as any).assistantBackfillTimers.size).toBe(0);
+  });
+
   it('serializes multiple canonical items before turn idle and freezes continuation per item', async () => {
     const forum = store.createForum('Forum');
     const human = store.createIdentity('Author', 'human');

@@ -40,9 +40,10 @@ test('preflight gate durably accepts and preserves every Pi 1.x disposition', as
   for (const disposition of ['started', 'queued', 'handled']) {
     const sessionManager = manager();
     const observed = [];
+    const dispatchId = `gate-${disposition}`;
     const gate = createDispatchPreflightGate(
       sessionManager,
-      { dispatchId: `gate-${disposition}`, generation: 0 },
+      { dispatchId, generation: 0 },
       (value) => observed.push(value),
     );
     let settled = false;
@@ -52,7 +53,9 @@ test('preflight gate durably accepts and preserves every Pi 1.x disposition', as
     gate.preflightResult(disposition);
     assert.equal(await gate.accepted, disposition);
     assert.deepEqual(observed, [disposition]);
-    assert.equal(inspectDispatch(sessionManager, { dispatchId: `gate-${disposition}`, generation: 0 }).status, 'duplicate');
+    assert.deepEqual(inspectDispatch(sessionManager, { dispatchId, generation: 0 }), {
+      status: 'duplicate', generation: 0, disposition,
+    });
   }
 });
 
