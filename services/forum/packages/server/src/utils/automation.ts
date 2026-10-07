@@ -260,7 +260,8 @@ async function runEchsAutomation(opts: {
         break;
       }
       case 'turn_completed': {
-        completionResolve?.(lastAssistantMessage ?? outputBuffer);
+        if ((event.data as any)?.aborted === true) completionReject?.(new Error('ECHS automation turn aborted'));
+        else completionResolve?.(lastAssistantMessage ?? outputBuffer);
         break;
       }
       case 'turn_interrupted': {

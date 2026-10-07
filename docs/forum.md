@@ -337,9 +337,15 @@ acquisition until its idempotent release. Existing fork/clone operation reads an
 Pi's internal `agent_settled` event means the runtime reached the idle boundary;
 it is not a request to aggregate text or publish an unpersisted raw completion.
 Agentd emits each persisted outward item individually, then maps settlement to the
-wire `turn_completed` event, which can follow zero outward items. The forum marks
-activity idle only after this wire boundary, while live text remains an in-progress
-trace rather than a post.
+wire `turn_completed` event, which can follow zero outward items. The boundary
+carries Pi 1.x's `aborted` flag so automation can reject cancellation rather than
+mistake it for successful output; canonical items persisted before cancellation
+remain projectable. The forum marks activity idle only after this wire boundary,
+while live text remains an in-progress trace rather than a post. Pi's accepted
+`handled` dispatch disposition means an input extension consumed the request with
+no agent run, so the forum advances its durable cursor without manufacturing active
+robot state or waiting for a completion event. Tool completion events may also carry
+Pi's recorded `duration_ms`; this is optional trace metadata, not a settlement clock.
 
 Live SSE and sync call the same deterministic assistant-projection service. The
 service applies outbound tamper and default-persona semantics, strips compatibility

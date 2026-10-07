@@ -596,7 +596,8 @@ export class AutoRunDirector {
           break;
         }
         case 'turn_completed': {
-          completionResolve?.(lastAssistantMessage ?? outputBuffer);
+          if ((event.data as any)?.aborted === true) completionReject?.(new Error('ECHS director turn aborted'));
+          else completionResolve?.(lastAssistantMessage ?? outputBuffer);
           break;
         }
         case 'turn_interrupted': {

@@ -7,9 +7,12 @@ Monika runs as two coordinated application containers:
 
 The tracked [`compose.yaml.example`](../compose.yaml.example) is the canonical
 standalone deployment template. Copy it to ignored `compose.yaml` and keep
-host-specific changes out of Git. The Monika image currently ships Pi 0.87.1;
-the CLI, agentd SDK, and lockfile are upgraded together so session and extension
-APIs cannot drift between the runtime layers.
+host-specific changes out of Git. The Monika image currently ships Pi 1.1.0;
+the CLI and agentd SDK are upgraded together from reviewed lockfiles so their
+session, extension, and transitive dependency APIs cannot drift between runtime
+layers. Interactive Pi explicitly uses regular TUI mode for tmux scrollback.
+Built-in MCP, codemode, and tool-search extensions remain disabled pending a
+separate capability and projection review.
 
 ## Start from published images
 
@@ -254,7 +257,7 @@ is not sufficient; the tool-result request must complete before activation.
 
 GPT-6.1 Sol (`codex/gpt-6.1-sol` and `codex/gpt-6.1-sol[1m]`) and
 `grok/grok-4.7-build-fast` passed isolated text and read-tool-result canaries
-with the deployed Pi 0.87.1 image at medium thinking and are included in
+with the then-deployed Pi 0.87.1 image at medium thinking and are included in
 `enabledModels`. Both routes reject the reasoning value sent by Pi when
 thinking is off; use medium thinking for these models. The default remains
 GPT-5.6 Sol, and subagent model assignments are unchanged.

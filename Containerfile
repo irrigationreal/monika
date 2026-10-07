@@ -63,10 +63,13 @@ RUN mkdir -p /opt/monika && \
 ENV AGENT_BROWSER_INSTALL_HOME=/opt/agent-browser
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/opt/agent-browser/chrome
 
-# Pi coding agent — pinned version. Pi releases are deliberately exempt from
-# the cooldown because coordinated @earendil-works updates are reviewed and
-# adopted explicitly; the exact version keeps the resulting image reproducible.
-RUN npm install -g --min-release-age=0 @earendil-works/pi-coding-agent@0.87.1
+# Pi coding agent — install the reviewed CLI and its complete transitive graph
+# from an image-owned lockfile. Upstream npm releases no longer publish a
+# shrinkwrap, so an exact top-level global pin alone would not be reproducible.
+COPY config/pi-cli/package.json config/pi-cli/package-lock.json /opt/pi-cli/
+RUN npm ci --prefix /opt/pi-cli --omit=dev --ignore-scripts --min-release-age=0 && \
+    node -e 'if (require("/opt/pi-cli/node_modules/@earendil-works/pi-coding-agent/package.json").version !== "1.1.0") process.exit(1)' && \
+    ln -s /opt/pi-cli/node_modules/.bin/pi /usr/local/bin/pi
 
 # Keep every pi-subagents entry point—including interactive Pi sessions—on the
 # same isolated child-session and lifecycle roots. Agentd repeats these values

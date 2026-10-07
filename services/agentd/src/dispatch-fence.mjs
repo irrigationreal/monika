@@ -46,18 +46,27 @@ export function acceptDispatch(sessionManager, { dispatchId, generation }) {
   return { status: 'accepted', generation };
 }
 
+export const DISPATCH_DISPOSITIONS = Object.freeze(['started', 'queued', 'handled']);
+
 export function dispatchPreflightHandler(sessionManager, input, onResult) {
-  return (accepted) => {
-    if (!accepted) {
-      onResult?.(false);
-      return;
+  return (disposition) => {
+    if (!DISPATCH_DISPOSITIONS.includes(disposition)) {
+      throw new TypeError(`invalid Pi dispatch disposition: ${String(disposition)}`);
     }
     const outcome = acceptDispatch(sessionManager, input);
     if (outcome.status !== 'accepted') {
       throw new Error(`dispatch preflight acceptance failed: ${outcome.status}`);
     }
-    onResult?.(true);
+    onResult?.(disposition);
   };
+}
+
+export async function awaitDispatchPreflight(accepted, promptPromise) {
+  // Pi 1.x intentionally omits the callback for rejected prompt setup. Keep a
+  // rejection observer attached from the start so callers never hang waiting
+  // for a disposition that cannot arrive.
+  const promptRejected = promptPromise.then(() => new Promise(() => {}));
+  return Promise.race([accepted, promptRejected]);
 }
 
 export function createDispatchPreflightGate(sessionManager, input, onResult) {
@@ -68,19 +77,18 @@ export function createDispatchPreflightGate(sessionManager, input, onResult) {
     resolveAccepted = resolve;
     rejectAccepted = reject;
   });
-  const handle = dispatchPreflightHandler(sessionManager, input, (didAccept) => {
+  const handle = dispatchPreflightHandler(sessionManager, input, (disposition) => {
     if (settled) return;
     settled = true;
-    onResult?.(didAccept);
-    if (didAccept) resolveAccepted();
-    else rejectAccepted(new Error('Pi dispatch preflight was not accepted'));
+    onResult?.(disposition);
+    resolveAccepted(disposition);
   });
   return {
     accepted,
-    preflightResult(didAccept) {
+    preflightResult(disposition) {
       if (settled) return;
       try {
-        handle(didAccept);
+        handle(disposition);
       } catch (error) {
         settled = true;
         rejectAccepted(error);
