@@ -76,13 +76,17 @@ export function registerAuthRoutes({
 
   store.cleanupExpiredAuthSessions();
   store.cleanupExpiredWebAuthnChallenges();
-  setInterval(
+  const authCleanupTimer = setInterval(
     () => {
       store.cleanupExpiredAuthSessions();
       store.cleanupExpiredWebAuthnChallenges();
     },
     60 * 60 * 1000
   );
+  authCleanupTimer.unref();
+  app.addHook('preClose', () => {
+    clearInterval(authCleanupTimer);
+  });
 
   app.post(
     '/auth/login',

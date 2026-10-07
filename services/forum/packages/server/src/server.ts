@@ -99,8 +99,11 @@ import { actionablePostDispatchBlocker, nonIdleRobotStateBlocker } from './servi
 import { getEmailService } from './services/emailService';
 import { FileStorageMaintenance } from './services/fileStorageMaintenance';
 import { ForkService } from './services/forkService';
+import { createForumShutdown } from './services/forumShutdown';
+import { MaintenanceTracker } from './services/maintenanceTracker';
 import { PiSessionSyncService } from './services/piSessionSyncService';
 import { PostDispatchService } from './services/postDispatchService';
+import { SseLifecycleRegistry } from './services/sseLifecycle';
 import { normalizeApiPrefix, registerSpaFallback, registerStaticAssets } from './services/staticServing';
 import { WebhookService } from './services/webhookService';
 import { ForumStore } from './store';
@@ -113,6 +116,8 @@ import { rateLimitKeyForRequest } from './utils/rateLimit';
 import type { MessageTamperContext } from '@irrigationreal/codex-forum-core';
 import type { FastifyPluginAsync } from 'fastify';
 
+import type { ForumShutdownState } from './services/forumShutdown';
+
 assertCorsCredentialsConfiguration(CORS_ORIGINS, CORS_CREDENTIALS);
 const featureFlags = loadFeatureFlags();
 const { db } = openDb({ path: DB_PATH });
@@ -120,11 +125,28 @@ migrate(db);
 const messageDraftService = new MessageDraftService(new SqliteMessageDraftRepository(db));
 const messageTemplateService = new MessageTemplateService(new SqliteMessageTemplateRepository(db));
 const notepadService = new NotepadService(new SqliteNotepadRepository(db));
-void messageDraftService.purgeExpired();
-void notepadService.purgeExpired();
-const draftCleanupTimer = setInterval(() => void messageDraftService.purgeExpired(), 24 * 60 * 60 * 1000);
+const maintenance = new MaintenanceTracker();
+const runMaintenance = (label: string, task: () => Promise<unknown>) => {
+  maintenance.run(async () => {
+    try {
+      await task();
+    } catch (error) {
+      console.error(`[maintenance] ${label} failed`, error);
+    }
+  });
+};
+runMaintenance('draft expiry', () => messageDraftService.purgeExpired());
+runMaintenance('notepad expiry', () => notepadService.purgeExpired());
+const draftCleanupTimer = setInterval(
+  () => {
+    runMaintenance('draft expiry', () => messageDraftService.purgeExpired());
+  },
+  24 * 60 * 60 * 1000
+);
 draftCleanupTimer.unref();
-const notepadCleanupTimer = setInterval(() => void notepadService.purgeExpired(), 60 * 1000);
+const notepadCleanupTimer = setInterval(() => {
+  runMaintenance('notepad expiry', () => notepadService.purgeExpired());
+}, 60 * 1000);
 notepadCleanupTimer.unref();
 const bootstrapResult = bootstrap(db, {
   defaultWebIdentityId: DEFAULT_WEB_IDENTITY_ID,
@@ -169,7 +191,8 @@ const cleanupExpiredChatMessages = () => {
   }
 };
 cleanupExpiredChatMessages();
-setInterval(cleanupExpiredChatMessages, CHAT_EXPIRY_CLEANUP_INTERVAL_MS);
+const chatCleanupTimer = setInterval(cleanupExpiredChatMessages, CHAT_EXPIRY_CLEANUP_INTERVAL_MS);
+chatCleanupTimer.unref();
 
 const autoRunDirector = new AutoRunDirector(store, bus, {
   workDir: WORK_DIR,
@@ -385,28 +408,90 @@ if (recoveredClones > 0)
 
 const app = Fastify({ logger: true, bodyLimit: MAX_REQUEST_BODY_BYTES, trustProxy: TRUST_PROXY });
 const access = createAccessHelpers(app, store);
-registerApiErrorHandler(app);
-app.addHook('onClose', async () => {
-  // Each stop call closes its claim gate synchronously before its first await.
-  // Close every producer first, then gracefully join their in-flight work.
+const sseLifecycle = new SseLifecycleRegistry();
+let fileStorageCleanupTimer: ReturnType<typeof setInterval> | null = null;
+let producerStops: Promise<void>[] | null = null;
+let preCloseStarted = false;
+let shutdownStartedAt: number | null = null;
+const shutdownState: ForumShutdownState = { forced: false };
+const logShutdownPhase = (phase: string, phaseStartedAt: number, details: Record<string, unknown> = {}) => {
+  app.log.info(
+    {
+      phase,
+      phaseElapsedMs: Date.now() - phaseStartedAt,
+      totalElapsedMs: shutdownStartedAt === null ? 0 : Date.now() - shutdownStartedAt,
+      ...details,
+    },
+    'Forum shutdown phase completed'
+  );
+};
+const beginPreClose = () => {
+  if (preCloseStarted) return;
+  preCloseStarted = true;
+  shutdownStartedAt = Date.now();
+  const phaseStartedAt = Date.now();
+  const sseBefore = sseLifecycle.counts;
+
+  // This phase must remain synchronous: close admissions, schedules, and
+  // indefinite responses before Fastify starts waiting for HTTP drain.
   piSessionSync?.stop();
-  deploymentAdmission.close();
-  const postDispatchStop = postDispatchService.stop();
-  const compactionStop = compactionService.stop();
-  const cloneStop = cloneService.stop();
-  const forkStop = forkService.stop();
+  deploymentAdmission.shutdown();
+  clearInterval(draftCleanupTimer);
+  clearInterval(notepadCleanupTimer);
+  clearInterval(chatCleanupTimer);
+  if (fileStorageCleanupTimer) clearInterval(fileStorageCleanupTimer);
+  fileStorageCleanupTimer = null;
+  maintenance.close();
+  const sseAfter = sseLifecycle.closeAll();
+  producerStops = [postDispatchService.stop(), compactionService.stop(), cloneService.stop(), forkService.stop()];
+  for (const stop of producerStops) void stop.catch(() => undefined);
+  logShutdownPhase('producer-fence', phaseStartedAt, {
+    sseActiveBefore: sseBefore.active,
+    sseActive: sseAfter.active,
+    sseClosed: sseAfter.closed,
+    sseClosedDuringFence: sseAfter.closed - sseBefore.closed,
+  });
+};
+registerApiErrorHandler(app);
+app.addHook('preClose', beginPreClose);
+app.addHook('onClose', async () => {
+  beginPreClose();
+  let phaseStartedAt = Date.now();
   await piSessionSync?.waitForIdle();
-  await Promise.all([postDispatchStop, compactionStop, cloneStop, forkStop]);
+  await Promise.all(producerStops ?? []);
+  logShutdownPhase('producer-joins', phaseStartedAt);
+
+  phaseStartedAt = Date.now();
+  await maintenance.waitForIdle();
+  logShutdownPhase('maintenance-join', phaseStartedAt);
+
+  phaseStartedAt = Date.now();
   await autoRunDirector.stop();
   await codex.stop();
+  logShutdownPhase('agent-join', phaseStartedAt);
+
+  phaseStartedAt = Date.now();
+  const forcedShutdownPreventsTeardown = () => {
+    if (!shutdownState.forced) return false;
+    app.log.error(
+      { totalElapsedMs: shutdownStartedAt === null ? 0 : Date.now() - shutdownStartedAt },
+      'Skipping durable teardown after forced shutdown deadline'
+    );
+    return true;
+  };
+  if (forcedShutdownPreventsTeardown()) return;
   if (bus instanceof RedisStreamBus) {
     await bus.close();
   }
+  // An injected exit can return in tests, and the deadline can expire while
+  // Redis is closing. Recheck immediately before the synchronous DB close.
+  if (forcedShutdownPreventsTeardown()) return;
   try {
     db.close();
   } catch {
     // ignore duplicate close attempts during shutdown
   }
+  logShutdownPhase('durable-cleanup', phaseStartedAt);
 });
 
 await app.register(cors, {
@@ -452,9 +537,9 @@ const fileStorageMaintenance = new FileStorageMaintenance(
   UPLOAD_TEMP_DIR,
   PENDING_ATTACHMENTS_DIR
 );
-void fileStorageMaintenance.run().catch((error) => console.error('[files] startup maintenance failed', error));
-const fileStorageCleanupTimer = setInterval(() => {
-  void fileStorageMaintenance.run().catch((error) => console.error('[files] maintenance failed', error));
+runMaintenance('file storage startup', () => fileStorageMaintenance.run());
+fileStorageCleanupTimer = setInterval(() => {
+  runMaintenance('file storage', () => fileStorageMaintenance.run());
 }, 60_000);
 fileStorageCleanupTimer.unref();
 // Expose only generated avatars from upload storage, plus the built Vue app.
@@ -541,10 +626,11 @@ const registerApiRoutes: FastifyPluginAsync = async (api) => {
     store,
     access,
     bus,
+    sseLifecycle,
   });
-  registerNotificationRoutes({ app: api, store, bus, access });
+  registerNotificationRoutes({ app: api, store, bus, access, sseLifecycle });
   registerAttachmentRoutes({ app: api, store, access });
-  registerRobotRoutes({ app: api, store, codex, bus, access, autoRunDirector });
+  registerRobotRoutes({ app: api, store, codex, bus, access, autoRunDirector, sseLifecycle });
   registerProfileRoutes({ app: api, store, access });
   registerMessageDraftRoutes({ app: api, store, access, service: messageDraftService });
   registerNotepadRoutes({ app: api, access, service: notepadService });
@@ -571,19 +657,7 @@ registerSpaFallback(app, { apiPrefix, publicIndex });
 
 await app.listen({ port: PORT, host: '0.0.0.0' });
 
-let shuttingDown = false;
-const shutdown = async (signal: string) => {
-  if (shuttingDown) return;
-  shuttingDown = true;
-  app.log.info({ signal }, 'Shutting down forum server');
-  try {
-    await app.close();
-    process.exit(0);
-  } catch (err) {
-    app.log.error({ err }, 'Forum shutdown failed');
-    process.exit(1);
-  }
-};
+const shutdown = createForumShutdown({ app, state: shutdownState });
 
 process.on('SIGTERM', () => {
   void shutdown('SIGTERM');

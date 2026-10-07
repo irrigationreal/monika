@@ -41,6 +41,14 @@ describe('DeploymentAdmissionCoordinator', () => {
     return { ...created, session };
   }
 
+  it('permanently fences new robot work when process shutdown begins', () => {
+    coordinator.shutdown();
+    coordinator.shutdown();
+
+    expect(() => coordinator.beginRobotWork()).toThrow(DispatchAdmissionFencedError);
+    expect(sync.pause).toHaveBeenCalledOnce();
+  });
+
   it('pauses sync, waits boundedly, and idempotently retains an acquired lease', async () => {
     const first = coordinator.acquire({ operationId: 'deploy-1', waitTimeoutMs: 1234, leaseMs: 60_000 });
     const duplicate = coordinator.acquire({ operationId: 'deploy-1', waitTimeoutMs: 1234, leaseMs: 60_000 });

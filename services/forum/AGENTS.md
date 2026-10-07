@@ -30,6 +30,19 @@ App:
 - Memory save/dedupe identity uses canonical Pi session id/path.
 - Close/save lifecycle goes forum → agentd → Pi `session_shutdown` → stateful-memory.
 
+## Process shutdown
+
+- Register every browser SSE response with the shared `SseLifecycleRegistry`; response `finish`, `close`, and `error`
+  are the authoritative, idempotent cleanup boundary.
+- `preClose` must synchronously fence new producer work, stop housekeeping schedules, reject late SSE registration, and
+  end SSE before Fastify waits for HTTP drain. Do not replace graceful finite-request drain with blanket force-close
+  behavior.
+- `onClose` owns durable joins and closes SQLite only after producer, maintenance, cancellation, and projection cleanup
+  completes.
+- The 60-second watchdog is a hard fail-closed deadline: log the emergency, call `closeAllConnections()`, and exit
+  nonzero immediately in the same callback. Untracked finite HTTP handlers may still be running when Fastify enters
+  `onClose`, so after this fallback never tear down SQLite or report durable shutdown success.
+
 ## Git workflow
 
 After making changes, commit and push. Commit messages must include the URL to the forum thread/post that requested the

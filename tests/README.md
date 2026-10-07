@@ -82,7 +82,12 @@ amid 1,800 decoys and rejects containment escapes, symlinks, malformed/mismatche
 headers, unresolved fork candidates, and ancestor-directory swaps both after
 opening the validation descriptor and around Pi's unavoidable pathname reopen.
 Shutdown seam tests prove HTTP/SSE termination and forced exit remain bounded when
-canonical cleanup is fenced. HTTP safety coverage uses a real aborted HTTP socket
+canonical cleanup is fenced. Forum server tests additionally open real topic-state,
+notification, and chat SSE sockets, prove Fastify close ends them before drain,
+exercise broken-stream and exactly-once chat-presence cleanup, reject late registration,
+preserve finite-request drain, and cover the 60-second hard watchdog with fake timers
+plus a real subprocess/socket proving immediate nonzero exit while a finite handler is
+pending. HTTP safety coverage uses a real aborted HTTP socket
 and keeps reset/destroyed clients from terminating agentd while preserving ordinary
 errors. The subagent lifecycle tests use temporary files and injected process
 inspection—no Docker timing, sleeps, model calls, or live state. They cover

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TopicPostDispatchProjectionDtoSchema } from '@irrigationreal/codex-forum-contracts';
 
 import { migrate } from '../db';
+import { SseLifecycleRegistry } from '../services/sseLifecycle';
 import { ForumStore } from '../store';
 import { createAccessHelpers } from '../utils/access';
 import { redactStreamEventForPublic, registerRobotRoutes } from './robotRoutes';
@@ -42,7 +43,7 @@ describe('Robot routes access controls', () => {
       runManual: vi.fn(async () => ({ ok: true, message: 'ok' })),
       handleAssistantReply: vi.fn(async () => {}),
     } as any;
-    registerRobotRoutes({ app, store, codex, bus, access, autoRunDirector });
+    registerRobotRoutes({ app, store, codex, bus, access, autoRunDirector, sseLifecycle: new SseLifecycleRegistry() });
     await app.ready();
     return app;
   }

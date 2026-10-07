@@ -160,6 +160,7 @@ export function registerAdminRoutes({
   let deployOnFinishLastError: string | null = initialDeployState?.deployOnFinishLastError ?? null;
   let deployOnFinishTimer: ReturnType<typeof setInterval> | null = null;
   let deployOnFinishChecking = false;
+  let deployOnFinishCheck: Promise<void> | null = null;
 
   function persistDeployState(): void {
     writeDeployState(DEPLOY_STATE_FILE, {
@@ -308,7 +309,7 @@ export function registerAdminRoutes({
     deployOnFinishTimer = setInterval(() => {
       if (!deployOnFinishRequestedAt || deployInProgress || deployOnFinishChecking || !deployEnabled || !DEPLOY_SCRIPT) return;
       deployOnFinishChecking = true;
-      void (async () => {
+      deployOnFinishCheck = (async () => {
         deployOnFinishLastCheckedAt = new Date().toISOString();
         if (hasBlockingRobotWork()) { persistDeployState(); return; }
         try {
@@ -336,11 +337,21 @@ export function registerAdminRoutes({
       })().catch((err) => {
         deployOnFinishLastError = err instanceof Error ? err.message : String(err);
         try { persistDeployState(); } catch {}
-      }).finally(() => { deployOnFinishChecking = false; });
+      }).finally(() => {
+        deployOnFinishChecking = false;
+        deployOnFinishCheck = null;
+      });
     }, 2_000);
     deployOnFinishTimer.unref?.();
   }
   if (deployOnFinishRequestedAt) ensureDeployOnFinishTimer();
+  app.addHook('preClose', () => {
+    if (deployOnFinishTimer) clearInterval(deployOnFinishTimer);
+    deployOnFinishTimer = null;
+  });
+  app.addHook('onClose', async () => {
+    await deployOnFinishCheck;
+  });
 
   function getDeployStatus() {
     return {
