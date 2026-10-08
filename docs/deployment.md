@@ -253,6 +253,14 @@ Pi supports command-valued credentials, so a catalog is executable
 configuration, not inert data. A successful catalog parse or text-only request
 is not sufficient; the tool-result request must complete before activation.
 
+An operator may explicitly include currently unavailable routes for future
+manual selection. Treat this as catalog registration, not a successful live
+acceptance: validate their schema and model references, document unavailable
+supply and billing route, and exclude them from defaults, automated routing,
+and fallback. They may return an error when selected until supply is restored;
+repeat the complete live canary before relying on them. This exception is used
+for the curated ordinary Mistral API routes below.
+
 #### October 7, 2026 catalog refresh
 
 GPT-6.1 Sol (`codex/gpt-6.1-sol` and `codex/gpt-6.1-sol[1m]`) and
@@ -266,17 +274,53 @@ The pool advertises Grok Build Fast with a 500k context window and a 1M output
 limit. Those are upstream metadata, not independently verified limits; the
 small canaries do not establish maximum usable request or output sizes.
 
-The new `pool-mistral` provider remains deferred. Its Large 4, Medium Latest,
-Small Latest, and Magistral Medium Latest models passed text canaries, but all
-four returned HTTP 422 after a real read-tool result at medium thinking.
-Some tool canaries passed with thinking off, which is insufficient for the
-runtime's default reasoning setting. Resolve the upstream reasoning-history /
-tool-result compatibility failure and repeat exact-ID canaries before adding
-these models to the deployment catalog or enabled selection. Mistral model
-references use `pool-mistral/mistral/<id>`; retain the provider and model
-namespaces. Zero prices in generated metadata do not establish free inference.
+At that refresh, the ordinary `pool-mistral` provider was deferred because all
+four recommended models failed reasoning-enabled tool-result continuation.
+The upstream fix is described in the Mistral configuration section below.
 
 This refresh does not alter Antigravity entries or rotate existing credentials.
+
+#### Curated Mistral routes (October 8, 2026)
+
+Monika configures two separate Mistral providers. Their namespaces distinguish
+billing/access routes, even when underlying models or alias names overlap:
+
+| Pi provider | Access route | Enabled model IDs (within provider) |
+| --- | --- | --- |
+| `pool-mistral-vibe` | Subscription-validated Vibe account | `mistral-vibe/mistral-vibe-cli-latest`, `mistral-vibe/mistral-vibe-cli-fast` |
+| `pool-mistral` | Ordinary paid API key | `mistral/mistral-large-4`, `mistral/mistral-medium-latest`, `mistral/mistral-small-latest`, `mistral/magistral-medium-latest` |
+
+A full Pi reference includes both provider and model ID, for example
+`pool-mistral-vibe/mistral-vibe/mistral-vibe-cli-latest`. Both providers use
+`openai-completions` at the pool's `/v1` route; do not switch transports based
+on the pool's separate Cute Code Messages export. No cross-provider fallback
+is configured. Selecting the ordinary API provider may incur API charges;
+a model name containing `vibe-cli` alone does not establish subscription use.
+
+The two curated Vibe IDs passed isolated text and full medium-thinking
+reasoning → read-tool call → tool result → final-answer canaries with the
+live pool and Pi 1.1.0. Their generated metadata advertises 262,144 context
+and 32,768 maximum output tokens, not independently verified size limits.
+Generated zero prices do not establish unlimited or free inference.
+
+The four ordinary API IDs are intentionally selectable but unavailable as of
+this review: the pool advertises them with `available_now: false`, and the
+last live probe returned HTTP 503, `no live mistral accounts`. This is not a
+confirmed usage-limit diagnosis. They are included for deliberate future use
+when the operator restores API supply, not claimed to pass current live
+canaries. Revalidate them against the live pool before relying on them.
+
+Upstream codex-pool PR #17 fixes generic assistant reasoning replay by
+reconstructing Mistral's native thinking content before forwarding a tool
+continuation. The four ordinary models passed that full sequence against an
+isolated fixed pool with Pi 0.87.1; that historical result is distinct from
+current live availability. The shared Messages bridge's historical-thinking
+omission remains a separate upstream limitation.
+
+Defaults and subagent assignments remain unchanged. The private deployment
+catalog adds only these six entries while preserving existing providers,
+credentials, and Antigravity configuration; it is not a wholesale import of
+the generated pool catalog.
 
 #### OpenAI Chat Completions compatibility
 
