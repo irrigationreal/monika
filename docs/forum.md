@@ -663,13 +663,23 @@ Pi JSONL as a blob store:
 Structured attachment references are the primary outbound contract:
 
 - Pi extension `forum-attachments.ts` registers
-  `forum_upload_attachment(path, filename?, mimeType?)`. It reads the current
-  topic from `.codex-forum/requester.json`, uploads bytes to the authenticated
-  internal pending endpoint, and appends a versioned
-  `monika.forum.attachment.ref` custom entry containing `pendingAttachmentId`,
-  topic, filename, MIME type, size, SHA-256, and expiry. Pi's custom-entry append
-  result supplies the durable entry ID used as `refEntryId`; it is not invented
-  independently by the extension.
+  `forum_upload_attachment(path, filename?, mimeType?)`. Its shared helper first
+  resolves the topic from the canonical provenance attached to the latest user
+  message, retaining `.codex-forum/requester.json` only as the legacy fallback
+  for this explicit upload tool. It uploads bytes to the authenticated internal
+  pending endpoint and appends a versioned `monika.forum.attachment.ref` custom
+  entry containing `pendingAttachmentId`, topic, filename, MIME type, size,
+  SHA-256, and expiry. Pi's custom-entry append result supplies the durable entry
+  ID used as `refEntryId`; it is not invented independently by the extension.
+- `generate_image` uses the same pending-upload/ref helper automatically, but
+  publishes only when the latest canonical user message has matching forum
+  provenance; it never trusts the mutable requester fallback. Validated output is
+  first saved locally and recorded as `monika.image.generated`. The attachment
+  ref is appended before the tool returns, so agentd can bind it to the following
+  outward assistant message. `monika.image.publication` records success or a
+  sanitized failure. A failed publication can be retried by generation ID from
+  the saved, digest-verified bytes without repeating image generation. CLI-origin
+  turns have no matching forum provenance and keep the local output only.
 - Agentd binds structured refs to the next canonical outward assistant provenance.
   Live and sync feed those refs into the same durable handoff service. Structured
   and legacy references to the same `pendingAttachmentId` are deduplicated before

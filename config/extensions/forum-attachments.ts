@@ -1,37 +1,14 @@
-import { createHash } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-
-function stripAt(path: string): string {
-	return path.startsWith("@") ? path.slice(1) : path;
-}
-
-async function readRequester(cwd: string): Promise<{ topicId: string } | null> {
-	try {
-		const raw = await readFile(resolve(cwd, ".codex-forum/requester.json"), "utf8");
-		const parsed = JSON.parse(raw) as { topicId?: unknown };
-		return typeof parsed.topicId === "string" && parsed.topicId ? { topicId: parsed.topicId } : null;
-	} catch {
-		return null;
-	}
-}
-
-function guessMimeType(filename: string): string {
-	const lower = filename.toLowerCase();
-	if (lower.endsWith(".png")) return "image/png";
-	if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
-	if (lower.endsWith(".webp")) return "image/webp";
-	if (lower.endsWith(".gif")) return "image/gif";
-	if (lower.endsWith(".txt")) return "text/plain";
-	if (lower.endsWith(".md")) return "text/markdown";
-	if (lower.endsWith(".json")) return "application/json";
-	if (lower.endsWith(".pdf")) return "application/pdf";
-	if (lower.endsWith(".zip")) return "application/zip";
-	return "application/octet-stream";
-}
+import {
+	guessMimeType,
+	resolveForumTopic,
+	stripAt,
+	uploadForumAttachmentPath,
+} from "./forum-attachments-core.mjs";
 
 export default function forumAttachmentsExtension(pi: ExtensionAPI) {
 	pi.registerTool({
@@ -49,9 +26,9 @@ export default function forumAttachmentsExtension(pi: ExtensionAPI) {
 			mimeType: Type.Optional(Type.String({ description: "MIME type. Defaults to a guess from filename." })),
 		}),
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-			const requester = await readRequester(ctx.cwd);
-			if (!requester) {
-				throw new Error("No .codex-forum/requester.json with topicId found in the current workspace");
+			const topic = await resolveForumTopic({ cwd: ctx.cwd, sessionManager: ctx.sessionManager });
+			if (!topic) {
+				throw new Error("No canonical forum topic or .codex-forum/requester.json with topicId found in the current workspace");
 			}
 
 			const filePath = resolve(ctx.cwd, stripAt(params.path));
@@ -61,53 +38,21 @@ export default function forumAttachmentsExtension(pi: ExtensionAPI) {
 
 			const filename = params.filename?.trim() || basename(filePath);
 			const mimeType = params.mimeType?.trim() || guessMimeType(filename);
-			const bytes = await readFile(filePath);
-			const form = new FormData();
-			form.append("file", new Blob([bytes], { type: mimeType }), filename);
-
-			const apiBase = (process.env.MONIKA_FORUM_API_BASE_URL ?? process.env.CODEX_FORUM_API_BASE_URL ?? "http://127.0.0.1:4310/api").replace(/\/$/, "");
-			const token = process.env.CODEX_FORUM_INTERNAL_API_TOKEN ?? process.env.MONIKA_FORUM_INTERNAL_API_TOKEN ?? "";
-			const headers: Record<string, string> = {};
-			if (token) headers["x-internal-token"] = token;
-
-			const response = await fetch(`${apiBase}/agent/topics/${encodeURIComponent(requester.topicId)}/pending-attachments`, {
-				method: "POST",
-				headers,
-				body: form,
+			const { attachmentRef, refEntryId, legacyReference } = await uploadForumAttachmentPath({
+				path: filePath,
+				filename,
+				mimeType,
+				topicId: topic.topicId,
+				sessionManager: ctx.sessionManager,
 				signal,
 			});
-			if (!response.ok) {
-				const text = await response.text().catch(() => "");
-				throw new Error(`Forum attachment upload failed: ${response.status} ${text}`);
-			}
-			const result = await response.json() as {
-				id: string;
-				filename: string;
-				mimeType: string;
-				sizeBytes: number;
-				sha256?: string | null;
-				reference: string;
-				expiresAt: string;
-			};
-			const sha256 = result.sha256 ?? createHash("sha256").update(bytes).digest("hex");
-			const attachmentRef = {
-				version: 1,
-				pendingAttachmentId: result.id,
-				topicId: requester.topicId,
-				filename: result.filename,
-				mimeType: result.mimeType,
-				sizeBytes: result.sizeBytes,
-				sha256,
-				expiresAt: result.expiresAt,
-			};
-			const refEntryId = ctx.sessionManager.appendCustomEntry("monika.forum.attachment.ref", attachmentRef);
 
 			return {
 				content: [{
 					type: "text",
-					text: `Uploaded ${result.filename} (${result.sizeBytes} bytes). The structured attachment reference is recorded; do not include a marker in the final answer.`,
+					text: `Uploaded ${attachmentRef.filename} (${attachmentRef.sizeBytes} bytes). The structured attachment reference is recorded; do not include a marker in the final answer.`,
 				}],
-				details: { ...attachmentRef, refEntryId, legacyReference: result.reference },
+				details: { ...attachmentRef, refEntryId, legacyReference },
 			};
 		},
 	});

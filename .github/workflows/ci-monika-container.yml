@@ -91,6 +91,9 @@ jobs:
       - name: Check web search provider logic
         run: tests/web-search.sh
 
+      - name: Check native image generation and publication logic
+        run: node --test tests/image-generation.test.mjs
+
       - name: Build Monika runtime image
         run: |
           docker build \

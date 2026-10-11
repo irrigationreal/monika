@@ -134,6 +134,23 @@ Exa/Brave/Tavily compatibility, sequential fallback, cancellation and deadlines,
 cooldowns, response bounds, URL sanitization, redaction, and exhaustion. It never
 uses provider credentials or live network services.
 
+## Image generation tests
+
+Native image generation has dependency-free Node coverage with fake model
+registries, HTTP responses, and forum publication:
+
+```bash
+node --test tests/image-generation.test.mjs
+```
+
+The suite verifies the OpenAI Responses and raw Gemini request protocols,
+resolved-auth headers and preserved controls, mixed-operation registration without
+losing chat metadata, no retry/fallback on failures or cancellation, bounded and
+signature/pixel-validated inputs and output, mode-`0600` exclusive saves, canonical
+forum-topic selection, attachment-ref ordering, sanitized publication failure, and
+retry from saved bytes without another model call. It never uses provider
+credentials, live network services, or live forum state.
+
 ## Stateful-memory tests
 
 Progressive recall selection, excerpt bounds, pagination, enrichment budgets,
@@ -227,7 +244,7 @@ The script verifies:
 6. npm's 10-day dependency cooldown, Pi's reviewed transitive lockfile, pnpm 11.21.0 with fail-closed 10-day release-age enforcement, and the pinned agent-browser version are active;
 7. the reviewed pi-subagents 0.37.2 gitHead (`8063333661476ca48afbca826dc4aab8707c72d3`) is installed, the dedicated runtime/session/operator roots are global, the operator root exists with mode `0700`, unsafe relative or shared top-level operator-root overrides fail startup, a container runtime identity exists, durable pre-spawn launch/drain and artifact-finalization patches are present, forked children use per-run directories, `defaultExtensions=[]` and isolated child profiles are configured, and legacy force-tools/delegate extensions are absent;
 8. interactive project-trust state is linked into persistent `/data`;
-9. agentd sends a complete Pi turn to a local OpenAI Responses fixture, which requires `pi_run`, `browser`, `web_search`, `subagent`, `subagent_wait`, `subagent_supervisor`, and stateful-memory's `recall` tool while rejecting the legacy `delegate` tool;
+9. agentd sends a complete Pi turn to a local OpenAI Responses fixture, which requires `pi_run`, `browser`, `web_search`, `generate_image`, `subagent`, `subagent_wait`, `subagent_supervisor`, and stateful-memory's `recall` tool while rejecting the legacy `delegate` tool;
 10. every strict function schema in the serialized request satisfies OpenAI's
    `additionalProperties: false` and required-property rules;
 11. a first-action pending Pi reservation is included in approximate health and authoritative quiescence, and a durable existing-session claim using the exact canonical path evicts idle agentd, blocks reopen/deployment, heartbeats, and releases cleanly;
