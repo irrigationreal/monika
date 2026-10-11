@@ -563,10 +563,19 @@ pass "bundled JavaScript extensions pass syntax validation"
 
 docker exec "$CONTAINER_NAME" sh -eu -c '
   test -f /app/.pi/agent/extensions/00-session-ownership.ts
+  test -f /app/.pi/agent/extensions/image-context.ts
+  test -f /app/.pi/agent/extensions/image-context-core.mjs
   test ! -e /app/.pi/agent/extensions/session-ownership.ts
   test "$(find /app/.pi/agent/extensions -maxdepth 1 -type f -printf "%f\n" | sort | grep -E "^(00-session-ownership|interactive-shell)\.ts$" | head -n 1)" = "00-session-ownership.ts"
 '
 pass "ownership extension is unique and sorts before interactive shell"
+
+docker cp "$SCRIPT_DIR/../image-context-pi.test.mjs" "$CONTAINER_NAME:/tmp/image-context-pi.test.mjs"
+docker exec -e PI_OFFLINE=1 \
+  -e MONIKA_IMAGE_CONTEXT_EXTENSION=/app/.pi/agent/extensions/image-context.ts \
+  "$CONTAINER_NAME" node --test /tmp/image-context-pi.test.mjs
+docker exec "$CONTAINER_NAME" rm /tmp/image-context-pi.test.mjs
+pass "real Pi projects bounded image history without mutating canonical entries"
 
 # Agentd supplies explicit extension factories, while the emergency CLI path
 # discovers ambient extensions from PI_CODING_AGENT_DIR. Start Pi's direct RPC

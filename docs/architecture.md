@@ -105,6 +105,12 @@ and an immutable browser-package seed created with Pi's install operation. The
 deployment owns Pi's selected `packages` array and managed `npm/`/`git/` trees under
 `/data/pi-agent-packages`; `PI_OFFLINE=1` gates their automatic startup package resolution and update checks.
 
+Chat-model image retention is a request-local extension policy, not a canonical
+history edit. Original image results remain in JSONL while bounded recent images
+and explicit omission references are projected to the provider. See
+[image context retention](deployment.md#image-context-retention) for defaults,
+lossiness, recovery and transport limits.
+
 ### agentd
 
 `agentd` embeds Pi through its SDK and exposes conversation, model, context,
