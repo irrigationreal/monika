@@ -134,6 +134,36 @@ Exa/Brave/Tavily compatibility, sequential fallback, cancellation and deadlines,
 cooldowns, response bounds, URL sanitization, redaction, and exhaustion. It never
 uses provider credentials or live network services.
 
+## Image context tests
+
+```bash
+node --test tests/image-context.test.mjs
+# Installed Pi integration (skips outside a runtime unless MONIKA_PI_SDK_PATH is set):
+PI_OFFLINE=1 node --test tests/image-context-pi.test.mjs
+```
+
+Dependency-free tests cover encoded-byte and count limits, newest-user image
+protection, long tool sequences, re-reading, custom attachments, branch/resume
+selection, explicit omission references, configuration and canonical immutability.
+The runtime smoke test requires the bundled policy files and runs the real Pi
+provider-payload capture test inside the throwaway image. It loads the actual
+extension, captures a full synthetic 20 MiB replay before network I/O, verifies
+bounded image input and system/tool-state preservation, and checks that original
+canonical entries remain unchanged. No API credentials are required.
+
+Private recovery validation should use a mode-`0700` temporary directory and a
+copy of the affected JSONL, never the live session. Load only this extension in
+isolated Pi state, with no tools, memory extensions, project resources, automatic
+compaction/retry/cache warming, or forum publication. First check provider input
+offline; then explicitly interrupt prior tasks with a tiny text-only prompt and
+force HTTP/SSE so cached WebSocket deltas cannot hide a replay failure. Use a
+short deadline and a small response request. Do not publish private transcripts,
+payloads, credentials or image data in Git, CI artifacts or logs. A successful
+response should report relevant thread decisions and acknowledge omitted visual
+context. Compare the original session hash before and after. Matching context
+windows on cheaper models do not establish identical transport behavior; verify
+the original failing model separately.
+
 ## Image generation tests
 
 Native image generation has dependency-free Node coverage with fake model

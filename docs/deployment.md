@@ -386,6 +386,43 @@ result. Failed attempts do not expose raw provider usage or upstream bodies.
 All returned answers, titles, snippets, and source URLs are explicitly labeled
 as untrusted external web-derived data.
 
+### Image context retention
+
+The bundled `image-context` extension limits images in each chat-model request
+without changing canonical JSONL, forum attachments, exports, or saved assets.
+It keeps the newest eligible images, at most four image blocks and 8 MiB of
+base64 data by default. This applies to image reads, historical user images, and
+custom-message image content, including a long sequence of tools in one turn.
+Images explicitly attached to the newest user prompt are always preserved and
+consume the budget first. An over-budget current user batch produces a warning;
+reduce that batch if the provider rejects it.
+
+Omitted image blocks become explicit text placeholders containing a canonical
+locator and, when the originating tool call supplies one, a source path. Existing
+text notes and tool pairing remain intact. These placeholders are **not visual
+summaries**: the assistant must re-read a source for pixel-level work or ask for
+the image again when the source is unavailable. A tool image larger than the
+entire budget is omitted; inspect a smaller derivative or deliberately increase
+the budget. Original local paths may disappear after container replacement.
+
+Deployment overrides in `runtime/secrets/secrets.env`:
+
+- `MONIKA_IMAGE_CONTEXT_ENABLED=0` disables the policy (default `1`).
+- `MONIKA_IMAGE_CONTEXT_MAX_IMAGES` sets the image count (default `4`, range 1–128).
+- `MONIKA_IMAGE_CONTEXT_MAX_BASE64_BYTES` sets encoded-image bytes (default
+  `8388608`, range 1–134217728). This is not decoded file size or a token limit.
+
+Invalid values warn and fall back to defaults. Use normal quiescent deployment
+for changes. The hook runs for each request, derives selection from the current
+active context, and requires no session migration; resumed sessions are covered.
+It does not load omitted bytes into its placeholders, summarize images, or call
+another model. The policy is intentionally lossy in model input only and can
+invalidate cached WebSocket prefixes as images age out. It is not a total request
+size guarantee: text, reasoning replay, tool declarations and protected current
+user images can still exceed provider limits. Pool full-replay hardening remains
+necessary. Specialist subagents that disable ambient extensions do not inherit
+this policy automatically.
+
 ### Native image generation
 
 The bundled `generate_image` tool uses Pi's typed image-model registry and its
