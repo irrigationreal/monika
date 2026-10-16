@@ -1,19 +1,28 @@
 /**
  * Claude Code compatibility adapter with dynamic tool discovery.
  *
- * This runtime-owned extension adapts requests destined for the Monika pool's
- * Anthropic route and Pi's native Anthropic route. Its payload and tool
- * transformations are informed by current Claude Code compatibility behavior;
- * its header profile is applied when Pi provides the header hook.
+ * This runtime-owned extension applies full Claude Code compatibility to the
+ * Monika pool's Anthropic route. For Pi's native Anthropic route it supplies
+ * only MCP-style aliases when OAuth is active; Pi remains authoritative for
+ * native identity, feature betas, and headers. Native API-key traffic is left
+ * unchanged.
  *
- * Authentication and transport remain owned by the selected provider. The pool
- * is a routing layer, not an exemption from compatibility shaping.
+ * Authentication and transport remain owned by the selected provider. Set
+ * PI_CLAUDE_CODE_USE_ENABLED=0 to disable the adapter before it registers any
+ * aliases or hooks.
  */
 
 import { appendFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+	CLAUDE_CODE_DEFAULT_VERSION,
+	CLAUDE_CODE_ROUTE_BETAS,
+	claudeCodeCompatibilityMode,
+	mergeCommaHeader,
+	parseClaudeCodeUseEnabled,
+} from "./claude-code-use-core.mjs";
 
 type ToolRegistration = Parameters<ExtensionAPI["registerTool"]>[0];
 type ToolInfo = ReturnType<ExtensionAPI["getAllTools"]>[number];
@@ -91,19 +100,19 @@ function lower(name: string | undefined): string {
 	return (name ?? "").trim().toLowerCase();
 }
 
+type CompatibilityMode = "off" | "pool-full" | "native-oauth-tools";
+
 /**
- * Claude Code compatibility is for Anthropic-destined routes only. The API
- * format alone is not sufficient: another provider may speak the same wire
- * protocol without accepting Claude Code's tool and prompt conventions.
- *
- * `claude` is the Monika pool route; `anthropic` is Pi's native route. Keep
- * this allowlist explicit so new providers do not inherit the transformation
- * accidentally.
+ * The pool needs the complete Claude Code compatibility profile because Pi
+ * sees its proxy credential as an API key. Native Anthropic needs only the MCP
+ * alias adapter when Pi selected OAuth; Pi owns native identity and headers.
+ * Native API-key and unrelated routes stay untouched.
  */
-function isAnthropicTarget(model: { api?: string; provider?: string } | undefined): boolean {
-	if (!model || model.api !== "anthropic-messages") return false;
-	const provider = lower(model.provider);
-	return provider === "claude" || provider === "anthropic";
+function compatibilityMode(
+	model: { api?: string; provider?: string } | undefined,
+	usingOAuth: boolean,
+): CompatibilityMode {
+	return claudeCodeCompatibilityMode(model, usingOAuth) as CompatibilityMode;
 }
 
 /**
@@ -162,14 +171,12 @@ function deriveMcpAlias(tool: ToolInfo, flatName: string): string | null {
 // ============================================================================
 // System prompt rewrite
 //
-// Replace Pi-identifying text with Claude Code-compatible wording. The
-// identity preamble is deliberately added only after isAnthropicTarget() has
-// selected an Anthropic-destined route.
+// Pool requests need prompt and identity compatibility. Native Anthropic OAuth
+// already receives both from Pi; this extension changes only its tool names.
 // ============================================================================
 
 const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
-const CLAUDE_CODE_VERSION = process.env.PI_CLAUDE_CODE_USE_VERSION?.trim() || "2.1.275";
-const CLAUDE_CODE_BETAS = ["claude-code-20250219", "oauth-2025-04-20", "interleaved-thinking-2025-05-14"];
+const CLAUDE_CODE_VERSION = process.env.PI_CLAUDE_CODE_USE_VERSION?.trim() || CLAUDE_CODE_DEFAULT_VERSION;
 
 function rewritePromptText(text: string): string {
 	return text
@@ -197,6 +204,16 @@ function rewriteSystemField(system: unknown): unknown {
 	});
 	if (identityPresent) return rewrittenBlocks;
 	return [{ type: "text", text: CLAUDE_CODE_IDENTITY, cache_control: { type: "ephemeral" } }, ...rewrittenBlocks];
+}
+
+function rewriteToolNamesInSystemField(system: unknown): unknown {
+	if (typeof system === "string") return rewriteAvailableToolsSection(system);
+	if (!Array.isArray(system)) return system;
+	return system.map((block) => {
+		if (!isPlainObject(block) || block.type !== "text" || typeof block.text !== "string") return block;
+		const text = rewriteAvailableToolsSection(block.text);
+		return text === block.text ? block : { ...block, text };
+	});
 }
 
 // ============================================================================
@@ -392,19 +409,27 @@ function rewriteAvailableToolsSection(systemText: string): string {
 }
 
 // ============================================================================
-// Full payload transform
-// Copied from upstream with companion-specific logic removed.
+// Full payload transform. Pool routes receive identity and prompt shaping;
+// native OAuth receives only tool-name synchronization.
 // ============================================================================
 
-function transformPayload(raw: Record<string, unknown>, disableFilter: boolean): Record<string, unknown> {
+function transformPayload(
+	raw: Record<string, unknown>,
+	disableFilter: boolean,
+	mode: Exclude<CompatibilityMode, "off">,
+): Record<string, unknown> {
 	const payload = JSON.parse(JSON.stringify(raw)) as Record<string, unknown>;
 
-	// 1. System prompt rewrite and Claude Code identity (always applies to the
-	// already-selected Anthropic target).
-	if (payload.system === undefined) {
-		payload.system = [{ type: "text", text: CLAUDE_CODE_IDENTITY, cache_control: { type: "ephemeral" } }];
-	} else {
-		payload.system = rewriteSystemField(payload.system);
+	// Pool requests need the complete Claude Code identity profile. Native OAuth
+	// already receives that profile from Pi, so only synchronize tool names there.
+	if (mode === "pool-full") {
+		if (payload.system === undefined) {
+			payload.system = [{ type: "text", text: CLAUDE_CODE_IDENTITY, cache_control: { type: "ephemeral" } }];
+		} else {
+			payload.system = rewriteSystemField(payload.system);
+		}
+	} else if (payload.system !== undefined) {
+		payload.system = rewriteToolNamesInSystemField(payload.system);
 	}
 
 	// When escape hatch is active, skip all tool filtering/remapping
@@ -472,7 +497,6 @@ function writeDebugLog(payload: unknown): void {
 const registeredMcpAliases = new Set<string>();
 const autoActivatedAliases = new Set<string>();
 let lastManagedToolList: string[] | undefined;
-let anthropicRouteActive = false;
 
 const FLAT_TO_MCP = new Map<string, string>(); // flat → mcp (append-only, never cleared mid-session)
 const FLAT_TOOL_DEFS = new Map<string, ToolInfo>(); // flat name → original tool definition (cleared/rebuilt each turn)
@@ -555,6 +579,7 @@ async function registerAliasesForAllTools(pi: ExtensionAPI): Promise<void> {
 			label: `MCP ${originalTool.label ?? flatName}`,
 			description: originalTool.description ?? "",
 			parameters: originalTool.parameters ?? Type.Object({}),
+			defaultActive: false,
 			async execute(toolCallId, params, signal, onUpdate, ctx) {
 				if (process.env.PI_CLAUDE_CODE_USE_DEBUG_LOG) {
 					appendFileSync(
@@ -578,7 +603,8 @@ async function registerAliasesForAllTools(pi: ExtensionAPI): Promise<void> {
 /**
  * Synchronize MCP alias tool activation with the current model state.
  * Auto-activates MCP aliases when their flat counterpart is active.
- * Removes auto-activated aliases when OAuth is inactive (but preserves user-selected).
+ * Removes every alias when compatibility is inactive so native API-key and
+ * unrelated routes cannot receive extension-owned declarations.
  */
 function syncAliasActivation(pi: ExtensionAPI, enableAliases: boolean): void {
 	const activeNames = pi.getActiveTools();
@@ -629,7 +655,7 @@ function syncAliasActivation(pi: ExtensionAPI, enableAliases: boolean): void {
 			lastManagedToolList = next;
 		}
 	} else {
-		const next = activeNames.filter((n) => !autoActivatedAliases.has(lower(n)));
+		const next = activeNames.filter((n) => !registeredMcpAliases.has(lower(n)));
 		autoActivatedAliases.clear();
 
 		if (next.length !== activeNames.length || next.some((n, i) => n !== activeNames[i])) {
@@ -646,6 +672,7 @@ function syncAliasActivation(pi: ExtensionAPI, enableAliases: boolean): void {
 // ============================================================================
 
 export default async function claudeCodeUse(pi: ExtensionAPI): Promise<void> {
+	if (!parseClaudeCodeUseEnabled(process.env.PI_CLAUDE_CODE_USE_ENABLED)) return;
 
 	// Monkey-patch Map.prototype.set to capture execute functions from ALL extensions'
 	// tool registrations. Each extension gets its own ExtensionAPI object with its own
@@ -731,46 +758,29 @@ export default async function claudeCodeUse(pi: ExtensionAPI): Promise<void> {
 	});
 
 	pi.on("before_agent_start", async (_event, ctx) => {
-		anthropicRouteActive = isAnthropicTarget(ctx.model);
+		const mode = compatibilityMode(ctx.model, ctx.modelRegistry.isUsingOAuth(ctx.model));
 		await registerAliasesForAllTools(pi);
-		// The pool is only a routing layer: Anthropic compatibility must be applied
-		// before both pool and native Anthropic requests leave Pi.
-		const isAnthropicRoute = isAnthropicTarget(ctx.model);
-		syncAliasActivation(pi, isAnthropicRoute);
+		syncAliasActivation(pi, mode !== "off");
 	});
 
-	// Pi 0.87 introduced a header hook. Register through a narrow compatibility
-	// cast so this extension remains loadable on older runtimes, where the hook
-	// simply is not emitted. The payload hook below remains authoritative there.
-	(pi.on as unknown as (event: string, handler: (event: { headers: Record<string, string | null> }) => void) => void)(
-		"before_provider_headers",
-		(event) => {
-			if (!anthropicRouteActive) return;
-			event.headers.accept = "application/json";
-			event.headers["anthropic-dangerous-direct-browser-access"] = "true";
-			event.headers["anthropic-beta"] = CLAUDE_CODE_BETAS.join(",");
-			event.headers["user-agent"] = `claude-code/${CLAUDE_CODE_VERSION}`;
-			event.headers["x-app"] = "cli";
-		},
-	);
+	pi.on("before_provider_headers", (event, ctx) => {
+		const mode = compatibilityMode(ctx.model, ctx.modelRegistry.isUsingOAuth(ctx.model));
+		if (mode !== "pool-full") return;
+		event.headers.accept = "application/json";
+		event.headers["anthropic-dangerous-direct-browser-access"] = "true";
+		mergeCommaHeader(event.headers, "anthropic-beta", CLAUDE_CODE_ROUTE_BETAS);
+		event.headers["user-agent"] = `claude-code/${CLAUDE_CODE_VERSION}`;
+		event.headers["x-app"] = "cli";
+	});
 
 	pi.on("before_provider_request", (event, ctx) => {
-		const model = ctx.model;
-		anthropicRouteActive = isAnthropicTarget(model);
-		// The pool forwards to Anthropic; it is not an exemption from Claude Code
-		// compatibility. Restrict this to the explicitly supported Anthropic routes
-		// so other providers remain completely untouched.
-		if (!isAnthropicTarget(model)) {
-			return undefined;
-		}
-		if (!isPlainObject(event.payload)) {
-			return undefined;
-		}
+		const mode = compatibilityMode(ctx.model, ctx.modelRegistry.isUsingOAuth(ctx.model));
+		if (mode === "off" || !isPlainObject(event.payload)) return undefined;
 
-		writeDebugLog({ stage: "before", payload: event.payload });
+		writeDebugLog({ stage: "before", mode, payload: event.payload });
 		const disableFilter = process.env.PI_CLAUDE_CODE_USE_DISABLE_TOOL_FILTER === "1";
-		const transformed = transformPayload(event.payload as Record<string, unknown>, disableFilter);
-		writeDebugLog({ stage: "after", payload: transformed });
+		const transformed = transformPayload(event.payload as Record<string, unknown>, disableFilter, mode);
+		writeDebugLog({ stage: "after", mode, payload: transformed });
 		return transformed;
 	});
 }
