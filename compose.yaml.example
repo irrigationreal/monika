@@ -55,6 +55,10 @@ services:
       HOME: /app
       PI_CODING_AGENT_DIR: /app/.pi/agent
       PI_OFFLINE: "1"
+      # Pool Claude routes need the bundled Claude Code compatibility adapter.
+      # Set to 0 to disable it completely; native Anthropic API-key traffic is
+      # left unchanged even when the adapter is enabled.
+      PI_CLAUDE_CODE_USE_ENABLED: ${PI_CLAUDE_CODE_USE_ENABLED:-1}
       PI_SUBAGENT_EXECUTION_TARGET_ROOT: /runtime/secrets/ssh/targets
       PI_SUBAGENT_SSH_LOCK_EXTENSION: /app/.pi/agent/extensions/ssh.ts
       MONIKA_SSH_LOCK_DESCRIPTOR: ${MONIKA_SSH_LOCK_DESCRIPTOR:-}

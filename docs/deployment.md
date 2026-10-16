@@ -198,6 +198,28 @@ reviewed `pi-agent-browser` npm package from immutable image state produced by
 `pi install`; `/opt/pi-subagents` remains image-local. Bundled `extensions/`,
 `agents/`, and other default resources are never moved into package persistence.
 
+### Claude Code compatibility policy
+
+The bundled `claude-code-use` extension is enabled by default because the
+`claude/...` pool route uses an ordinary pool credential and therefore does not
+activate Pi's native Anthropic OAuth compatibility path. The adapter supplies
+the pool's Claude Code identity, MCP-style custom-tool names, and compatibility
+headers while preserving Pi's model-specific beta features.
+
+Native `anthropic/...` behavior is authentication-sensitive. When Pi selects
+OAuth, the extension adds only MCP tool aliases; Pi remains authoritative for
+identity, betas, and headers. When Pi selects an API key, header-owned auth, or
+workload identity, the extension leaves the request unchanged. Do not configure
+a native API-key route to impersonate Claude Code merely because it uses the
+Anthropic Messages protocol.
+
+Set `PI_CLAUDE_CODE_USE_ENABLED=0` in the deployment environment to disable the
+adapter before it registers hooks or aliases. The Compose template defaults the
+value to `1`. Disabling it can make custom Monika tools unusable through pool
+Claude and native Anthropic OAuth routes. See
+[`config/extensions/CLAUDE-CODE-USE.md`](../config/extensions/CLAUDE-CODE-USE.md)
+for the exact route and header contract.
+
 Do not commit `runtime/` or store public-ingress connector credentials anywhere
 inside the mounted workspace tree.
 
