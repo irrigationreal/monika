@@ -20,14 +20,25 @@ allowBuilds:
   unrs-resolver: false
 
 overrides:
-  '@isaacs/brace-expansion': '>=5.0.1'
-  'brace-expansion@1': 1.1.18
-  'brace-expansion@2': 2.1.4
-  'brace-expansion@5': 5.0.9
-  'fast-uri@3': 3.1.6
+  '@fastify/busboy': 3.2.2
+  '@isaacs/brace-expansion': '>=5.0.12'
+  'brace-expansion@1': 1.1.21
+  'brace-expansion@2': 2.1.7
+  'brace-expansion@5': 5.0.12
+  '@vue/server-renderer': 3.5.42
+  dompurify: 3.4.16
+  'fast-uri@3': 3.1.8
+  fast-uri: 3.1.8
+  fastify: 5.12.5
   fast-xml-parser: '>=5.3.4'
   'find-my-way@9': 9.7.0
   'js-yaml@4': 4.3.2
+  katex: 0.18.2
   lodash: 4.18.1
+  nanoid: 3.3.18
+  nodemailer: 10.0.9
+  'postcss-selector-parser': 7.1.6
   'postcss@8': 8.5.23
-  'undici@6': 6.28.0
+  sharp: 0.35.5
+  source-map-js: 1.2.2
+  'undici@6': 6.28.1
