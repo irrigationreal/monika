@@ -81,7 +81,7 @@ export class EmailService implements IEmailService {
     }
 
     try {
-      const transportOptions: nodemailer.TransportOptions = {
+      const transportOptions: Parameters<typeof nodemailer.createTransport>[0] = {
         host,
         port,
         secure,
@@ -91,7 +91,7 @@ export class EmailService implements IEmailService {
         // attachment support.
         disableFileAccess: true,
         disableUrlAccess: true,
-      } as nodemailer.TransportOptions;
+      } as Parameters<typeof nodemailer.createTransport>[0];
 
       this.transporter = nodemailer.createTransport(transportOptions);
       console.log(`[EmailService] SMTP configured with host: ${host}:${port}`);
