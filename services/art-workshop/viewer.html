@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Art workshop preview comparison</title>
+  <style>
+    :root { color-scheme: light dark; font: 16px system-ui, sans-serif; }
+    body { max-width: 1100px; margin: 2rem auto; padding: 0 1rem; }
+    .inputs { display: flex; flex-wrap: wrap; gap: 1rem; align-items: end; }
+    label { display: grid; gap: .35rem; }
+    .panes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin-top: 1.5rem; }
+    .pane { min-height: 260px; padding: .75rem; border: 1px solid #888; border-radius: .35rem; }
+    .preview { display: block; width: 100%; height: 380px; object-fit: contain; background: #eee; }
+    .source { max-height: 380px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .status { color: #666; }
+    .guide .preview { background-image: linear-gradient(90deg, transparent 49.7%, #d55 49.7%, #d55 50.3%, transparent 50.3%), linear-gradient(0deg, transparent 49.7%, #d55 49.7%, #d55 50.3%, transparent 50.3%); }
+    @media (max-width: 700px) { .panes { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <h1>Preview comparison</h1>
+  <p>Choose two local PNG previews, or SVG source files to inspect their text. Files are not uploaded.</p>
+  <div class="inputs">
+    <label>Preview A
+      <input id="file-a" type="file" accept="image/png,image/svg+xml,.png,.svg">
+    </label>
+    <label>Preview B
+      <input id="file-b" type="file" accept="image/png,image/svg+xml,.png,.svg">
+    </label>
+    <label><input id="guide" type="checkbox"> show center guides</label>
+  </div>
+  <p class="status" id="status" aria-live="polite">Select files to compare.</p>
+  <main class="panes" id="panes">
+    <section class="pane" id="pane-a"><h2>A</h2><img class="preview" alt="Preview A"></section>
+    <section class="pane" id="pane-b"><h2>B</h2><img class="preview" alt="Preview B"></section>
+  </main>
+
+  <script>
+    (() => {
+      const state = { urls: [null, null], reads: [0, 0] };
+      const status = document.querySelector('#status');
+      const panes = [document.querySelector('#pane-a'), document.querySelector('#pane-b')];
+
+      function isAllowed(file) {
+        return file && (file.type === 'image/png' || file.type === 'image/svg+xml' ||
+          /\.(png|svg)$/i.test(file.name));
+      }
+
+      function clearPane(index) {
+        if (state.urls[index]) URL.revokeObjectURL(state.urls[index]);
+        state.urls[index] = null;
+        state.reads[index] += 1;
+        const pane = panes[index];
+        const oldSource = pane.querySelector('.source');
+        if (oldSource) oldSource.remove();
+        const image = pane.querySelector('img');
+        image.hidden = false;
+        image.removeAttribute('src');
+      }
+
+      async function show(index, file) {
+        clearPane(index);
+        if (!file) return;
+        if (!isAllowed(file)) {
+          status.textContent = `${file.name}: choose a PNG or SVG file.`;
+          return;
+        }
+        const readId = ++state.reads[index];
+        const pane = panes[index];
+        if (/\.svg$/i.test(file.name) || file.type === 'image/svg+xml') {
+          // SVG is source text only. textContent avoids interpreting markup as DOM.
+          const text = await file.text();
+          if (readId !== state.reads[index]) return;
+          const source = document.createElement('pre');
+          source.className = 'source';
+          source.textContent = text;
+          pane.querySelector('img').hidden = true;
+          pane.append(source);
+          return;
+        }
+        state.urls[index] = URL.createObjectURL(file);
+        pane.querySelector('img').src = state.urls[index];
+      }
+
+      document.querySelector('#file-a').addEventListener('change', event => show(0, event.target.files[0]));
+      document.querySelector('#file-b').addEventListener('change', event => show(1, event.target.files[0]));
+      document.querySelector('#guide').addEventListener('change', event => {
+        document.querySelector('#panes').classList.toggle('guide', event.target.checked);
+      });
+      window.addEventListener('pagehide', () => state.urls.forEach(url => url && URL.revokeObjectURL(url)));
+    })();
+  </script>
+</body>
+</html>
