@@ -26,6 +26,7 @@ Options:
   --no-tools               Disable all pi tools
   --tools LIST             Comma-separated pi tool allowlist, e.g. read,grep,find,ls
   --no-extensions          Disable Pi extension discovery
+  --extension PATH        Explicit extension path inside the runner image; repeatable
   --no-skills              Disable Pi skill discovery
   --no-prompt-templates    Disable Pi prompt-template discovery
   --no-context-files       Disable Pi context-file discovery
@@ -90,6 +91,7 @@ save_session=0
 no_tools=0
 tools=""
 no_extensions=0
+extensions=()
 no_skills=0
 no_prompt_templates=0
 no_context_files=0
@@ -114,6 +116,7 @@ while [[ $# -gt 0 ]]; do
     --no-tools) no_tools=1; shift ;;
     --tools) tools="${2:-}"; shift 2 ;;
     --no-extensions) no_extensions=1; shift ;;
+    --extension) extensions+=("${2:-}"); shift 2 ;;
     --no-skills) no_skills=1; shift ;;
     --no-prompt-templates) no_prompt_templates=1; shift ;;
     --no-context-files) no_context_files=1; shift ;;
@@ -196,6 +199,10 @@ if [[ -n "$tools" ]]; then
 fi
 if [[ "$no_extensions" -eq 1 ]]; then
   docker_args+=( -e RUNNER_NO_EXTENSIONS=1 )
+fi
+if [[ ${#extensions[@]} -gt 0 ]]; then
+  extension_list="$(IFS=:; echo "${extensions[*]}")"
+  docker_args+=( -e "RUNNER_EXTENSIONS=$extension_list" )
 fi
 if [[ "$no_skills" -eq 1 ]]; then
   docker_args+=( -e RUNNER_NO_SKILLS=1 )

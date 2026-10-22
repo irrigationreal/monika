@@ -101,6 +101,7 @@ test("agent-runner maps opt-in resource isolation environment flags to Pi", asyn
       PI_MODEL: "",
       PI_TOOLS: "",
       RUNNER_NO_EXTENSIONS: "1",
+      RUNNER_EXTENSIONS: ["/extensions/one.ts", "/extensions/two.ts"].join(path.delimiter),
       RUNNER_NO_SKILLS: "true",
       RUNNER_NO_PROMPT_TEMPLATES: "yes",
       RUNNER_NO_CONTEXT_FILES: "on",
@@ -112,6 +113,9 @@ test("agent-runner maps opt-in resource isolation environment flags to Pi", asyn
   const args = captured.args;
   assert.equal(captured.shutdownSaveMode, "disabled");
   for (const flag of ISOLATION_FLAGS) assert.ok(args.includes(flag), `${flag} was not forwarded`);
+  assert.deepEqual(args.filter((value) => value === "--extension"), ["--extension", "--extension"]);
+  assert.ok(args.includes("/extensions/one.ts"));
+  assert.ok(args.includes("/extensions/two.ts"));
 });
 
 test("runner preserves explicit global Git config while HOME is disposable", async (t) => {
@@ -195,6 +199,7 @@ test("wrapper maps resource isolation options to runner environment", async (t) 
     "--output-dir", outputDir,
     "--cleanup", "never",
     "--no-extensions",
+    "--extension", "/app/.pi/agent/extensions/claude-code-use.ts",
     "--no-skills",
     "--no-prompt-templates",
     "--no-context-files",
@@ -212,6 +217,7 @@ test("wrapper maps resource isolation options to runner environment", async (t) 
   const args = captured.args;
   const expectedEnv = [
     "RUNNER_NO_EXTENSIONS=1",
+    "RUNNER_EXTENSIONS=/app/.pi/agent/extensions/claude-code-use.ts",
     "RUNNER_NO_SKILLS=1",
     "RUNNER_NO_PROMPT_TEMPLATES=1",
     "RUNNER_NO_CONTEXT_FILES=1",
