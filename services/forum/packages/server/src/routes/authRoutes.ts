@@ -63,6 +63,7 @@ export function registerAuthRoutes({
     inviteRegistrationEnabled,
     publicRegistrationEnabled,
     passwordLoginEnabled,
+    searchAccess: featureFlags.searchAccess,
   };
 
   registerWebAuthnRoutes({

@@ -23,7 +23,7 @@ describe('Search routes access controls', () => {
     db.close();
   });
 
-  async function buildApp(options?: { rateLimiting?: boolean }) {
+  async function buildApp(options?: { rateLimiting?: boolean; searchAccess?: 'public' | 'members' }) {
     const app = Fastify({ logger: false });
     await app.register(sensible);
     if (options?.rateLimiting) {
@@ -37,7 +37,11 @@ describe('Search routes access controls', () => {
     registerSearchRoutes({
       app,
       store,
-      featureFlags: { enableSearch: true, enableRateLimiting: Boolean(options?.rateLimiting) } as any,
+      featureFlags: {
+        enableSearch: true,
+        enableRateLimiting: Boolean(options?.rateLimiting),
+        searchAccess: options?.searchAccess ?? 'public',
+      } as any,
       access,
     });
     await app.ready();
@@ -48,6 +52,28 @@ describe('Search routes access controls', () => {
     const { topic, post } = store.createTopic({ forumId, title, body, authorId });
     return { topic, post };
   }
+
+  it('rejects guests when search is members-only', async () => {
+    const app = await buildApp({ searchAccess: 'members' });
+    const res = await app.inject({ method: 'GET', url: '/search?q=needle' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('allows authenticated members to search when search is members-only', async () => {
+    const app = await buildApp({ searchAccess: 'members' });
+    const forum = store.createForum('Public', null, null, null, null, 'active', 'public');
+    const member = store.createIdentityWithPassword('Member', 'member', 'pw-hash', 'human');
+    store.createAuthSession('member-token', member.id);
+    createTopicWithPost(forum.id, 'needle topic', 'needle post', member.id);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/search?q=needle',
+      headers: { authorization: 'Bearer member-token' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().topics).toHaveLength(1);
+  });
 
   it('returns only public results to guests', async () => {
     const app = await buildApp();

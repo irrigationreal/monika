@@ -161,7 +161,9 @@ than editing migration state manually.
 
 ## Search, rate limiting, and trusted proxies
 
-Public search should be paired with `CODEX_FORUM_ENABLE_RATE_LIMITING=1`. Limits are route-specific: login,
+Search can be public or members-only. Set `CODEX_FORUM_SEARCH_ACCESS=members` to require a valid authenticated
+identity for the search endpoint; this requires `CODEX_FORUM_ENABLE_AUTH=1`. The default is `public` when search is
+enabled. Both modes should be paired with `CODEX_FORUM_ENABLE_RATE_LIMITING=1`. Limits are route-specific: login,
 registration, topic creation, replies, and search are limited, while ordinary authenticated reads are not globally
 throttled.
 

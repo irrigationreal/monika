@@ -1,4 +1,8 @@
-import { RegistrationModeValues, type RegistrationMode } from '@irrigationreal/codex-forum-contracts';
+import {
+  RegistrationModeValues,
+  type RegistrationMode,
+  type SearchAccess,
+} from '@irrigationreal/codex-forum-contracts';
 
 export interface ServerConfig {
   host: string;
@@ -12,6 +16,7 @@ export interface FeatureFlags {
   enableAuth: boolean;
   enableRateLimiting: boolean;
   enableSearch: boolean;
+  searchAccess: SearchAccess;
   registrationMode: RegistrationMode;
 }
 
@@ -26,11 +31,21 @@ export function parseRegistrationMode(value: string | undefined): RegistrationMo
 }
 
 export function loadFeatureFlags(): FeatureFlags {
+  const enableAuth = process.env['CODEX_FORUM_ENABLE_AUTH'] === '1';
+  const searchAccess = process.env['CODEX_FORUM_SEARCH_ACCESS'] ?? 'public';
+  if (searchAccess !== 'public' && searchAccess !== 'members') {
+    throw new Error(`Invalid CODEX_FORUM_SEARCH_ACCESS: ${searchAccess}. Expected public or members`);
+  }
+  if (searchAccess === 'members' && !enableAuth) {
+    throw new Error('CODEX_FORUM_SEARCH_ACCESS=members requires CODEX_FORUM_ENABLE_AUTH=1');
+  }
+
   return {
     useRedisStreamBus: process.env['CODEX_FORUM_REDIS_STREAM_BUS'] === '1',
-    enableAuth: process.env['CODEX_FORUM_ENABLE_AUTH'] === '1',
+    enableAuth,
     enableRateLimiting: process.env['CODEX_FORUM_ENABLE_RATE_LIMITING'] === '1',
     enableSearch: process.env['CODEX_FORUM_ENABLE_SEARCH'] === '1',
+    searchAccess,
     registrationMode: parseRegistrationMode(process.env['CODEX_FORUM_REGISTRATION_MODE'])
   };
 }

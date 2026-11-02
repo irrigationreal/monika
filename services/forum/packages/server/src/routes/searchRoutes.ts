@@ -43,6 +43,9 @@ export function registerSearchRoutes({
       }
       const limit = Math.max(1, Math.min(100, Math.trunc(requestedLimit)));
       const identity = getIdentityFromRequest(request);
+      if (featureFlags.searchAccess === 'members' && !identity) {
+        throw app.httpErrors.unauthorized('Authentication required to search');
+      }
       const forumAccess = new Map<string, boolean>();
       const canViewForumId = (forumId: string | null | undefined): boolean => {
         if (!forumId) return false;

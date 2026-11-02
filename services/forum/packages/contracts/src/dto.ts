@@ -1101,6 +1101,8 @@ export interface AuthIdentityDto {
 
 export const RegistrationModeValues = ['disabled', 'invite-only', 'public'] as const;
 export type RegistrationMode = (typeof RegistrationModeValues)[number];
+export const SearchAccessValues = ['public', 'members'] as const;
+export type SearchAccess = (typeof SearchAccessValues)[number];
 
 export interface RegistrationModeDto {
   mode: RegistrationMode;
@@ -1108,6 +1110,7 @@ export interface RegistrationModeDto {
   inviteRegistrationEnabled: boolean;
   publicRegistrationEnabled: boolean;
   passwordLoginEnabled: boolean;
+  searchAccess: SearchAccess;
 }
 
 export interface AuthUserDto {

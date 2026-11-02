@@ -18,7 +18,7 @@ import {
   RobotModeValues,
 } from '@irrigationreal/codex-forum-core';
 
-import { RegistrationModeValues } from './dto';
+import { RegistrationModeValues, SearchAccessValues } from './dto';
 import { PageRequestSchema, PageResponseSchema } from './pagination';
 import { ForumThemeKeySchema } from './themes';
 
@@ -223,6 +223,7 @@ export const RobotAutomationWorkerSchema = z.enum(['echs']);
 export const RobotAutomationRunModeSchema = z.enum(['manual', 'interval']);
 export const TopicAutoRunStatusSchema = z.enum(['idle', 'running', 'stopped', 'error']);
 export const RegistrationModeSchema = z.enum(RegistrationModeValues);
+export const SearchAccessSchema = z.enum(SearchAccessValues);
 
 export const ForumLastPostDtoSchema: z.ZodType<ForumLastPostDto> = z.object({
   postId: z.string(),
@@ -1318,6 +1319,7 @@ export const RegistrationModeDtoSchema: z.ZodType<RegistrationModeDto> = z.objec
   inviteRegistrationEnabled: z.boolean(),
   publicRegistrationEnabled: z.boolean(),
   passwordLoginEnabled: z.boolean(),
+  searchAccess: SearchAccessSchema,
 });
 
 export const AuthUserDtoSchema: z.ZodType<AuthUserDto> = z.object({
