@@ -140,10 +140,12 @@ Implemented in `services/forum`:
   from a currently loaded conversation that supplies both canonical ID and path.
 - Durable post dispatch is strictly ordered per topic: a delayed head cannot be bypassed by a newer due row. Agentd adds
   `dispatch_acceptance: "not_accepted"` only when failure is provably before prompt dispatch acceptance (including
-  conversation initialization and synchronous message preparation before Pi acceptance). Agentd draining adds the
-  separate `dispatch_retry: "safe"` marker; only that explicit combination retains the same durable dispatch for
-  indefinite automatic retry at the transport cadence while remaining lifecycle-classified. Other not-accepted failures
-  are terminal/manual. The post author or an admin can retry a failed current-generation dispatch through the existing
+  conversation initialization and synchronous message preparation before Pi acceptance). Agentd adds the separate
+  `dispatch_retry: "safe"` marker for draining and for an explicit auto-compaction transition that raced a newly
+  active conversation; only that explicit combination retains the same durable dispatch for indefinite automatic retry
+  at the transport cadence while remaining lifecycle-classified. Other not-accepted failures are terminal/manual.
+  Ordinary dispatches omit `auto_compact`; a reply changes the policy only when it explicitly includes the setting, and
+  agentd admits that change at the canonical prompt boundary. The post author or an admin can retry a failed current-generation dispatch through the existing
   post-dispatch endpoint; retry crosses deployment admission and the admin topic indicator exposes the action. The durable
   post, canonical links, and creation ledger remain intact. Markerless 5xx, reset, timeout,
   and network outcomes remain ambiguous: they retain the exact dispatch ID, generation, normalized origin, and ordered
@@ -495,11 +497,14 @@ silently overwrite another change. Existing, imported, and handoff-created topic
 start disabled. Other participants receive read-only visibility because compaction
 affects their shared canonical context.
 
-The forum sends the desired policy whenever it creates, opens, recreates, or dispatches
-to an agentd conversation. Agentd applies it with a conversation-local,
-non-persistent `SettingsManager.applyOverrides()` overlay. It must not call Pi's
-`AgentSession.setAutoCompactionEnabled()`, whose settings-manager setter persists the
-shared global setting. Consequently unrelated parent sessions and direct Pi CLI use
+The forum sends the desired policy when it creates, opens, or recreates an agentd
+conversation. Ordinary dispatches omit `auto_compact`; a reply carries the field only
+when it explicitly changes the topic policy, and that intent is retained on its durable
+dispatch row for retry and grouping boundaries. Agentd applies explicit changes with a
+conversation-local, non-persistent `SettingsManager.applyOverrides()` overlay and
+remains the authoritative active/idle gate at the prompt boundary. It must not call
+Pi's `AgentSession.setAutoCompactionEnabled()`, whose settings-manager setter persists
+the shared global setting. Consequently unrelated parent sessions and direct Pi CLI use
 remain governed by the global default, which stays disabled.
 
 When enabled, Pi owns threshold detection and overflow recovery. Threshold compaction

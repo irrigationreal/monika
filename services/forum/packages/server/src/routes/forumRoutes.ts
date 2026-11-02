@@ -1115,6 +1115,7 @@ export function registerForumRoutes({
               mode: 'auto',
               model: body.model?.trim() || null,
               reasoningEffort: body.reasoningEffort?.trim() || null,
+              ...(changingAutoCompact ? { autoCompact: body.autoCompactEnabled } : {}),
             });
           }
           const subscriptions = store.listTopicSubscriptions(topicId, 'watching');

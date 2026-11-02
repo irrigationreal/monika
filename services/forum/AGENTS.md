@@ -179,7 +179,9 @@ current generation/operation. Aborted/reset/markerless-5xx transport outcomes ke
 ordered contributors pending indefinitely at deterministic progressive backoff (about 30s, 60s, 2m, then a 5m cap); they
 never authorize link cleanup or fresh canonical work. Agentd errors explicitly marked
 `dispatch_acceptance: "not_accepted"` are lifecycle failures; only an additional `dispatch_retry: "safe"` marker permits
-indefinite exact-identity automatic retry. Other marked setup failures are terminal/manual. Never infer either rule from
+indefinite exact-identity automatic retry. This includes draining and explicit auto-compaction transitions that race
+newly active conversations; ordinary dispatches omit auto-compaction configuration. Other marked setup failures are
+terminal/manual. Never infer either rule from
 status. Older delayed heads order-fence newer topic dispatches. Attempt claims and outcomes are append-only audit
 history, and only admins may receive the topic-scoped diagnostic projection. Apply cancellation results only when their
 generation still matches the topic.

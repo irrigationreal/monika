@@ -397,6 +397,7 @@ interface QueuedTurn {
   options?: {
     model?: string | null;
     reasoningEffort?: string | null;
+    autoCompact?: boolean;
     mode?: 'queue' | 'steer';
     dispatchId?: string;
     generation?: number;
@@ -1124,6 +1125,7 @@ export class EchsBridge {
       mode?: 'queue' | 'steer';
       model?: string | null;
       reasoningEffort?: string | null;
+      autoCompact?: boolean;
       dispatchId?: string;
       generation?: number;
       contributorPostIds?: string[];
@@ -1144,6 +1146,7 @@ export class EchsBridge {
       options: {
         model: options?.model ?? null,
         reasoningEffort: options?.reasoningEffort ?? null,
+        autoCompact: options?.autoCompact,
         mode: options?.mode ?? 'queue',
         dispatchId: options?.dispatchId ?? randomUUID(),
         generation: options?.generation ?? this.store.getTopicDispatchGeneration(topicId),
@@ -1958,7 +1961,7 @@ export class EchsBridge {
         workdir: cwd,
         model,
         reasoning: reasoningEffort,
-        auto_compact: autoCompact,
+        ...(options?.autoCompact !== undefined ? { auto_compact: options.autoCompact } : {}),
       };
       const requestedMode = options?.mode ?? 'queue';
       const incomingOriginKey = options?.origin ? normalizedOriginKey(options.origin) : null;

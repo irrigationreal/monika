@@ -29,6 +29,8 @@ test('dispatch acceptance markers distinguish terminal and explicitly safe retry
   });
   assert.equal(original.dispatch_acceptance, undefined);
   assert.equal(new DispatchNotAcceptedError(new Error('failed')).cause.message, 'failed');
+  assert.equal(new DispatchNotAcceptedError(Object.assign(new Error('busy'), { safeRetry: true })).safeRetry, true);
+  assert.match(serverSource, /safeRetry: dispatchNotAccepted\.safeRetry/);
 });
 
 test('message route wires HTTP success behind the behavioral preflight gate', () => {

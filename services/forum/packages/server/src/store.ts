@@ -422,6 +422,8 @@ export interface CreatePostDispatchInput {
   mode?: string;
   model?: string | null;
   reasoningEffort?: string | null;
+  /** Explicit reply-level policy change; omitted for ordinary dispatches. */
+  autoCompact?: boolean;
 }
 
 export type AttachmentHandoffInput = {
@@ -3688,12 +3690,12 @@ export class ForumStore {
       this.db
         .prepare(
           `insert into post_dispatches
-            (id, topic_id, post_id, session_id, status, mode, generation, model, reasoning_effort, attempt_count,
+            (id, topic_id, post_id, session_id, status, mode, generation, model, reasoning_effort, auto_compact, attempt_count,
              last_attempt_at, next_attempt_at, dispatched_at, error_message, created_at, updated_at,
              origin_key, origin_json, contributor_post_ids_json)
             values (?, ?, ?, ?, 'pending', ?,
               (select generation from post_dispatch_generations where topic_id = ?),
-              ?, ?, 0, null, ?, null, null, ?, ?, ?, ?, ?)`
+              ?, ?, ?, 0, null, ?, null, null, ?, ?, ?, ?, ?)`
         )
         .run(
           id,
@@ -3704,6 +3706,7 @@ export class ForumStore {
           input.topicId,
           input.model ?? null,
           input.reasoningEffort ?? null,
+          input.autoCompact === undefined ? null : input.autoCompact ? 1 : 0,
           now,
           now,
           now,

@@ -1074,6 +1074,16 @@ function refreshConversationModelRuntime(modelRuntime) {
   return refresh;
 }
 
+class SessionConfigurationConflictError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'SessionConfigurationConflictError';
+    // The prompt has not crossed Pi's acceptance boundary. Once the current
+    // turn settles, retrying the same durable dispatch is safe.
+    this.safeRetry = true;
+  }
+}
+
 const forumModelRuntimePromise = createModelRuntime();
 const forumCatalogRefresh = startModelCatalogRefresh(forumModelRuntimePromise, {
   intervalMs: MODEL_REFRESH_MS,
@@ -1111,7 +1121,7 @@ async function applySessionConfig(conv, config = {}) {
       hasActiveBackgroundWork(conv),
     );
     if (activeExecution)
-      throw new Error(
+      throw new SessionConfigurationConflictError(
         "auto_compact cannot be changed while the conversation is active",
       );
     applyAutoCompactionOverride(conv.runtime.services.settingsManager, {
@@ -3004,7 +3014,11 @@ const server = http.createServer(async (req, res) => {
   } catch (caught) {
     const dispatchNotAccepted = caught instanceof DispatchNotAcceptedError;
     const err = dispatchNotAccepted ? caught.cause : caught;
-    const errorJson = (status, body) => json(res, status, dispatchNotAccepted ? notAcceptedBody(body) : body);
+    const errorJson = (status, body) => json(
+      res,
+      status,
+      dispatchNotAccepted ? notAcceptedBody(body, { safeRetry: dispatchNotAccepted.safeRetry }) : body,
+    );
     if (err instanceof SyntaxError) return errorJson(400, { error: 'bad_request', message: err.message });
     if (err instanceof SessionOwnershipConflict) {
       return errorJson(409, {

@@ -1995,6 +1995,15 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 52,
+    name: 'explicit-dispatch-auto-compaction-policy',
+    up: (db) => {
+      if (!hasColumn(db, 'post_dispatches', 'auto_compact')) {
+        db.prepare('alter table post_dispatches add column auto_compact integer check (auto_compact in (0, 1))').run();
+      }
+    },
+  },
 ];
 
 export const SCHEMA_VERSION: number = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;
