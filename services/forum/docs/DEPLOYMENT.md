@@ -228,6 +228,7 @@ See:
 For forum-only development from `services/forum/`:
 
 ```bash
+npm install --global corepack@0.36.0
 corepack enable
 corepack prepare pnpm@11.21.0 --activate
 pnpm install

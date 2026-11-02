@@ -121,9 +121,12 @@ surface colors.
 
 ## Quick start (local)
 
-> Requires Node 22.13+ and pnpm 11.21.0.
+> Production and CI use Node.js 26 LTS and pnpm 11.21.0. The package minimum
+> remains Node 22.14+ (Node-API 10, required by better-sqlite3 13).
+> Node 26 no longer bundles Corepack; bootstrap the pinned version below.
 
 ```bash
+npm install --global corepack@0.36.0
 corepack enable
 corepack prepare pnpm@11.21.0 --activate
 pnpm install

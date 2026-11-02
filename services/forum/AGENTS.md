@@ -107,7 +107,7 @@ pnpm test
 On stanza, use `nix-shell` if pnpm is not on PATH:
 
 ```bash
-nix-shell -p nodejs_22 pnpm --run 'CODEX_FORUM_UPLOADS_DIR=/tmp/codex-forum-test-uploads pnpm test'
+nix-shell -p nodejs_26 pnpm --run 'CODEX_FORUM_UPLOADS_DIR=/tmp/codex-forum-test-uploads pnpm test'
 ```
 
 Unit/integration tests live under:

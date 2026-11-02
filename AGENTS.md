@@ -111,7 +111,7 @@ Forum-specific code lives under `services/forum/`; read `services/forum/AGENTS.m
 Use `nix-shell` for temporary tooling when needed, for example:
 
 ```bash
-nix-shell -p nodejs_22 pnpm --run 'cd services/forum && pnpm test'
+nix-shell -p nodejs_26 pnpm --run 'cd services/forum && pnpm test'
 ```
 
 When forum tests need writable upload storage, set `CODEX_FORUM_UPLOADS_DIR` to a temp path.

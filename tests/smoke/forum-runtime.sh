@@ -62,6 +62,14 @@ trap cleanup EXIT
 
 # ── Start container ──────────────────────────────────────────────────────────
 
+section "Verify Node.js runtime"
+NODE_VERSION="$(docker run --rm "$IMAGE" node --version)"
+case "$NODE_VERSION" in
+  v26.*) pass "Node.js $NODE_VERSION" ;;
+  *) fail "Expected Node.js 26, got $NODE_VERSION"; exit 1 ;;
+esac
+endsection
+
 section "Start forum container"
 info "Image: $IMAGE"
 info "Container: $CONTAINER_NAME"
@@ -242,7 +250,12 @@ endsection
 section "Verify native modules"
 SQLITE_CHECK=$(docker exec "$CONTAINER_NAME" node -e "
   try {
-    require('better-sqlite3');
+    const Database = require('better-sqlite3');
+    const db = new Database(':memory:');
+    db.exec('CREATE TABLE smoke (value TEXT NOT NULL)');
+    db.prepare('INSERT INTO smoke (value) VALUES (?)').run('node26');
+    if (db.prepare('SELECT value FROM smoke').pluck().get() !== 'node26') throw new Error('SQLite round-trip failed');
+    db.close();
     console.log('ok');
   } catch(e) {
     console.log('fail: ' + e.message);

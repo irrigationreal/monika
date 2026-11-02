@@ -300,9 +300,13 @@ replacement during validation fail closed.
 
 ## Development
 
-Install and run the provider-independent suite:
+The runtime and CI use Node.js 26 LTS. Node 26 no longer bundles Corepack, so
+install the pinned package-manager bootstrap before using pnpm:
 
 ```bash
+npm install --global corepack@0.36.0
+corepack enable
+corepack prepare pnpm@11.21.0 --activate
 corepack pnpm@11.21.0 install --frozen-lockfile
 pnpm test
 ```

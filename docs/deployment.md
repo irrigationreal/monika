@@ -7,10 +7,11 @@ Monika runs as two coordinated application containers:
 
 The tracked [`compose.yaml.example`](../compose.yaml.example) is the canonical
 standalone deployment template. Copy it to ignored `compose.yaml` and keep
-host-specific changes out of Git. The Monika image currently ships Pi 1.1.0;
-the CLI and agentd SDK are upgraded together from reviewed lockfiles so their
-session, extension, and transitive dependency APIs cannot drift between runtime
-layers. Interactive Pi explicitly uses regular TUI mode for tmux scrollback.
+host-specific changes out of Git. The Monika image runs Node.js 26 LTS and
+currently ships Pi 1.1.0; the CLI and agentd SDK are upgraded together from
+reviewed lockfiles so their session, extension, and transitive dependency APIs
+cannot drift between runtime layers. Node 26 does not bundle Corepack, so the
+images install pinned Corepack 0.36.0 before activating pnpm 11.21.0. Interactive Pi explicitly uses regular TUI mode for tmux scrollback.
 Built-in MCP, codemode, and tool-search extensions remain disabled pending a
 separate capability and projection review.
 
