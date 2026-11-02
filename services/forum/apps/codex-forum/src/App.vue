@@ -143,7 +143,7 @@ const forumLinks = computed<NavigationLink[]>(() => {
       { label: 'Admin', to: { name: 'admin' } },
       { label: 'Robot Dashboard', to: { name: 'admin.robotDashboard' } },
       { label: 'Analytics', to: { name: 'admin.analytics' } },
-      { label: 'Secret Metadata', to: { name: 'admin.secrets' } }
+      { label: 'Secrets', to: { name: 'admin', query: { section: 'secrets' } } }
     );
   }
   if (state.isLoggedIn.value) {
