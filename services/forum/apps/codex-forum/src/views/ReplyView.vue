@@ -410,6 +410,14 @@ onBeforeRouteUpdate(async (to, from) => {
 async function loadTopic(topicId: string): Promise<void> {
   try {
     await state.selectTopicById(topicId);
+    if (routeTopicId.value === topicId && typeof route.query['model'] !== 'string') {
+      const selection = state.replyOptionsForTopic(topicId);
+      selectedModel.value = selection.model ?? '';
+    }
+    if (routeTopicId.value === topicId && typeof route.query['reasoning'] !== 'string') {
+      const selection = state.replyOptionsForTopic(topicId);
+      selectedReasoning.value = selection.reasoningEffort ?? selectedReasoning.value;
+    }
   } catch (err) {
     errorMessage.value = err instanceof Error ? err.message : 'Failed to load topic data.';
   }
@@ -472,24 +480,6 @@ watch(
   syncSelectionFromQuery();
   },
   { immediate: true }
-);
-
-watch(
-  () => state.lastReplyModel.value,
-  (value) => {
-    if (!route.query['model'] && value) {
-      selectedModel.value = value;
-    }
-  }
-);
-
-watch(
-  () => state.lastReplyReasoning.value,
-  (value) => {
-    if (!route.query['reasoning'] && value) {
-      selectedReasoning.value = value;
-    }
-  }
 );
 
 watch([selectedModel, () => state.defaultModel.value], ([model]) => {
