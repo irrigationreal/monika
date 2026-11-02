@@ -202,7 +202,10 @@ apply without rejecting or rewriting stored post source. Author-controlled Merma
 blocked while normal diagram syntax and `accTitle`/`accDescr` remain available. See `docs/MERMAID.md` for supported
 surfaces, limits, security boundaries, export behavior, and upgrade validation.
 
-## Persistent Quick Reply dock
+## Forum-managed secrets
+
+`/secrets` is a browser-session-only write-only credential-management surface. Secret values are sent to agentd over the authenticated internal bridge and stored there encrypted with AES-256-GCM; forum SQLite stores only ownership and redacted metadata. List/detail/admin responses never return plaintext, and API-key or impersonation authentication is rejected. Users can create, replace, disable, and delete their own secrets; administrators can inspect metadata and manage any stored secret without reading its value. Expiration and disabled state prevent future broker operations. Post-dispatch grant attachment is not yet enabled.
+
 
 Topic pages keep a single Quick Reply composer in the account's selected inline or viewport-bottom docked style. The
 style remains fixed for that topic view: there are no temporary Keep visible or Undock controls. A docked composer can

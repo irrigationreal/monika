@@ -49,6 +49,10 @@ Do not implement silent moves by inserting a `posts.silent = 1` marker. Silent
 posts are still included in assistant catch-up context, so that would still alter
 the canonical session.
 
+## Secret management
+
+The forum owns secret metadata and browser ownership checks; agentd owns encrypted value custody. Secret list/detail/admin responses are metadata-only and values are never persisted in forum SQLite. Agentd's internal broker uses the existing ECHS bearer token plus `MONIKA_AGENTD_SECRET_KEY` and exposes no plaintext HTTP response endpoint. Grant attachment to post-dispatch operations is a follow-up because v1 has no existing hook point.
+
 ## Component documentation
 
 - [Monika-specific forum behavior](../services/forum/docs/MONIKA_BEHAVIOR.md) — homepage freshness and component provenance

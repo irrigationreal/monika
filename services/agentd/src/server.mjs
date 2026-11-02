@@ -67,6 +67,7 @@ import { DurableDrainState } from './drain-state.mjs';
 import { DispatchNotAcceptedError, notAcceptedBody } from './dispatch-acceptance.mjs';
 import { runBoundedShutdown, runCanonicalShutdownCleanup } from './shutdown.mjs';
 import { createActiveThreadHealthCache, createSubagentHealthCache } from './health-state.mjs';
+import { createEncryptedSecretStore } from './secret-store.mjs';
 import { PresentationDtoCache } from './presentation-cache.mjs';
 import {
   ensureDurableForumSession,
@@ -221,6 +222,10 @@ const ANALYTICS_CACHE_TTL_MS = Number(
   process.env.MONIKA_AGENTD_ANALYTICS_CACHE_TTL_MS ?? 30_000,
 );
 const analyticsCache = new AnalyticsTtlCache({ ttlMs: ANALYTICS_CACHE_TTL_MS });
+const secretStore = process.env.MONIKA_AGENTD_SECRET_KEY
+  ? createEncryptedSecretStore()
+  : null;
+const agentdApiToken = process.env.MONIKA_AGENTD_API_TOKEN ?? process.env.CODEX_FORUM_ECHS_API_TOKEN ?? null;
 
 const retentionCoordinator = new SubagentRetentionCoordinator();
 let retentionCache = { inventory: null, result: null, error: null, lastRunAt: null };
@@ -2307,6 +2312,20 @@ const server = http.createServer(async (req, res) => {
       `http://${req.headers.host ?? `${HOST}:${PORT}`}`,
     );
     const method = req.method ?? "GET";
+    const secretMatch = url.pathname.match(/^\/v1\/internal\/secrets\/([^/]+)$/);
+    if (secretMatch && ['PUT', 'DELETE', 'GET', 'PATCH'].includes(method)) {
+      const presented = String(req.headers.authorization ?? '').replace(/^Bearer\s+/, '');
+      if (!agentdApiToken || presented !== agentdApiToken) return json(res, 401, { ok: false, error: 'unauthorized' });
+      if (!secretStore) return json(res, 503, { ok: false, error: 'secret_store_unconfigured' });
+      const id = decodeURIComponent(secretMatch[1]);
+      if (method === 'GET') return json(res, 200, secretStore.metadata(id) ?? { id, found: false });
+      if (method === 'DELETE') return json(res, 200, { ok: secretStore.delete(id) });
+      if (method === 'PATCH') return json(res, 200, { ok: secretStore.disable(id) });
+      const body = await readBody(req);
+      if (typeof body.value !== 'string') return json(res, 400, { ok: false, error: 'value_required' });
+      const metadata = { name: body.name ?? null, tags: Array.isArray(body.tags) ? body.tags : [], expires_at: body.expires_at ?? null, enabled: body.enabled !== false };
+      return json(res, 200, { ok: true, metadata: secretStore.put(id, body.value, metadata) });
+    }
 
     if (method === "GET" && url.pathname === "/healthz") {
       const subagents = subagentHealthCache.read();

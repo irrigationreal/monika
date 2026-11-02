@@ -1264,6 +1264,7 @@ test.describe('Robot UI (mocked)', () => {
       'Admin',
       'Robot Dashboard',
       'Analytics',
+      'Secret Metadata',
       'Chat',
       'Developers',
       'API Docs',
