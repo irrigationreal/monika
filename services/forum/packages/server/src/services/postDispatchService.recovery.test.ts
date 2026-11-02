@@ -45,6 +45,44 @@ describe('durable post dispatch recovery fence', () => {
     return { topic, session, post, author };
   }
 
+  it('omits implicit auto-compaction configuration but preserves an explicit policy transition', async () => {
+    const { topic, session, post, author } = fixture();
+    const ordinary = store.createPostDispatch({ topicId: topic.id, sessionId: session.id, postId: post.id });
+    const explicitPost = store.createPost({ topicId: topic.id, authorId: author.id, body: 'change policy' });
+    const explicit = store.createPostDispatch({
+      topicId: topic.id,
+      sessionId: session.id,
+      postId: explicitPost.id,
+      autoCompact: true,
+    });
+    // Keep the explicit transition separate from the preceding ordinary post.
+    db.prepare('update post_dispatches set status = \'superseded\' where id = ?').run(ordinary.id);
+    const calls: unknown[][] = [];
+    const agent = { dispatchPostToAgent: vi.fn(async (...args: unknown[]) => calls.push(args)) };
+    await processOnce(new PostDispatchService(store, agent as any));
+    expect(calls[0]?.[2]).toMatchObject({ autoCompact: true });
+    expect(store.getPostDispatch(explicit.id)?.status).toBe('dispatched');
+
+    const ordinaryLater = store.createPost({ topicId: topic.id, authorId: author.id, body: 'ordinary again' });
+    const ordinaryDispatch = store.createPostDispatch({ topicId: topic.id, sessionId: session.id, postId: ordinaryLater.id });
+    calls.length = 0;
+    await processOnce(new PostDispatchService(store, agent as any));
+    expect(calls[0]?.[2]).not.toHaveProperty('autoCompact');
+    expect(store.getPostDispatch(ordinaryDispatch.id)?.status).toBe('dispatched');
+
+    const disablePost = store.createPost({ topicId: topic.id, authorId: author.id, body: 'disable policy' });
+    const disable = store.createPostDispatch({
+      topicId: topic.id,
+      sessionId: session.id,
+      postId: disablePost.id,
+      autoCompact: false,
+    });
+    calls.length = 0;
+    await processOnce(new PostDispatchService(store, agent as any));
+    expect(calls[0]?.[2]).toMatchObject({ autoCompact: false });
+    expect(store.getPostDispatch(disable.id)?.status).toBe('dispatched');
+  });
+
   it('does not let a newer due dispatch bypass a delayed ordered head', () => {
     const { topic, session, post, author } = fixture();
     const head = store.createPostDispatch({ topicId: topic.id, sessionId: session.id, postId: post.id });

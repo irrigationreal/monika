@@ -2,9 +2,10 @@ export const DISPATCH_NOT_ACCEPTED = 'not_accepted';
 export const DISPATCH_SAFE_RETRY = 'safe';
 
 export class DispatchNotAcceptedError extends Error {
-  constructor(cause) {
+  constructor(cause, { safeRetry = Boolean(cause?.safeRetry) } = {}) {
     super(cause instanceof Error ? cause.message : String(cause), { cause });
     this.name = 'DispatchNotAcceptedError';
+    this.safeRetry = safeRetry;
   }
 }
 

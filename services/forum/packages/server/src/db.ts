@@ -302,6 +302,8 @@ export interface PostDispatchRow {
   contributor_post_ids_json: string;
   model: string | null;
   reasoning_effort: string | null;
+  // Null means this dispatch did not explicitly request a policy change.
+  auto_compact: number | null;
   attempt_count: number;
   last_attempt_at: string | null;
   next_attempt_at: string | null;

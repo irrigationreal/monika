@@ -153,6 +153,7 @@ export class AgentBridge {
       mode?: 'queue' | 'steer';
       model?: string | null;
       reasoningEffort?: string | null;
+      autoCompact?: boolean;
       dispatchId?: string;
       generation?: number;
       contributorPostIds?: string[];

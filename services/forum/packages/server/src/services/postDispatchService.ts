@@ -133,11 +133,22 @@ export class PostDispatchService {
       const startIndex = pendingForTopic.findIndex((pending) => pending.id === row.id);
       if (startIndex < 0) return;
       const candidates = pendingForTopic.slice(startIndex);
-      const boundary = candidates.findIndex((pending) => pending.origin_key !== row.origin_key);
+      const originBoundary = candidates.findIndex((pending) => pending.origin_key !== row.origin_key);
+      // An explicit policy transition is a configuration operation, not an
+      // ordinary contributor. Keep it as the trigger for its own dispatch so
+      // grouping cannot lose the requested value or apply it to another post.
+      const policyBoundary = candidates.findIndex((pending) => pending.auto_compact !== null);
+      const boundary =
+        policyBoundary === 0
+          ? 1
+          : policyBoundary > 0
+            ? policyBoundary
+            : candidates.length;
+      const groupBoundary = originBoundary < 0 ? boundary : Math.min(originBoundary, boundary);
       const group =
         dispatchingRecoveryCheckpoint || row.mode === 'fork-opening'
           ? [row]
-          : candidates.slice(0, boundary < 0 ? undefined : boundary);
+          : candidates.slice(0, groupBoundary);
       const trigger = group.at(-1) ?? row;
       const claimed = this.store.claimPostDispatchGroup(group);
       claimToken = claimed?.claim_token ?? null;
@@ -164,6 +175,7 @@ export class PostDispatchService {
         mode,
         model: trigger.model,
         reasoningEffort: trigger.reasoning_effort,
+        ...(trigger.auto_compact === null ? {} : { autoCompact: Boolean(trigger.auto_compact) }),
         dispatchId: trigger.id,
         generation: trigger.generation,
         contributorPostIds,

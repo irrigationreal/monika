@@ -27,7 +27,13 @@ fi
 
 # Deterministic runner/stateful-memory and SSH checks use pure local fixtures;
 # mandatory image smoke never contacts an external provider or SSH host.
-node --experimental-default-type=module --test \
+# GitHub's ubuntu runner does not promise a fixed system Node version, so only
+# use this flag when the selected Node actually supports it.
+NODE_TEST_ARGS=()
+if node --experimental-default-type=module --version >/dev/null 2>&1; then
+  NODE_TEST_ARGS+=(--experimental-default-type=module)
+fi
+node "${NODE_TEST_ARGS[@]}" --test \
   "$SCRIPT_DIR/../agent-runner.test.mjs" \
   "$SCRIPT_DIR/../runtime-supervision.test.mjs" \
   "$SCRIPT_DIR/../stateful-memory/lifecycle.test.js" \
