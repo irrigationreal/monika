@@ -91,6 +91,8 @@ import type {
   RobotStateDto,
   RobotStopResultDto,
   SearchResultsDto,
+  SecretMetadataDto,
+  SecretListResponseDto,
   SessionDto,
   SessionInspectorDto,
   TamperConfigDto,
@@ -176,6 +178,8 @@ export type {
   PostDto,
   RegisterResponseDto,
   SearchResultsDto,
+  SecretMetadataDto,
+  SecretListResponseDto,
   UserProfileDto,
   UserPostHistoryItemDto,
   UserPostHistoryResponseDto,
@@ -338,6 +342,19 @@ function createApi({
     createPassword: (newPassword: string) =>
       json<{ ok: boolean }>('/me/password/create', { method: 'POST', body: JSON.stringify({ newPassword }) }),
     listModels: () => json<ModelCatalogDto>('/models'),
+    listSecrets: () => json<SecretListResponseDto>('/secrets'),
+    getSecret: (id: string) => json<{ secret: SecretMetadataDto }>(`/secrets/${encodeURIComponent(id)}`),
+    listAdminSecrets: () => json<SecretListResponseDto>('/admin/secrets'),
+    createSecret: (input: { name: string; value: string; tags?: string[]; expiresAt?: string | null; enabled?: boolean }) =>
+      json<{ secret: SecretMetadataDto }>('/secrets', { method: 'POST', body: JSON.stringify(input) }),
+    replaceSecret: (id: string, input: { name: string; value: string; tags?: string[]; expiresAt?: string | null; enabled?: boolean }) =>
+      json<{ secret: SecretMetadataDto }>(`/secrets/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(input) }),
+    disableSecret: (id: string) => json<{ secret: SecretMetadataDto }>(`/secrets/${encodeURIComponent(id)}/disable`, { method: 'PATCH' }),
+    deleteSecret: (id: string) => json<{ ok: boolean }>(`/secrets/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    replaceAdminSecret: (id: string, input: { name: string; value: string; tags?: string[]; expiresAt?: string | null; enabled?: boolean }) =>
+      json<{ secret: SecretMetadataDto }>(`/admin/secrets/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(input) }),
+    disableAdminSecret: (id: string) => json<{ secret: SecretMetadataDto }>(`/admin/secrets/${encodeURIComponent(id)}/disable`, { method: 'PATCH' }),
+    deleteAdminSecret: (id: string) => json<{ ok: boolean }>(`/admin/secrets/${encodeURIComponent(id)}`, { method: 'DELETE' }),
     getInviteInfo: (code: string) => json<InviteInfoDto>(`/auth/invite/${code}`),
     updateIdentity: (
       identityId: string,

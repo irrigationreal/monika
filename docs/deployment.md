@@ -542,6 +542,18 @@ without gaining a separate external authentication and authorization model.
 See [`public-ingress.md`](public-ingress.md) for the production tunnel boundary,
 credential custody, redirects, and verification.
 
+## Forum-managed secrets
+
+Forum user secrets are metadata-owned by the forum and encrypted at rest by agentd. Configure the shared internal ECHS token plus a dedicated 32-byte base64 key and persistent path:
+
+```text
+MONIKA_AGENTD_API_TOKEN=<same token used by MONIKA_AGENTD_API_TOKEN in the forum>
+MONIKA_AGENTD_SECRET_KEY=<base64 of 32 random bytes>
+MONIKA_AGENTD_SECRET_STORE_PATH=/data/secrets.json
+```
+
+The browser secrets page returns metadata only; plaintext is never written to forum SQLite or returned by an API list/detail operation. Grant attachment to post-dispatch operations is intentionally a follow-up and is not enabled by v1.
+
 ## Git identity, signing, and SSH
 
 The deployment may provide either environment identity overrides or a complete

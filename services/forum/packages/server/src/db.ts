@@ -194,6 +194,17 @@ export interface NotificationRow {
   read_at: string | null;
 }
 
+export interface SecretRow {
+  id: string;
+  owner_identity_id: string;
+  name: string;
+  tags_json: string;
+  expires_at: string | null;
+  enabled: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ApiKeyRow {
   id: string;
   identity_id: string;

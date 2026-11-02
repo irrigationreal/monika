@@ -133,6 +133,8 @@ import type {
   UpdateQuickReplyPreferenceResponseDto,
   UserFileDto,
   UserFileListResponseDto,
+  SecretMetadataDto,
+  SecretListResponseDto,
   UserPostHistoryItemDto,
   UserPostHistoryResponseDto,
   UserProfileDto,
@@ -1970,6 +1972,20 @@ export const AdminUpdateRobotAutomationRequestSchema: z.ZodType<AdminUpdateRobot
 export const AdminUpdateRobotSettingsRequestSchema = z.object({
   maxConcurrentTurns: z.coerce.number().int().optional(),
 }) satisfies z.ZodType<AdminUpdateRobotSettingsRequest>;
+
+export const SecretMetadataDtoSchema: z.ZodType<SecretMetadataDto> = z.object({
+  id: z.string(), ownerIdentityId: z.string(), name: z.string(), tags: z.array(z.string()),
+  expiresAt: z.string().nullable(), enabled: z.boolean(), createdAt: z.string(), updatedAt: z.string(),
+});
+export const SecretListResponseDtoSchema: z.ZodType<SecretListResponseDto> = z.object({ items: z.array(SecretMetadataDtoSchema) });
+export const SecretWriteRequestSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  value: z.string().min(1).max(64 * 1024),
+  tags: z.array(z.string().trim().min(1).max(40)).max(20).default([]),
+  expiresAt: z.string().datetime({ offset: true }).nullable().optional(),
+  enabled: z.boolean().optional(),
+});
+
 
 export const PageRequestDtoSchema: z.ZodType<PageRequest> = PageRequestSchema;
 export const PageResponseForumDtoSchema: z.ZodType<PageResponse<ForumDto>> = PageResponseSchema(ForumDtoSchema);

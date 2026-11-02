@@ -2004,6 +2004,26 @@ export const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    version: 53,
+    name: 'encrypted-secret-metadata',
+    up: (db) => {
+      db.exec(`
+        create table if not exists secrets (
+          id text primary key,
+          owner_identity_id text not null,
+          name text not null,
+          tags_json text not null default '[]',
+          expires_at text,
+          enabled integer not null default 1 check (enabled in (0, 1)),
+          created_at text not null,
+          updated_at text not null,
+          foreign key (owner_identity_id) references identities(id) on delete cascade
+        );
+        create index if not exists idx_secrets_owner on secrets(owner_identity_id, updated_at);
+      `);
+    },
+  },
 ];
 
 export const SCHEMA_VERSION: number = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;

@@ -41,6 +41,7 @@ import { registerNotificationRoutes } from './routes/notificationRoutes';
 import { registerProfileRoutes } from './routes/profileRoutes';
 import { registerRobotRoutes } from './routes/robotRoutes';
 import { registerSearchRoutes } from './routes/searchRoutes';
+import { registerSecretRoutes } from './routes/secretRoutes';
 import { registerSystemRoutes, sendReadiness } from './routes/systemRoutes';
 import { registerTenantRoutes } from './routes/tenantRoutes';
 import { registerWebhookRoutes } from './routes/webhookRoutes';
@@ -636,6 +637,7 @@ const registerApiRoutes: FastifyPluginAsync = async (api) => {
   registerNotepadRoutes({ app: api, access, service: notepadService });
   registerMessageTemplateRoutes({ app: api, access, service: messageTemplateService });
   registerSearchRoutes({ app: api, store, featureFlags, access });
+  registerSecretRoutes({ app: api, store, access, broker: echsClient });
   registerAdapterRoutes({
     app: api,
     getDiscordBridge: adapterRegistry.getDiscordBridge,

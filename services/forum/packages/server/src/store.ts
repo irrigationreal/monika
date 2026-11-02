@@ -29,6 +29,7 @@ import type {
   TopicOperationalEvent,
   TopicStatus,
   UtteranceOrigin,
+  SecretMetadata,
 } from '@irrigationreal/codex-forum-core';
 import type Database from 'better-sqlite3';
 
@@ -66,6 +67,7 @@ import type {
   RobotPersonaRow,
   RobotStateRow,
   RoleRow,
+  SecretRow,
   SessionMessageRow,
   SessionRow,
   TamperConfigRow,
@@ -7704,6 +7706,56 @@ export class ForumStore {
     const row = this.db.prepare('select value from system_settings where key = ?').get(key) as
       { value: string } | undefined;
     return row?.value ?? null;
+  }
+
+  listSecrets(ownerIdentityId?: string): SecretMetadata[] {
+    const rows = (ownerIdentityId
+      ? this.db.prepare('select * from secrets where owner_identity_id = ? order by updated_at desc').all(ownerIdentityId)
+      : this.db.prepare('select * from secrets order by updated_at desc').all()) as SecretRow[];
+    return rows.map((row) => this.mapSecret(row));
+  }
+
+  getSecret(id: string, ownerIdentityId?: string): SecretMetadata | null {
+    const row = (ownerIdentityId
+      ? this.db.prepare('select * from secrets where id = ? and owner_identity_id = ?').get(id, ownerIdentityId)
+      : this.db.prepare('select * from secrets where id = ?').get(id)) as SecretRow | undefined;
+    return row ? this.mapSecret(row) : null;
+  }
+
+  createSecret(input: Omit<SecretMetadata, 'createdAt' | 'updatedAt'>): SecretMetadata {
+    const now = nowIso();
+    this.db.prepare('insert into secrets (id, owner_identity_id, name, tags_json, expires_at, enabled, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)').run(
+      input.id, input.ownerIdentityId, input.name, JSON.stringify(input.tags), input.expiresAt, input.enabled ? 1 : 0, now, now
+    );
+    return { ...input, createdAt: now, updatedAt: now };
+  }
+
+  updateSecret(id: string, ownerIdentityId: string, input: Pick<SecretMetadata, 'name' | 'tags' | 'expiresAt' | 'enabled'>): SecretMetadata | null {
+    const now = nowIso();
+    const result = this.db.prepare('update secrets set name = ?, tags_json = ?, expires_at = ?, enabled = ?, updated_at = ? where id = ? and owner_identity_id = ?').run(
+      input.name, JSON.stringify(input.tags), input.expiresAt, input.enabled ? 1 : 0, now, id, ownerIdentityId
+    );
+    return result.changes ? this.getSecret(id, ownerIdentityId) : null;
+  }
+
+  deleteSecret(id: string, ownerIdentityId?: string): boolean {
+    const result = ownerIdentityId
+      ? this.db.prepare('delete from secrets where id = ? and owner_identity_id = ?').run(id, ownerIdentityId)
+      : this.db.prepare('delete from secrets where id = ?').run(id);
+    return result.changes > 0;
+  }
+
+  private mapSecret(row: SecretRow): SecretMetadata {
+    return {
+      id: row.id,
+      ownerIdentityId: row.owner_identity_id,
+      name: row.name,
+      tags: JSON.parse(row.tags_json) as string[],
+      expiresAt: row.expires_at,
+      enabled: row.enabled === 1,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
   }
 
   setSystemSetting(key: string, value: string): void {

@@ -25,6 +25,21 @@ import type { ForumThemeKey } from './themes';
 
 export type QuickReplyMode = import('@irrigationreal/codex-forum-core').QuickReplyMode;
 
+export interface SecretMetadataDto {
+  id: string;
+  ownerIdentityId: string;
+  name: string;
+  tags: string[];
+  expiresAt: string | null;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SecretListResponseDto {
+  items: SecretMetadataDto[];
+}
+
 export interface ForumLastPostDto {
   postId: string;
   topicId: string;

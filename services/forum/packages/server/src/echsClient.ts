@@ -192,6 +192,21 @@ export class EchsClient {
     this.apiToken = options.apiToken ?? null;
   }
 
+  async putSecret(id: string, input: { value: string; name: string; tags: string[]; expiresAt: string | null; enabled: boolean }): Promise<void> {
+    await this.request(`/v1/internal/secrets/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: { value: input.value, name: input.name, tags: input.tags, expires_at: input.expiresAt, enabled: input.enabled },
+    });
+  }
+
+  async disableSecret(id: string): Promise<void> {
+    await this.request(`/v1/internal/secrets/${encodeURIComponent(id)}`, { method: 'PATCH' });
+  }
+
+  async deleteSecret(id: string): Promise<void> {
+    await this.request(`/v1/internal/secrets/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
   async getSubagentWorkload(): Promise<EchsSubagentWorkload> {
     return (await this.request('/v1/admin/subagents')) as EchsSubagentWorkload;
   }

@@ -130,6 +130,7 @@ const accountLinks = computed<NavigationLink[]>(() =>
         { label: 'Drafts', to: { name: 'user.drafts' } },
         { label: 'Notepad', to: { name: 'user.notepad' } },
         { label: 'Files', to: { name: 'user.files' } },
+        { label: 'Secrets', to: { name: 'user.secrets' } },
         { label: 'Message Templates', to: { name: 'user.messageTemplates' } },
       ]
     : []
@@ -141,7 +142,8 @@ const forumLinks = computed<NavigationLink[]>(() => {
     links.push(
       { label: 'Admin', to: { name: 'admin' } },
       { label: 'Robot Dashboard', to: { name: 'admin.robotDashboard' } },
-      { label: 'Analytics', to: { name: 'admin.analytics' } }
+      { label: 'Analytics', to: { name: 'admin.analytics' } },
+      { label: 'Secret Metadata', to: { name: 'admin.secrets' } }
     );
   }
   if (state.isLoggedIn.value) {

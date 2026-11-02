@@ -3,6 +3,7 @@ import { createRouter, createWebHistory } from 'vue-router';
 import { useForumState } from '../composables/useForumState';
 import AdminView from '../views/AdminView.vue';
 import AnalyticsView from '../views/AnalyticsView.vue';
+import AdminSecretsView from '../views/AdminSecretsView.vue';
 import ApiDocsView from '../views/ApiDocsView.vue';
 import ChatView from '../views/ChatView.vue';
 import DeveloperPortalView from '../views/DeveloperPortalView.vue';
@@ -16,6 +17,7 @@ import ProfileView from '../views/ProfileView.vue';
 import RegisterView from '../views/RegisterView.vue';
 import ReplyView from '../views/ReplyView.vue';
 import RobotDashboardView from '../views/RobotDashboardView.vue';
+import SecretsView from '../views/SecretsView.vue';
 import TopicView from '../views/TopicView.vue';
 import UserFilesView from '../views/UserFilesView.vue';
 import UserProfileView from '../views/UserProfileView.vue';
@@ -58,7 +60,9 @@ const routes: RouteRecordRaw[] = [
   { path: '/chat/:roomId', name: 'chat.room', component: ChatView, meta: { title: 'Chat Room', requiresAuth: true } },
   { path: '/users/:identityId', name: 'user.view', component: UserProfileView, meta: { title: 'User Profile' } },
   { path: '/files', name: 'user.files', component: UserFilesView, meta: { title: 'User Files' } },
+  { path: '/secrets', name: 'user.secrets', component: SecretsView, meta: { title: 'Secrets', requiresAuth: true } },
   { path: '/admin', name: 'admin', component: AdminView, meta: { title: 'Admin Panel', requiresAdmin: true } },
+  { path: '/admin/secrets', name: 'admin.secrets', component: AdminSecretsView, meta: { title: 'Secret Metadata', requiresAdmin: true } },
   {
     path: '/admin/analytics',
     name: 'admin.analytics',

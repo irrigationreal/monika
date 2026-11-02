@@ -476,6 +476,7 @@ test.describe('Auth registration and profile flows', () => {
       'Drafts',
       'Notepad',
       'Files',
+      'Secrets',
       'Message Templates',
     ]);
     await expect(page.locator('.vb-welcome-links')).toContainText('Log Out');

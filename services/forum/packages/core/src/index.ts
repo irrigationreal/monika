@@ -17,6 +17,7 @@ export * from './domain/dispatchPolicy';
 export * from './domain/postDispatch';
 export * from './domain/deploymentAdmission';
 export * from './domain/authentication';
+export * from './domain/secrets';
 export * from './state/robot';
 export * from './interfaces/repositories';
 export * from './interfaces/readModels';
