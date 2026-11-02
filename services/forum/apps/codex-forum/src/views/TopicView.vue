@@ -1358,24 +1358,6 @@ watch(
   { immediate: true }
 );
 
-watch(
-  () => state.lastReplyModel.value,
-  (value) => {
-    if (value) {
-      selectedModel.value = value;
-    }
-  }
-);
-
-watch(
-  () => state.lastReplyReasoning.value,
-  (value) => {
-    if (value) {
-      selectedReasoning.value = value;
-    }
-  }
-);
-
 watch([selectedModel, () => state.defaultModel.value], ([model]) => {
   const effective = model || state.defaultModel.value || '';
   selectedReasoning.value = normalizeReasoning(effective, selectedReasoning.value);
@@ -2274,6 +2256,14 @@ async function loadTopic(topicId: string): Promise<void> {
   try {
     await state.selectTopicById(topicId);
     if (routeTopicId.value !== topicId || state.selectedTopic.value?.id !== topicId) return;
+    if (typeof route.query['model'] !== 'string') {
+      const selection = state.replyOptionsForTopic(topicId);
+      selectedModel.value = selection.model ?? '';
+    }
+    if (typeof route.query['reasoning'] !== 'string') {
+      const selection = state.replyOptionsForTopic(topicId);
+      selectedReasoning.value = selection.reasoningEffort ?? selectedReasoning.value;
+    }
     await reconcilePageAfterTopicLoad();
     if (isAdmin.value) {
       const intent = loadCompactionIntent(topicId);

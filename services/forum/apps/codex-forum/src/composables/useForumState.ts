@@ -2,6 +2,7 @@ import { computed, ref } from 'vue';
 
 import { api, createStateStream } from '../lib/apiClient';
 import { retainSessionContext } from '../lib/sessionContext';
+import { resolveTopicReplySelection } from '../lib/replyModelSelection';
 import { useTheme } from './useTheme';
 
 import type {
@@ -1586,6 +1587,16 @@ export function useForumState() {
     topics.value = sortTopicsByActivity(res.items);
   }
 
+  function replyOptionsForTopic(topicId: string): { model: string | null; reasoningEffort: string | null } {
+    if (selectedTopic.value?.id !== topicId) {
+      return { model: lastReplyModel.value, reasoningEffort: lastReplyReasoning.value };
+    }
+    return resolveTopicReplySelection(robotState.value, {
+      model: lastReplyModel.value,
+      reasoningEffort: lastReplyReasoning.value,
+    });
+  }
+
   function rememberReplyOptions(options?: { model?: string | null; reasoningEffort?: string | null }): void {
     if (!options) return;
     if (options.model) {
@@ -1745,6 +1756,7 @@ export function useForumState() {
     closeLoginModal,
     setDateFilter,
     loadTopicsWithFilter,
+    replyOptionsForTopic,
     rememberReplyOptions,
   };
 }

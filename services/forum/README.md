@@ -92,7 +92,7 @@ packages/
 
 ### Web UI
 
-- Vue 3 app in `apps/codex-forum` with classic forum UI.
+- The reply model selector is topic-aware: existing-topic composers default to that topic's current robot model and reasoning setting, while new-topic composers retain the last successfully used model and reasoning preference. Viewing a topic does not change the new-topic preference.
 - The header separates account navigation from forum navigation: the welcome strip owns personal pages, authentication
   actions, and theme selection, while the primary navbar owns forum, admin, chat, developer, and API destinations.
   Account links remain a single horizontally scrollable row on narrow viewports; forum links use the mobile menu.
