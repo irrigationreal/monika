@@ -587,6 +587,21 @@ MONIKA_AGENTD_SECRET_KEY=<base64 of 32 random bytes>
 MONIKA_AGENTD_SECRET_STORE_PATH=/data/secrets.json
 ```
 
+Put `MONIKA_AGENTD_API_TOKEN` in `runtime/secrets/forum.env`, loaded by both
+containers. Put `MONIKA_AGENTD_SECRET_KEY` only in
+`runtime/secrets/secrets.env`, loaded by Monika, not Forum. Generate each once
+using cryptographic randomness (32 bytes, base64 for the encryption key); keep
+an independent protected backup of the key. Do not regenerate it during deploys:
+changing it makes existing ciphertext unreadable. The ciphertext must stay under
+the persistent `/data` mount. Back up ciphertext and forum metadata together.
+
+Do not declare empty token/key entries in Compose `environment`: they override
+`env_file` values. Existing ignored `compose.yaml` files are not updated by Git;
+remove any such overrides or deliberately configure them. Recreate both services
+through the normal quiescent deployment after changing credentials. A broker 401
+means the internal token is missing or mismatched, not a browser login failure;
+after authentication succeeds, a missing encryption key produces a 503.
+
 The browser secrets page returns metadata only; plaintext is never written to forum SQLite or returned by an API list/detail operation. Grant attachment to post-dispatch operations is intentionally a follow-up and is not enabled by v1.
 
 ## Git identity, signing, and SSH
