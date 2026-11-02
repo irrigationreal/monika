@@ -130,7 +130,7 @@ const accountLinks = computed<NavigationLink[]>(() =>
         { label: 'Drafts', to: { name: 'user.drafts' } },
         { label: 'Notepad', to: { name: 'user.notepad' } },
         { label: 'Files', to: { name: 'user.files' } },
-        { label: 'Secrets', to: { name: 'user.secrets' } },
+        { label: 'My Secrets', to: { name: 'user.secrets' } },
         { label: 'Message Templates', to: { name: 'user.messageTemplates' } },
       ]
     : []

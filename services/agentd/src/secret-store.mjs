@@ -12,7 +12,7 @@ function keyFromEnv(value) {
 }
 
 export function createEncryptedSecretStore(options = {}) {
-  const filePath = options.path ?? process.env.MONIKA_AGENTD_SECRET_STORE_PATH ?? '/var/lib/monika/secrets.json';
+  const filePath = options.path ?? process.env.MONIKA_AGENTD_SECRET_STORE_PATH ?? '/data/secrets.json';
   const key = options.key ?? keyFromEnv(process.env.MONIKA_AGENTD_SECRET_KEY);
   let records = new Map();
   if (existsSync(filePath)) {

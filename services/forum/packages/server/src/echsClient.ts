@@ -783,6 +783,12 @@ export class EchsClient {
     }
     const data = text ? safeJsonParse(text) : null;
     if (!response.ok) {
+      if (path.startsWith('/v1/internal/secrets/') && (response.status === 401 || response.status === 503)) {
+        const message = response.status === 401
+          ? 'Secret storage is unavailable: Forum and agentd broker credentials are missing or mismatched. An administrator must configure the shared internal token and redeploy both services. Signing in again will not fix this.'
+          : 'Secret storage is unavailable. An administrator must check agentd encryption-key configuration and service health.';
+        throw Object.assign(new Error(message), { statusCode: 503 });
+      }
       const message = `ECHS ${response.status}: ${typeof data === 'string' ? data : JSON.stringify(data)}`;
       if (
         data &&

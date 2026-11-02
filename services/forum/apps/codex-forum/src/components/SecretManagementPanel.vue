@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { api, type SecretMetadataDto } from '../lib/apiClient';
+import { useTheme } from '../composables/useTheme';
+
+const { resolvedTone } = useTheme();
 
 const props = withDefaults(defineProps<{ admin?: boolean }>(), { admin: false });
 
@@ -122,7 +125,7 @@ onMounted(load);
 </script>
 
 <template>
-  <section class="secret-management" :class="{ 'secret-management--admin': admin }" aria-labelledby="secret-management-title">
+  <section class="secret-management" :style="{ colorScheme: resolvedTone }" :class="{ 'secret-management--admin': admin }" aria-labelledby="secret-management-title">
     <header class="secret-management__header">
       <div>
         <p class="secret-management__eyebrow">Credential custody</p>
@@ -222,7 +225,24 @@ onMounted(load);
 .secret-management__fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 16px; }
 .secret-management__fields label { display: grid; gap: 6px; color: var(--text-secondary); font-size: 0.82rem; font-weight: 700; }
 .secret-management__fields label em { color: var(--text-muted); font-size: 0.75rem; font-style: normal; font-weight: 400; }
-.secret-management__fields input { width: 100%; box-sizing: border-box; }
+.secret-management__fields input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 8px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: 400;
+}
+.secret-management__fields input::placeholder { color: var(--text-muted); opacity: 1; }
+.secret-management__fields input:focus-visible {
+  outline: 2px solid var(--brand-secondary);
+  outline-offset: 2px;
+}
+.secret-management__fields input[type="datetime-local"] { color-scheme: inherit; }
+@media (max-width: 640px) { .secret-management__fields input { font-size: 16px; } }
 .secret-management__actions { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
 .secret-management__hint { color: var(--text-muted); font-size: 0.78rem; }
 .secret-management__list-heading { align-items: end; margin-bottom: 10px; }
