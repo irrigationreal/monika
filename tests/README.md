@@ -20,6 +20,19 @@ live memstore database or host-mode Monika mounts.
 - **Readable** — logs should show the image under test, what was verified, and the
 first useful diagnostic on failure without dumping large raw payloads.
 
+## Runtime baseline
+
+Runtime images and CI use Node.js 26 LTS. Forum build/runtime stages use the
+same explicit Trixie image version; Monika retains Debian Bookworm with
+NodeSource 26.x. Both container PR gates build and smoke-test natively on amd64
+and arm64 before merge. Both smoke scripts reject a non-26 Node runtime;
+Forum additionally opens SQLite and checks a bound-parameter write/read round-trip
+rather than merely requiring the JS wrapper.
+
+Node 26 no longer includes Corepack. Outside the Monika image, bootstrap
+`corepack@0.36.0` explicitly and activate `pnpm@11.21.0`, as described in the
+[Forum quick start](../services/forum/README.md#quick-start-local).
+
 ## Forum tests
 
 Forum source tests live under `services/forum/`. Repo-level wrappers live in
@@ -188,7 +201,7 @@ stateful-memory configuration/shutdown, and pi-subagents child context boundarie
 have provider-independent Node tests:
 
 ```bash
-nix-shell -p nodejs_22 --run \
+nix-shell -p nodejs_26 --run \
   'node --experimental-default-type=module --test \
     tests/stateful-memory/recall-utils.test.js \
     tests/stateful-memory/child-context.test.js \

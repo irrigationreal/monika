@@ -36,8 +36,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && fd --version \
     && rm -rf /var/lib/apt/lists/*
 
-# Node.js 22.x (matches stanza's system node)
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+# Node.js 26.x LTS
+RUN curl -fsSL https://deb.nodesource.com/setup_26.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
@@ -142,7 +142,8 @@ COPY --from=memstore-build /memstore /usr/local/bin/memstore
 # so there is a single owner for agent sessions and memory integration.
 WORKDIR /opt/agentd
 COPY services/agentd/package.json services/agentd/pnpm-lock.yaml services/agentd/pnpm-workspace.yaml ./
-RUN corepack enable && \
+RUN npm install --global corepack@0.36.0 && \
+    corepack enable && \
     corepack prepare pnpm@11.21.0 --activate && \
     pnpm install --prod --frozen-lockfile
 COPY services/agentd/src/ /opt/agentd/src/

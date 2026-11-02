@@ -19,11 +19,9 @@ not select a newer browser package. Upgrade it deliberately with
 `PI_OFFLINE=0 pi install npm:pi-agent-browser@NEW_VERSION`, then validate and
 retain a package-state backup for rollback.
 
-The pinned CLI currently declares Node.js 24 or newer while the Monika runtime
-remains on Node.js 22 until the planned Node 26 LTS migration. The native CLI path
-works under the current image and is covered by runtime smoke, but this is an
-explicit upstream-engine compatibility exception rather than a supported Node
-combination.
+The pinned CLI declares Node.js 24 or newer. The Monika runtime uses Node.js 26
+LTS, satisfying that engine requirement. Runtime smoke covers the native CLI
+and image-owned browser path on each supported architecture.
 
 After changing either package pin, rebuild the image and run:
 

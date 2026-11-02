@@ -9,10 +9,11 @@ ARG MONIKA_BUILD_COMMIT=""
 ARG MONIKA_BUILD_SOURCE=""
 ARG MONIKA_BUILD_DATE=""
 
-FROM node:22-slim AS base
+FROM node:26.13.0-trixie-slim AS base
 
-# Install pnpm
-RUN corepack enable && corepack prepare pnpm@11.21.0 --activate
+# Node 26 no longer bundles Corepack. Bootstrap the reviewed version explicitly.
+# Keep pnpm unchanged so the runtime migration does not also change lock semantics.
+RUN npm install --global corepack@0.36.0 && corepack enable && corepack prepare pnpm@11.21.0 --activate
 
 # Install build dependencies for native modules (better-sqlite3)
 RUN apt-get update && apt-get install -y \
@@ -74,7 +75,7 @@ RUN VITE_BUILD_COMMIT="$MONIKA_BUILD_COMMIT" \
 # pnpm's injected-workspace deploy creates a portable directory containing the
 # package, copied workspace dependencies, and only production npm packages.
 # Native runtime dependencies are deployed from the builder. better-sqlite3 is
-# compiled there; Sharp 0.35's platform packages and bundled libvips are carried
+# checked there; better-sqlite3 13 ships Node-API prebuilds. Sharp 0.35's platform packages and bundled libvips are carried
 # into the deployment without requiring a runtime build toolchain.
 RUN pnpm --filter @irrigationreal/codex-forum-server deploy --prod /app/deploy
 
@@ -83,10 +84,14 @@ RUN pnpm --filter @irrigationreal/codex-forum-server deploy --prod /app/deploy
 # The runtime smoke repeats this assertion against the final image.
 RUN cd /app/deploy && node -e "const sharp=require('sharp'); (async()=>{const jpeg=await sharp({create:{width:3,height:2,channels:3,background:{r:20,g:80,b:140}}}).jpeg().toBuffer(); const metadata=await sharp(jpeg).metadata(); if(metadata.format!=='jpeg'||metadata.width!==3||metadata.height!==2) throw new Error('unexpected Sharp transform metadata: '+JSON.stringify(metadata)); console.log('Sharp '+sharp.versions.sharp+' / libvips '+sharp.versions.vips+' production transform passed')})().catch(error=>{console.error(error);process.exit(1)})"
 
+# Loading the JS wrapper alone does not load SQLite's native addon. Open a real
+# database in the deployed production closure on every native architecture.
+RUN cd /app/deploy && node -e "const Database=require('better-sqlite3'); const db=new Database(':memory:'); if(db.prepare('SELECT 42 AS value').get().value!==42) throw new Error('SQLite query failed'); console.log('SQLite '+db.prepare('SELECT sqlite_version() AS version').get().version+' production query passed'); db.close()"
+
 # -----------------------------------------------------------------------------
 # Stage 3: Production runtime
 # -----------------------------------------------------------------------------
-FROM node:22-slim AS runtime
+FROM node:26.13.0-trixie-slim AS runtime
 
 ARG MONIKA_BUILD_COMMIT
 ARG MONIKA_BUILD_SOURCE

@@ -25,6 +25,12 @@ if [ -z "$IMAGE" ]; then
   exit 2
 fi
 
+NODE_VERSION="$(docker run --rm --entrypoint node "$IMAGE" --version)"
+case "$NODE_VERSION" in
+  v26.*) printf '✓ Node.js %s\n' "$NODE_VERSION" ;;
+  *) printf '✗ Expected Node.js 26, got %s\n' "$NODE_VERSION" >&2; exit 1 ;;
+esac
+
 # Deterministic runner/stateful-memory and SSH checks use pure local fixtures;
 # mandatory image smoke never contacts an external provider or SSH host.
 # GitHub's ubuntu runner does not promise a fixed system Node version, so only

@@ -107,7 +107,9 @@ while the runtime is stopped. Retain the pre-maintenance backup until the packag
 has loaded successfully after a container recreation; partial rollback can pair
 settings with incompatible install trees.
 
-Regenerate the frozen agentd lockfile with the repository's pnpm version:
+Regenerate the frozen agentd lockfile with the repository's pnpm version. The
+runtime already includes Corepack; external Node 26 installations must first run
+`npm install --global corepack@0.36.0` because Node no longer bundles it:
 
 ```bash
 cd services/agentd
