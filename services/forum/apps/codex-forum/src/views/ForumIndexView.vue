@@ -153,7 +153,7 @@ onMounted(() => {
       <div class="vb-pagination">Showing the latest topics</div>
     </div>
 
-    <div class="vb-tools">
+    <div v-if="state.canSearch?.value !== false" class="vb-tools">
       <div class="vb-menu">Forum Tools</div>
       <div class="vb-search-box">
         <input
@@ -170,6 +170,9 @@ onMounted(() => {
           Search all visible forums
         </label>
       </div>
+    </div>
+    <div v-else-if="state.authChecked.value" class="vb-search-login-hint">
+      Log in to search the forum.
     </div>
 
     <div v-if="showSearchResults" class="vb-search-results">

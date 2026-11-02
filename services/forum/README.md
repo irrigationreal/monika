@@ -377,10 +377,14 @@ Key env vars (see `packages/server/src/runtimeConfig.ts` for the full list):
 | `CODEX_FORUM_ENABLE_RATE_LIMITING`         | Route-specific rate limit toggle for auth/write/search endpoints; safe authenticated reads are not globally throttled              | `0`                              |
 | `CODEX_FORUM_TRUST_PROXY`                  | Fastify trusted proxy setting (`0`, `true`, or an explicit trusted proxy IP/CIDR list) for deployments behind Cloudflare Tunnel/reverse proxy | `0`                              |
 | `CODEX_FORUM_ENABLE_SEARCH`                | Search toggle                                                                                                                      | `0`                              |
+| `CODEX_FORUM_SEARCH_ACCESS`                | Search access when enabled: `public` or `members`                                                                                | `public`                         |
 | `MONIKA_AGENTD_BASE_URL`                   | Internal Monika agentd URL                                                                                                         | unset                            |
 | `CODEX_FORUM_AGENT_BACKEND`                | Agent backend selector; Monika deployment uses `monika-pi`                                                                         | unset                            |
 | `CODEX_FORUM_AGENT_MODEL`                  | Default Pi model                                                                                                                   | `codex/gpt-5.6-sol`              |
 | `CODEX_FORUM_ECHS_BASE_URL`                | Legacy/generic ECHS compatibility backend; not used by the Monika deployment                                                       | unset                            |
+
+`CODEX_FORUM_SEARCH_ACCESS=members` fails startup if authentication is disabled; this prevents a deployment from advertising
+an unusable members-only boundary.
 
 `CODEX_FORUM_ENABLE_AUTH=1` does not open registration by itself. Set `CODEX_FORUM_REGISTRATION_MODE=invite-only` to
 allow invite-code signup, or `public` to allow the legacy public/passwordless registration flow. Internet-facing
@@ -394,8 +398,10 @@ closed. See `docs/DEPLOYMENT.md` for enrollment and legacy external-identity mig
 
 Search is visibility-aware when `CODEX_FORUM_ENABLE_SEARCH=1`: unauthenticated callers only search public-visible
 forums, authenticated members can also search members-only forums, and admin-only results require admin visibility.
-Forum pages search the current forum by default; the UI can opt into searching all visible forums. Public search should
-be paired with `CODEX_FORUM_ENABLE_RATE_LIMITING=1` so the route-specific search limiter is active.
+Set `CODEX_FORUM_SEARCH_ACCESS=members` to require authentication for the search endpoint and hide global search from
+guests; this requires `CODEX_FORUM_ENABLE_AUTH=1`. Forum pages search the current forum by default; the UI can opt into
+searching all visible forums. Public and members-only search should be paired with
+`CODEX_FORUM_ENABLE_RATE_LIMITING=1` so the route-specific search limiter is active.
 
 When `CODEX_FORUM_ENABLE_RATE_LIMITING=1`, limits are route-specific rather than global. Password and passkey login,
 registration, topic creation, replies, and search are limited; normal authenticated read routes are not globally

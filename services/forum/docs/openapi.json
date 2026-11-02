@@ -446,6 +446,13 @@
                     },
                     "passwordLoginEnabled": {
                       "type": "boolean"
+                    },
+                    "searchAccess": {
+                      "type": "string",
+                      "enum": [
+                        "public",
+                        "members"
+                      ]
                     }
                   },
                   "required": [
@@ -453,7 +460,8 @@
                     "registrationEnabled",
                     "inviteRegistrationEnabled",
                     "publicRegistrationEnabled",
-                    "passwordLoginEnabled"
+                    "passwordLoginEnabled",
+                    "searchAccess"
                   ]
                 }
               }

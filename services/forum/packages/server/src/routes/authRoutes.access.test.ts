@@ -35,6 +35,7 @@ describe('Auth route access controls', () => {
       enableRateLimiting: false,
       enableAuth: true,
       enableSearch: false,
+      searchAccess: 'public',
       registrationMode: 'disabled',
       ...featureFlagOverrides,
     };
@@ -298,6 +299,7 @@ describe('Auth route access controls', () => {
       inviteRegistrationEnabled: false,
       publicRegistrationEnabled: false,
       passwordLoginEnabled: true,
+      searchAccess: 'public',
     });
 
     const passwordless = await app.inject({
@@ -382,6 +384,7 @@ describe('Auth route access controls', () => {
       inviteRegistrationEnabled: false,
       publicRegistrationEnabled: true,
       passwordLoginEnabled: false,
+      searchAccess: 'public',
     });
 
     const passwordless = await app.inject({

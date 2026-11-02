@@ -109,6 +109,7 @@ const registrationSettings = ref<RegistrationModeDto>({
   inviteRegistrationEnabled: false,
   publicRegistrationEnabled: false,
   passwordLoginEnabled: false,
+  searchAccess: 'public',
 });
 const registrationSettingsLoading = ref(false);
 const registrationSettingsError = ref<string | null>(null);
@@ -308,6 +309,7 @@ export function useForumState() {
   const canInviteRegister = computed(() => registrationSettings.value.inviteRegistrationEnabled);
   const canShowRegisterLink = computed(() => registrationSettings.value.registrationEnabled);
   const passwordLoginEnabled = computed(() => registrationSettings.value.passwordLoginEnabled);
+  const canSearch = computed(() => registrationSettings.value.searchAccess === 'public' || isLoggedIn.value);
   const canModerate = computed(() => {
     const kind = currentUser.value?.kind;
     if (kind === 'admin') return true;
@@ -1716,6 +1718,7 @@ export function useForumState() {
     canInviteRegister,
     canShowRegisterLink,
     passwordLoginEnabled,
+    canSearch,
     canModerate,
     modelItems,
     modelSupportsReasoning,
