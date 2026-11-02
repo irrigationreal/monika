@@ -124,6 +124,47 @@ describe('Forum routes contract conformance', () => {
     assertSchema(PageResponseTopicDtoSchema, body, 'GET /forums/:forumId/topics');
   });
 
+  it('GET /forums/:forumId/topics supports bounded cursor pagination', async () => {
+    const app = await buildApp();
+    const forum = store.createForum('General', null, null, null, null, 'active', 'public');
+    const author = store.createIdentity('Author', 'human');
+    const first = store.createTopic({ forumId: forum.id, title: 'First', body: 'First post', authorId: author.id });
+    const second = store.createTopic({ forumId: forum.id, title: 'Second', body: 'Second post', authorId: author.id });
+
+    const firstPage = await app.inject({ method: 'GET', url: `/forums/${forum.id}/topics?limit=1` });
+    expect(firstPage.statusCode).toBe(200);
+    const firstBody = firstPage.json();
+    expect(firstBody.items).toHaveLength(1);
+    expect(firstBody.hasMore).toBe(true);
+    expect(firstBody.nextCursor).toEqual(expect.any(String));
+
+    const secondPage = await app.inject({
+      method: 'GET',
+      url: `/forums/${forum.id}/topics?limit=1&cursor=${encodeURIComponent(firstBody.nextCursor)}`,
+    });
+    expect(secondPage.statusCode).toBe(200);
+    expect(secondPage.json().items).toHaveLength(1);
+    expect(secondPage.json().items[0].id).not.toBe(firstBody.items[0].id);
+    expect([first.topic.id, second.topic.id]).toContain(firstBody.items[0].id);
+  });
+
+  it('GET /forums/:forumId/topics separates sticky topics and supports filtered cursors', async () => {
+    const app = await buildApp();
+    const forum = store.createForum('General', null, null, null, null, 'active', 'public');
+    const author = store.createIdentity('Author', 'human');
+    const sticky = store.createTopic({ forumId: forum.id, title: 'Sticky', body: 'Pinned', authorId: author.id });
+    store.updateTopicTags(sticky.topic.id, ['sticky']);
+    const normal = store.createTopic({ forumId: forum.id, title: 'Normal', body: 'Recent', authorId: author.id });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/forums/${forum.id}/topics?limit=1&since=${encodeURIComponent(new Date(Date.now() - 60_000).toISOString())}`,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().items.map((item: { id: string }) => item.id)).toEqual(expect.arrayContaining([sticky.topic.id]));
+    expect(res.json().items.map((item: { id: string }) => item.id)).toContain(normal.topic.id);
+  });
+
   it('GET /topics/:topicId/posts conforms to PageResponsePostDto', async () => {
     const app = await buildApp();
     const forum = store.createForum('General', null, null, null, null, 'active', 'public');

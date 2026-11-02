@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 export const PageRequestSchema = z.object({
   page: z.number().int().positive().optional(),
-  pageSize: z.number().int().positive().optional()
+  pageSize: z.number().int().positive().optional(),
 });
 
 export type PageRequest = z.infer<typeof PageRequestSchema>;
@@ -12,7 +12,9 @@ export const PageResponseSchema = <T>(itemSchema: z.ZodType<T>) =>
     items: z.array(itemSchema),
     page: z.number().int().nonnegative(),
     pageSize: z.number().int().positive(),
-    total: z.number().int().nonnegative().optional()
+    total: z.number().int().nonnegative().optional(),
+    nextCursor: z.string().nullable().optional(),
+    hasMore: z.boolean().optional(),
   });
 
 export type PageResponse<T> = {
@@ -20,4 +22,6 @@ export type PageResponse<T> = {
   page: number;
   pageSize: number;
   total?: number;
+  nextCursor?: string | null;
+  hasMore?: boolean;
 };

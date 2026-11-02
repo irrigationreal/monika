@@ -1,8 +1,8 @@
 import { computed, ref } from 'vue';
 
 import { api, createStateStream } from '../lib/apiClient';
-import { retainSessionContext } from '../lib/sessionContext';
 import { resolveTopicReplySelection } from '../lib/replyModelSelection';
+import { retainSessionContext } from '../lib/sessionContext';
 import { useTheme } from './useTheme';
 
 import type {
@@ -49,6 +49,10 @@ export function isInitiatingTopicCurrent(initiatingTopicId: string, currentTopic
 const forums = ref<ForumDto[]>([]);
 const archivedForums = ref<ForumDto[]>([]);
 const topics = ref<TopicDto[]>([]);
+const topicsNextCursor = ref<string | null>(null);
+const topicsHasMore = ref(false);
+const topicsLoadingMore = ref(false);
+const topicsSince = ref<string | undefined>(undefined);
 const selectedForumId = ref<string | null>(null);
 const selectedTopic = ref<TopicDto | null>(null);
 const posts = ref<PostDto[]>([]);
@@ -112,6 +116,7 @@ const registrationSettingsError = ref<string | null>(null);
 const LAST_REPLY_MODEL_KEY = 'codex-forum:last-reply-model';
 const LAST_REPLY_REASONING_KEY = 'codex-forum:last-reply-reasoning';
 let lastReplyDefaultsLoaded = false;
+let topicListRequestId = 0;
 let modelCatalogLoaded = false;
 let registrationSettingsLoaded = false;
 
@@ -668,8 +673,36 @@ export function useForumState() {
 
   async function loadTopics(): Promise<void> {
     if (!selectedForumId.value) return;
-    const res = await api.listTopics(selectedForumId.value, { page: 1, pageSize: desiredTopicsPageSize() });
+    const requestId = ++topicListRequestId;
+    const forumId = selectedForumId.value;
+    topicsSince.value = undefined;
+    const res = await api.listTopics(forumId, { limit: 50 });
+    if (requestId !== topicListRequestId || selectedForumId.value !== forumId) return;
     topics.value = sortTopicsByActivity(res.items);
+    topicsNextCursor.value = res.nextCursor ?? null;
+    topicsHasMore.value = res.hasMore ?? false;
+  }
+
+  async function loadMoreTopics(): Promise<void> {
+    if (!selectedForumId.value || !topicsHasMore.value || topicsLoadingMore.value) return;
+    const requestId = ++topicListRequestId;
+    const forumId = selectedForumId.value;
+    const since = topicsSince.value;
+    topicsLoadingMore.value = true;
+    try {
+      const res = await api.listTopics(forumId, {
+        limit: 50,
+        cursor: topicsNextCursor.value,
+        ...(since ? { since } : {}),
+      });
+      if (requestId !== topicListRequestId || selectedForumId.value !== forumId || topicsSince.value !== since) return;
+      const merged = new Map([...topics.value, ...res.items].map((topic) => [topic.id, topic]));
+      topics.value = sortTopicsByActivity([...merged.values()]);
+      topicsNextCursor.value = res.nextCursor ?? null;
+      topicsHasMore.value = res.hasMore ?? false;
+    } finally {
+      topicsLoadingMore.value = false;
+    }
   }
 
   async function loadPosts(topicId: string): Promise<void> {
@@ -1553,13 +1586,6 @@ export function useForumState() {
     dateFilter.value = 'beginning';
   }
 
-  function desiredTopicsPageSize(): number {
-    const count = selectedForum.value?.threadCount ?? 50;
-    // Don't request an unbounded page size, but do make the default large enough that
-    // “missing threads” isn't a regular occurrence for small/medium forums.
-    return Math.max(50, Math.min(500, Math.trunc(count)));
-  }
-
   async function loadTopicsWithFilter(): Promise<void> {
     if (!selectedForumId.value) return;
     // Calculate date from filter
@@ -1579,12 +1605,17 @@ export function useForumState() {
         since = undefined;
         break;
     }
-    const res = await api.listTopics(selectedForumId.value, {
+    topicsSince.value = since;
+    const requestId = ++topicListRequestId;
+    const forumId = selectedForumId.value;
+    const res = await api.listTopics(forumId, {
       ...(since ? { since } : {}),
-      page: 1,
-      pageSize: desiredTopicsPageSize(),
+      limit: 50,
     });
+    if (requestId !== topicListRequestId || selectedForumId.value !== forumId) return;
     topics.value = sortTopicsByActivity(res.items);
+    topicsNextCursor.value = res.nextCursor ?? null;
+    topicsHasMore.value = res.hasMore ?? false;
   }
 
   function replyOptionsForTopic(topicId: string): { model: string | null; reasoningEffort: string | null } {
@@ -1626,6 +1657,8 @@ export function useForumState() {
     forums,
     archivedForums,
     topics,
+    topicsHasMore,
+    topicsLoadingMore,
     selectedForumId,
     selectedForum,
     selectedTopic,
@@ -1709,6 +1742,7 @@ export function useForumState() {
     loadRecentPosts,
     loadForumLeaders,
     loadTopics,
+    loadMoreTopics,
     loadPosts,
     loadOperationalEvents,
     loadIdentities,
