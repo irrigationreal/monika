@@ -3,6 +3,7 @@ import { ref, computed, onMounted, watch, type ObjectDirective } from 'vue';
 import { useRoute, useRouter, type RouteLocationRaw } from 'vue-router';
 import { useForumState } from '../composables/useForumState';
 import MessageTemplateManager from '../components/MessageTemplateManager.vue';
+import SecretManagementPanel from '../components/SecretManagementPanel.vue';
 import {
   api,
   type ForumDto,
@@ -40,7 +41,8 @@ type AdminSection =
   | 'sync'
   | 'robots'
   | 'message-templates'
-  | 'tampers';
+  | 'tampers'
+  | 'secrets';
 
 const adminSections: readonly { id: AdminSection; label: string }[] = [
   { id: 'forums', label: 'Forums' },
@@ -54,8 +56,10 @@ const adminSections: readonly { id: AdminSection; label: string }[] = [
   { id: 'deploy', label: 'Deploy' },
   { id: 'sync', label: 'Sync Health' },
   { id: 'message-templates', label: 'Message Templates' },
-  { id: 'robots', label: 'Robot Automations' }
+  { id: 'robots', label: 'Robot Automations' },
+  { id: 'secrets', label: 'Secrets' }
 ];
+
 const adminSectionIds = new Set<AdminSection>(adminSections.map(({ id }) => id));
 
 function parseAdminSection(value: unknown): AdminSection {
@@ -3836,6 +3840,11 @@ onMounted(async () => {
             </table>
           </div>
         </template>
+      </div>
+
+      <!-- Secrets Tab -->
+      <div v-if="activeTab === 'secrets'" class="vb-admin-section-panel">
+        <SecretManagementPanel admin />
       </div>
 
       <!-- Robot Automations Tab -->
