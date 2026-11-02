@@ -347,6 +347,41 @@ catalog adds only these six entries while preserving existing providers,
 credentials, and Antigravity configuration; it is not a wholesale import of
 the generated pool catalog.
 
+#### November 2, 2026 live-pool catalog review
+
+The live pool Operator API reported 237 models in its full catalog and 173
+Pi-compatible entries across 12 providers. This is a capability inventory, not
+a deployment policy: it includes aliases, incomplete metadata, and routes that
+are configured but temporarily unavailable. The generated export must therefore
+be reviewed rather than copied wholesale.
+
+The reviewed deployment metadata changes from this refresh are:
+
+- `codex/gpt-6.1-sol`: 272,000 → 500,000 context tokens;
+- `kimi/kimi-for-coding`: 262,144 → 1,048,576 context tokens.
+
+The pool also reports newer Antigravity, Kimi, OpenCode, and Mistral entries.
+They remain deferred until each candidate has complete Pi metadata and passes
+both the isolated text and tool-result canaries above. In particular, the new
+Kimi 3.1 entries omit a maximum-output value in the generated Pi export, and
+several OpenCode entries omit both context and output limits. These are not
+sufficiently specified for activation.
+
+The live pool currently reports zero `available_now` routes for both
+`pool-mistral` and `pool-mistral-vibe`, despite their configured model entries.
+The existing six curated Mistral references remain registered for deliberate
+selection, but no additional Mistral routes are enabled and none is promoted to
+default or fallback routing. Availability is transient and is not represented
+in Pi's model schema; revalidate supply and rerun the canaries before relying on
+these routes.
+
+This review changes metadata only. It does not change the default model,
+subagent assignments, provider credentials, or the curated `enabledModels`
+policy. The deployment-owned `runtime/secrets/models.json` remains the active
+catalog and must be replaced atomically during a quiescent deployment after
+validation; it is intentionally ignored by Git and is never generated into a
+pull request.
+
 #### OpenAI Chat Completions compatibility
 
 Antigravity entries currently use Pi's `openai-completions` transport. The
