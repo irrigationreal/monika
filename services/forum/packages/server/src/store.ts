@@ -26,10 +26,10 @@ import type {
   ForumListOptions,
   ForumStatus,
   ForumVisibility,
+  SecretMetadata,
   TopicOperationalEvent,
   TopicStatus,
   UtteranceOrigin,
-  SecretMetadata,
 } from '@irrigationreal/codex-forum-core';
 import type Database from 'better-sqlite3';
 
@@ -1074,6 +1074,54 @@ export class ForumStore {
     return this.db
       .prepare('select * from topics where forum_id = ? order by created_at desc limit ? offset ?')
       .all(forumId, pageSize, offset) as TopicRow[];
+  }
+
+  listTopicsCursor(
+    forumId: string,
+    options: { limit: number; cursor?: { activityAt: string; id: string }; since?: string }
+  ): {
+    sticky: TopicRow[];
+    items: TopicRow[];
+    total: number;
+    hasMore: boolean;
+    nextCursor: { activityAt: string; id: string } | null;
+  } {
+    const sinceClause = options.since ? ' and activity_at >= ?' : '';
+    const baseArgs: Array<string | number> = [forumId];
+    const cursorClause = options.cursor ? ' and (activity_at < ? or (activity_at = ? and id < ?))' : '';
+    const cursorArgs = options.cursor ? [options.cursor.activityAt, options.cursor.activityAt, options.cursor.id] : [];
+    const cte = `
+      with topic_activity as (
+        select t.*,
+          coalesce((select max(p.created_at) from posts p where p.topic_id = t.id and p.deleted_at is null), t.created_at) as activity_at
+        from topics t
+        where t.forum_id = ?
+      )`;
+    const sticky = this.db
+      .prepare(
+        `${cte} select * from topic_activity where tags_json like '%"sticky"%'${sinceClause} order by activity_at desc, id desc limit ?`
+      )
+      .all(...baseArgs, ...(options.since ? [options.since] : []), options.limit) as TopicRow[];
+    const items = this.db
+      .prepare(
+        `${cte} select * from topic_activity where tags_json not like '%"sticky"%'${sinceClause}${cursorClause} order by activity_at desc, id desc limit ?`
+      )
+      .all(...baseArgs, ...(options.since ? [options.since] : []), ...cursorArgs, options.limit + 1) as Array<
+      TopicRow & { activity_at: string }
+    >;
+    const hasMore = items.length > options.limit;
+    const visibleItems = hasMore ? items.slice(0, options.limit) : items;
+    const last = visibleItems.at(-1);
+    const totalRow = this.db
+      .prepare(`${cte} select count(*) as count from topic_activity${options.since ? ' where activity_at >= ?' : ''}`)
+      .get(forumId, ...(options.since ? [options.since] : [])) as { count: number };
+    return {
+      sticky,
+      items: visibleItems,
+      total: totalRow.count,
+      hasMore,
+      nextCursor: hasMore && last ? { activityAt: last.activity_at, id: last.id } : null,
+    };
   }
 
   getTopicStatsForTopics(
@@ -7709,32 +7757,55 @@ export class ForumStore {
   }
 
   listSecrets(ownerIdentityId?: string): SecretMetadata[] {
-    const rows = (ownerIdentityId
-      ? this.db.prepare('select * from secrets where owner_identity_id = ? order by updated_at desc').all(ownerIdentityId)
-      : this.db.prepare('select * from secrets order by updated_at desc').all()) as SecretRow[];
+    const rows = (
+      ownerIdentityId
+        ? this.db
+            .prepare('select * from secrets where owner_identity_id = ? order by updated_at desc')
+            .all(ownerIdentityId)
+        : this.db.prepare('select * from secrets order by updated_at desc').all()
+    ) as SecretRow[];
     return rows.map((row) => this.mapSecret(row));
   }
 
   getSecret(id: string, ownerIdentityId?: string): SecretMetadata | null {
-    const row = (ownerIdentityId
-      ? this.db.prepare('select * from secrets where id = ? and owner_identity_id = ?').get(id, ownerIdentityId)
-      : this.db.prepare('select * from secrets where id = ?').get(id)) as SecretRow | undefined;
+    const row = (
+      ownerIdentityId
+        ? this.db.prepare('select * from secrets where id = ? and owner_identity_id = ?').get(id, ownerIdentityId)
+        : this.db.prepare('select * from secrets where id = ?').get(id)
+    ) as SecretRow | undefined;
     return row ? this.mapSecret(row) : null;
   }
 
   createSecret(input: Omit<SecretMetadata, 'createdAt' | 'updatedAt'>): SecretMetadata {
     const now = nowIso();
-    this.db.prepare('insert into secrets (id, owner_identity_id, name, tags_json, expires_at, enabled, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)').run(
-      input.id, input.ownerIdentityId, input.name, JSON.stringify(input.tags), input.expiresAt, input.enabled ? 1 : 0, now, now
-    );
+    this.db
+      .prepare(
+        'insert into secrets (id, owner_identity_id, name, tags_json, expires_at, enabled, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)'
+      )
+      .run(
+        input.id,
+        input.ownerIdentityId,
+        input.name,
+        JSON.stringify(input.tags),
+        input.expiresAt,
+        input.enabled ? 1 : 0,
+        now,
+        now
+      );
     return { ...input, createdAt: now, updatedAt: now };
   }
 
-  updateSecret(id: string, ownerIdentityId: string, input: Pick<SecretMetadata, 'name' | 'tags' | 'expiresAt' | 'enabled'>): SecretMetadata | null {
+  updateSecret(
+    id: string,
+    ownerIdentityId: string,
+    input: Pick<SecretMetadata, 'name' | 'tags' | 'expiresAt' | 'enabled'>
+  ): SecretMetadata | null {
     const now = nowIso();
-    const result = this.db.prepare('update secrets set name = ?, tags_json = ?, expires_at = ?, enabled = ?, updated_at = ? where id = ? and owner_identity_id = ?').run(
-      input.name, JSON.stringify(input.tags), input.expiresAt, input.enabled ? 1 : 0, now, id, ownerIdentityId
-    );
+    const result = this.db
+      .prepare(
+        'update secrets set name = ?, tags_json = ?, expires_at = ?, enabled = ?, updated_at = ? where id = ? and owner_identity_id = ?'
+      )
+      .run(input.name, JSON.stringify(input.tags), input.expiresAt, input.enabled ? 1 : 0, now, id, ownerIdentityId);
     return result.changes ? this.getSecret(id, ownerIdentityId) : null;
   }
 

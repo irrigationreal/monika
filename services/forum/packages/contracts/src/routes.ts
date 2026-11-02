@@ -50,6 +50,8 @@ const pageSchema = <T extends z.ZodTypeAny>(item: T) =>
     page: z.number(),
     pageSize: z.number(),
     total: z.number(),
+    nextCursor: z.string().nullable().optional(),
+    hasMore: z.boolean().optional(),
     items: z.array(item),
   });
 
@@ -93,6 +95,8 @@ const listTopicsQuerySchema = z.object({
   since: z.string().optional(),
   page: z.number().optional(),
   pageSize: z.number().optional(),
+  limit: z.number().int().positive().optional(),
+  cursor: z.string().optional(),
 });
 
 const listPostsQuerySchema = z.object({

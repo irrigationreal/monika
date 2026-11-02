@@ -302,6 +302,28 @@ privacy boundaries.
 
 The API is designed for automation and external adapters:
 
+### Topic-list pagination
+
+`GET /forums/:forumId/topics` accepts a bounded cursor request using `limit` and
+an opaque `cursor` returned by the previous response:
+
+```text
+GET /api/forums/:forumId/topics?limit=50
+GET /api/forums/:forumId/topics?limit=50&cursor=<nextCursor>
+```
+
+The server is authoritative for limits and visibility. Ordinary callers are
+capped at 100 topics per request; administrators are capped at 500. There is no
+unlimited interactive request. Responses include `hasMore` and `nextCursor`.
+The ordering is newest activity first, with topic ID as a deterministic
+tie-breaker. Sticky topics are included in each bounded response and do not
+consume the normal-topic cursor window.
+
+The legacy `page`/`pageSize` parameters remain supported for compatibility, but
+new clients should use cursor pagination. Topic-list pagination is independent
+of `/search`: search has its own bounded result contract and does not use topic
+list cursors.
+
 - OpenAPI spec: `docs/openapi.json` (also `GET /api/openapi.json` with authenticated read access) — **manual reference
   only**; the contracts in `packages/contracts/src/schemas.ts` are the canonical API boundary.
 - Postman collection: `docs/postman/codex-forum.postman_collection.json` (also `GET /api/postman/collection.json` with

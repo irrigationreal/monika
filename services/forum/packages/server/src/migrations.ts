@@ -2024,6 +2024,17 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 54,
+    name: 'topic-cursor-pagination-indexes',
+    up: (db) => {
+      db.exec(`
+        create index if not exists idx_posts_topic_created_at
+          on posts(topic_id, created_at desc)
+          where deleted_at is null;
+      `);
+    },
+  },
 ];
 
 export const SCHEMA_VERSION: number = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;

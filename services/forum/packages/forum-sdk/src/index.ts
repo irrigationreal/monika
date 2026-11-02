@@ -870,12 +870,16 @@ export function createForumSdk(options?: ForumSdkOptions) {
         since?: string;
         page?: number;
         pageSize?: number;
+        limit?: number;
+        cursor?: string | null;
       }
     ) => {
       const params = new URLSearchParams();
       if (opts?.since) params.set('since', opts.since);
       if (opts?.page) params.set('page', String(opts.page));
       if (opts?.pageSize) params.set('pageSize', String(opts.pageSize));
+      if (opts?.limit) params.set('limit', String(opts.limit));
+      if (opts?.cursor) params.set('cursor', opts.cursor);
       const suffix = params.toString() ? `?${params.toString()}` : '';
       return json<PageResponse<TopicDto>>(`/forums/${forumId}/topics${suffix}`);
     },

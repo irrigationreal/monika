@@ -381,7 +381,10 @@ export interface AdminUpdateRobotSettingsRequest {
 export interface ForumApi {
   listForums(req?: ListForumsRequest): Promise<ForumDto[]>;
   createForum(req: CreateForumRequest): Promise<ForumDto>;
-  listTopics(forumId: string, page?: number, pageSize?: number): Promise<PageResponse<TopicDto>>;
+  listTopics(
+    forumId: string,
+    options?: { since?: string; page?: number; pageSize?: number; limit?: number; cursor?: string | null }
+  ): Promise<PageResponse<TopicDto>>;
   createTopic(forumId: string, req: CreateTopicRequest): Promise<TopicDto>;
   getTopic(topicId: string): Promise<TopicDto>;
   listPosts(topicId: string, page?: number, pageSize?: number): Promise<PageResponse<PostDto>>;

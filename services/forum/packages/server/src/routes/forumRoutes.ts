@@ -81,6 +81,27 @@ export function registerForumRoutes({
     return 'auto';
   }
 
+  const topicMemberLimit = 100;
+  const topicAdminLimit = 500;
+
+  function encodeTopicCursor(cursor: { activityAt: string; id: string }): string {
+    return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+  }
+
+  function decodeTopicCursor(value: string | undefined): { activityAt: string; id: string } | undefined {
+    if (!value) return undefined;
+    try {
+      const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as {
+        activityAt?: unknown;
+        id?: unknown;
+      };
+      if (typeof parsed.activityAt !== 'string' || typeof parsed.id !== 'string') throw new Error('invalid cursor');
+      return { activityAt: parsed.activityAt, id: parsed.id };
+    } catch {
+      throw app.httpErrors.badRequest('Invalid topic pagination cursor');
+    }
+  }
+
   function serializeTopicWithPublicLineage(
     topic: Parameters<typeof serializeTopic>[0],
     request: Parameters<typeof getIdentityFromRequest>[0]
@@ -302,16 +323,39 @@ export function registerForumRoutes({
       throw app.httpErrors.notFound('Forum not found');
     }
     requireForumVisible(forum, identity);
-    const page = Number((request.query as { page?: string }).page ?? 1);
-    const pageSize = Number((request.query as { pageSize?: string }).pageSize ?? 50);
-    const topics = store.listTopics(forumId, page, pageSize);
+    const query = request.query as {
+      since?: string;
+      page?: string;
+      pageSize?: string;
+      limit?: string;
+      cursor?: string;
+    };
+    const requestedLimit = Number(query.limit ?? query.pageSize ?? 50);
+    const maxLimit = identity?.kind === 'admin' ? topicAdminLimit : topicMemberLimit;
+    if (!Number.isInteger(requestedLimit) || requestedLimit < 1) {
+      throw app.httpErrors.badRequest('Invalid topic pagination limit');
+    }
+    const limit = Math.min(requestedLimit, maxLimit);
+    const useCursor = query.cursor !== undefined || query.limit !== undefined;
+    const page = Number(query.page ?? 1);
+    const pageSize = Math.min(Number(query.pageSize ?? limit), maxLimit);
+    const cursorPage = useCursor
+      ? store.listTopicsCursor(forumId, {
+          limit,
+          cursor: decodeTopicCursor(query.cursor),
+          since: query.since,
+        })
+      : null;
+    const topics = cursorPage ? [...cursorPage.sticky, ...cursorPage.items] : store.listTopics(forumId, page, pageSize);
     const topicStatsById = store.getTopicStatsForTopics(topics.map((row) => row.id));
     const authorIds = topics.map((row) => row.created_by).filter((id): id is string => Boolean(id));
     const authorsById = store.getIdentitiesByIds(authorIds);
     return {
       page,
-      pageSize,
-      total: topics.length,
+      pageSize: useCursor ? limit : pageSize,
+      total: cursorPage?.total ?? topics.length,
+      nextCursor: cursorPage?.nextCursor ? encodeTopicCursor(cursorPage.nextCursor) : null,
+      hasMore: cursorPage?.hasMore ?? false,
       items: topics.map((row) => {
         const stats = topicStatsById.get(row.id) ?? {
           postCount: 0,

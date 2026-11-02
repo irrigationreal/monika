@@ -150,7 +150,7 @@ onMounted(() => {
       >
         New Thread
       </button>
-      <div class="vb-pagination">Page 1 of 1</div>
+      <div class="vb-pagination">Showing the latest topics</div>
     </div>
 
     <div class="vb-tools">
@@ -442,6 +442,11 @@ onMounted(() => {
             </tr>
           </tbody>
         </table>
+      </div>
+      <div v-if="state.topicsHasMore.value" class="vb-controls vb-controls-bottom">
+        <button class="vb-btn" :disabled="state.topicsLoadingMore.value" @click="state.loadMoreTopics()">
+          {{ state.topicsLoadingMore.value ? 'Loading…' : 'Load more topics' }}
+        </button>
       </div>
     </div>
 
