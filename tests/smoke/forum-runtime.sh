@@ -62,7 +62,9 @@ trap cleanup EXIT
 
 # ── Start container ──────────────────────────────────────────────────────────
 
-section "Verify Node.js runtime"
+section "Verify Debian and Node.js runtime"
+docker run --rm --entrypoint sh "$IMAGE" -ec '. /etc/os-release; test "$ID" = debian; test "$VERSION_CODENAME" = trixie'
+pass "Debian Trixie runtime"
 NODE_VERSION="$(docker run --rm "$IMAGE" node --version)"
 case "$NODE_VERSION" in
   v26.*) pass "Node.js $NODE_VERSION" ;;

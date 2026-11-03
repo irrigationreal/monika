@@ -1,11 +1,14 @@
 # ── Stage 1: Build memstore ──────────────────────────────
-FROM golang:1.22-bookworm AS memstore-build
+# CGO links memstore against this Debian generation; keep it aligned with runtime.
+FROM golang:1.27.3-trixie AS memstore-build
 COPY services/memstore/ /src/
 WORKDIR /src
-RUN CGO_ENABLED=1 go build -tags fts5 -o /memstore .
+RUN CGO_ENABLED=1 go test -tags fts5 ./... && \
+    CGO_ENABLED=1 go build -tags fts5 -o /memstore .
 
 # ── Stage 2: Runtime ─────────────────────────────────────
-FROM debian:bookworm-slim
+# Keep the exact Node/Trixie base in sync with both Forum stages.
+FROM node:26.13.0-trixie-slim
 
 ARG MONIKA_BUILD_COMMIT=""
 ARG MONIKA_BUILD_SOURCE=""
@@ -25,20 +28,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates git curl bash openssh-client ripgrep fd-find \
     libxcb-shm0 libx11-xcb1 libx11-6 libxcb1 libxext6 libxrandr2 \
     libxcomposite1 libxcursor1 libxdamage1 libxfixes3 libxi6 \
-    libgtk-3-0 libpangocairo-1.0-0 libpango-1.0-0 libatk1.0-0 \
+    libgtk-3-0t64 libpangocairo-1.0-0 libpango-1.0-0 libatk1.0-0t64 \
     libcairo-gobject2 libcairo2 libgdk-pixbuf-2.0-0 libxrender1 \
-    libasound2 libfreetype6 libfontconfig1 libdbus-1-3 libnss3 libglib2.0-0 \
-    libnspr4 libatk-bridge2.0-0 libdrm2 libxkbcommon0 libatspi2.0-0 \
-    libcups2 libxshmfence1 libgbm1 \
+    libasound2t64 libfreetype6 libfontconfig1 libdbus-1-3 libnss3 libglib2.0-0t64 \
+    libnspr4 libatk-bridge2.0-0t64 libdrm2 libxkbcommon0 libatspi2.0-0t64 \
+    libcups2t64 libxshmfence1 libgbm1 \
     fonts-noto-color-emoji fonts-noto-cjk fonts-freefont-ttf \
     && ln -s /usr/bin/fdfind /usr/local/bin/fd \
     && rg --version | head -n 1 \
     && fd --version \
-    && rm -rf /var/lib/apt/lists/*
-
-# Node.js 26.x LTS
-RUN curl -fsSL https://deb.nodesource.com/setup_26.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # Pin an npm release with native dependency cooldown support. The bootstrap
