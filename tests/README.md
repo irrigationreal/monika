@@ -22,12 +22,15 @@ first useful diagnostic on failure without dumping large raw payloads.
 
 ## Runtime baseline
 
-Runtime images and CI use Node.js 26 LTS. Forum build/runtime stages use the
-same explicit Trixie image version; Monika retains Debian Bookworm with
-NodeSource 26.x. Both container PR gates build and smoke-test natively on amd64
-and arm64 before merge. Both smoke scripts reject a non-26 Node runtime;
-Forum additionally opens SQLite and checks a bound-parameter write/read round-trip
-rather than merely requiring the JS wrapper.
+Runtime images and CI use Node.js 26 LTS. Monika and Forum build/runtime stages
+use the same explicit official Node/Trixie slim image version. Memstore is built
+and tested with Go 1.27.3 on Trixie, matching Monika's runtime C-library generation
+because its SQLite driver uses CGO. Its module's Go 1.22 language minimum is
+unchanged; that is not the compiler used for release builds. Both container PR
+gates build and smoke-test natively on amd64 and arm64 before merge. Both smoke
+scripts reject a non-26 Node runtime and a non-Trixie Debian base; Forum additionally
+opens SQLite and checks a bound-parameter write/read round-trip rather than merely
+requiring the JS wrapper.
 
 Node 26 no longer includes Corepack. Outside the Monika image, bootstrap
 `corepack@0.36.0` explicitly and activate `pnpm@11.21.0`, as described in the
@@ -55,6 +58,14 @@ preparing revocation, acquired publication rollback, tracked in-flight agent/Dir
 explicit-dispatch atomicity, pending/running forks, and global durable blockers.
 
 ## Agentd/forum integration tests
+
+The integration gate first checks that Monika and Forum retain identical explicitly
+versioned Node/Trixie bases, and that the CGO memstore build stays on Trixie with
+its FTS5 tests enabled:
+
+```bash
+node --test tests/integration/container-baseline.test.mjs
+```
 
 The cross-service fork-boundary contract test expects frozen dependency installs
 for both services, then exercises a real Pi `SessionManager`, the actual agentd
@@ -219,7 +230,8 @@ Monika delegate, the Terra/Sol profile policy, parent delegation guidance, expli
 extension allowlists, and child-local compaction without persistence.
 
 Memstore's Go suite covers FTS search, save deduplication, and append-only observation
-supersession/retraction:
+supersession/retraction. The Monika image build runs it with CGO/FTS5 before compiling
+the shipped binary on every architecture. To run it directly:
 
 ```bash
 nix-shell -p go gcc --run \

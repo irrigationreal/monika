@@ -36,6 +36,13 @@ lifecycle history.
 
 ## Development
 
+The release image builds with Go 1.27.3 and runs the CGO/FTS5 suite before compiling
+the binary. Both its official Go builder and the Monika runtime use Debian Trixie;
+keep them aligned because CGO links against the builder's C-library environment.
+The `go 1.22.0` module directive remains the minimum language/toolchain requirement,
+not the release compiler pin. SQLite is bundled by the pinned `go-sqlite3` dependency;
+updating Debian does not replace it with Debian's system SQLite.
+
 ```bash
 nix-shell -p go gcc --run \
   'cd services/memstore && CGO_ENABLED=1 go test -tags fts5 ./...'

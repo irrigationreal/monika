@@ -25,6 +25,9 @@ if [ -z "$IMAGE" ]; then
   exit 2
 fi
 
+docker run --rm --entrypoint sh "$IMAGE" -ec '. /etc/os-release; test "$ID" = debian; test "$VERSION_CODENAME" = trixie'
+printf '✓ Debian Trixie runtime\n'
+
 NODE_VERSION="$(docker run --rm --entrypoint node "$IMAGE" --version)"
 case "$NODE_VERSION" in
   v26.*) printf '✓ Node.js %s\n' "$NODE_VERSION" ;;

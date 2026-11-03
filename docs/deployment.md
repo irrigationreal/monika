@@ -7,8 +7,16 @@ Monika runs as two coordinated application containers:
 
 The tracked [`compose.yaml.example`](../compose.yaml.example) is the canonical
 standalone deployment template. Copy it to ignored `compose.yaml` and keep
-host-specific changes out of Git. The Monika image runs Node.js 26 LTS and
-currently ships Pi 1.1.0; the CLI and agentd SDK are upgraded together from
+host-specific changes out of Git. Monika and Forum use the same explicitly versioned
+official Node.js 26 LTS image on Debian 13 (Trixie) slim; Monika no longer installs
+Node through NodeSource. Memstore is compiled and tested with Go 1.27.3 on Trixie,
+keeping its CGO/SQLite build and runtime on the same C-library generation. The Go
+compiler is build-only and is not shipped in the runtime. Keep these native
+build/runtime bases aligned when updating them; CI checks their declarations and
+builds/smokes both architectures. Distribution codenames remain explicit rather
+than following a floating `slim` or `stable` alias.
+
+Monika currently ships Pi 1.1.0; the CLI and agentd SDK are upgraded together from
 reviewed lockfiles so their session, extension, and transitive dependency APIs
 cannot drift between runtime layers. Node 26 does not bundle Corepack, so the
 images install pinned Corepack 0.36.0 before activating pnpm 11.21.0. Interactive Pi explicitly uses regular TUI mode for tmux scrollback.
