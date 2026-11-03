@@ -1,8 +1,9 @@
 # ── Stage 1: Build memstore ──────────────────────────────
-FROM golang:1.22-bookworm AS memstore-build
+FROM golang:1.27.3-bookworm AS memstore-build
 COPY services/memstore/ /src/
 WORKDIR /src
-RUN CGO_ENABLED=1 go build -tags fts5 -o /memstore .
+RUN CGO_ENABLED=1 go test -tags fts5 ./... && \
+    CGO_ENABLED=1 go build -tags fts5 -o /memstore .
 
 # ── Stage 2: Runtime ─────────────────────────────────────
 FROM debian:bookworm-slim
