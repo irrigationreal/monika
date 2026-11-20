@@ -26,6 +26,7 @@
   },
   "enabledModels": [
     "claude/claude-sonnet-5",
+    "claude/claude-sonnet-5-5",
     "claude/claude-fable-5-1",
     "claude/claude-fable-5",
     "claude/claude-opus-5-5",
