@@ -1,0 +1,92 @@
+#!/bin/sh
+set -eu
+
+# This is intentionally a local, offline preparation step. It never clones,
+# fetches, resolves a tag, installs dependencies, or changes /opt/pi-subagents.
+# The source checkout must have been reviewed and pinned by the caller.
+readonly expected_commit='533033f0e906e85fdb0e909ce27a7c499ffb6485'
+readonly expected_tree='d6c8cf1dbf40704d3d5f8b0530908e9f6aa6afce'
+readonly expected_version='0.89.1'
+readonly expected_package_lock_sha256='5fc39baec198a9b58887e7fabefed9dc8a4df7dcbf42839992263b9a1639776b'
+readonly expected_package_sha256='4e325c3009651c542c3243a7c5525230c68cbb9790b5cc6c0f6e548848bb8d57'
+
+usage() {
+  echo "usage: $0 <reviewed-source-checkout> <candidate-destination>" >&2
+  echo "copies only the verified upstream source; production installation is out of scope" >&2
+}
+
+if [ "$#" -ne 2 ]; then
+  usage
+  exit 2
+fi
+
+source=$(realpath "$1")
+destination=$2
+if [ ! -d "$source" ]; then
+  echo "source checkout is not a directory: $source" >&2
+  exit 1
+fi
+if [ -e "$destination" ]; then
+  echo "candidate destination already exists: $destination" >&2
+  exit 1
+fi
+
+# No network operation is possible here: all git reads are against the supplied
+# checkout. Reject dirty source so the object and copied tree are identical.
+test -d "$source/.git" -o -f "$source/.git"
+test -z "$(git -C "$source" status --porcelain --untracked-files=all)"
+test "$(git -C "$source" rev-parse --verify HEAD)" = "$expected_commit"
+test "$(git -C "$source" rev-parse 'HEAD^{tree}')" = "$expected_tree"
+
+printf '%s  %s\n' "$expected_package_lock_sha256" "$source/package-lock.json" | sha256sum --check --strict -
+printf '%s  %s\n' "$expected_package_sha256" "$source/package.json" | sha256sum --check --strict -
+
+node - "$source/package.json" "$source/package-lock.json" "$expected_version" <<'NODE'
+const fs = require('node:fs');
+const [packagePath, lockPath, expectedVersion] = process.argv.slice(2);
+const manifest = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+if (manifest.name !== 'pi-subagents' || manifest.version !== expectedVersion) {
+  throw new Error(`Unexpected package identity: ${manifest.name}@${manifest.version}`);
+}
+if (lock.lockfileVersion !== 3 || lock.packages?.['']?.name !== 'pi-subagents'
+    || lock.packages?.['']?.version !== expectedVersion) {
+  throw new Error('Unexpected pi-subagents lockfile identity');
+}
+NODE
+
+mkdir -p "$(dirname "$destination")"
+# Export the verified Git object, not the working directory: ignored files,
+# local dependencies, and concurrent worktree edits must never enter a candidate.
+# Use a file rather than a pipeline so either archive/extraction failure is fatal
+# even under POSIX sh, which has no portable pipefail.
+archive=$(mktemp)
+trap 'rm -f "$archive"' EXIT HUP INT TERM
+git -C "$source" archive --format=tar "$expected_commit" > "$archive"
+mkdir "$destination"
+tar -xf "$archive" -C "$destination"
+rm -f "$archive"
+trap - EXIT HUP INT TERM
+
+cat > "$destination/CANDIDATE_SOURCE.json" <<EOF
+{
+  "name": "pi-subagents",
+  "version": "$expected_version",
+  "repository": "https://github.com/nicobailon/pi-subagents.git",
+  "gitHead": "$expected_commit",
+  "gitTree": "$expected_tree",
+  "packageSha256": "$expected_package_sha256",
+  "packageLockSha256": "$expected_package_lock_sha256",
+  "preparedBy": "scripts/prepare-pi-subagents-candidate",
+  "productionInstall": false
+}
+EOF
+
+# Verify the copy after writing its attestation. This catches a partial copy
+# without claiming that dependencies or the Monika patch have been installed.
+test "$(sha256sum "$destination/package.json" | awk '{print $1}')" = "$expected_package_sha256"
+test "$(sha256sum "$destination/package-lock.json" | awk '{print $1}')" = "$expected_package_lock_sha256"
+test -f "$destination/CANDIDATE_SOURCE.json"
+test ! -e "$destination/node_modules"
+test ! -e "$destination/.git"
+printf 'prepared verified pi-subagents %s at %s\n' "$expected_version" "$destination"

@@ -1,0 +1,1605 @@
+diff --git a/src/api/preflight.ts b/src/api/preflight.ts
+index 1a7e3745..d7537f98 100644
+--- a/src/api/preflight.ts
++++ b/src/api/preflight.ts
+@@ -28,6 +28,7 @@ import { resultFilePath } from "../runs/background/result-files.ts";
+ import { nestedResultsPath } from "../runs/shared/nested-events.ts";
+ import { normalizeExtensionBindings, type ExtensionBindings } from "../runs/shared/extension-bindings.ts";
+ import { assertRequiredChildExtensionsAdmitted, resolveRequiredChildExtensions } from "../shared/required-child-extensions.ts";
++import { hostOwnsResultDelivery, resolveDeliveryDisposition, type DeliveryDisposition } from "../shared/monika-host.ts";
+ 
+ // v3: the contract reports the resolved Intercom bridge state and binds its
+ // prompt and tools into launchContractDigest, matching execution (#2127).
+@@ -60,6 +61,7 @@ export interface SubagentLaunchContractDiagnostic {
+ 
+ export interface SubagentLaunchContractInput {
+ 	agent: string;
++	deliveryDisposition?: DeliveryDisposition;
+ 	cwd: string;
+ 	task?: string;
+ 	agentScope?: AgentScope;
+@@ -503,6 +505,7 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
+ 	const effectiveThinking = resolveEffectiveThinking(model, effectiveThinkingConfig);
+ 	const binding = resolveLaunchBinding({
+ 		agent,
++		...(hostOwnsResultDelivery() ? { deliveryDisposition: resolveDeliveryDisposition(input.deliveryDisposition) } : {}),
+ 		task: input.task ?? "",
+ 		model,
+ 		...(fast !== undefined ? { fast } : {}),
+diff --git a/src/extension/fanout-child.ts b/src/extension/fanout-child.ts
+index 150e8cf6..89093964 100644
+--- a/src/extension/fanout-child.ts
++++ b/src/extension/fanout-child.ts
+@@ -21,14 +21,17 @@ import { loadConfig, resolveAsyncByDefault } from "./config.ts";
+ import { SUBAGENT_ASYNC_STARTED_EVENT, type AsyncStartedEvent, type Details, type SubagentState } from "../shared/types.ts";
+ import { createChildExternalJobBridgeSweeper } from "../runs/shared/external-job-bridge.ts";
+ import { MODEL_ONLY_TOOL } from "../shared/extension-context.ts";
++import { configuredSessionRoot } from "../shared/monika-host.ts";
+ 
+ function getSubagentSessionRoot(parentSessionFile: string | null): string {
+-	if (parentSessionFile) {
+-		const baseName = path.basename(parentSessionFile, ".jsonl");
+-		const sessionsDir = path.dirname(parentSessionFile);
+-		return path.join(sessionsDir, baseName);
+-	}
+-	return fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-session-"));
++	return configuredSessionRoot(parentSessionFile, () => {
++		if (parentSessionFile) {
++			const baseName = path.basename(parentSessionFile, ".jsonl");
++			const sessionsDir = path.dirname(parentSessionFile);
++			return path.join(sessionsDir, baseName);
++		}
++		return fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-session-"));
++	});
+ }
+ 
+ function expandTilde(p: string): string {
+diff --git a/src/extension/index.ts b/src/extension/index.ts
+index ffe0cda0..eefc8036 100644
+--- a/src/extension/index.ts
++++ b/src/extension/index.ts
+@@ -57,6 +57,7 @@ import { recordedPromptSection, registerPinnedTool, setDeclarationPinning } from
+ import { buildActiveRunsSection } from "./active-runs-prompt.ts";
+ import { createWaitSubscriptionManager } from "../runs/background/wait-subscriptions.ts";
+ import { drainOutstandingWork } from "../runs/background/auto-drain.ts";
++import { configuredSessionRoot, hostOwnsResultDelivery } from "../shared/monika-host.ts";
+ import registerSubagentNotify from "../runs/background/notify.ts";
+ import { createParentWake } from "../shared/parent-wake.ts";
+ import { handleSubagentSteeringNotice, type SubagentSteeringMessageDetails } from "./steering-notices.ts";
+@@ -163,12 +164,14 @@ function formatWorkflowPreflightCall(input: unknown): string {
+  * Falls back to a unique temp directory if no parent session.
+  */
+ function getSubagentSessionRoot(parentSessionFile: string | null): string {
+-	if (parentSessionFile) {
+-		const baseName = path.basename(parentSessionFile, ".jsonl");
+-		const sessionsDir = path.dirname(parentSessionFile);
+-		return path.join(sessionsDir, baseName);
+-	}
+-	return fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-session-"));
++	return configuredSessionRoot(parentSessionFile, () => {
++		if (parentSessionFile) {
++			const baseName = path.basename(parentSessionFile, ".jsonl");
++			const sessionsDir = path.dirname(parentSessionFile);
++			return path.join(sessionsDir, baseName);
++		}
++		return fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-session-"));
++	});
+ }
+ 
+ function expandTilde(p: string): string {
+@@ -282,7 +285,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
+ 
+ 	DIRS.results = ensureAccessibleDir(DIRS.results);
+ 	DIRS.async = ensureAccessibleDir(DIRS.async);
+-	cleanupOldChainDirs();
++	// Host acknowledgement owns the full evidence lifetime, including legacy
++	// chain directories that an unacknowledged result may still reference.
++	if (!hostOwnsResultDelivery()) cleanupOldChainDirs();
+ 
+ 	const config = loadConfig();
+ 	setDeclarationPinning(pi, config.pinToolDeclarations !== false);
+@@ -300,7 +305,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
+ 	const summaryInlineToolDisplay = config.inlineToolDisplay === "summary";
+ 	const tempArtifactsDir = getArtifactsDir(null);
+ 	const artifactCleanupDays = config.artifactConfig?.cleanupDays ?? DEFAULT_ARTIFACT_CONFIG.cleanupDays;
+-	cleanupAllArtifactDirs(artifactCleanupDays);
++	// Do not age out output/session artifacts while agentd may still need them to
++	// prove or synthesize an unacknowledged host-owned result.
++	if (!hostOwnsResultDelivery()) cleanupAllArtifactDirs(artifactCleanupDays);
+ 	let resultIndexCleanupTimer: ReturnType<typeof setTimeout> | undefined;
+ 
+ 	const state: SubagentState = {
+@@ -519,6 +526,12 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
+ 	const asyncRetentionAbort = new AbortController();
+ 	let asyncRetentionTimer: ReturnType<typeof setTimeout> | undefined;
+ 	const startSessionMaintenance = () => {
++		// Agentd retains exact result bytes until canonical host acknowledgement.
++		// Package retention/index cleanup has no authority over those artifacts.
++		if (hostOwnsResultDelivery()) {
++			waitSubscriptionManager.start();
++			return;
++		}
+ 		if (!resultIndexCleanupTimer) {
+ 			resultIndexCleanupTimer = setTimeout(() => {
+ 				try {
+@@ -830,7 +843,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
+ 			// finished results to Pi now; Pi runs the queued completion turn after agent_end.
+ 			// A failed drain rejects without this step so its deadline stays exact.
+ 			// The parent ended its turn to wait for the wake, so the drain lasts as long as a run may.
+-			if (!ctx.hasUI) await drainOutstandingWork({ state, events: pi.events, hasPendingSupervisorRequest: supervisorChannel.hasPendingRequests, timeoutMs: resolveConfigDefaultTimeoutMs(config.timeoutMs) }).then(resultWatcher.deliverPendingResults);
++			if (!ctx.hasUI && process.env.PI_SUBAGENTS_DISABLE_AUTO_DRAIN !== "1") await drainOutstandingWork({ state, events: pi.events, hasPendingSupervisorRequest: supervisorChannel.hasPendingRequests, timeoutMs: resolveConfigDefaultTimeoutMs(config.timeoutMs) }).then(resultWatcher.deliverPendingResults);
+ 		} finally {
+ 			// Deliver notices after a failed drain without suppressing its rejection.
+ 			const ownerSessionId = state.currentSessionId;
+@@ -930,6 +943,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
+ 	});
+ 
+ 	const cleanupSessionArtifacts = (ctx: ExtensionContext) => {
++		if (hostOwnsResultDelivery()) return;
+ 		try {
+ 			const sessionFile = ctx.sessionManager.getSessionFile();
+ 			if (sessionFile) {
+@@ -1029,7 +1043,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
+ 		// Launches an earlier session start of this runtime planned and has not started belong to that session.
+ 		cancelPendingWorkflowAutoResumes((entry) => entry.owner === autoResumeOwner);
+ 		// Not in a one-shot print run: its turn would then wait on the resumed workflow at settle.
+-		if (recovering && ctx.hasUI && config.autoResume !== false) {
++		if (recovering && ctx.hasUI && config.autoResume !== false && !hostOwnsResultDelivery()) {
+ 			for (const entry of planWorkflowAutoResumes({ asyncDirRoot: DIRS.async, currentSessionId: state.currentSessionId, now: Date.now(), owner: autoResumeOwner })) {
+ 				void launchWorkflowAutoResume(entry, ctx);
+ 			}
+@@ -1048,7 +1062,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
+ 		startResultWatcher();
+ 		logSlowPhase(state, "result-watcher-start", phaseStartedAt);
+ 		phaseStartedAt = Date.now();
+-		primeExistingResults({ triggerTurn: !recovering });
++		// Host-owned recovery is passive: inventory only. It must not consume result
++		// bytes, replay notices, or create a parent continuation on session bind.
++		if (!hostOwnsResultDelivery()) primeExistingResults({ triggerTurn: !recovering });
+ 		logSlowPhase(state, "result-prime", phaseStartedAt);
+ 		fleetStatus?.setContext(ctx);
+ 	};
+@@ -1247,7 +1263,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
+ 
+ 	pi.on("session_start", (event, ctx) => {
+ 		parentWake.bindSession(ctx);
+-		completionNotifier.bindSession(ctx.sessionManager);
++		if (!hostOwnsResultDelivery()) completionNotifier.bindSession(ctx.sessionManager);
+ 		installRuntime(ctx);
+ 		startSessionMaintenance();
+ 		scheduleModulePreload();
+@@ -1274,7 +1290,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
+ 		});
+ 		programStatus.sessionStarted({ hasUI: ctx.hasUI === true, mode: ctx.mode });
+ 		rpcBridge.emitReady(ctx);
+-		supervisorChannel.start();
++		supervisorChannel.start(hostOwnsResultDelivery() && recovering ? { recoveryCutoff: Date.now() } : undefined);
+ 		supervisorChannel.activateTransport();
+ 	});
+ 
+diff --git a/src/extension/schemas.ts b/src/extension/schemas.ts
+index 1d9cfc67..b4da3d12 100644
+--- a/src/extension/schemas.ts
++++ b/src/extension/schemas.ts
+@@ -237,6 +237,7 @@ const SubagentParamProperties = {
+ 		description: "fresh/fork overrides every child; profile requires agent's declared defaultContext, ignoring config. Omitted: defaultSubagentContext wins over each agent defaultContext; implicit fork needs persisted parent + leaf, else fresh. forkContext may prune forks before spawn.",
+ 	})),
+ 	async: Type.Optional(Type.Boolean({ description: "Background; default asyncByDefault. false only to block parent." })),
++	deliveryDisposition: Type.Optional(Type.String({ enum: ["awaited", "follow_up", "silent"], description: "Host-owned async delivery: awaited is claimed by bg_wait, follow_up continues the parent, silent retains without waking." })),
+ 	timeoutMs: Type.Optional(Type.Integer({ minimum: 1, description: "Foreground and single async runs use config timeoutMs, else 30m; async composites have no default parent deadline. Alias maxRuntimeMs; must agree." })),
+ 	maxRuntimeMs: Type.Optional(Type.Integer({ minimum: 1, description: "Alias timeoutMs (same defaults)." })),
+ 	checkpointBeforeDeadlineMs: Type.Optional(Type.Integer({ minimum: 1, maximum: 2_147_483_647, description: "Async single-agent runs only: the runner requests that the child checkpoint and stop this many ms before the run deadline (best-effort; the deadline kill still applies)." })),
+diff --git a/src/intercom/native-supervisor-channel.ts b/src/intercom/native-supervisor-channel.ts
+index cace8622..0fada7c0 100644
+--- a/src/intercom/native-supervisor-channel.ts
++++ b/src/intercom/native-supervisor-channel.ts
+@@ -58,6 +58,8 @@ interface SupervisorRequest {
+ interface PendingSupervisorRequest extends SupervisorRequest {
+ 	channelDir: string;
+ 	requestFile: string;
++	/** Present before a recovered host session bound; replyable but never a model wake. */
++	recoveryHeld?: boolean;
+ }
+ 
+ interface SupervisorRequestCorrelation {
+@@ -447,6 +449,12 @@ function cleanupStaleEmptySupervisorChannels(nowMs = Date.now(), platform: NodeJ
+ 	return removed;
+ }
+ 
++function hostCancellationHeld(request: SupervisorRequest): boolean {
++	if (process.env.PI_SUBAGENTS_HOST_ACK_RESULTS !== "1") return false;
++	try { return fs.lstatSync(path.join(ASYNC_DIR, request.runId, "host-cancellation.json")).isFile(); }
++	catch { return false; }
++}
++
+ function requestMatchesOwner(request: SupervisorRequest, state: Pick<SubagentState, "supervisorOwnerSessionId" | "currentSessionId">): boolean {
+ 	const currentSessionId = state.supervisorOwnerSessionId;
+ 	if (currentSessionId && request.orchestratorSessionId === currentSessionId) return true;
+@@ -532,6 +540,8 @@ function requestLifecycle(request: PendingSupervisorRequest, state: SubagentStat
+ 	if (!requestMatchesOwner(request, state)) return "wrong-session";
+ 	if (!fs.existsSync(request.requestFile)) return "missing";
+ 	if (request.expectsReply && fs.existsSync(replyPath(request.channelDir, request.id))) return "resolved";
++	// Recovery suppresses a model wake, not lifecycle. Recovered asks still age
++	// out or become inactive exactly like asks observed in the live session.
+ 	if (request.expectsReply && now > requestExpiresAt(request, now)) return "expired";
+ 	if (request.expectsReply && requestRunInactive(request, runState)) return "inactive";
+ 	return "pending";
+@@ -711,7 +721,7 @@ function buildParentSupervisorTool(pi: ExtensionAPI, pending: Map<string, Pendin
+ 
+ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentState, deps: NativeSupervisorChannelDeps = {}): {
+ 	registerTools: () => void;
+-	start: () => void;
++	start: (options?: { recoveryCutoff?: number }) => void;
+ 	activateTransport: () => void;
+ 	findPendingAsks: (target: { runId: string; agent: string; childIndex: number }) => string[];
+ 	hasPendingRequests: () => boolean;
+@@ -816,6 +826,7 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
+ 	let safetyPoller: ReturnType<typeof setInterval> | undefined;
+ 	let deferredWatcherRefresh: ReturnType<typeof setImmediate> | undefined;
+ 	let started = false;
++	let recoveryCutoff: number | undefined;
+ 	let lastStaleCleanupAt = 0;
+ 	const platform = deps.platform ?? process.platform;
+ 	const useNativeWatcher = () => !deps.getChannelDirs && shouldUseNativeFsWatch("supervisor-channel", platform) && platform !== "win32";
+@@ -867,6 +878,7 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
+ 			if (seenFiles.has(file)) continue;
+ 			const request = parseRequestFile(file, channelDir);
+ 			if (!request || !requestMatchesOwner(request, state)) continue;
++			request.recoveryHeld = recoveryCutoff !== undefined && request.createdAt <= recoveryCutoff;
+ 			const lifecycle = requestLifecycle(request, state, now, runState(request));
+ 			if (lifecycle !== "pending") {
+ 				seenFiles.add(file);
+@@ -903,6 +915,7 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
+ 			declareParentTool();
+ 			updateSettleSubscription();
+ 			markForegroundSupervisorAttention(request, state);
++			if (request.recoveryHeld || process.env.PI_SUBAGENTS_HOST_DRAINING === "1" || hostCancellationHeld(request)) continue;
+ 			// The ask is already queued above. A sendMessage failure (no UI, stale context) must not
+ 			// lose it, and must not abort the loop before the remaining asks register.
+ 			try {
+@@ -1145,8 +1158,11 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
+ 			pollOnce();
+ 			return pending.size > 0;
+ 		},
+-		start: () => {
+-			if (started) return;
++		start: (options = {}) => {
++			recoveryCutoff = typeof options.recoveryCutoff === "number" && Number.isFinite(options.recoveryCutoff)
++				? options.recoveryCutoff
++				: undefined;
++			if (started) { poll(); return; }
+ 			started = true;
+ 			registerParentTools();
+ 			poll();
+diff --git a/src/runs/background/async-execution.ts b/src/runs/background/async-execution.ts
+index b6ca6912..7942275a 100644
+--- a/src/runs/background/async-execution.ts
++++ b/src/runs/background/async-execution.ts
+@@ -94,6 +94,7 @@ import { assertWorkflowLaneKey, normalizeWorkflowLaneMetadata } from "../shared/
+ import { recoveryDescriptorPath } from "../shared/run-launch-folder.ts";
+ import { assertRequiredChildExtensionsAdmitted, resolveRequiredChildExtensions, writeRetainedRequiredChildExtensions, type RequiredChildExtensionSnapshot } from "../../shared/required-child-extensions.ts";
+ import { DEFAULT_WAIT_TOOL_NAME, waitToolName } from "../../shared/wait-tool-name.ts";
++import { hostIsDraining, hostLifecycleFields, hostOwnsResultDelivery, linuxProcessStartTicks, readRuntimeEpoch, resolveDeliveryDisposition, type DeliveryDisposition } from "../../shared/monika-host.ts";
+ 
+ const require = nodeModule.createRequire(import.meta.url);
+ // Cache failures as well as roots: management must remain loadable, and launches must not retry another SDK.
+@@ -209,6 +210,7 @@ function parentExtensionProviderForChild(ctx: AsyncExecutionContext, disableAmbi
+ export const DEFAULT_ASYNC_TIMEOUT_MS = 30 * 60 * 1000;
+ 
+ interface AsyncChainParams {
++	deliveryDisposition?: DeliveryDisposition;
+ 	chain: ChainStep[];
+ 	task?: string;
+ 	/** Raw caller-facing goal used only by the started event. */
+@@ -274,6 +276,7 @@ interface AsyncChainParams {
+ }
+ 
+ interface AsyncSingleParams {
++	deliveryDisposition?: DeliveryDisposition;
+ 	/** Originating executor invocation, distinct from the async run id. */
+ 	toolCallId?: string;
+ 	agent: string;
+@@ -372,6 +375,7 @@ interface AsyncExecutionResult {
+ }
+ 
+ export interface AsyncRunnerStepBuildParams {
++	deliveryDisposition?: DeliveryDisposition;
+ 	chain: ChainStep[];
+ 	task?: string;
+ 	attachRoot?: ImportedAsyncRoot & { agent: string; outputName?: string; label?: string };
+@@ -738,7 +742,8 @@ function spawnRunner(cfg: object, suffix: string, cwd: string, initialStatus: Om
+ 
+ 	fs.mkdirSync(TEMP_ROOT_DIR, { recursive: true });
+ 	const cfgPath = getAsyncConfigPath(suffix);
+-	const runnerProcessInstanceId = randomUUID();
++	const configuredProcessInstanceId = (cfg as { runnerProcessInstanceId?: unknown }).runnerProcessInstanceId;
++	const runnerProcessInstanceId = typeof configuredProcessInstanceId === "string" ? configuredProcessInstanceId : randomUUID();
+ 	const hasRevivalLease = typeof (cfg as { revivalLease?: unknown }).revivalLease === "object";
+ 	const launchBarrierToken = hasRevivalLease ? undefined : runnerProcessInstanceId;
+ 	// A broker launcher may start the runner outside its own process, even under another kernel, so the
+@@ -747,6 +752,21 @@ function spawnRunner(cfg: object, suffix: string, cwd: string, initialStatus: Om
+ 	const launcher = (cfg as { launcher?: RunnerLauncher }).launcher;
+ 	const bootId = launcher ? undefined : currentBootId();
+ 	const launchConfig = { ...cfg, runnerProcessInstanceId, ...(launchBarrierToken ? { launchBarrierToken } : {}), ...(bootId ? { bootId } : {}), ...(waitToolName() !== DEFAULT_WAIT_TOOL_NAME ? { waitToolName: waitToolName() } : {}) };
++	const launchIdentity = launchConfig as typeof launchConfig & { id?: unknown; asyncDir?: unknown; sessionId?: unknown; resultMode?: unknown; deliveryDisposition?: unknown };
++	const launchDisposition = resolveDeliveryDisposition(launchIdentity.deliveryDisposition);
++	if (hostOwnsResultDelivery() && typeof launchIdentity.id === "string" && typeof launchIdentity.asyncDir === "string" && typeof launchIdentity.sessionId === "string") {
++		writePrivateAtomicJson(path.join(launchIdentity.asyncDir, "launch.json"), {
++			...hostLifecycleFields("registered", launchDisposition),
++			runId: launchIdentity.id,
++			sessionId: launchIdentity.sessionId,
++			asyncDir: launchIdentity.asyncDir,
++			mode: launchIdentity.resultMode,
++			state: "registered",
++			runnerProcessInstanceId,
++			...readRuntimeEpoch(),
++			registeredAt: Date.now(),
++		});
++	}
+ 	writePrivateAtomicJson(cfgPath, launchConfig);
+ 	const command = binaryHost ?? nodeExecutable;
+ 	const launchForStartup = launchConfig as typeof launchConfig & { asyncDir?: unknown; id?: unknown; sessionId?: unknown; completionOwnerId?: unknown; revivalLease?: unknown };
+@@ -828,6 +848,22 @@ function spawnRunner(cfg: object, suffix: string, cwd: string, initialStatus: Om
+ 		});
+ 		let observedProcessExit: { exitCode: number | null; signal: NodeJS.Signals | null } | undefined;
+ 		proc.once("exit", (exitCode, signal) => { observedProcessExit = { exitCode, signal }; });
++		if (hostOwnsResultDelivery() && typeof launchIdentity.id === "string" && typeof launchIdentity.asyncDir === "string" && typeof launchIdentity.sessionId === "string") {
++			writePrivateAtomicJson(path.join(launchIdentity.asyncDir, "launch.json"), {
++				...hostLifecycleFields("running", launchDisposition),
++				runId: launchIdentity.id,
++				sessionId: launchIdentity.sessionId,
++				asyncDir: launchIdentity.asyncDir,
++				mode: launchIdentity.resultMode,
++				state: "spawned",
++				runnerProcessInstanceId,
++				...readRuntimeEpoch(),
++				pid: proc.pid,
++				processStartTicks: linuxProcessStartTicks(proc.pid),
++				registeredAt: Date.now(),
++				updatedAt: Date.now(),
++			});
++		}
+ 		const processClosed = new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+ 			proc.once("close", (exitCode, signal) => {
+ 				observedProcessExit ??= { exitCode, signal };
+@@ -1508,6 +1544,10 @@ export function executeAsyncChain(
+ 	id: string,
+ 	params: AsyncChainParams,
+ ): AsyncExecutionResult | Promise<AsyncExecutionResult> {
++	let deliveryDisposition: DeliveryDisposition;
++	try { deliveryDisposition = resolveDeliveryDisposition(params.deliveryDisposition); }
++	catch (error) { return formatAsyncStartError(params.resultMode ?? "chain", error instanceof Error ? error.message : String(error)); }
++	if (hostIsDraining()) return formatAsyncStartError(params.resultMode ?? "chain", "Agent host is draining; new subagent launches are disabled.");
+ 	const {
+ 		chain,
+ 		agents,
+@@ -1656,6 +1696,7 @@ export function executeAsyncChain(
+ 		spawnResultOrPromise = spawnRunner(
+ 			{
+ 				id,
++				deliveryDisposition,
+ 				steps,
+ 				resultPath: inheritedNestedRoute ? nestedResultsPath(inheritedNestedRoute.rootRunId, id) : resultFilePath(DIRS.results, id),
+ 				cwd: runnerCwd,
+@@ -1707,7 +1748,9 @@ export function executeAsyncChain(
+ 			runnerCwd,
+ 			{
+ 				lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
++				...hostLifecycleFields("running", deliveryDisposition),
+ 				runId: id,
++				...(hostOwnsResultDelivery() ? { asyncDir } : {}),
+ 				...(ctx.currentSessionId ? { sessionId: ctx.currentSessionId } : {}),
+ 				...(initialCompletionOwnerId ? { completionOwnerId: initialCompletionOwnerId } : {}),
+ 				completionOwnerProcess,
+@@ -1817,7 +1860,8 @@ export function executeAsyncChain(
+ 			}
+ 		}
+ 		ctx.pi.events.emit(SUBAGENT_ASYNC_STARTED_EVENT, {
+-			lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
++			lifecycleArtifactVersion: hostOwnsResultDelivery() ? 5 : SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
++			deliveryDisposition,
+ 			id,
+ 			pid: spawnResult.pid,
+ 			sessionId: ctx.currentSessionId,
+@@ -1853,7 +1897,7 @@ export function executeAsyncChain(
+ 
+ 	return {
+ 		content: [{ type: "text", text: formatAsyncStartedMessage(`Async ${resultMode}: ${chainDesc} [${id}]`, ctx.interactive === true) }],
+-		details: { mode: resultMode, runId: id, results: [], asyncId: id, asyncDir, workflowGraph, ...(capabilityCeiling ? { capabilityCeiling } : {}), ...(params.parentWorkflowRunId ? { parentWorkflowRunId: params.parentWorkflowRunId } : {}), ...(params.workflowKey ? { workflowKey: params.workflowKey } : {}), ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs, deadlineAt } : {}), ...(params.toolBudget ? { toolBudget: params.toolBudget } : {}), ...(initialUsageBudget ? { usageBudget: initialUsageBudget } : {}) },
++		details: { mode: resultMode, runId: id, deliveryDisposition, results: [], asyncId: id, asyncDir, workflowGraph, ...(capabilityCeiling ? { capabilityCeiling } : {}), ...(params.parentWorkflowRunId ? { parentWorkflowRunId: params.parentWorkflowRunId } : {}), ...(params.workflowKey ? { workflowKey: params.workflowKey } : {}), ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs, deadlineAt } : {}), ...(params.toolBudget ? { toolBudget: params.toolBudget } : {}), ...(initialUsageBudget ? { usageBudget: initialUsageBudget } : {}) },
+ 	};
+ 	};
+ 	return spawnResultOrPromise instanceof Promise ? spawnResultOrPromise.then(finishSpawnResult) : finishSpawnResult(spawnResultOrPromise);
+@@ -1867,6 +1911,10 @@ export function executeAsyncSingle(
+ 	id: string,
+ 	params: AsyncSingleParams,
+ ): AsyncExecutionResult | Promise<AsyncExecutionResult> {
++	let deliveryDisposition: DeliveryDisposition;
++	try { deliveryDisposition = resolveDeliveryDisposition(params.deliveryDisposition); }
++	catch (error) { return formatAsyncStartError("single", error instanceof Error ? error.message : String(error)); }
++	if (hostIsDraining()) return formatAsyncStartError("single", "Agent host is draining; new subagent launches are disabled.");
+ 	const {
+ 		agent,
+ 		ctx,
+@@ -2151,6 +2199,7 @@ export function executeAsyncSingle(
+ 	const launchThinking = resolveEffectiveThinking(selectedModel, effectiveThinking);
+ 	const { definitionDigest, launchContractDigest } = resolveLaunchBinding({
+ 		agent: agentConfig,
++		...(hostOwnsResultDelivery() ? { deliveryDisposition } : {}),
+ 		task,
+ 		model: selectedModel,
+ 		...(fast !== undefined ? { fast } : {}),
+@@ -2252,6 +2301,7 @@ export function executeAsyncSingle(
+ 		spawnResultOrPromise = spawnRunner(
+ 			{
+ 				id,
++				deliveryDisposition,
+ 				...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
+ 				steps: [
+ 					{
+@@ -2373,7 +2423,9 @@ export function executeAsyncSingle(
+ 			runnerCwd,
+ 			{
+ 				lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
++				...hostLifecycleFields("running", deliveryDisposition),
+ 				runId: id,
++				...(hostOwnsResultDelivery() ? { asyncDir } : {}),
+ 				...(ctx.currentSessionId ? { sessionId: ctx.currentSessionId } : {}),
+ 				...(initialCompletionOwnerId ? { completionOwnerId: initialCompletionOwnerId } : {}),
+ 				completionOwnerProcess,
+@@ -2449,7 +2501,8 @@ export function executeAsyncSingle(
+ 			}
+ 		}
+ 		ctx.pi.events.emit(SUBAGENT_ASYNC_STARTED_EVENT, {
+-			lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
++			lifecycleArtifactVersion: hostOwnsResultDelivery() ? 5 : SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
++			deliveryDisposition,
+ 			id,
+ 			pid: spawnResult.pid,
+ 			sessionId: ctx.currentSessionId,
+@@ -2475,7 +2528,7 @@ export function executeAsyncSingle(
+ 
+ 	return {
+ 		content: [{ type: "text", text: formatAsyncStartedMessage(`Async: ${agent} [${id}]`, ctx.interactive === true) }],
+-		details: { mode: "single", runId: id, ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}), results: [], asyncId: id, asyncDir, launchContractDigest, launchResolvedExtensions, ...(capabilityCeiling ? { capabilityCeiling } : {}), ...(params.context ? { context: params.context } : {}), ...(timeoutMs !== undefined ? { timeoutMs, deadlineAt } : {}), ...(params.toolBudget ? { toolBudget: resolvedToolBudget.budget ?? params.toolBudget } : {}), ...(initialUsageBudget ? { usageBudget: initialUsageBudget } : {}) } as Details,
++		details: { mode: "single", runId: id, deliveryDisposition, ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}), results: [], asyncId: id, asyncDir, launchContractDigest, launchResolvedExtensions, ...(capabilityCeiling ? { capabilityCeiling } : {}), ...(params.context ? { context: params.context } : {}), ...(timeoutMs !== undefined ? { timeoutMs, deadlineAt } : {}), ...(params.toolBudget ? { toolBudget: resolvedToolBudget.budget ?? params.toolBudget } : {}), ...(initialUsageBudget ? { usageBudget: initialUsageBudget } : {}) } as Details,
+ 	};
+ 	};
+ 	return spawnResultOrPromise instanceof Promise ? spawnResultOrPromise.then(finishSpawnResult) : finishSpawnResult(spawnResultOrPromise);
+diff --git a/src/runs/background/async-status.ts b/src/runs/background/async-status.ts
+index b82d7cc2..cc76ceef 100644
+--- a/src/runs/background/async-status.ts
++++ b/src/runs/background/async-status.ts
+@@ -101,6 +101,7 @@ export interface AsyncRunSummary {
+ 	asyncDir: string;
+ 	toolCallId?: string;
+ 	sessionId?: string;
++	deliveryDisposition?: import("../../shared/types.ts").DeliveryDisposition;
+ 	state: "queued" | "running" | "complete" | "failed" | "partial" | "paused" | "stopped" | "rejected";
+ 	error?: string;
+ 	activityState?: ActivityState;
+@@ -437,6 +438,7 @@ function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string
+ 		asyncDir,
+ 		...(status.toolCallId ? { toolCallId: status.toolCallId } : {}),
+ 		...(status.sessionId ? { sessionId: status.sessionId } : {}),
++		...(status.deliveryDisposition ? { deliveryDisposition: status.deliveryDisposition } : {}),
+ 		state: status.state,
+ 		...(status.error ? { error: status.error } : {}),
+ 		activityState,
+diff --git a/src/runs/background/notify.ts b/src/runs/background/notify.ts
+index c060f906..ee2a296c 100644
+--- a/src/runs/background/notify.ts
++++ b/src/runs/background/notify.ts
+@@ -25,6 +25,7 @@ import { formatParallelHandoffLines, parseKeptBranchLines, readKeptBranches, typ
+ import type { ResultDeliveryOwnership } from "./result-delivery-ownership.ts";
+ import { describeWorkflowResume } from "../../workflows/workflow-resume-claim.ts";
+ import { isReusableWorkflowStopCause } from "../../workflows/workflow-stop-cause.ts";
++import { hostOwnsResultDelivery, type DeliveryDisposition } from "../../shared/monika-host.ts";
+ 
+ export interface SubagentNotifyChildOutput {
+ 	workflowKey?: string;
+@@ -145,6 +146,7 @@ export interface CompletionNotification {
+ 	parallelHandoff?: ParallelHandoffReference;
+ 	scheduleOrigin?: ScheduleOrigin;
+ 	asyncDir?: string;
++	deliveryDisposition?: DeliveryDisposition;
+ }
+ 
+ interface NotifyTimerApi {
+@@ -953,6 +955,9 @@ export default function registerSubagentNotify(
+ 	};
+ 
+ 	const deliver = (result: CompletionNotification): Promise<boolean> => {
++		// Agentd is the only completion transport in host-owned mode. The package
++		// notifier must not append a second subagent-notify/session message.
++		if (hostOwnsResultDelivery()) return Promise.resolve(false);
+ 		if (disposed || typeof result.sessionId !== "string") {
+ 			traceNotification(disposed ? "disposed" : "missing_session", result);
+ 			return Promise.resolve(false);
+diff --git a/src/runs/background/result-claim.ts b/src/runs/background/result-claim.ts
+new file mode 100644
+index 00000000..227e6caf
+--- /dev/null
++++ b/src/runs/background/result-claim.ts
+@@ -0,0 +1,183 @@
++import { createHash } from "node:crypto";
++import * as fs from "node:fs";
++import * as path from "node:path";
++import type { DeliveryDisposition } from "../../shared/types.ts";
++
++export const RESULT_CLAIM_VERSION = 1 as const;
++
++export interface ResultClaimV1 {
++	version: typeof RESULT_CLAIM_VERSION;
++	kind: "pi-subagents.result-claim";
++	runId: string;
++	runKey: string;
++	sessionId: string;
++	deliveryDisposition: "awaited";
++	resultSha256: string;
++	resultSizeBytes: number;
++	claimedAt: number;
++}
++
++export class AwaitedResultPendingError extends Error {
++	readonly resultPath: string;
++
++	constructor(resultPath: string, reason?: string) {
++		super(reason ?? `Awaited result is not published yet at '${resultPath}'.`);
++		this.name = "AwaitedResultPendingError";
++		this.resultPath = resultPath;
++	}
++}
++
++export type AwaitedResultClaim = {
++	kind: "claimed";
++	claim: ResultClaimV1;
++	claimPath: string;
++	resultPath: string;
++	resultBytes: Buffer;
++	result: Record<string, unknown>;
++	idempotent: boolean;
++} | {
++	kind: "not-claimable";
++	deliveryDisposition: Exclude<DeliveryDisposition, "awaited">;
++};
++
++function readRegularNoFollow(filePath: string): Buffer {
++	let fd: number | undefined;
++	try {
++		fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
++		const stat = fs.fstatSync(fd);
++		if (!stat.isFile()) throw new Error(`Refusing non-regular file '${filePath}'.`);
++		return fs.readFileSync(fd);
++	} finally {
++		if (fd !== undefined) fs.closeSync(fd);
++	}
++}
++
++function parseObject(bytes: Buffer, label: string): Record<string, unknown> {
++	let value: unknown;
++	try {
++		value = JSON.parse(bytes.toString("utf-8"));
++	} catch (error) {
++		throw new Error(`Malformed ${label}: ${error instanceof Error ? error.message : String(error)}`);
++	}
++	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Malformed ${label}: expected an object.`);
++	return value as Record<string, unknown>;
++}
++
++function resolveRunIdentity(asyncDirInput: string, expectedRunId?: string): { asyncDir: string; runId: string; runKey: string; resultPath: string } {
++	const asyncDir = path.resolve(asyncDirInput);
++	const dirStat = fs.lstatSync(asyncDir);
++	if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) throw new Error(`Refusing unsafe async directory '${asyncDir}'.`);
++	const canonicalDir = fs.realpathSync(asyncDir);
++	if (canonicalDir !== asyncDir) throw new Error(`Refusing aliased async directory '${asyncDir}'.`);
++	const runId = path.basename(asyncDir);
++	if (!runId || runId === "." || runId === ".." || (expectedRunId !== undefined && runId !== expectedRunId)) {
++		throw new Error(`Async run identity mismatch for '${asyncDir}'.`);
++	}
++	const parent = path.dirname(asyncDir);
++	if (path.basename(parent) === "async-subagent-runs") {
++		const runtimeRoot = path.dirname(parent);
++		return { asyncDir, runId, runKey: `top:${runId}`, resultPath: path.join(runtimeRoot, "async-subagent-results", `${runId}.json`) };
++	}
++	const rootRunId = path.basename(parent);
++	const nestedRoot = path.dirname(parent);
++	if (path.basename(nestedRoot) !== "nested-subagent-runs" || !rootRunId) throw new Error(`Async directory is outside a recognized run scope: '${asyncDir}'.`);
++	const runtimeRoot = path.dirname(nestedRoot);
++	return {
++		asyncDir,
++		runId,
++		runKey: `nested:${rootRunId}:${runId}`,
++		resultPath: path.join(runtimeRoot, "async-subagent-results", "nested", rootRunId, `${runId}.json`),
++	};
++}
++
++function assertLifecycleRecord(
++	filePath: string,
++	label: string,
++	expected: { runId: string; sessionId: string; disposition: DeliveryDisposition },
++): Record<string, unknown> {
++	const value = parseObject(readRegularNoFollow(filePath), label);
++	if (value.lifecycleArtifactVersion !== 5) throw new Error(`${label} is not a lifecycle v5 artifact.`);
++	if ((value.runId ?? value.id) !== expected.runId) throw new Error(`${label} run identity mismatch.`);
++	if (value.sessionId !== expected.sessionId) throw new Error(`${label} session identity mismatch.`);
++	if (value.deliveryDisposition !== expected.disposition) throw new Error(`${label} delivery disposition mismatch.`);
++	return value;
++}
++
++function assertFinalAwaitedArtifact(value: Record<string, unknown>, label: string, resultPath: string): void {
++	const state = value.state;
++	const finalState = state === "complete" || state === "failed" || state === "rejected";
++	if (!finalState || value.execution_state !== "terminal" || (value.outcome_state !== "succeeded" && value.outcome_state !== "failed")) {
++		throw new AwaitedResultPendingError(resultPath, `${label} is not final (state=${String(state)}).`);
++	}
++}
++
++function sameClaim(a: Record<string, unknown>, b: ResultClaimV1): boolean {
++	const allowed = new Set(["version", "kind", "runId", "runKey", "sessionId", "deliveryDisposition", "resultSha256", "resultSizeBytes", "claimedAt"]);
++	return Object.keys(a).every((key) => allowed.has(key))
++		&& a.version === b.version && a.kind === b.kind && a.runId === b.runId && a.runKey === b.runKey
++		&& a.sessionId === b.sessionId && a.deliveryDisposition === b.deliveryDisposition
++		&& a.resultSha256 === b.resultSha256 && a.resultSizeBytes === b.resultSizeBytes
++		&& typeof a.claimedAt === "number" && Number.isFinite(a.claimedAt);
++}
++
++function createClaimNoFollow(claimPath: string, claim: ResultClaimV1): { claim: ResultClaimV1; idempotent: boolean } {
++	let fd: number | undefined;
++	try {
++		fd = fs.openSync(claimPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0), 0o600);
++		fs.writeFileSync(fd, `${JSON.stringify(claim)}\n`, "utf-8");
++		fs.fsyncSync(fd);
++		return { claim, idempotent: false };
++	} catch (error) {
++		if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
++		const existing = parseObject(readRegularNoFollow(claimPath), "result claim");
++		if (!sameClaim(existing, claim)) throw new Error(`Conflicting result claim at '${claimPath}'.`);
++		return { claim: existing as unknown as ResultClaimV1, idempotent: true };
++	} finally {
++		if (fd !== undefined) fs.closeSync(fd);
++	}
++}
++
++/** Read and identity-bind one exact awaited result, then atomically publish its sidecar. */
++export function claimAwaitedResult(input: { asyncDir: string; runId?: string; sessionId: string; now?: () => number }): AwaitedResultClaim {
++	const identity = resolveRunIdentity(input.asyncDir, input.runId);
++	const statusPath = path.join(identity.asyncDir, "status.json");
++	const launchPath = path.join(identity.asyncDir, "launch.json");
++	const status = parseObject(readRegularNoFollow(statusPath), "status artifact");
++	const disposition = status.deliveryDisposition;
++	if (disposition === "follow_up" || disposition === "silent") return { kind: "not-claimable", deliveryDisposition: disposition };
++	if (disposition !== "awaited") throw new Error("Status artifact has an invalid delivery disposition.");
++	const expected = { runId: identity.runId, sessionId: input.sessionId, disposition: disposition as DeliveryDisposition };
++	const checkedStatus = assertLifecycleRecord(statusPath, "status artifact", expected);
++	assertLifecycleRecord(launchPath, "launch artifact", expected);
++	assertFinalAwaitedArtifact(checkedStatus, "Status artifact", identity.resultPath);
++	let resultBytes: Buffer;
++	try {
++		resultBytes = readRegularNoFollow(identity.resultPath);
++	} catch (error) {
++		if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new AwaitedResultPendingError(identity.resultPath);
++		throw error;
++	}
++	const result = parseObject(resultBytes, "result artifact");
++	if (result.lifecycleArtifactVersion !== 5 || (result.runId ?? result.id) !== identity.runId || result.sessionId !== input.sessionId
++		|| result.asyncDir !== identity.asyncDir || result.deliveryDisposition !== disposition) {
++		throw new Error("Result artifact identity or disposition mismatch.");
++	}
++	assertFinalAwaitedArtifact(result, "Result artifact", identity.resultPath);
++	if (result.state !== checkedStatus.state || result.execution_state !== checkedStatus.execution_state || result.outcome_state !== checkedStatus.outcome_state) {
++		throw new AwaitedResultPendingError(identity.resultPath, "Awaited status and result artifacts do not describe the same final publication.");
++	}
++	const claim: ResultClaimV1 = {
++		version: RESULT_CLAIM_VERSION,
++		kind: "pi-subagents.result-claim",
++		runId: identity.runId,
++		runKey: identity.runKey,
++		sessionId: input.sessionId,
++		deliveryDisposition: "awaited",
++		resultSha256: createHash("sha256").update(resultBytes).digest("hex"),
++		resultSizeBytes: resultBytes.byteLength,
++		claimedAt: (input.now ?? Date.now)(),
++	};
++	const claimPath = path.join(identity.asyncDir, "result-claim.json");
++	const published = createClaimNoFollow(claimPath, claim);
++	return { kind: "claimed", claim: published.claim, claimPath, resultPath: identity.resultPath, resultBytes, result, idempotent: published.idempotent };
++}
+diff --git a/src/runs/background/result-watcher.ts b/src/runs/background/result-watcher.ts
+index e143afb4..8301b335 100644
+--- a/src/runs/background/result-watcher.ts
++++ b/src/runs/background/result-watcher.ts
+@@ -28,6 +28,7 @@ import { acknowledgeMissionObserverSnapshot, missionObserverIndexPath, missionOb
+ import type { CompletionNotifier, CompletionNotification } from "./notify.ts";
+ import type { ResultDeliveryOwnership } from "./result-delivery-ownership.ts";
+ import { reportSessionWarning } from "../../shared/session-warnings.ts";
++import { hostOwnsResultDelivery, resolveDeliveryDisposition, type DeliveryDisposition } from "../../shared/monika-host.ts";
+ 
+ const WATCHER_RESTART_DELAY_MS = 3000;
+ const POLL_INTERVAL_MS = 3000;
+@@ -421,6 +422,28 @@ export function createResultWatcher(
+ 			const runId = typeof data.runId === "string" && data.runId
+ 				? data.runId
+ 				: typeof data.id === "string" && data.id ? data.id : file.replace(/\.json$/i, "");
++			let deliveryDisposition: DeliveryDisposition;
++			try {
++				deliveryDisposition = resolveDeliveryDisposition(data.deliveryDisposition);
++			} catch (error) {
++				// Retain malformed host-owned bytes for operator/agentd inspection. A bad
++				// disposition must neither wake Pi nor crash the watcher retry loop.
++				if (hostOwnsResultDelivery()) {
++					reportResultWatcherWarning(state, `Refusing host-owned subagent result '${resultPath}' with invalid delivery disposition`, error);
++					return;
++				}
++				throw error;
++			}
++			if (hostOwnsResultDelivery()) {
++				const completionKey = buildCompletionKey(data, `host-result:${file}`);
++				if (state.completionSeen.get(completionKey) === undefined) {
++					markSeenWithTtl(state.completionSeen, completionKey, Date.now(), completionTtlMs);
++					pi.events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, { ...data, runId, deliveryDisposition, triggerTurn: false });
++				}
++				// Exact bytes remain at their canonical path until agentd publishes a
++				// durable acknowledgement and performs custody-safe removal.
++				return;
++			}
+ 			const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId : undefined;
+ 			let read: ResultSnapshot = { runId, sessionId, toolCallId, snapshot: raw, ...(publicAtRead !== undefined && publicAtRead !== raw ? { stalePublic: publicAtRead } : {}) };
+ 			const markReplacedPayload = (): boolean => {
+diff --git a/src/runs/background/subagent-runner.ts b/src/runs/background/subagent-runner.ts
+index 0c17c783..631b5f9f 100644
+--- a/src/runs/background/subagent-runner.ts
++++ b/src/runs/background/subagent-runner.ts
+@@ -160,6 +160,7 @@ import { runExternalJob } from "../shared/external-job-runner.ts";
+ import { createOrcaProgressTab, type OrcaProgressTab } from "../shared/orca-progress-tabs.ts";
+ import type { ResolvedSubagentCapabilityCeiling } from "../shared/capability-ceiling.ts";
+ import { setWaitToolName } from "../../shared/wait-tool-name.ts";
++import { hostLifecycleFields, hostOwnsResultDelivery, resolveDeliveryDisposition, type DeliveryDisposition } from "../../shared/monika-host.ts";
+ import {
+ 	acceptChildWatchdogEvent,
+ 	applyChildWatchdogMessage,
+@@ -178,6 +179,7 @@ process.env[SUBAGENT_RUNNER_PID_ENV] = String(process.pid);
+ 
+ export interface SubagentRunConfig {
+ 	id: string;
++	deliveryDisposition?: DeliveryDisposition;
+ 	toolCallId?: string;
+ 	steps: RunnerStep[];
+ 	resultPath: string;
+@@ -659,6 +661,7 @@ async function readGitFingerprint(cwd: string, signal: AbortSignal, onError: (er
+ 
+ interface SingleStepContext {
+ 	previousOutput: string;
++	deliveryDisposition: DeliveryDisposition;
+ 	outputs?: ChainOutputMap;
+ 	placeholder: string;
+ 	cwd: string;
+@@ -1169,6 +1172,7 @@ export async function runSingleStepInner(
+ 			launchResolvedExtensions = projectLaunchResolvedChildExtensions(toolPlan);
+ 			actualLaunchContractDigest = resolveLaunchBinding({
+ 				definitionDigest: step.definitionDigest,
++				...(hostOwnsResultDelivery() ? { deliveryDisposition: ctx.deliveryDisposition } : {}),
+ 				systemPromptMode: step.systemPromptMode,
+ 				inheritProjectContext: step.inheritProjectContext,
+ 				inheritGlobalContext: step.inheritGlobalContext,
+@@ -1887,6 +1891,7 @@ export async function runSubagent(
+ ): Promise<void> {
+ 	const { id, steps, resultPath, cwd, placeholder, taskIndex, totalTasks, maxOutput, artifactsDir, artifactConfig } =
+ 		config;
++	const deliveryDisposition = resolveDeliveryDisposition(config.deliveryDisposition);
+ 	if (config.waitToolName) setWaitToolName(config.waitToolName);
+ 	const globalSemaphore = new Semaphore(config.globalConcurrencyLimit ?? DEFAULT_GLOBAL_CONCURRENCY_LIMIT);
+ 	let previousOutput = "";
+@@ -2055,7 +2060,9 @@ export async function runSubagent(
+ 
+ 	const statusPayload: RunnerStatusPayload = omitUndefinedProperties({
+ 		lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
++		...hostLifecycleFields("running", deliveryDisposition),
+ 		runId: id,
++		...(hostOwnsResultDelivery() ? { asyncDir } : {}),
+ 		...(config.toolCallId ? { toolCallId: config.toolCallId } : {}),
+ 		...(config.sessionId ? { sessionId: config.sessionId } : {}),
+ 		...(config.completionOwnerId ? { completionOwnerId: config.completionOwnerId } : {}),
+@@ -2241,6 +2248,7 @@ export async function runSubagent(
+ 		const summary = statusResultSummary(state);
+ 		runPersistence.write(resultPath, omitUndefinedProperties({
+ 			lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
++			...hostLifecycleFields(state, deliveryDisposition),
+ 			id,
+ 			runId: id,
+ 			agent: statusPayload.steps.length === 1 ? statusPayload.steps[0]!.agent : statusPayload.mode === "parallel" ? `parallel:${statusPayload.steps.map((step) => step.agent).join("+")}` : `chain:${statusPayload.steps.map((step) => step.agent).join("->")}`,
+@@ -2266,6 +2274,7 @@ export async function runSubagent(
+ 			timestamp: now,
+ 			durationMs: Math.max(0, now - overallStartTime),
+ 			asyncDir,
++			deliveryDisposition,
+ 			cwd,
+ 			sessionId: config.sessionId,
+ 			completionOwnerId: config.completionOwnerId,
+@@ -2276,6 +2285,7 @@ export async function runSubagent(
+ 	};
+ 	const writeStatusPayloadNow = (): void => {
+ 		if (finalResultPublication) return;
++		Object.assign(statusPayload, hostLifecycleFields(statusPayload.state, deliveryDisposition));
+ 		refreshWorkflowGraph();
+ 		writeRecoverableStatusResult();
+ 		runPersistence.write(statusPath, { ...statusPayload });
+@@ -3857,7 +3867,7 @@ export async function runSubagent(
+ 				appendJsonl(eventsPath, JSON.stringify({ type: "subagent.step.started", ts: taskStartTime, runId: id, stepIndex: fi, agent: task.agent }));
+ 				flushPendingStepSteers(fi);
+ 				const singleResult = await runSingleStepWithTimeout(task, compactOptional<SingleStepContext>({
+-					previousOutput, placeholder, cwd, sessionEnabled,
++					previousOutput, deliveryDisposition, placeholder, cwd, sessionEnabled,
+ 					outputs,
+ 					sessionDir: config.sessionDir ? path.join(config.sessionDir, `dynamic-${stepIndex}-${taskIdx}`) : undefined,
+ 					artifactsDir, artifactConfig, id,
+@@ -4231,7 +4241,7 @@ export async function runSubagent(
+ 						flushPendingStepSteers(fi);
+ 
+ 						const singleResult = await runSingleStepWithTimeout(taskForRun, compactOptional<SingleStepContext>({
+-							previousOutput, placeholder, cwd: taskCwd, sessionEnabled,
++							previousOutput, deliveryDisposition, placeholder, cwd: taskCwd, sessionEnabled,
+ 							outputs,
+ 							sessionDir: taskSessionDir,
+ 							artifactsDir, artifactConfig, id,
+@@ -4582,7 +4592,7 @@ export async function runSubagent(
+ 			let singleResult: Awaited<ReturnType<typeof runSingleStepWithTimeout>>;
+ 			try {
+ 				singleResult = await runSingleStepWithTimeout(executionStep, compactOptional<SingleStepContext>({
+-				previousOutput, placeholder, cwd: singleCwd, sessionEnabled,
++				previousOutput, deliveryDisposition, placeholder, cwd: singleCwd, sessionEnabled,
+ 				outputs: statusPayload.mode === "single" ? undefined : outputs,
+ 				sessionDir: config.sessionDir,
+ 				artifactsDir, artifactConfig, id,
+@@ -4978,6 +4988,7 @@ export async function runSubagent(
+ 	try {
+ 		runPersistence.write(resultPath, {
+ 			lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
++			...hostLifecycleFields(statusPayload.state, deliveryDisposition),
+ 			id,
+ 			...(config.toolCallId ? { toolCallId: config.toolCallId } : {}),
+ 			agent: agentName,
+@@ -5060,6 +5071,7 @@ export async function runSubagent(
+ 			artifactsDir,
+ 			cwd,
+ 			asyncDir,
++			deliveryDisposition,
+ 			launchContractDigest: config.launchContractDigest,
+ 			launchResolvedExtensions: config.launchResolvedExtensions,
+ 			runtimeAcknowledgedExtensions: singleRuntimeAcknowledgedExtensions,
+diff --git a/src/runs/background/subagent-wait.ts b/src/runs/background/subagent-wait.ts
+index 99f8513b..83d72160 100644
+--- a/src/runs/background/subagent-wait.ts
++++ b/src/runs/background/subagent-wait.ts
+@@ -69,6 +69,7 @@ import { collectWaitCompletions } from "./wait-completions.ts";
+ import { formatResumeFirstFailedRunsNote } from "./resume-guidance.ts";
+ import { formatTimeoutRecoveryLines } from "../shared/mutation-evidence.ts";
+ import { waitToolName } from "../../shared/wait-tool-name.ts";
++import { AwaitedResultPendingError, claimAwaitedResult, type ResultClaimV1 } from "./result-claim.ts";
+ export { WAIT_TOOL_DEFAULT_TIMEOUT_MS_ENV, WAIT_TOOL_ENABLED_ENV, resolveWaitToolConfig, type ResolvedWaitToolConfig } from "./wait-config.ts";
+ 
+ const ACTIVE_STATES: ReadonlyArray<AsyncRunSummary["state"]> = ["queued", "running"];
+@@ -97,6 +98,7 @@ export interface SubagentWaitParams {
+ /** Minimal event-bus surface wait subscribes to (matches pi.events). */
+ export interface WaitEventBus {
+ 	on(channel: string, handler: (data: unknown) => void): () => void;
++	emit?(channel: string, data: unknown): void;
+ }
+ 
+ export interface SubagentWaitDeps {
+@@ -140,6 +142,8 @@ export interface SubagentWaitDeps {
+ 	 * events). Omit in tests that want pure poll behavior.
+ 	 */
+ 	events?: WaitEventBus;
++	/** Publish the canonical parent-session entry before exposing a claim. */
++	publishClaim?: (claim: ResultClaimV1) => string | Promise<string>;
+ }
+ 
+ const WAKE_CHANNELS = [
+@@ -363,7 +367,16 @@ function completionUsage(completions: WaitCompletion[] | undefined): Usage | und
+ 	return projected ? usage : undefined;
+ }
+ 
+-function result(text: string, isError = false, completions?: WaitCompletion[]): AgentToolResult<Details> {
++interface PublishedClaim {
++	claim: ResultClaimV1;
++	claimPath: string;
++	resultPath: string;
++	claimEntryId: string;
++	idempotent: boolean;
++	resultText: string;
++}
++
++function result(text: string, isError = false, completions?: WaitCompletion[], claims: PublishedClaim[] = []): AgentToolResult<Details> {
+ 	const usage = completionUsage(completions);
+ 	for (const completion of completions ?? []) {
+ 		if (completion.workflowReceiptPath) text += `\nWorkflow receipt [${completion.runId}]: ${completion.workflowReceiptPath}`;
+@@ -376,10 +389,52 @@ function result(text: string, isError = false, completions?: WaitCompletion[]):
+ 			mode: "management",
+ 			results: [],
+ 			...(completions && completions.length > 0 ? { completions } : {}),
++			...(claims.length ? { resultClaims: claims.map(({ claim }) => claim) } : {}),
+ 		},
+ 	};
+ }
+ 
++async function publishAwaitedClaims(runs: AsyncRunSummary[], deps: SubagentWaitDeps): Promise<{ claims: PublishedClaim[]; pending: AsyncRunSummary[]; error?: string }> {
++	const claims: PublishedClaim[] = [];
++	const pending: AsyncRunSummary[] = [];
++	for (const run of runs) {
++		if (run.deliveryDisposition !== "awaited") continue;
++		try {
++			const claimed = claimAwaitedResult({ asyncDir: run.asyncDir, runId: run.id, sessionId: deps.state.currentSessionId! });
++			if (claimed.kind !== "claimed") continue;
++			if (!deps.publishClaim) throw new Error("Current session manager cannot publish an awaited result claim.");
++			const claimEntryId = await deps.publishClaim(claimed.claim);
++			if (!claimEntryId) throw new Error("Current session manager returned no result-claim entry identity.");
++			deps.events?.emit?.("subagent:result-claimed", { ...claimed.claim, claimEntryId, claimPath: claimed.claimPath });
++			claims.push({ claim: claimed.claim, claimPath: claimed.claimPath, resultPath: claimed.resultPath, claimEntryId, idempotent: claimed.idempotent, resultText: claimed.resultBytes.toString("utf8") });
++		} catch (error) {
++			if (error instanceof AwaitedResultPendingError) { pending.push(run); continue; }
++			return { claims, pending, error: error instanceof Error ? error.message : String(error) };
++		}
++	}
++	return { claims, pending };
++}
++
++async function waitForAwaitedClaims(runs: AsyncRunSummary[], signal: AbortSignal | undefined, deps: SubagentWaitDeps, startedAt: number, timeoutMs: number, pollIntervalMs: number): Promise<{ claims: PublishedClaim[]; error?: string }> {
++	const byKey = new Map<string, PublishedClaim>();
++	let remaining = runs;
++	while (true) {
++		const published = await publishAwaitedClaims(remaining, deps);
++		for (const item of published.claims) byKey.set(item.claim.runKey, item);
++		if (published.error) return { claims: [...byKey.values()], error: published.error };
++		if (!published.pending.length) return { claims: [...byKey.values()] };
++		if (signal?.aborted) return { claims: [...byKey.values()], error: "Wait aborted before exact awaited result publication." };
++		if ((deps.now ?? Date.now)() - startedAt >= timeoutMs) return { claims: [...byKey.values()], error: `Timed out before exact awaited result publication for: ${published.pending.map((run) => run.id).join(", ")}.` };
++		await waitForWake(pollIntervalMs, signal, deps);
++		remaining = published.pending;
++	}
++}
++
++function withClaimedResults(text: string, claims: PublishedClaim[]): string {
++	if (!claims.length) return text;
++	return `${text}\n\n${claims.map((item) => `Awaited result ${item.claim.runKey} (${item.claim.resultSha256}, ${item.claim.resultSizeBytes} bytes):\n${item.resultText}`).join("\n\n")}`;
++}
++
+ function formatCompletionRecovery(completions: WaitCompletion[] | undefined): string {
+ 	const lines = (completions ?? []).flatMap((completion) =>
+ 		(completion.results ?? []).flatMap((child) => formatTimeoutRecoveryLines(child.timeoutRecovery)));
+@@ -711,9 +766,11 @@ export async function waitForSubagents(
+ 			try {
+ 				const references: string[] = [];
+ 				const completions = collectScopedCompletions([selected.run], deps, references);
++				const published = await waitForAwaitedClaims([selected.run], signal, deps, startedAt, timeoutMs, pollIntervalMs);
++				if (published.error) return result(`Awaited result claim failed: ${published.error}`, true, completions, published.claims);
+ 				return result(
+-					`Run "${selected.id}" is terminal. Outcome: ${summarizeTerminalRuns([selected.run])}.${formatCompletionRecovery(completions)}${references.length ? `\n${references.join("\n")}` : ""}`,
+-					deps.failOnFailedRuns === true && (selected.run.state === "failed" || selected.run.state === "partial"), completions,
++					withClaimedResults(`Run "${selected.id}" is terminal. Outcome: ${summarizeTerminalRuns([selected.run])}.${formatCompletionRecovery(completions)}${references.length ? `\n${references.join("\n")}` : ""}`, published.claims),
++					deps.failOnFailedRuns === true && (selected.run.state === "failed" || selected.run.state === "partial"), completions, published.claims,
+ 				);
+ 			} catch (error) {
+ 				return result(error instanceof Error ? error.message : String(error), true);
+@@ -842,6 +899,10 @@ export async function waitForSubagents(
+ 		return result(error instanceof Error ? error.message : String(error), true);
+ 	}
+ 
++	const terminalRuns = runsForIds(initialAsyncIds, deps).filter((run) => !ACTIVE_STATES.includes(run.state));
++	const published = await waitForAwaitedClaims(terminalRuns, signal, deps, startedAt, timeoutMs, pollIntervalMs);
++	if (published.error) return result(`Awaited result claim failed: ${published.error}`, true, completions, published.claims);
++
+ 	const relevantAttention = attention.filter((run) => initialAsyncIds.has(run.id));
+ 	const supervisorAttentionHint = relevantAttention.some(hasSupervisorTool)
+ 		? " Reply to any pending supervisor request. If subagent_supervisor({ action: \"pending\" }) is empty, check intercom({ action: \"pending\" }) because an external intercom tool may own the request."
+@@ -876,9 +937,10 @@ export async function waitForSubagents(
+ 				: `${initialAsyncIds.size} async run(s) and ${initialProviderIds.size} provider item(s)`;
+ 		const status = relevantAttention.length > 0 ? "attention required" : "done";
+ 		return result(
+-			`Waited ${elapsed} for ${scope}; ${status}.${outcome}${recoveryNote}${resumeGuidance}${attentionNote}${foregroundNote} Completion/control events have been observed; inspect status if a notification is not visible yet.`,
++			withClaimedResults(`Waited ${elapsed} for ${scope}; ${status}.${outcome}${recoveryNote}${resumeGuidance}${attentionNote}${foregroundNote} Completion/control events have been observed; inspect status if a notification is not visible yet.`, published.claims),
+ 			(deps.failOnFailedRuns === true && failedAsyncCount > 0) || (deps.failOnAttention === true && relevantAttention.length > 0),
+ 			completions,
++			published.claims,
+ 		);
+ 	}
+ 
+@@ -893,8 +955,9 @@ export async function waitForSubagents(
+ 		? `${relevantAttention.length} of ${initialCount} ${subject} need attention`
+ 		: `${finishedCount} of ${initialCount} ${subject} finished`;
+ 	return result(
+-		`Waited ${elapsed}; ${progress}.${outcome}${recoveryNote}${resumeGuidance}${attentionNote}${remainder} Relevant completion/control events have been observed; inspect status if a notification is not visible yet.`,
++		withClaimedResults(`Waited ${elapsed}; ${progress}.${outcome}${recoveryNote}${resumeGuidance}${attentionNote}${remainder} Relevant completion/control events have been observed; inspect status if a notification is not visible yet.`, published.claims),
+ 		(deps.failOnFailedRuns === true && failedAsyncCount > 0) || (deps.failOnAttention === true && relevantAttention.length > 0),
+ 		completions,
++		published.claims,
+ 	);
+ }
+diff --git a/src/runs/background/top-level-async.ts b/src/runs/background/top-level-async.ts
+index 08a7e77a..d1ca8e06 100644
+--- a/src/runs/background/top-level-async.ts
++++ b/src/runs/background/top-level-async.ts
+@@ -1,7 +1,10 @@
++import { forceHostAsync, hostOwnsResultDelivery, resolveDeliveryDisposition, type DeliveryDisposition } from "../../shared/monika-host.ts";
++
+ interface AsyncOverrideParams {
+ 	async?: boolean;
+ 	clarify?: boolean;
+ 	foregroundOnly?: boolean;
++	deliveryDisposition?: DeliveryDisposition;
+ }
+ 
+ export function applyForceTopLevelAsyncOverride<T extends AsyncOverrideParams>(
+@@ -9,6 +12,16 @@ export function applyForceTopLevelAsyncOverride<T extends AsyncOverrideParams>(
+ 	depth: number,
+ 	forceTopLevelAsync: boolean,
+ ): T {
+-	if (params.foregroundOnly || !(depth === 0 && forceTopLevelAsync)) return params;
++	// A delegated foreground call is an ownership boundary, not a forum leaf.
++	// Host force-async must never rewrite or detach it.
++	if (params.foregroundOnly) return params;
++	if (hostOwnsResultDelivery()) {
++		const deliveryDisposition = resolveDeliveryDisposition(params.deliveryDisposition);
++		const normalized = params.deliveryDisposition === deliveryDisposition ? params : { ...params, deliveryDisposition };
++		return forceHostAsync() || (depth === 0 && forceTopLevelAsync)
++			? { ...normalized, async: true, clarify: false }
++			: normalized;
++	}
++	if (!(depth === 0 && forceTopLevelAsync)) return params;
+ 	return { ...params, async: true, clarify: false };
+ }
+diff --git a/src/runs/background/wait-tool.ts b/src/runs/background/wait-tool.ts
+index 874e76ab..4269a113 100644
+--- a/src/runs/background/wait-tool.ts
++++ b/src/runs/background/wait-tool.ts
+@@ -6,6 +6,17 @@ import type { WaitSubscriptionManager } from "./wait-subscriptions.ts";
+ import { finalizeToolResult } from "../../extension/tool-result.ts";
+ import { registerPinnedTool } from "../../extension/declaration-pinning.ts";
+ import { waitToolName } from "../../shared/wait-tool-name.ts";
++import type { ResultClaimV1 } from "./result-claim.ts";
++
++export function sameCanonicalResultClaim(value: unknown, claim: ResultClaimV1): boolean {
++	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
++	const candidate = value as Partial<ResultClaimV1>;
++	return candidate.version === claim.version && candidate.kind === claim.kind
++		&& candidate.runId === claim.runId && candidate.runKey === claim.runKey
++		&& candidate.sessionId === claim.sessionId && candidate.deliveryDisposition === claim.deliveryDisposition
++		&& candidate.resultSha256 === claim.resultSha256 && candidate.resultSizeBytes === claim.resultSizeBytes
++		&& candidate.claimedAt === claim.claimedAt;
++}
+ 
+ export function registerWaitTool(
+ 	pi: ExtensionAPI,
+@@ -40,6 +51,16 @@ Timeout or a user message ends the wait without error; work keeps running.${enab
+ 				enabled,
+ 				hasPendingSupervisorRequest,
+ 				userInputSignal: userInput.signal,
++				publishClaim: (claim) => {
++					const find = () => ctx.sessionManager.getEntries().find((entry) => entry.type === "custom"
++						&& entry.customType === "pi-subagents.result-claim" && sameCanonicalResultClaim(entry.data, claim));
++					const existing = find();
++					if (existing) return existing.id;
++					pi.appendEntry("pi-subagents.result-claim", claim);
++					const appended = find();
++					if (!appended) throw new Error("Failed to publish canonical result-claim entry.");
++					return appended.id;
++				},
+ 				...(defaultTimeoutMs !== undefined ? { defaultTimeoutMs } : {}),
+ 				onUpdate,
+ 				...(subscriptions && ctx?.hasUI ? { subscribe: (input) => subscriptions.arm(input) } : {}),
+diff --git a/src/runs/foreground/subagent-executor.ts b/src/runs/foreground/subagent-executor.ts
+index 7e1ced23..6588678f 100644
+--- a/src/runs/foreground/subagent-executor.ts
++++ b/src/runs/foreground/subagent-executor.ts
+@@ -5,7 +5,7 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+ import { discoverAgents, discoverAgentsAll, findBlockingAgentDiagnostic, formatAvailableAgentLines, formatUnknownAgentError, resolveAgentName, suggestAgentName, unknownAgentDiagnosticContext, type AgentConfig, type AgentDiscoveryDiagnostic, type AgentScope, type UnknownAgentDiagnosticContext } from "../../agents/agents.ts";
+ import { getArtifactsDir, getProjectArtifactPackagingWarning, getProjectSubagentsDir, missingForkCopyNote } from "../../shared/artifacts.ts";
+-import { writeAtomicJson } from "../../shared/atomic-json.ts";
++import { writeAtomicJson, writePrivateAtomicJson } from "../../shared/atomic-json.ts";
+ import { createCapacityResilientJsonWriter } from "../../shared/capacity-resilient-json.ts";
+ import { reportSessionWarning } from "../../shared/session-warnings.ts";
+ import { resolveEffectiveThinking, toModelInfo, type ModelInfo } from "../../shared/model-info.ts";
+@@ -232,6 +232,7 @@ import {
+ import { deriveChildSessionName } from "../../shared/child-session-name.ts";
+ import { editDistance, hasSingleAdjacentTransposition } from "../../shared/edit-distance.ts";
+ import { waitToolName } from "../../shared/wait-tool-name.ts";
++import { hostIsDraining, hostLifecycleFields, hostOwnsResultDelivery, readRuntimeEpoch, resolveDeliveryDisposition, type DeliveryDisposition } from "../../shared/monika-host.ts";
+ 
+ const MUTATING_MANAGEMENT_ACTIONS = new Set(["command.yield", "command.cancel", "create", "update", "delete", "eject", "disable", "enable", "reset", "grant-spawn-budget", "watchdog.configure", "mission.create", "mission.update", "mission.resolve-decision", "mission.attach-run", "mission.close", "inspector.open", "inspector.close", "project.open", "project.close", "worktree.discard", "worktree.cleanup", "lane.recordMerge", "lane.recordSupersession", "refine", "refine.rollback", "dismiss", "schedule.create", "schedule.pause", "schedule.resume", "schedule.run", "schedule.run-due", "schedule.delete"]);
+ const DESTRUCTIVE_MANAGEMENT_ACTIONS = new Set(["command.cancel", "delete", "eject", "disable", "reset", "mission.close", "worktree.discard", "refine.rollback", "inspector.close", "project.close", "stop", "interrupt", "schedule.delete"]);
+@@ -376,6 +377,7 @@ export interface SubagentParamsLike {
+ 	/** Per-run intercom bridge config. It replaces the global config for this launch only. */
+ 	intercomBridge?: IntercomBridgeConfig;
+ 	async?: boolean;
++	deliveryDisposition?: DeliveryDisposition;
+ 	foregroundOnly?: boolean;
+ 	timeoutMs?: number;
+ 	maxRuntimeMs?: number;
+@@ -2201,6 +2203,7 @@ async function resumeAsyncRun(input: {
+ 		const normalized = normalizeSkillInput(input.params.skill);
+ 		const parentModel = input.parentModel;
+ 		const result = await executeAsyncChain(runId, compactOptional<Parameters<typeof executeAsyncChain>[1]>({
++			deliveryDisposition: input.params.deliveryDisposition,
+ 			chain,
+ 			task: workflowTask,
+ 			goal,
+@@ -2351,6 +2354,7 @@ async function resumeAsyncRun(input: {
+ 		? (target.source === "foreground" ? target.savedOutputPath : undefined) ?? resolveSingleOutputPath(inheritedOutput, input.requestCwd, effectiveCwd, revivalOutputBaseDir)
+ 		: undefined;
+ 	const result = await executeAsyncSingle(runId, compactOptional<Parameters<typeof executeAsyncSingle>[1]>({
++		deliveryDisposition: input.params.deliveryDisposition,
+ 		agent: target.agent,
+ 		task: buildRevivedAsyncTask(target as Parameters<typeof buildRevivedAsyncTask>[0], effectiveFollowUp),
+ 		goal: effectiveFollowUp,
+@@ -3703,6 +3707,7 @@ async function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
+ 		const launchRuleError = applyWatchdogLaunchRules({ cwd: effectiveCwd, agent: a.name, model: modelOverride ?? (parentModel && `${parentModel.provider}/${parentModel.id}`), warn: (violation) => deps.watchdog?.displayRuleWarning(violation) });
+ 		if (launchRuleError) return toExecutionErrorResult(params, new Error(launchRuleError), data.contextPolicy.contextSummary);
+ 		const asyncResult = await executeAsyncSingle(id, compactOptional<Parameters<typeof executeAsyncSingle>[1]>({
++			deliveryDisposition: params.deliveryDisposition,
+ 			toolCallId: data.toolCallId,
+ 			agent: params.agent!,
+ 			task: shouldForkAgent(contextPolicy, params.agent!) ? wrapForkTask(params.task ?? "") : (params.task ?? ""),
+@@ -5705,6 +5710,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+ 			const derivedObjective = previewAgent ? `Workflow: ${previewAgent}` : boundedScriptPreview;
+ 			const workflowDepth = checkSubagentDepth(deps.config.maxSubagentDepth, deps.childRuntime).depth;
+ 			const asyncWorkflow = requestParams.async !== false;
++			if (hostIsDraining()) return buildRequestedModeError(requestParams, "Agent host is draining; new subagent launches are disabled.");
+ 			const topLevelAsyncWorkflow = asyncWorkflow
+ 				&& workflowDepth === 0
+ 				&& !inheritedNestedRoute(deps)
+@@ -5790,6 +5796,8 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+ 				const eventsPath = path.join(asyncDir, "events.jsonl");
+ 				const startedAt = Date.now();
+ 				const currentSessionId = resolveCurrentSessionId(ctx.sessionManager);
++				const deliveryDisposition = resolveDeliveryDisposition(requestParams.deliveryDisposition);
++				const workflowProcessInstanceId = `workflow-${randomUUID()}`;
+ 				const workflowCapabilityCeiling = intersectSubagentCapabilityCeilings(requestParams.capabilityCeiling, resolveCurrentSubagentCapabilityCeiling(ctx.sessionManager.getSessionId() ?? undefined));
+ 				const completionOwnerId = deps.state.completionOwnerId ?? currentCompletionOwnerId();
+ 				deps.state.completionOwnerId = completionOwnerId;
+@@ -5820,6 +5828,11 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+ 				}
+ 				try {
+ 					fs.mkdirSync(asyncDir, { recursive: true });
++					if (hostOwnsResultDelivery() && currentSessionId) writePrivateAtomicJson(path.join(asyncDir, "launch.json"), {
++						...hostLifecycleFields("running", deliveryDisposition), runId: workflowRunId, sessionId: currentSessionId,
++						deliveryDisposition, asyncDir, mode: "workflow", state: "running", runnerProcessInstanceId: workflowProcessInstanceId,
++						processProofKind: "workflow", ...readRuntimeEpoch(), registeredAt: startedAt,
++					});
+ 					writeRunFanoutBudgetDescriptor(asyncDir, workflowFanoutBudget);
+ 					if (topLevelAsyncWorkflow) writeWorkflowLaunchRecord(DIRS.async, workflowRunId, workflowLaunchRecord(publicWorkflowLaunch ?? { source: "internal" }, workflowCwd, workflowScriptSourceDigest, currentSessionId, workflowCapabilityCeiling));
+ 					fs.mkdirSync(DIRS.results, { recursive: true });
+@@ -5834,7 +5847,10 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+ 				workflowCapacity?.markWorkflowStarted();
+ 				if (workflowCapacity) deps.state.activeAsyncCapacity = getActiveAsyncCapacitySnapshot(currentSessionId, resolveMaxActiveAsyncRunsPerSession(deps.config.maxActiveAsyncRunsPerSession), { liveWorkflowRunIds: new Set(deps.state.workflowControllers.keys()), abandonedSlotReleaseAfterMs: resolveAbandonedSlotReleaseAfterMs(deps.config.capacity?.abandonedSlotReleaseAfterMs) });
+ 				let status: AsyncStatus = {
++					...hostLifecycleFields("running", deliveryDisposition),
++					deliveryDisposition,
+ 					runId: workflowRunId,
++					...(hostOwnsResultDelivery() ? { asyncDir } : {}),
+ 					toolCallId,
+ 					sessionId: currentSessionId ?? undefined,
+ 					completionOwnerId,
+@@ -5846,7 +5862,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+ 					cwd: workflowCwd,
+ 					...(workflowSessionRoot ? { sessionRoot: workflowSessionRoot } : {}),
+ 					...(requestParams.scheduleOrigin ? { scheduleOrigin: requestParams.scheduleOrigin } : {}),
+-					...currentRecordedPid(),
++					...(hostOwnsResultDelivery() ? {} : currentRecordedPid()),
+ 					...(workflowCapabilityCeiling ? { admissionCapabilityCeiling: workflowCapabilityCeiling } : {}),
+ 					steps: [],
+ 					...(workflowPreflight ? { preflight: workflowPreflight } : {}),
+@@ -5943,6 +5959,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+ 				// index pinned at "running" after the result already says complete.
+ 				const persist = (options: { tolerateStatusWriteFailure?: boolean } = {}): void => {
+ 					if (persistClosed) return;
++					Object.assign(status, hostLifecycleFields(status.state, deliveryDisposition));
+ 					const liveJob = deps.state.asyncJobs.get(workflowRunId);
+ 					if (liveJob && (liveJob.status === "complete" || liveJob.status === "failed") && status.state !== "complete" && status.state !== "failed") return;
+ 					const workflowState = status.state === "complete" ? "completed" : status.state === "failed" || status.state === "rejected" ? "failed" : status.state === "paused" ? "paused" : status.state === "stopped" ? "stopped" : "running";
+@@ -5997,6 +6014,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+ 				};
+ 				const writeWorkflowResult = (payload: Record<string, unknown>): boolean => {
+ 					try {
++						payload = { ...payload, ...hostLifecycleFields(String(payload.state ?? "unknown"), deliveryDisposition), deliveryDisposition, asyncDir };
+ 						let resultPublished = false;
+ 						settleResultPublication = (published) => { resultPublished = published; };
+ 						pendingResultPublication = undefined;
+@@ -6046,12 +6064,13 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+ 				appendWorkflowEvent({ type: "subagent.workflow.started", ...(workflowArgsDigest ? { argsDigest: workflowArgsDigest } : {}) });
+ 				try {
+ 					deps.pi.events.emit(SUBAGENT_ASYNC_STARTED_EVENT, {
+-						lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
++						lifecycleArtifactVersion: hostOwnsResultDelivery() ? 5 : SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
++						deliveryDisposition,
+ 						id: workflowRunId,
+ 						asyncDir,
+ 						cwd: workflowCwd,
+ 						...(workflowSessionRoot ? { sessionRoot: workflowSessionRoot } : {}),
+-						pid: process.pid,
++						...(hostOwnsResultDelivery() ? {} : { pid: process.pid }),
+ 						sessionId: currentSessionId ?? undefined,
+ 						completionOwnerId,
+ 						mode: "workflow",
+diff --git a/src/shared/launch-contract.ts b/src/shared/launch-contract.ts
+index 52949916..a266fb27 100644
+--- a/src/shared/launch-contract.ts
++++ b/src/shared/launch-contract.ts
+@@ -85,6 +85,8 @@ export function agentDefinitionDigest(agent: AgentConfig): string {
+ 
+ export interface LaunchBindingInput {
+ 	definitionDigest: string;
++	/** Host delivery policy is launch identity in Monika-managed runtimes. */
++	deliveryDisposition?: import("./monika-host.ts").DeliveryDisposition;
+ 	/** Caller task; runtime acceptance/output task annotations are explicitly outside the preflight-known subset. */
+ 	task?: string;
+ 	model?: string;
+@@ -112,6 +114,7 @@ export function projectLaunchBinding(input: LaunchBindingInput): Record<string,
+ 	return {
+ 		version: LAUNCH_BINDING_PROJECTION_VERSION,
+ 		definitionDigest: input.definitionDigest,
++		deliveryDisposition: input.deliveryDisposition,
+ 		taskDigest: input.task === undefined ? undefined : stableJsonDigest(input.task),
+ 		model: input.model,
+ 		fast: input.fast,
+@@ -149,7 +152,7 @@ export type LaunchBindingIdentity =
+ 	| ({ definitionDigest: string } & LaunchBindingPromptMode);
+ 
+ export type LaunchBindingSource = LaunchBindingIdentity
+-	& Pick<LaunchBindingInput, "fast" | "thinking" | "skills" | "outputPath" | "outputMode" | "structuredOutputSchema" | "extensionBindings">
++	& Pick<LaunchBindingInput, "deliveryDisposition" | "fast" | "thinking" | "skills" | "outputPath" | "outputMode" | "structuredOutputSchema" | "extensionBindings">
+ 	& {
+ 		task: string;
+ 		model?: string;
+@@ -179,6 +182,7 @@ export function resolveLaunchBinding(source: LaunchBindingSource): LaunchBinding
+ 		definitionDigest: identity.definitionDigest,
+ 		launchContractDigest: launchBindingDigest({
+ 			...identity,
++			deliveryDisposition: source.deliveryDisposition,
+ 			task: source.task,
+ 			model: source.model,
+ 			fast: source.fast,
+diff --git a/src/shared/monika-host.ts b/src/shared/monika-host.ts
+new file mode 100644
+index 00000000..6455abf8
+--- /dev/null
++++ b/src/shared/monika-host.ts
+@@ -0,0 +1,85 @@
++import * as fs from "node:fs";
++import * as path from "node:path";
++
++export type DeliveryDisposition = "awaited" | "follow_up" | "silent";
++
++export const MONIKA_LIFECYCLE_ARTIFACT_VERSION = 5 as const;
++
++export function hostOwnsResultDelivery(): boolean {
++	return process.env.PI_SUBAGENTS_HOST_ACK_RESULTS === "1";
++}
++
++export function hostIsDraining(): boolean {
++	return process.env.PI_SUBAGENTS_HOST_DRAINING === "1";
++}
++
++export function forceHostAsync(): boolean {
++	return process.env.PI_SUBAGENTS_FORCE_ASYNC === "1";
++}
++
++export function resolveDeliveryDisposition(value?: unknown): DeliveryDisposition {
++	const candidate = value ?? process.env.PI_SUBAGENTS_DEFAULT_DELIVERY_DISPOSITION ?? "follow_up";
++	if (candidate === "awaited" || candidate === "follow_up" || candidate === "silent") return candidate;
++	throw new Error(`Invalid subagent delivery disposition '${String(candidate)}'.`);
++}
++
++export function configuredSessionRoot(parentSessionFile: string | null, fallback: () => string): string {
++	const configured = process.env.PI_SUBAGENT_SESSION_ROOT?.trim();
++	if (!configured) return fallback();
++	if (!path.isAbsolute(configured)) throw new Error("PI_SUBAGENT_SESSION_ROOT must be absolute.");
++	if (!parentSessionFile) return path.join(path.resolve(configured), "unbound");
++	return path.join(path.resolve(configured), path.basename(parentSessionFile, ".jsonl"));
++}
++
++export function readRuntimeEpoch(): { runtimeInstanceId?: string; runtimeCreatedAt?: number } {
++	const file = process.env.MONIKA_RUNTIME_INSTANCE_FILE?.trim();
++	if (!file) return {};
++	try {
++		const value = JSON.parse(fs.readFileSync(file, "utf8")) as { id?: unknown; createdAt?: unknown };
++		return typeof value.id === "string" && typeof value.createdAt === "number" && Number.isFinite(value.createdAt)
++			? { runtimeInstanceId: value.id, runtimeCreatedAt: value.createdAt }
++			: {};
++	} catch {
++		return {};
++	}
++}
++
++export function linuxProcessStartTicks(pid: number | undefined): string | undefined {
++	if (!pid || process.platform !== "linux") return undefined;
++	try {
++		const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
++		const close = stat.lastIndexOf(")");
++		return stat.slice(close + 2).trim().split(/\s+/)[19];
++	} catch {
++		return undefined;
++	}
++}
++
++type LifecycleState = "queued" | "running" | "complete" | "failed" | "partial" | "paused" | "stopped" | "rejected" | string;
++
++/** Explicit adapter from upstream lifecycle v3 states to agentd's lifecycle v5 schema. */
++export function hostLifecycleFields(state: LifecycleState, disposition: DeliveryDisposition): Record<string, unknown> {
++	if (!hostOwnsResultDelivery()) return {};
++	const active = state === "queued" || state === "running" || state === "registered" || state === "launching";
++	const succeeded = state === "complete" || state === "completed";
++	const interrupted = state === "paused" || state === "stopped";
++	return {
++		lifecycleArtifactVersion: MONIKA_LIFECYCLE_ARTIFACT_VERSION,
++		deliveryDisposition: disposition,
++		execution_state: active ? "active" : interrupted ? "interrupted" : "terminal",
++		outcome_state: active ? "pending" : succeeded ? "succeeded" : interrupted ? "interrupted" : state === "failed" || state === "partial" || state === "rejected" ? "failed" : "unknown",
++		effects_state: "unknown",
++		delivery_state: "pending",
++	};
++}
++
++export function hostWakeAllowed(disposition: DeliveryDisposition, asyncDir?: string): boolean {
++	if (disposition !== "follow_up" || hostIsDraining()) return false;
++	if (!hostOwnsResultDelivery() || !asyncDir) return true;
++	try {
++		const marker = fs.lstatSync(path.join(asyncDir, "host-cancellation.json"));
++		return !marker.isFile() || marker.isSymbolicLink();
++	} catch (error) {
++		return (error as NodeJS.ErrnoException).code === "ENOENT";
++	}
++}
+diff --git a/src/shared/types.ts b/src/shared/types.ts
+index d02a2dde..0f22dc96 100644
+--- a/src/shared/types.ts
++++ b/src/shared/types.ts
+@@ -635,7 +635,20 @@ export interface TimeoutRecoverySummary {
+ export type TimeoutRecoveryProjection = Pick<TimeoutRecoverySummary, "termination" | "changedFiles" | "truncated" | "recoveryNeeded" | "reason" | "reportStatus">;
+ 
+ export const SUBAGENT_LIFECYCLE_ARTIFACT_VERSION = 3;
+-export type SubagentLifecycleArtifactVersion = typeof SUBAGENT_LIFECYCLE_ARTIFACT_VERSION;
++/** Upstream persists v3; the Monika host adapter emits an explicit v5 projection. */
++export type SubagentLifecycleArtifactVersion = number;
++export type DeliveryDisposition = "awaited" | "follow_up" | "silent";
++export interface ResultClaimV1 {
++	version: 1;
++	kind: "pi-subagents.result-claim";
++	runId: string;
++	runKey: string;
++	sessionId: string;
++	deliveryDisposition: "awaited";
++	resultSha256: string;
++	resultSizeBytes: number;
++	claimedAt: number;
++}
+ 
+ export type ProcessTerminalReason =
+ 	| "observer-unavailable"
+@@ -1476,6 +1489,9 @@ export interface Details {
+ 	 * identity never reaches tool_result details.
+ 	 */
+ 	completions?: WaitCompletion[];
++	/** Exact digest-bound claims published only by an awaited bg_wait. */
++	resultClaims?: ResultClaimV1[];
++	deliveryDisposition?: DeliveryDisposition;
+ 	wait?: {
+ 		reason: "window_elapsed";
+ 		timedOut: true;
+@@ -1741,6 +1757,7 @@ export interface NestedRouteInfo {
+ 
+ export interface AsyncStartedEvent {
+ 	lifecycleArtifactVersion?: SubagentLifecycleArtifactVersion;
++	deliveryDisposition?: DeliveryDisposition;
+ 	id?: string;
+ 	asyncDir?: string;
+ 	/** Parent-resolved launch directory, used as a trusted artifact root while this session is live. */
+@@ -1953,7 +1970,14 @@ export interface AsyncStatus {
+ 	/** Exact reference returned by successful current workflow receipt publication. */
+ 	workflowReceiptPath?: string;
+ 	lifecycleArtifactVersion?: SubagentLifecycleArtifactVersion;
++	deliveryDisposition?: DeliveryDisposition;
++	execution_state?: "active" | "terminal" | "interrupted" | "uncertain" | "quarantined";
++	outcome_state?: "pending" | "succeeded" | "failed" | "interrupted" | "unknown";
++	effects_state?: "none" | "confirmed" | "unknown";
++	delivery_state?: "pending" | "settled" | "operator-resolved";
+ 	runId: string;
++	/** Canonical lifecycle directory in host-managed runtimes. */
++	asyncDir?: string;
+ 	/** Parent Pi process/window that owns local completion delivery. */
+ 	completionOwnerId?: string;
+ 	/** The Pi process behind `completionOwnerId`; once it is dead, the session that owns the run delivers it. */
+@@ -2951,7 +2975,9 @@ export function resolveTempScopeId(options?: {
+ 
+ const MAX_PARALLEL = 8;
+ const MAX_CONCURRENCY = 4;
+-const configuredTempRoot = process.env.PI_SUBAGENTS_TEMP_ROOT?.trim();
++// Monika exposes its durable lifecycle root under PI_SUBAGENT_RUNTIME_ROOT;
++// retain upstream PI_SUBAGENTS_TEMP_ROOT precedence for ordinary callers.
++const configuredTempRoot = process.env.PI_SUBAGENTS_TEMP_ROOT?.trim() || process.env.PI_SUBAGENT_RUNTIME_ROOT?.trim();
+ export const TEMP_ROOT_DIR = configuredTempRoot
+ 	? path.resolve(configuredTempRoot)
+ 	: path.join(os.tmpdir(), `pi-subagents-${resolveTempScopeId()}`);
+diff --git a/test/integration/top-level-async.test.ts b/test/integration/top-level-async.test.ts
+index fdadb1b3..8cb38927 100644
+--- a/test/integration/top-level-async.test.ts
++++ b/test/integration/top-level-async.test.ts
+@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
+ import { tryImport } from "../support/helpers.ts";
+ 
+ interface TopLevelAsyncModule {
+-	applyForceTopLevelAsyncOverride<T extends { async?: boolean; clarify?: boolean; foregroundOnly?: boolean }>(
++	applyForceTopLevelAsyncOverride<T extends { async?: boolean; clarify?: boolean; foregroundOnly?: boolean; deliveryDisposition?: "awaited" | "follow_up" | "silent" }>(
+ 		params: T,
+ 		depth: number,
+ 		forceTopLevelAsync: boolean,
+@@ -40,4 +40,34 @@ describe("force top-level async helper", { skip: !available ? "pi packages not a
+ 		const next = mod!.applyForceTopLevelAsyncOverride(params, 0, false);
+ 		assert.equal(next, params);
+ 	});
++
++	it("forces host-managed leaves at every depth without detaching delegated foreground calls", () => {
++		const previous = {
++			ack: process.env.PI_SUBAGENTS_HOST_ACK_RESULTS,
++			force: process.env.PI_SUBAGENTS_FORCE_ASYNC,
++			disposition: process.env.PI_SUBAGENTS_DEFAULT_DELIVERY_DISPOSITION,
++		};
++		process.env.PI_SUBAGENTS_HOST_ACK_RESULTS = "1";
++		process.env.PI_SUBAGENTS_FORCE_ASYNC = "1";
++		process.env.PI_SUBAGENTS_DEFAULT_DELIVERY_DISPOSITION = "awaited";
++		try {
++			assert.deepEqual(mod!.applyForceTopLevelAsyncOverride({ async: false, clarify: true }, 2, false), {
++				async: true,
++				clarify: false,
++				deliveryDisposition: "awaited",
++			});
++			const delegated = { async: false, clarify: false, foregroundOnly: true };
++			assert.equal(mod!.applyForceTopLevelAsyncOverride(delegated, 2, false), delegated);
++			assert.equal(delegated.foregroundOnly, true);
++			assert.equal(delegated.async, false);
++		} finally {
++			for (const [name, value] of Object.entries({
++				PI_SUBAGENTS_HOST_ACK_RESULTS: previous.ack,
++				PI_SUBAGENTS_FORCE_ASYNC: previous.force,
++				PI_SUBAGENTS_DEFAULT_DELIVERY_DISPOSITION: previous.disposition,
++			})) {
++				if (value === undefined) delete process.env[name]; else process.env[name] = value;
++			}
++		}
++	});
+ });
+diff --git a/test/unit/monika-launch-contract.test.ts b/test/unit/monika-launch-contract.test.ts
+new file mode 100644
+index 00000000..81277126
+--- /dev/null
++++ b/test/unit/monika-launch-contract.test.ts
+@@ -0,0 +1,64 @@
++import assert from "node:assert/strict";
++import { describe, it } from "node:test";
++import { resolveLaunchBinding } from "../../src/shared/launch-contract.ts";
++import type { AgentConfig } from "../../src/agents/agents.ts";
++
++const toolPlan = {
++	effectiveToolAllowlist: ["read"],
++	excludeTools: [],
++	extensionArgs: [],
++	effectiveMcpTools: [],
++};
++
++const common = {
++	task: "inspect the boundary",
++	model: "provider/model",
++	fast: false,
++	thinking: "low",
++	systemPrompt: "Be precise.",
++	toolPlan,
++};
++
++function digestForPersistedStep(deliveryDisposition?: "awaited" | "follow_up" | "silent"): string {
++	return resolveLaunchBinding({
++		definitionDigest: "a".repeat(64),
++		systemPromptMode: "replace",
++		inheritProjectContext: false,
++		inheritGlobalContext: false,
++		inheritSkills: false,
++		...common,
++		...(deliveryDisposition ? { deliveryDisposition } : {}),
++	}).launchContractDigest;
++}
++
++function digestForAgent(deliveryDisposition?: "awaited" | "follow_up" | "silent"): string {
++	const agent = {
++		name: "worker",
++		description: "test worker",
++		systemPromptMode: "replace",
++		inheritProjectContext: false,
++		inheritGlobalContext: false,
++		inheritSkills: false,
++	} as AgentConfig;
++	return resolveLaunchBinding({
++		agent,
++		...common,
++		...(deliveryDisposition ? { deliveryDisposition } : {}),
++	}).launchContractDigest;
++}
++
++describe("Monika delivery disposition launch binding", () => {
++	it("binds disposition for both agent and persisted chain-step identities", () => {
++		assert.notEqual(digestForAgent("awaited"), digestForAgent("follow_up"));
++		assert.notEqual(digestForPersistedStep("awaited"), digestForPersistedStep("follow_up"));
++		assert.equal(digestForAgent("awaited"), digestForAgent("awaited"));
++		assert.equal(digestForPersistedStep("silent"), digestForPersistedStep("silent"));
++	});
++
++	it("keeps the ordinary non-host projection unchanged when disposition is absent", () => {
++		assert.equal(digestForAgent(), digestForAgent());
++		assert.equal(digestForPersistedStep(), digestForPersistedStep());
++		assert.notEqual(digestForAgent(), digestForAgent("follow_up"));
++		assert.notEqual(digestForPersistedStep(), digestForPersistedStep("follow_up"));
++	});
++});
+diff --git a/test/unit/result-claim.test.ts b/test/unit/result-claim.test.ts
+new file mode 100644
+index 00000000..21f64cae
+--- /dev/null
++++ b/test/unit/result-claim.test.ts
+@@ -0,0 +1,59 @@
++import assert from "node:assert/strict";
++import { createHash } from "node:crypto";
++import * as fs from "node:fs";
++import * as os from "node:os";
++import * as path from "node:path";
++import { describe, it } from "node:test";
++import { AwaitedResultPendingError, claimAwaitedResult } from "../../src/runs/background/result-claim.ts";
++
++function writeJson(file: string, value: Record<string, unknown>): Buffer {
++	const bytes = Buffer.from(`${JSON.stringify(value)}\n`, "utf8");
++	fs.mkdirSync(path.dirname(file), { recursive: true });
++	fs.writeFileSync(file, bytes);
++	return bytes;
++}
++
++describe("awaited result claims", () => {
++	it("keeps paused and partial publications unclaimable, then claims exact final resumed bytes", () => {
++		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-awaited-result-claim-"));
++		try {
++			const runId = "run-claim-final";
++			const sessionId = "session-claim-final";
++			const asyncDir = path.join(root, "async-subagent-runs", runId);
++			const resultPath = path.join(root, "async-subagent-results", `${runId}.json`);
++			const identity = {
++				lifecycleArtifactVersion: 5,
++				runId,
++				sessionId,
++				asyncDir,
++				deliveryDisposition: "awaited",
++			};
++			writeJson(path.join(asyncDir, "launch.json"), { ...identity, state: "spawned", execution_state: "active", outcome_state: "pending" });
++
++			for (const state of ["paused", "partial"] as const) {
++				const execution_state = state === "paused" ? "interrupted" : "terminal";
++				const outcome_state = state === "paused" ? "interrupted" : "failed";
++				writeJson(path.join(asyncDir, "status.json"), { ...identity, state, execution_state, outcome_state });
++				writeJson(resultPath, { ...identity, state, execution_state, outcome_state, summary: `${state} bytes` });
++				assert.throws(
++					() => claimAwaitedResult({ asyncDir, runId, sessionId }),
++					(error) => error instanceof AwaitedResultPendingError && error.message.includes("not final"),
++				);
++				assert.equal(fs.existsSync(path.join(asyncDir, "result-claim.json")), false);
++			}
++
++			const final = { ...identity, state: "complete", execution_state: "terminal", outcome_state: "succeeded", summary: "exact resumed result" };
++			writeJson(path.join(asyncDir, "status.json"), final);
++			const finalBytes = writeJson(resultPath, final);
++			const claimed = claimAwaitedResult({ asyncDir, runId, sessionId, now: () => 1234 });
++			assert.equal(claimed.kind, "claimed");
++			if (claimed.kind !== "claimed") return;
++			assert.deepEqual(claimed.resultBytes, finalBytes);
++			assert.equal(claimed.claim.resultSha256, createHash("sha256").update(finalBytes).digest("hex"));
++			assert.equal(claimed.claim.resultSizeBytes, finalBytes.byteLength);
++			assert.equal(claimed.claim.claimedAt, 1234);
++		} finally {
++			fs.rmSync(root, { recursive: true, force: true });
++		}
++	});
++});

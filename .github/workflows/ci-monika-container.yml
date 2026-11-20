@@ -105,6 +105,9 @@ jobs:
       - name: Check request-local image retention
         run: node --test tests/image-context.test.mjs
 
+      - name: Check offline subagent candidate preparation
+        run: node --test tests/pi-subagents-candidate.test.mjs
+
       - name: Build Monika runtime image
         run: |
           docker build \
