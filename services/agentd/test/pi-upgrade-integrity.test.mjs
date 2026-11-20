@@ -3,9 +3,9 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { createAssistantMessageEventStream, Type } from '@earendil-works/pi-ai';
+import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import {
-  createAgentSessionFromServices, createAgentSessionServices, createReadTool,
+  createAgentSessionFromServices, createAgentSessionServices, createReadTool, createFindTool, createGrepTool,
   ModelRuntime, SessionManager, SettingsManager,
 } from '@earendil-works/pi-coding-agent';
 import { handlePiEvent } from '../src/pi-event-bridge.mjs';
@@ -124,7 +124,7 @@ test('real Pi loop defers extension notices past tool results and compacts befor
       agentsFilesOverride: () => ({ agentsFiles: [] }),
       extensionFactories: [(pi) => {
         pi.registerTool({ name: 'large_result', label: 'Large result', description: 'Fixture tool',
-          parameters: Type.Object({}),
+          parameters: { type: 'object', properties: {} },
           async execute() {
             pi.sendMessage({ customType: 'fixture-notice', content: 'context notice', display: false }, { triggerTurn: false });
             return { content: [{ type: 'text', text: 'x'.repeat(12000) }], details: {} };
@@ -165,4 +165,107 @@ test('real Pi loop defers extension notices past tool results and compacts befor
   assert.deepEqual(wire.filter((item) => item.event === 'turn_completed').map((item) => item.piEvent), ['agent_settled']);
   assert.ok(order.indexOf('request-2') < order.indexOf('agent_settled'));
   assert.equal(session.isIdle, true);
+});
+
+test('custom continuations get run context while startup is busy and settle canonically once', async (t) => {
+  const root = await temporary(t);
+  const modelRuntime = await ModelRuntime.create({
+    authPath: join(root, 'auth.json'), modelsPath: join(root, 'models.json'),
+    modelsStorePath: join(root, 'catalog.json'), allowModelNetwork: false,
+  });
+  const contexts = [];
+  modelRuntime.registerProvider('integrity-test', {
+    api: 'openai-completions', baseUrl: 'https://invalid.invalid', apiKey: 'fixture',
+    models: [{ id: 'fixture', name: 'Fixture', reasoning: false, input: ['text'],
+      contextWindow: 10000, maxTokens: 100, cost: usage.cost }],
+    streamSimple(_model, context) {
+      contexts.push(context);
+      const message = assistant([{ type: 'text', text: 'continued' }]);
+      const stream = createAssistantMessageEventStream();
+      stream.push({ type: 'start', partial: message });
+      stream.push({ type: 'done', reason: 'stop', message });
+      stream.end();
+      return stream;
+    },
+  });
+  let api;
+  let blockStart;
+  const starts = [];
+  const services = await createAgentSessionServices({
+    cwd: root, agentDir: root, modelRuntime,
+    settingsManager: SettingsManager.inMemory({ packages: [], compaction: { enabled: false }, retry: { enabled: false }, cacheWarming: 'off' }),
+    resourceLoaderOptions: {
+      noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true,
+      agentsFilesOverride: () => ({ agentsFiles: [] }),
+      extensionFactories: [pi => {
+        api = pi;
+        pi.on('before_agent_start', async (event, ctx) => {
+          if (blockStart) await blockStart();
+          starts.push({ messageType: event.messageType, hasPrompt: 'prompt' in event, idle: ctx.isIdle() });
+          return { systemPrompt: `${event.systemPrompt}\nRUN_CONTEXT_SENTINEL` };
+        });
+      }],
+    },
+  });
+  const manager = SessionManager.create(root, join(root, 'sessions'));
+  const { session } = await createAgentSessionFromServices({ services, sessionManager: manager,
+    model: modelRuntime.getModel('integrity-test', 'fixture'), thinkingLevel: 'off' });
+  t.after(() => session.dispose());
+  await session.bindExtensions({});
+  await session.prompt('first user task');
+  const wire = [];
+  const conv = { id: 'custom-fixture', current: null, session };
+  let settled;
+  const completed = new Promise(resolve => { settled = resolve; });
+  session.subscribe(event => {
+    handlePiEvent(conv, event, (_conv, name, data) => wire.push({ name, data }));
+    if (event.type === 'agent_settled') settled();
+  });
+  api.sendMessage({ customType: 'fixture-continuation', content: 'delegate completed', display: false }, { triggerTurn: true });
+  await completed;
+  assert.deepEqual(starts, [
+    { messageType: 'user', hasPrompt: true, idle: false },
+    { messageType: 'custom', hasPrompt: false, idle: false },
+  ]);
+  assert.equal(contexts.length, 2);
+  assert.ok(contexts.every(context => JSON.stringify(context).includes('RUN_CONTEXT_SENTINEL')));
+  assert.equal(manager.getBranch().filter(entry => entry.customType === 'fixture-continuation').length, 1);
+  assert.equal(wire.filter(event => event.name === 'turn_completed').length, 1);
+  assert.equal(session.isIdle, true);
+
+  let entered, release;
+  const starting = new Promise(resolve => { entered = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  blockStart = async () => { entered(); await gate; };
+  const prompt = session.prompt('cancel during asynchronous setup');
+  await starting;
+  assert.equal(session.isIdle, false);
+  const aborted = session.abort();
+  release();
+  await Promise.all([prompt, aborted]);
+  assert.equal(contexts.length, 2, 'aborted setup must not start another provider request');
+  assert.equal(session.isIdle, true);
+});
+
+test('local find and grep use search-root-relative globs', async (t) => {
+  const root = await temporary(t);
+  for (const file of ['src/a.ts', 'src/deep/b.ts', 'pkg/src/c.ts']) {
+    await mkdir(join(root, file, '..'), { recursive: true });
+    await writeFile(join(root, file), 'needle\n');
+  }
+  const find = createFindTool(root);
+  for (const [pattern, expected] of [
+    ['src/*.ts', ['src/a.ts']], ['./src/*.ts', ['src/a.ts']],
+    ['**/src/*.ts', ['pkg/src/c.ts', 'src/a.ts']],
+    ['*.ts', ['pkg/src/c.ts', 'src/a.ts', 'src/deep/b.ts']],
+  ]) {
+    const result = await find.execute('find', { pattern, path: root });
+    assert.deepEqual(result.content[0].text.trim().split('\n').sort(), expected);
+  }
+  const grep = createGrepTool(root);
+  for (const glob of ['src/*.ts', './src/*.ts']) {
+    const result = await grep.execute('grep', { pattern: 'needle', path: root, glob });
+    assert.match(result.content[0].text, /src\/a.ts/);
+    assert.doesNotMatch(result.content[0].text, /pkg\/src|deep\/b.ts/);
+  }
 });

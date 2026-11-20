@@ -7,7 +7,16 @@ persona injection, memory retrieval, entity observations, topic routing, and the
 
 ### System Prompt Assembly
 
-On every turn (`before_agent_start`), the extension builds the system prompt addon:
+On every run (`before_agent_start`), including Pi's custom-message continuations,
+the extension builds the system prompt addon. User events supply `prompt`;
+custom events supply `message.content`. Both route topics from their text, but
+only a user prompt can initiate first-user memory enrichment. Custom continuations
+still receive persona, pinned memory and previously cached enrichment; they do
+not consume the first-user enrichment opportunity. Child seams likewise retain
+their stable persona or specialist boundary on custom runs, without acquiring
+parent memory lifecycle hooks.
+
+The addon includes:
 
 1. **Persona** — SOUL.md + STYLE.md + REGISTER.md + SLEEP.md
 2. **Current Context** — WAKE.md (orientation from last sleep cycle)

@@ -1,3 +1,4 @@
+import { runContext } from "./session-utils.js";
 import { buildSpecialistChildContext, registerChildAutoCompaction } from "./child-context.js";
 
 const SPECIALIST_MEMORY_BOUNDARY = "This specialist has no durable-memory role. Do not access memstore, its socket or database, stateful-memory files, or memory lifecycle through shell or filesystem tools.";
@@ -7,7 +8,7 @@ const SPECIALIST_MEMORY_BOUNDARY = "This specialist has no durable-memory role. 
 export default function specialistChildContext(pi) {
   pi.on("before_agent_start", async (event, ctx) => {
     const addendum = await buildSpecialistChildContext({
-      query: event.prompt,
+      query: runContext(event).query,
       cwd: ctx.cwd,
     });
     return {

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { createAssistantMessageEventStream, Type } from '@earendil-works/pi-ai';
+import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import { createAgentSessionServices, createAgentSessionFromServices, ModelRuntime, SessionManager, SettingsManager } from '@earendil-works/pi-coding-agent';
 import { handlePiEvent } from '../src/pi-event-bridge.mjs';
 
@@ -35,9 +35,9 @@ async function fixture(t, scripts, { block = false, active = true, dataExecute }
   const services = await createAgentSessionServices({ cwd: root, agentDir: join(root, 'agent'), modelRuntime, settingsManager,
     resourceLoaderOptions: { noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true,
       agentsFilesOverride: () => ({ agentsFiles: [] }), additionalExtensionPaths: [extension], extensionFactories: [pi => {
-        pi.registerTool({ name: 'fixture_data', label: 'Fixture', description: 'Return structured fixture', parameters: Type.Object({ token: Type.Optional(Type.String()) }), outputSchema: Type.Object({ count: Type.Number() }),
+        pi.registerTool({ name: 'fixture_data', label: 'Fixture', description: 'Return structured fixture', parameters: { type: 'object', properties: { token: { type: 'string' } } }, outputSchema: { type: 'object', properties: { count: { type: 'number' } }, required: ['count'] },
           async execute(...args) { executions++; if (dataExecute) return dataExecute(...args); return { content: [{ type: 'text', text: 'PRIVATE_INTERMEDIATE_RESULT' }], structuredContent: { count: 7 }, details: { private: 'PRIVATE_INTERMEDIATE_DETAILS' } }; } });
-        pi.registerTool({ name: 'subagent', label: 'Control', description: 'Must not execute nested', parameters: Type.Object({}), async execute() { throw Error('CONTROL_EXECUTED'); } });
+        pi.registerTool({ name: 'subagent', label: 'Control', description: 'Must not execute nested', parameters: { type: 'object', properties: {} }, async execute() { throw Error('CONTROL_EXECUTED'); } });
         if (block) pi.on('tool_call', event => event.toolName === 'fixture_data' ? { block: true, reason: 'fixture blocked' } : undefined);
       }] } });
   assert.deepEqual(services.resourceLoader.getExtensions().errors, []);

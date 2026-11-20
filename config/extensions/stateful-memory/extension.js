@@ -5,7 +5,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 
 import { loadConfig } from "./config.js";
 import { MemoryStore, slugifyKeywords, renderEntityContext, updateRecencyIndex } from "./memory-store.js";
-import { buildTranscriptFromEntries, extractText, readSessionJsonl } from "./session-utils.js";
+import { buildTranscriptFromEntries, extractText, readSessionJsonl, runContext } from "./session-utils.js";
 import { runSleepCycle } from "./memory-sleep.js";
 // memory-summary.js removed — session transcripts written directly to memstore
 import { buildMemoryInstructions, buildMemorySection } from "./memory-prompt.js";
@@ -506,9 +506,10 @@ export default function (pi) {
   pi.on("before_agent_start", async (event, ctx) => {
     await ensureSessionState(ctx);
 
-    // Score against current user message + previous assistant message
+    // Score against run-trigger text + previous assistant message
     const lastAssistantMsg = getLastAssistantMessage(ctx);
-    const combinedQuery = [event.prompt, lastAssistantMsg].filter(Boolean).join("\n");
+    const { query, userPrompt } = runContext(event);
+    const combinedQuery = [query, lastAssistantMsg].filter(Boolean).join("\n");
 
     let [addon, topicSelection] = await Promise.all([
       buildSystemPromptAddon(),
@@ -523,7 +524,7 @@ export default function (pi) {
     ]);
 
     // First-message enrichment: search memstore for relevant context
-    if (!sessionEnriched && event.prompt?.trim()) {
+    if (!sessionEnriched && userPrompt?.trim()) {
       if (ctx.hasUI) ctx.ui.setStatus("stateful-memory-enrich", "Enriching memory...");
 
       // Check queue before committing to a memstore search
@@ -550,11 +551,11 @@ export default function (pi) {
         try {
           await ensureMemstore();
           const [sessionResults, observationResults] = await Promise.all([
-            memstoreClient.search(event.prompt, { limit: 12 }).catch((err) => {
+            memstoreClient.search(userPrompt, { limit: 12 }).catch((err) => {
               console.error("[stateful-memory] session enrichment search failed:", err.message);
               return { entries: [] };
             }),
-            memstoreClient.searchObservations(event.prompt, {
+            memstoreClient.searchObservations(userPrompt, {
               limit: config.recallObservationResults ?? 3,
             }).catch((err) => {
               console.error("[stateful-memory] observation enrichment search failed:", err.message);

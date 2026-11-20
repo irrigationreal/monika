@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -71,6 +71,13 @@ async function startAgentd(root, port) {
     path.join(root, 'forks'),
     path.join(root, 'creations'),
   ]) await mkdir(directory, { recursive: true });
+  // Explicit credentialless provider: new built-in catalog defaults may be
+  // usable without credentials. Never depend on that selection or call a provider.
+  await writeFile(path.join(agentDir, 'models.json'), JSON.stringify({ providers: {
+    'preflight-fixture': { api: 'openai-completions', baseUrl: 'https://invalid.invalid/v1',
+      models: [{ id: 'no-auth', name: 'No auth', reasoning: false, input: ['text'],
+        contextWindow: 4096, maxTokens: 100, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] },
+  } }));
   const child = spawn(process.execPath, ['src/server.mjs'], {
     cwd: new URL('..', import.meta.url),
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -121,7 +128,7 @@ test('message route returns a marked rejection when the SDK omits preflight call
   const createdResponse = await fetch(`http://127.0.0.1:${port}/v1/conversations`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ cwd: root }),
+    body: JSON.stringify({ cwd: root, model: 'preflight-fixture/no-auth' }),
   });
   assert.equal(createdResponse.status, 200);
   const created = await createdResponse.json();
@@ -137,5 +144,5 @@ test('message route returns a marked rejection when the SDK omits preflight call
 
   assert.equal(response.status, 500);
   assert.equal(body.dispatch_acceptance, DISPATCH_NOT_ACCEPTED);
-  assert.match(body.message, /model|API key/i);
+  assert.match(body.message, /API key|credentials/i);
 });

@@ -1,6 +1,6 @@
 # Codemode
 
-Monika exposes Pi 1.1.0's native codemode alongside ordinary tools in parent CLI
+Monika exposes Pi 1.6.0's native codemode alongside ordinary tools in parent CLI
 and agentd sessions. Use it to batch independent reads/searches, chain predictable
 tool calls, or filter intermediate results before returning useful evidence to the
 model. Simple calls should remain direct; reasoning, creative judgment and durable
@@ -54,6 +54,11 @@ Monika imposes these bounds around the native executor:
 - 131,072 source characters;
 - at most 64 nested tool calls, with at most eight in flight per script;
 - Pi's native 256 MiB VM limit and native output/store limits also apply.
+
+Pi queues scripts when its native workers are occupied (two by default, process-wide).
+The script deadline includes that wait; per-script call concurrency is a separate
+bound. No worker-limit increase is configured. An `@options` directive anywhere
+except the first line is rejected before execution.
 
 An optional first line may request smaller bounds or raise them within the maxima:
 

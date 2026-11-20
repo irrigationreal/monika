@@ -150,3 +150,36 @@ test("remote find passes glob positionally, handles no-match, and bounds product
   assert.equal(found.stdout.trim().split("\n").length, 2);
   assert.equal(run(REMOTE_FIND_SCRIPT, [root, "*.none", 2, 1024, ""], "no-match").status, 0);
 });
+
+test('real remote find globs are search-root-relative like Pi 1.6 local find', () => {
+  const search = path.join(root, 'glob-parity');
+  for (const file of ['src/a.ts', 'src/deep/b.ts', 'pkg/src/c.ts']) {
+    mkdirSync(path.dirname(path.join(search, file)), { recursive: true });
+    writeFileSync(path.join(search, file), 'fixture');
+  }
+  for (const [pattern, expected] of [
+    ['src/*.ts', ['src/a.ts']],
+    ['./src/*.ts', ['src/a.ts']],
+    ['**/src/*.ts', ['pkg/src/c.ts', 'src/a.ts']],
+    ['*.ts', ['pkg/src/c.ts', 'src/a.ts', 'src/deep/b.ts']],
+  ]) {
+    const result = run(REMOTE_FIND_SCRIPT, [search, pattern, 20, 4096, ''], '', undefined, { PATH: process.env.PATH });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(result.stdout.trim().split('\n').sort(), expected, pattern);
+  }
+});
+
+test('real remote grep globs are relative to the explicit directory in both SSH modes', () => {
+  const search = path.join(root, 'grep-glob-parity');
+  mkdirSync(path.join(search, 'src'), { recursive: true });
+  writeFileSync(path.join(search, 'src', 'a.ts'), 'needle\n');
+  writeFileSync(path.join(search, 'other.ts'), 'needle\n');
+  for (const lockedRoot of ['', search]) {
+    for (const glob of ['src/*.ts', './src/*.ts', '!./src/*.ts']) {
+      const result = run(REMOTE_GREP_SCRIPT, [0, 0, glob, 'needle', search, 0, 20, 4096, lockedRoot], '', undefined, { PATH: process.env.PATH });
+      assert.equal(result.status, 0, result.stderr);
+      const matches = result.stdout.trim().split('\n').map(line => JSON.parse(line)).filter(event => event.type === 'match');
+      assert.deepEqual(matches.map(event => event.data.path.text.replace(/^\.\//, '')), glob.startsWith('!') ? ['other.ts'] : ['src/a.ts'], `${glob} locked=${Boolean(lockedRoot)}`);
+    }
+  }
+});

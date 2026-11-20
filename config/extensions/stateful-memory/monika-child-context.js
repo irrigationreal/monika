@@ -1,3 +1,4 @@
+import { runContext } from "./session-utils.js";
 import { buildMonikaChildContext, registerChildAutoCompaction } from "./child-context.js";
 import { registerReadonlyRecallTools } from "./readonly-recall.js";
 
@@ -8,7 +9,7 @@ export default function monikaChildContext(pi) {
   registerReadonlyRecallTools(pi);
   pi.on("before_agent_start", async (event, ctx) => {
     const addendum = await buildMonikaChildContext({
-      query: event.prompt,
+      query: runContext(event).query,
       cwd: ctx.cwd,
     });
     return { systemPrompt: `${event.systemPrompt}\n\n${addendum}`.trim() };
