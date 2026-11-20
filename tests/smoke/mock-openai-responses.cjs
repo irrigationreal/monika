@@ -59,7 +59,7 @@ const server = http.createServer((req, res) => {
         .filter((tool) => tool.type === 'function' && typeof tool.name === 'string')
         .map((tool) => tool.name),
     );
-    const requiredTools = ['pi_run', 'browser', 'web_search', 'generate_image', 'subagent', 'bg_wait', 'subagent_supervisor', 'recall'];
+    const requiredTools = ['pi_run', 'browser', 'web_search', 'generate_image', 'subagent', 'subagent_wait', 'subagent_supervisor', 'recall'];
     const missingTools = requiredTools.filter((name) => !functionToolNames.has(name));
     if (!(body.tools ?? []).some(tool => tool.name === 'codemode')) missingTools.push('codemode');
     if (missingTools.length > 0) {
