@@ -1,74 +1,86 @@
 #!/bin/sh
 set -eu
 
-# This is intentionally a local, offline preparation step. It never clones,
-# fetches, resolves a tag, installs dependencies, or changes /opt/pi-subagents.
-# The source checkout must have been reviewed and pinned by the caller.
+# Offline source export only: no fetch, dependency installation, or activation.
 readonly expected_commit='533033f0e906e85fdb0e909ce27a7c499ffb6485'
 readonly expected_tree='d6c8cf1dbf40704d3d5f8b0530908e9f6aa6afce'
 readonly expected_version='0.89.1'
 readonly expected_package_lock_sha256='5fc39baec198a9b58887e7fabefed9dc8a4df7dcbf42839992263b9a1639776b'
 readonly expected_package_sha256='4e325c3009651c542c3243a7c5525230c68cbb9790b5cc6c0f6e548848bb8d57'
 
-usage() {
-  echo "usage: $0 <reviewed-source-checkout> <candidate-destination>" >&2
-  echo "copies only the verified upstream source; production installation is out of scope" >&2
-}
-
 if [ "$#" -ne 2 ]; then
-  usage
+  echo "usage: $0 <reviewed-source-checkout> <new-candidate-directory>" >&2
   exit 2
 fi
 
 source=$(realpath "$1")
-destination=$2
-if [ ! -d "$source" ]; then
-  echo "source checkout is not a directory: $source" >&2
-  exit 1
-fi
-if [ -e "$destination" ]; then
+parent=$(realpath "$(dirname "$2")")
+test -d "$source" && test -d "$parent"
+destination="$parent/$(basename "$2")"
+case "$destination" in "$source"|"$source"/*|*/.|*/..) echo 'destination must be outside the source checkout' >&2; exit 1;; esac
+if [ -e "$destination" ] || [ -L "$destination" ]; then
   echo "candidate destination already exists: $destination" >&2
   exit 1
 fi
 
-# No network operation is possible here: all git reads are against the supplied
-# checkout. Reject dirty source so the object and copied tree are identical.
-test -d "$source/.git" -o -f "$source/.git"
+# Clean-checkout diagnostics are useful, but export the object itself: ignored
+# files, assume-unchanged edits and concurrent worktree changes cannot enter it.
 test -z "$(git -C "$source" status --porcelain --untracked-files=all)"
 test "$(git -C "$source" rev-parse --verify HEAD)" = "$expected_commit"
 test "$(git -C "$source" rev-parse 'HEAD^{tree}')" = "$expected_tree"
-
-printf '%s  %s\n' "$expected_package_lock_sha256" "$source/package-lock.json" | sha256sum --check --strict -
-printf '%s  %s\n' "$expected_package_sha256" "$source/package.json" | sha256sum --check --strict -
-
-node - "$source/package.json" "$source/package-lock.json" "$expected_version" <<'NODE'
+staging=$(mktemp -d "$parent/.pi-subagents-candidate.XXXXXXXX")
+trap 'rm -rf "$staging"' EXIT
+trap 'exit 1' HUP INT TERM
+mkdir "$staging/tree"
+# A temporary archive avoids POSIX sh pipelines masking a failed git command.
+git -C "$source" archive --format=tar "$expected_commit" > "$staging/source.tar"
+tar -xf "$staging/source.tar" -C "$staging/tree"
+printf '%s  %s\n' "$expected_package_lock_sha256" "$staging/tree/package-lock.json" \
+  "$expected_package_sha256" "$staging/tree/package.json" | sha256sum --check --strict -
+node - "$staging/tree/package.json" "$staging/tree/package-lock.json" "$expected_version" <<'NODE'
 const fs = require('node:fs');
-const [packagePath, lockPath, expectedVersion] = process.argv.slice(2);
+const [packagePath, lockPath, version] = process.argv.slice(2);
 const manifest = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
 const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
-if (manifest.name !== 'pi-subagents' || manifest.version !== expectedVersion) {
-  throw new Error(`Unexpected package identity: ${manifest.name}@${manifest.version}`);
-}
-if (lock.lockfileVersion !== 3 || lock.packages?.['']?.name !== 'pi-subagents'
-    || lock.packages?.['']?.version !== expectedVersion) {
-  throw new Error('Unexpected pi-subagents lockfile identity');
-}
+if (manifest.name !== 'pi-subagents' || manifest.version !== version
+    || lock.lockfileVersion !== 3 || lock.packages?.['']?.name !== manifest.name
+    || lock.packages?.['']?.version !== version) throw new Error('Unexpected candidate package identity');
 NODE
-
-mkdir -p "$(dirname "$destination")"
-# Export the verified Git object, not the working directory: ignored files,
-# local dependencies, and concurrent worktree edits must never enter a candidate.
-# Use a file rather than a pipeline so either archive/extraction failure is fatal
-# even under POSIX sh, which has no portable pipefail.
-archive=$(mktemp)
-trap 'rm -f "$archive"' EXIT HUP INT TERM
-git -C "$source" archive --format=tar "$expected_commit" > "$archive"
-mkdir "$destination"
-tar -xf "$archive" -C "$destination"
-rm -f "$archive"
-trap - EXIT HUP INT TERM
-
-cat > "$destination/CANDIDATE_SOURCE.json" <<EOF
+# git archive can honor local export attributes. Verify every resulting blob,
+# mode and name against the object before publishing any attestation.
+node - "$source" "$expected_commit" "$staging/tree" <<'NODE'
+const fs = require('node:fs');
+const path = require('node:path');
+const { execFileSync } = require('node:child_process');
+const { createHash } = require('node:crypto');
+const [source, commit, tree] = process.argv.slice(2);
+const entries = execFileSync('git', ['-C', source, 'ls-tree', '-rz', commit], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }).split('\0').filter(Boolean);
+const expected = new Set();
+for (const entry of entries) {
+  const match = /^(\d+) blob ([a-f0-9]+)\t([\s\S]+)$/.exec(entry);
+  if (!match) throw new Error('Unsupported candidate Git tree entry');
+  const [, mode, oid, name] = match;
+  const file = path.join(tree, name);
+  const stat = fs.lstatSync(file);
+  if (mode === '120000' ? !stat.isSymbolicLink() : !stat.isFile()) throw new Error(`Candidate type mismatch: ${name}`);
+  const bytes = mode === '120000' ? Buffer.from(fs.readlinkSync(file)) : fs.readFileSync(file);
+  const hash = createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
+  if (hash !== oid || (mode !== '120000' && Boolean(stat.mode & 0o111) !== (mode === '100755'))) throw new Error(`Candidate blob/mode mismatch: ${name}`);
+  expected.add(name);
+}
+function visit(directory, prefix = '') {
+  for (const item of fs.readdirSync(directory, { withFileTypes: true })) {
+    const name = prefix + item.name;
+    if (item.isDirectory()) visit(path.join(directory, item.name), name + '/');
+    else if (!expected.delete(name)) throw new Error(`Unexpected candidate file: ${name}`);
+  }
+}
+visit(tree);
+if (expected.size) throw new Error('Candidate tree is incomplete');
+NODE
+# This sidecar is the only addition to the exported tree. Consumers comparing
+# its contents with gitTree must exclude CANDIDATE_SOURCE.json.
+cat > "$staging/tree/CANDIDATE_SOURCE.json" <<EOF
 {
   "name": "pi-subagents",
   "version": "$expected_version",
@@ -81,12 +93,11 @@ cat > "$destination/CANDIDATE_SOURCE.json" <<EOF
   "productionInstall": false
 }
 EOF
-
-# Verify the copy after writing its attestation. This catches a partial copy
-# without claiming that dependencies or the Monika patch have been installed.
-test "$(sha256sum "$destination/package.json" | awk '{print $1}')" = "$expected_package_sha256"
-test "$(sha256sum "$destination/package-lock.json" | awk '{print $1}')" = "$expected_package_lock_sha256"
-test -f "$destination/CANDIDATE_SOURCE.json"
-test ! -e "$destination/node_modules"
-test ! -e "$destination/.git"
+# GNU mv -T never nests inside an existing destination; -n never replaces it.
+# A concurrent destination leaves the staging tree in place: report failure.
+mv -T -n "$staging/tree" "$destination"
+if [ -e "$staging/tree" ]; then
+  echo "candidate destination appeared during preparation: $destination" >&2
+  exit 1
+fi
 printf 'prepared verified pi-subagents %s at %s\n' "$expected_version" "$destination"

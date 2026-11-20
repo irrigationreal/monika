@@ -106,7 +106,13 @@ jobs:
         run: node --test tests/image-context.test.mjs
 
       - name: Check offline subagent candidate preparation
-        run: node --test tests/pi-subagents-candidate.test.mjs
+        shell: bash
+        run: |
+          SOURCE="$RUNNER_TEMP/pi-subagents-candidate-source"
+          git init --quiet "$SOURCE"
+          git -C "$SOURCE" fetch --quiet --depth=1 https://github.com/nicobailon/pi-subagents.git 533033f0e906e85fdb0e909ce27a7c499ffb6485
+          git -C "$SOURCE" checkout --quiet --detach FETCH_HEAD
+          MONIKA_SUBAGENTS_CANDIDATE_SOURCE="$SOURCE" node --test tests/pi-subagents-candidate.test.mjs
 
       - name: Build Monika runtime image
         run: |

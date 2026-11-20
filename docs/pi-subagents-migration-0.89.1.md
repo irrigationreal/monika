@@ -2,8 +2,7 @@
 
 **Status: experimental preparation only.** Monika production still installs the
 reviewed and patched **0.37.2** source from `scripts/install-pi-subagents`.
-This document records the first migration milestone; it does not authorize an
-image change, runtime installation, or live restart.
+This document records the first migration milestone; it does not switch the image pin, install a runtime, or restart live services.
 
 ## Candidate preparation
 
@@ -26,10 +25,13 @@ scripts/prepare-pi-subagents-candidate \
 
 The command never fetches, resolves a mutable branch/tag, runs npm, installs
 production dependencies, writes `/opt/pi-subagents`, or changes runtime state.
-It copies a dependency-free source candidate and writes
+It exports the pinned Git object (not working-directory bytes) and writes
 `CANDIDATE_SOURCE.json`. The source checkout is expected to come from a
-separately reviewed clone or archive; the script itself performs no network
-operation.
+separately reviewed Git clone; the script itself performs no network operation.
+The destination parent must already exist, the destination must be new and
+outside the source, and failed extraction leaves no published candidate.
+`CANDIDATE_SOURCE.json` is the only added file; exclude it when comparing the
+export with the upstream tree.
 
 ## Three-way compatibility inventory
 
@@ -45,8 +47,9 @@ The inventory compares upstream 0.37.2, Monika's 0.37.2 patch, and upstream
   and behavior.
 
 Every file changed by `config/pi-subagents-0.37.2.patch` is listed below.
-References are upstream 0.89.1 paths/symbol families, not claims that the local
-patch can be applied textually.
+The first column names the old patch paths, including removed upstream files
+and Monika-added files. The evidence column names their replacements where
+applicable; these are not claims that the patch applies textually.
 
 | Patched file | Disposition | Evidence and migration intent |
 |---|---|---|
@@ -65,49 +68,49 @@ patch can be applied textually.
 | `src/runs/background/async-status.ts` | adapt | Use upstream receipts/status while preserving agentd execution/outcome/effects/delivery projections. |
 | `src/runs/background/control-channel.ts` | adapt | Port cancellation/control records to changed upstream run identities; agentd remains cancellation authority. |
 | `src/runs/background/notify.ts` | adapt | Reconcile newer completion notices with canonical parent-session provenance; no fabricated public wake. |
-| `src/runs/background/result-claim.ts` | retain | Monika's exact identity/digest-bound result claim is an agentd custody contract, not a UI feature. |
+| `src/runs/background/result-claim.ts` | retain | Monika-added; no upstream counterpart. Exact identity/digest-bound claims remain an agentd custody contract. |
 | `src/runs/background/result-watcher.ts` | adapt | Incorporate upstream unreadable-status and runner-death fixes without treating missing state as absence. |
 | `src/runs/background/scheduled-runs.ts` | remove | Scheduled package runs remain outside Monika's current causal descendant and Stop Robot contract; revisit separately. |
 | `src/runs/background/subagent-runner.ts` | adapt | Reconcile native session runner, launcher and artifact behavior with container roots and effects tracking. |
 | `src/runs/background/subagent-wait.ts` | adapt | Migrate the implementation to upstream's single configurable wait tool; preserve historical result identity and claims. |
 | `src/runs/background/top-level-async.ts` | adapt | Preserve agentd forced async and explicit delivery dispositions across upstream workflow lifecycle. |
 | `src/runs/background/wait-tool.ts` | adapt | Prefer upstream `bg_wait`; accept historical `subagent_wait` records/alias during migration. |
-| `src/runs/foreground/chain-execution.ts` | adapt | Upstream workflow chains changed; retain target inheritance and no cross-topic session ownership. |
+| `src/runs/foreground/chain-execution.ts` | adapt | Removed upstream. Re-home target inheritance in `src/runs/foreground/subagent-executor.ts` and `src/workflows/`; do not restore the old chain engine. |
 | `src/runs/foreground/execution.ts` | adapt | Reapply hard-kill/exit and target checks at the new foreground executor seam. |
 | `src/runs/foreground/subagent-executor.ts` | adapt | Port launch contract and context/capability ceilings; do not bypass agentd for forum-originated work. |
 | `src/runs/shared/dynamic-fanout.ts` | adapt | Test structured dynamic fanout through durable nested run keys and bounded concurrency. |
-| `src/runs/shared/execution-target.ts` | retain | Named local/SSH target policy is Monika-specific; upstream machine support cannot infer relocation or fall back locally. |
+| `src/runs/shared/execution-target.ts` | retain | Monika-added; no upstream counterpart. Named local/SSH policy cannot infer relocation or fall back locally. |
 | `src/runs/shared/parallel-utils.ts` | superseded | Prefer upstream parallel workflow primitives, adding only bounded agentd identity/provenance adapters. |
-| `src/runs/shared/pi-args.ts` | adapt | New runner/standalone compatibility needs validation against image-owned Pi 1.6.0 npm installation. |
+| `src/runs/shared/pi-args.ts` | adapt | Removed upstream. Re-home child environment isolation and invocation checks in `src/runs/shared/pi-spawn.ts` and the native child-session runtime, against image-owned Pi 1.6.0. |
 | `src/shared/fork-context.ts` | adapt | Adopt upstream correct cwd/project-instruction behavior while preserving specialist/persona/memory seams. |
 | `src/shared/launch-contract.ts` | adapt | Upstream contract is newer; keep Monika fields in an explicit versioned extension rather than shadowing upstream fields. |
 | `src/shared/settings.ts` | adapt | Merge upstream configuration (`disabledFeatures`, wait naming, recovery) with image-owned settings and safe defaults. |
 | `src/shared/types.ts` | adapt | Map upstream lifecycle receipts to Monika's execution/outcome/effects/delivery states; retain versioned artifact compatibility. |
 | `src/tui/fleet-status.ts` | superseded | Use upstream fleet/status projections as the base; Monika's agentd/forum surfaces remain the operational authority. |
-| `test/integration/async-execution.test.ts` | adapt | Port to the new runner and assert launch registration, forced async, and exact lifecycle identity. |
+| `test/integration/async-execution.test.ts` | adapt | Removed/split upstream into `test/integration/async-execution.part-1.test.ts` through `async-execution.part-4.test.ts`; port launch registration, forced async, and exact lifecycle identity there. |
 | `test/integration/fork-context-execution.test.ts` | adapt | Add upstream fork/cwd behavior while asserting persona and memory exclusion. |
 | `test/integration/result-watcher.test.ts` | adapt | Cover unreadable status, runner death, retained receipts and agentd pending delivery. |
 | `test/integration/top-level-async.test.ts` | adapt | Cover workflow scripts, drain, cancellation and canonical delivery. |
-| `test/support/isolated-test-runner.mjs` | retain | Isolation is required regardless of upstream test harness; keep fresh HOME/runtime/session/operator roots. |
+| `test/support/isolated-test-runner.mjs` | retain | Monika-added; compare with upstream `test/support/isolated-temp-root.mjs`. Keep fresh HOME/runtime/session/operator roots and prevent shared-fixture interference. |
 | `test/unit/async-recovery-descriptor.test.ts` | adapt | Port recovery descriptors and prove child-writable artifacts cannot authorize resume. |
 | `test/unit/async-resume.test.ts` | adapt | Test agentd-approved resume, completed-child reuse, stale evidence and no automatic topic wake. |
 | `test/unit/chain-serializer.test.ts` | adapt | Validate only the supported migrated workflow/chain surface. |
 | `test/unit/control-channel.test.ts` | adapt | Preserve scoped, symlink-safe cancellation controls and generation fencing. |
-| `test/unit/execution-target.test.ts` | retain | Monika SSH target validation and local-no-fallback policy remain required. |
+| `test/unit/execution-target.test.ts` | retain | Monika-added; no upstream counterpart. SSH target validation and local-no-fallback remain required. |
 | `test/unit/fork-context.test.ts` | adapt | Assert upstream cwd/project context plus Monika child identity boundaries. |
 | `test/unit/index-child-registration.test.ts` | adapt | Verify extension registration, child-only extensions and `bg_wait` activation. |
 | `test/unit/native-supervisor-channel.test.ts` | adapt | Prove handoff stays within one canonical session/topic and survives restart passively. |
 | `test/unit/notify.test.ts` | adapt | Normalize old and new notification forms without treating notification text as provenance. |
 | `test/unit/package-manifest.test.ts` | adapt | Verify the exact candidate package/peer contract and no mutable dependency resolution. |
-| `test/unit/pi-args.test.ts` | adapt | Verify npm Pi 1.6.0 invocation and isolated root arguments. |
+| `test/unit/pi-args.test.ts` | adapt | Removed upstream; cover invocation and roots through `test/unit/pi-spawn.test.ts` and native child-runtime tests. |
 | `test/unit/preflight.test.ts` | adapt | Verify delivery disposition, target and capability preflight at the new seam. |
-| `test/unit/result-claim.test.ts` | retain | Keep exact claim/digest/custody tests as Monika lifecycle invariants. |
+| `test/unit/result-claim.test.ts` | retain | Monika-added; no upstream counterpart. Keep exact claim/digest/custody tests. |
 | `test/unit/scheduled-runs.test.ts` | remove | Scheduled execution is intentionally unsupported until it has an explicit agentd causal contract. |
 | `test/unit/schemas.test.ts` | adapt | Test merged upstream and closed Monika target schemas. |
 | `test/unit/subagent-wait.test.ts` | adapt | Test `bg_wait`, historical `subagent_wait`, and exact run-key settlement. |
 | `test/unit/temp-paths.test.ts` | adapt | Preserve dedicated runtime/session/operator root containment under upstream path changes. |
 | `test/unit/tool-description.test.ts` | adapt | Assert workflow and `bg_wait` guidance does not promise unsupported topic transfer or memory mutation. |
-| `test/unit/wait-tool.test.ts` | adapt | Test configurable wait name and compatibility normalization. |
+| `test/unit/wait-tool.test.ts` | retain | Monika-added; no upstream file. Test configurable wait naming and exact claim publication, alongside upstream wait tests. |
 
 ### Source grounding
 
@@ -201,3 +204,31 @@ execution, then agentd/forum validation. Each slice gets a fresh candidate test
 and a throwaway runtime probe before the next slice. Do not update
 `Containerfile`, `config/settings.json`, or the production installer to 0.89.1
 until the candidate has passed the full matrix.
+
+## Initial compatibility findings
+
+Initial throwaway-container baselines on Node 26.13.0: agentd passed all 248
+tests. Unmodified upstream unit tests reported 4,435 passing, 15 failing and 16
+skipped. Fourteen failures involve pane allocation-directory permissions and
+one involves a root/non-root filesystem fixture; their environmental causes
+still require isolated reproduction, not blanket exclusion. These numbers do
+not validate the candidate integration.
+
+Direct source comparison and scanner probes identified mandatory port seams:
+
+- Upstream uses `PI_SUBAGENTS_TEMP_ROOT`, not Monika's runtime-root variable.
+- Upstream recovery records under `async-subagent-launches/` and nested
+  `.launches/` must not become agentd pseudo-runs.
+- Workflow coordinators have a different proof shape and use the host PID;
+  coordinator exit must never stand in for child-process settlement.
+- Workflow stop uses an in-process controller. Writing detached-runner control
+  files alone does not prove cancellation of a workflow.
+- Upstream maintenance must not delete pending results or evidence protected by
+  agentd's custody/retention policy.
+- Notifications now include `details.runs`; upstream `awaitedByWorkflow` is not
+  the same thing as Monika's `deliveryDisposition: "awaited"`.
+- `bg_wait` migration also touches trace privacy, direct-only codemode tools,
+  provider smoke fixtures and analytics, not only model instructions.
+
+These findings are acceptance inputs for later slices, not fixes shipped by
+this preparation milestone.
