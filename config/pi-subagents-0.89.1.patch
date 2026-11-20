@@ -912,6 +912,195 @@ index c060f90..ee2a296 100644
  		if (disposed || typeof result.sessionId !== "string") {
  			traceNotification(disposed ? "disposed" : "missing_session", result);
  			return Promise.resolve(false);
+diff --git a/src/runs/background/result-claim.ts b/src/runs/background/result-claim.ts
+new file mode 100644
+index 0000000..227e6ca
+--- /dev/null
++++ b/src/runs/background/result-claim.ts
+@@ -0,0 +1,183 @@
++import { createHash } from "node:crypto";
++import * as fs from "node:fs";
++import * as path from "node:path";
++import type { DeliveryDisposition } from "../../shared/types.ts";
++
++export const RESULT_CLAIM_VERSION = 1 as const;
++
++export interface ResultClaimV1 {
++	version: typeof RESULT_CLAIM_VERSION;
++	kind: "pi-subagents.result-claim";
++	runId: string;
++	runKey: string;
++	sessionId: string;
++	deliveryDisposition: "awaited";
++	resultSha256: string;
++	resultSizeBytes: number;
++	claimedAt: number;
++}
++
++export class AwaitedResultPendingError extends Error {
++	readonly resultPath: string;
++
++	constructor(resultPath: string, reason?: string) {
++		super(reason ?? `Awaited result is not published yet at '${resultPath}'.`);
++		this.name = "AwaitedResultPendingError";
++		this.resultPath = resultPath;
++	}
++}
++
++export type AwaitedResultClaim = {
++	kind: "claimed";
++	claim: ResultClaimV1;
++	claimPath: string;
++	resultPath: string;
++	resultBytes: Buffer;
++	result: Record<string, unknown>;
++	idempotent: boolean;
++} | {
++	kind: "not-claimable";
++	deliveryDisposition: Exclude<DeliveryDisposition, "awaited">;
++};
++
++function readRegularNoFollow(filePath: string): Buffer {
++	let fd: number | undefined;
++	try {
++		fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
++		const stat = fs.fstatSync(fd);
++		if (!stat.isFile()) throw new Error(`Refusing non-regular file '${filePath}'.`);
++		return fs.readFileSync(fd);
++	} finally {
++		if (fd !== undefined) fs.closeSync(fd);
++	}
++}
++
++function parseObject(bytes: Buffer, label: string): Record<string, unknown> {
++	let value: unknown;
++	try {
++		value = JSON.parse(bytes.toString("utf-8"));
++	} catch (error) {
++		throw new Error(`Malformed ${label}: ${error instanceof Error ? error.message : String(error)}`);
++	}
++	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Malformed ${label}: expected an object.`);
++	return value as Record<string, unknown>;
++}
++
++function resolveRunIdentity(asyncDirInput: string, expectedRunId?: string): { asyncDir: string; runId: string; runKey: string; resultPath: string } {
++	const asyncDir = path.resolve(asyncDirInput);
++	const dirStat = fs.lstatSync(asyncDir);
++	if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) throw new Error(`Refusing unsafe async directory '${asyncDir}'.`);
++	const canonicalDir = fs.realpathSync(asyncDir);
++	if (canonicalDir !== asyncDir) throw new Error(`Refusing aliased async directory '${asyncDir}'.`);
++	const runId = path.basename(asyncDir);
++	if (!runId || runId === "." || runId === ".." || (expectedRunId !== undefined && runId !== expectedRunId)) {
++		throw new Error(`Async run identity mismatch for '${asyncDir}'.`);
++	}
++	const parent = path.dirname(asyncDir);
++	if (path.basename(parent) === "async-subagent-runs") {
++		const runtimeRoot = path.dirname(parent);
++		return { asyncDir, runId, runKey: `top:${runId}`, resultPath: path.join(runtimeRoot, "async-subagent-results", `${runId}.json`) };
++	}
++	const rootRunId = path.basename(parent);
++	const nestedRoot = path.dirname(parent);
++	if (path.basename(nestedRoot) !== "nested-subagent-runs" || !rootRunId) throw new Error(`Async directory is outside a recognized run scope: '${asyncDir}'.`);
++	const runtimeRoot = path.dirname(nestedRoot);
++	return {
++		asyncDir,
++		runId,
++		runKey: `nested:${rootRunId}:${runId}`,
++		resultPath: path.join(runtimeRoot, "async-subagent-results", "nested", rootRunId, `${runId}.json`),
++	};
++}
++
++function assertLifecycleRecord(
++	filePath: string,
++	label: string,
++	expected: { runId: string; sessionId: string; disposition: DeliveryDisposition },
++): Record<string, unknown> {
++	const value = parseObject(readRegularNoFollow(filePath), label);
++	if (value.lifecycleArtifactVersion !== 5) throw new Error(`${label} is not a lifecycle v5 artifact.`);
++	if ((value.runId ?? value.id) !== expected.runId) throw new Error(`${label} run identity mismatch.`);
++	if (value.sessionId !== expected.sessionId) throw new Error(`${label} session identity mismatch.`);
++	if (value.deliveryDisposition !== expected.disposition) throw new Error(`${label} delivery disposition mismatch.`);
++	return value;
++}
++
++function assertFinalAwaitedArtifact(value: Record<string, unknown>, label: string, resultPath: string): void {
++	const state = value.state;
++	const finalState = state === "complete" || state === "failed" || state === "rejected";
++	if (!finalState || value.execution_state !== "terminal" || (value.outcome_state !== "succeeded" && value.outcome_state !== "failed")) {
++		throw new AwaitedResultPendingError(resultPath, `${label} is not final (state=${String(state)}).`);
++	}
++}
++
++function sameClaim(a: Record<string, unknown>, b: ResultClaimV1): boolean {
++	const allowed = new Set(["version", "kind", "runId", "runKey", "sessionId", "deliveryDisposition", "resultSha256", "resultSizeBytes", "claimedAt"]);
++	return Object.keys(a).every((key) => allowed.has(key))
++		&& a.version === b.version && a.kind === b.kind && a.runId === b.runId && a.runKey === b.runKey
++		&& a.sessionId === b.sessionId && a.deliveryDisposition === b.deliveryDisposition
++		&& a.resultSha256 === b.resultSha256 && a.resultSizeBytes === b.resultSizeBytes
++		&& typeof a.claimedAt === "number" && Number.isFinite(a.claimedAt);
++}
++
++function createClaimNoFollow(claimPath: string, claim: ResultClaimV1): { claim: ResultClaimV1; idempotent: boolean } {
++	let fd: number | undefined;
++	try {
++		fd = fs.openSync(claimPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0), 0o600);
++		fs.writeFileSync(fd, `${JSON.stringify(claim)}\n`, "utf-8");
++		fs.fsyncSync(fd);
++		return { claim, idempotent: false };
++	} catch (error) {
++		if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
++		const existing = parseObject(readRegularNoFollow(claimPath), "result claim");
++		if (!sameClaim(existing, claim)) throw new Error(`Conflicting result claim at '${claimPath}'.`);
++		return { claim: existing as unknown as ResultClaimV1, idempotent: true };
++	} finally {
++		if (fd !== undefined) fs.closeSync(fd);
++	}
++}
++
++/** Read and identity-bind one exact awaited result, then atomically publish its sidecar. */
++export function claimAwaitedResult(input: { asyncDir: string; runId?: string; sessionId: string; now?: () => number }): AwaitedResultClaim {
++	const identity = resolveRunIdentity(input.asyncDir, input.runId);
++	const statusPath = path.join(identity.asyncDir, "status.json");
++	const launchPath = path.join(identity.asyncDir, "launch.json");
++	const status = parseObject(readRegularNoFollow(statusPath), "status artifact");
++	const disposition = status.deliveryDisposition;
++	if (disposition === "follow_up" || disposition === "silent") return { kind: "not-claimable", deliveryDisposition: disposition };
++	if (disposition !== "awaited") throw new Error("Status artifact has an invalid delivery disposition.");
++	const expected = { runId: identity.runId, sessionId: input.sessionId, disposition: disposition as DeliveryDisposition };
++	const checkedStatus = assertLifecycleRecord(statusPath, "status artifact", expected);
++	assertLifecycleRecord(launchPath, "launch artifact", expected);
++	assertFinalAwaitedArtifact(checkedStatus, "Status artifact", identity.resultPath);
++	let resultBytes: Buffer;
++	try {
++		resultBytes = readRegularNoFollow(identity.resultPath);
++	} catch (error) {
++		if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new AwaitedResultPendingError(identity.resultPath);
++		throw error;
++	}
++	const result = parseObject(resultBytes, "result artifact");
++	if (result.lifecycleArtifactVersion !== 5 || (result.runId ?? result.id) !== identity.runId || result.sessionId !== input.sessionId
++		|| result.asyncDir !== identity.asyncDir || result.deliveryDisposition !== disposition) {
++		throw new Error("Result artifact identity or disposition mismatch.");
++	}
++	assertFinalAwaitedArtifact(result, "Result artifact", identity.resultPath);
++	if (result.state !== checkedStatus.state || result.execution_state !== checkedStatus.execution_state || result.outcome_state !== checkedStatus.outcome_state) {
++		throw new AwaitedResultPendingError(identity.resultPath, "Awaited status and result artifacts do not describe the same final publication.");
++	}
++	const claim: ResultClaimV1 = {
++		version: RESULT_CLAIM_VERSION,
++		kind: "pi-subagents.result-claim",
++		runId: identity.runId,
++		runKey: identity.runKey,
++		sessionId: input.sessionId,
++		deliveryDisposition: "awaited",
++		resultSha256: createHash("sha256").update(resultBytes).digest("hex"),
++		resultSizeBytes: resultBytes.byteLength,
++		claimedAt: (input.now ?? Date.now)(),
++	};
++	const claimPath = path.join(identity.asyncDir, "result-claim.json");
++	const published = createClaimNoFollow(claimPath, claim);
++	return { kind: "claimed", claim: published.claim, claimPath, resultPath: identity.resultPath, resultBytes, result, idempotent: published.idempotent };
++}
 diff --git a/src/runs/background/result-watcher.ts b/src/runs/background/result-watcher.ts
 index e143afb..8301b33 100644
 --- a/src/runs/background/result-watcher.ts
@@ -1007,7 +1196,7 @@ index 2e78a70..0612857 100644
  	const lastUpdate = effectiveStatus.lastUpdate ?? effectiveStatus.startedAt;
  	const observedScope = options.pidNamespaceScope ? options.pidNamespaceScope() : currentPidNamespaceScope();
 diff --git a/src/runs/background/subagent-runner.ts b/src/runs/background/subagent-runner.ts
-index 0c17c78..0d9f005 100644
+index 0c17c78..e54511c 100644
 --- a/src/runs/background/subagent-runner.ts
 +++ b/src/runs/background/subagent-runner.ts
 @@ -160,6 +160,8 @@ import { runExternalJob } from "../shared/external-job-runner.ts";
@@ -1015,7 +1204,7 @@ index 0c17c78..0d9f005 100644
  import type { ResolvedSubagentCapabilityCeiling } from "../shared/capability-ceiling.ts";
  import { setWaitToolName } from "../../shared/wait-tool-name.ts";
 +import { hostLifecycleFields, hostOwnsResultDelivery, resolveDeliveryDisposition, type DeliveryDisposition } from "../../shared/monika-host.ts";
-+import { aggregateEffectsStates, resolveEffectsEvidenceState, type ResolvedExecutionTarget } from "../shared/execution-target.ts";
++import { aggregateEffectsStates, executionTargetStatusFields, materializeExecutionTargetList, resolveEffectsEvidenceState, type ResolvedExecutionTarget } from "../shared/execution-target.ts";
  import {
  	acceptChildWatchdogEvent,
  	applyChildWatchdogMessage,
@@ -1063,7 +1252,7 @@ index 0c17c78..0d9f005 100644
 +				: [step.executionTarget]);
 +	// Unlike flattenSteps, this ledger keeps a placeholder for each dynamic group
 +	// until runtime materialization replaces it with the exact child target list.
-+	const runtimeEffectsTargets = effectsTargetsForSteps(steps);
++	const runtimeExecutionTargets = effectsTargetsForSteps(steps);
  	const initialFlatStepCount = flatSteps.length;
  	const parallelGroups: Array<{ start: number; count: number; stepIndex: number }> = [];
  	const initialStatusSteps: RunnerStatusStep[] = [];
@@ -1126,7 +1315,7 @@ index 0c17c78..0d9f005 100644
  		}), (filePath, payload) => publishRunResult(filePath, () => writePendingAsyncResultFile(filePath, payload as Record<string, unknown>)));
  	};
 +	const terminalEffectsState = (): "none" | "confirmed" | "unknown" => aggregateEffectsStates(
-+		runtimeEffectsTargets.map((target, index) => resolveEffectsEvidenceState(target, path.join(asyncDir, "effects", `${index}.jsonl`))),
++		runtimeExecutionTargets.map((target, index) => resolveEffectsEvidenceState(target, path.join(asyncDir, "effects", `${index}.jsonl`))),
 +	);
  	const writeStatusPayloadNow = (): void => {
  		if (finalResultPublication) return;
@@ -1139,7 +1328,7 @@ index 0c17c78..0d9f005 100644
  		const appendedSteps = requests.flatMap((request) => request.steps);
  		steps.push(...appendedSteps);
  		flatSteps.push(...flattenSteps(appendedSteps));
-+		runtimeEffectsTargets.push(...effectsTargetsForSteps(appendedSteps));
++		runtimeExecutionTargets.push(...effectsTargetsForSteps(appendedSteps));
  		const now = Date.now();
  		const pendingAppends = countPendingChainAppendRequests(asyncDir);
  		const added = appendRunnerStepsToStatus({
@@ -1150,11 +1339,19 @@ index 0c17c78..0d9f005 100644
 +			// Evidence files are named by the runtime flat index. Replace the one
 +			// planning placeholder with the exact materialized children before any
 +			// child can launch, including an empty expansion.
-+			runtimeEffectsTargets.splice(groupStartFlatIndex, 1, ...materialized.parallel.map(() => step.parallel.executionTarget));
++			materializeExecutionTargetList(runtimeExecutionTargets, groupStartFlatIndex, materialized.parallel.map(() => step.parallel.executionTarget));
  
  			const effectiveDynamicGroupAcceptance = resolveEffectiveAcceptance(omitUndefinedProperties({
  				explicit: step.acceptanceInput,
-@@ -3857,7 +3893,7 @@ export async function runSubagent(
+@@ -3738,6 +3774,7 @@ export async function runSubagent(
+ 				const transcriptPath = resolveAsyncStepTranscriptPath(omitUndefinedProperties({ artifactsDir, artifactConfig, runId: id, agent: task.agent, flatIndex: groupStartFlatIndex + itemIndex, flatStepCount: dynamicFlatStepCount }));
+ 				return omitUndefinedProperties({
+ 					agent: task.agent,
++					...executionTargetStatusFields(task.executionTarget),
+ 					...(task.sessionName ? { sessionName: task.sessionName } : {}),
+ 					...(externalRunnerStatus(task.runner, task.machine) ? { runner: externalRunnerStatus(task.runner, task.machine) } : {}),
+ 					...(statusStepDescription(task.task) ? { description: statusStepDescription(task.task) } : {}),
+@@ -3857,7 +3894,7 @@ export async function runSubagent(
  				appendJsonl(eventsPath, JSON.stringify({ type: "subagent.step.started", ts: taskStartTime, runId: id, stepIndex: fi, agent: task.agent }));
  				flushPendingStepSteers(fi);
  				const singleResult = await runSingleStepWithTimeout(task, compactOptional<SingleStepContext>({
@@ -1163,7 +1360,7 @@ index 0c17c78..0d9f005 100644
  					outputs,
  					sessionDir: config.sessionDir ? path.join(config.sessionDir, `dynamic-${stepIndex}-${taskIdx}`) : undefined,
  					artifactsDir, artifactConfig, id,
-@@ -4231,7 +4267,7 @@ export async function runSubagent(
+@@ -4231,7 +4268,7 @@ export async function runSubagent(
  						flushPendingStepSteers(fi);
  
  						const singleResult = await runSingleStepWithTimeout(taskForRun, compactOptional<SingleStepContext>({
@@ -1172,7 +1369,7 @@ index 0c17c78..0d9f005 100644
  							outputs,
  							sessionDir: taskSessionDir,
  							artifactsDir, artifactConfig, id,
-@@ -4582,7 +4618,7 @@ export async function runSubagent(
+@@ -4582,7 +4619,7 @@ export async function runSubagent(
  			let singleResult: Awaited<ReturnType<typeof runSingleStepWithTimeout>>;
  			try {
  				singleResult = await runSingleStepWithTimeout(executionStep, compactOptional<SingleStepContext>({
@@ -1181,7 +1378,7 @@ index 0c17c78..0d9f005 100644
  				outputs: statusPayload.mode === "single" ? undefined : outputs,
  				sessionDir: config.sessionDir,
  				artifactsDir, artifactConfig, id,
-@@ -4978,6 +5014,8 @@ export async function runSubagent(
+@@ -4978,6 +5015,8 @@ export async function runSubagent(
  	try {
  		runPersistence.write(resultPath, {
  			lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
@@ -1190,15 +1387,14 @@ index 0c17c78..0d9f005 100644
  			id,
  			...(config.toolCallId ? { toolCallId: config.toolCallId } : {}),
  			agent: agentName,
-@@ -4991,8 +5029,10 @@ export async function runSubagent(
+@@ -4991,8 +5030,9 @@ export async function runSubagent(
  			...(statusPayload.toolBudgetBlocked ? { toolBudgetBlocked: true } : {}),
  			...(statusPayload.usageBudget ? { usageBudget: statusPayload.usageBudget } : {}),
  			...(stopped ? { stopped: true, error: stopMessage } : timedOut ? { timedOut: true, error: timeoutMessage ?? SUBAGENT_TIMED_OUT_MESSAGE } : usageBudgetExceeded ? { error: statusPayload.error ?? "Usage budget exhausted." } : {}),
 -			results: results.map((r) => omitUndefinedProperties({
 +			results: results.map((r, index) => omitUndefinedProperties({
  				agent: r.agent,
-+				executionTarget: flatSteps[index]?.executionTarget?.public,
-+				executionTargetDigest: flatSteps[index]?.executionTarget?.kind === "ssh" ? flatSteps[index].executionTarget.descriptorDigest : undefined,
++				...executionTargetStatusFields(runtimeExecutionTargets[index]),
  				...(r.sessionName ? { sessionName: r.sessionName } : {}),
  				context: r.context,
  				output: r.output,
@@ -1837,6 +2033,250 @@ index 0cace95..50f484a 100644
  const RUNNER_DYNAMIC_PARALLEL_KEYS = new Set([
  	...DYNAMIC_PARALLEL_KEYS,
  	"runner", "outputName", "structured", "inheritProjectContext", "inheritGlobalContext", "inheritSkills", "skills", "outputPath", "namespaceOutputPath", "maxSubagentDepth", "timeoutMs", "waitToolEnabled", "waitToolDefaultTimeoutMs",
+diff --git a/src/runs/shared/execution-target.ts b/src/runs/shared/execution-target.ts
+new file mode 100644
+index 0000000..ce187c5
+--- /dev/null
++++ b/src/runs/shared/execution-target.ts
+@@ -0,0 +1,238 @@
++import { createHash } from "node:crypto";
++import * as fs from "node:fs";
++import * as path from "node:path";
++
++export const EXECUTION_TARGET_ROOT_ENV = "PI_SUBAGENT_EXECUTION_TARGET_ROOT";
++export const SSH_LOCK_EXTENSION_ENV = "PI_SUBAGENT_SSH_LOCK_EXTENSION";
++export const SSH_LOCK_CODE_DIGEST_ENV = "PI_SUBAGENT_SSH_LOCK_CODE_DIGEST";
++export const SSH_LOCK_DESCRIPTOR_ENV = "MONIKA_SSH_LOCK_DESCRIPTOR";
++export const EXECUTION_TARGET_NAME_ENV = "PI_SUBAGENT_EXECUTION_TARGET_NAME";
++export const EXECUTION_TARGET_DIGEST_ENV = "PI_SUBAGENT_EXECUTION_TARGET_DIGEST";
++export const EFFECTS_EVIDENCE_PATH_ENV = "PI_SUBAGENT_EFFECTS_EVIDENCE_PATH";
++
++export type ExecutionTarget = { kind: "local" } | { kind: "ssh"; name: string };
++export type PublicExecutionTarget = ExecutionTarget;
++export type EffectsState = "none" | "confirmed" | "unknown";
++
++export function executionTargetStatusFields(target: ResolvedExecutionTarget | undefined): { executionTarget?: PublicExecutionTarget; executionTargetDigest?: string } {
++	return target ? {
++		executionTarget: target.public,
++		...(target.kind === "ssh" ? { executionTargetDigest: target.descriptorDigest } : {}),
++	} : {};
++}
++
++/** Replace one planning placeholder with the targets of its runtime children. */
++export function materializeExecutionTargetList(targets: Array<ResolvedExecutionTarget | undefined>, index: number, children: Array<ResolvedExecutionTarget | undefined>): void {
++	targets.splice(index, 1, ...children);
++}
++
++export interface LockedSshDescriptor {
++	version: 1;
++	name: string;
++	target: string;
++	hostname: string;
++	cwd: string;
++	allowedRoot: string;
++	knownHosts: string;
++}
++
++export type ResolvedExecutionTarget =
++	| { kind: "local"; public: { kind: "local" } }
++	| {
++		kind: "ssh";
++		name: string;
++		public: { kind: "ssh"; name: string };
++		descriptorPath: string;
++		descriptorDigest: string;
++		descriptor: LockedSshDescriptor;
++		lockExtensionPath: string;
++		lockCodeDigest: string;
++	};
++
++const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
++const SAFE_TARGET = /^(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9][A-Za-z0-9._-]*$/;
++const DESCRIPTOR_KEYS = ["allowedRoot", "cwd", "hostname", "knownHosts", "name", "target", "version"].sort();
++const SECRET_ROOT = "/runtime/secrets/ssh";
++
++function plainObject(value: unknown): value is Record<string, unknown> {
++	return Boolean(value) && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
++}
++
++function noControls(value: string): boolean {
++	return !/[\u0000-\u001f\u007f]/.test(value);
++}
++
++function canonicalContained(root: string, candidate: string): boolean {
++	const relative = path.relative(root, candidate);
++	return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
++}
++
++function requireAbsoluteClean(field: string, value: unknown): string {
++	if (typeof value !== "string" || !path.posix.isAbsolute(value) || !noControls(value) || value.includes("\\")) {
++		throw new Error(`Invalid SSH target descriptor field '${field}': expected an absolute POSIX path.`);
++	}
++	const normalized = path.posix.normalize(value);
++	if (normalized !== value || value.split("/").includes("..")) {
++		throw new Error(`Invalid SSH target descriptor field '${field}': path must be canonical.`);
++	}
++	return value;
++}
++
++export function validateExecutionTarget(value: unknown, field = "executionTarget"): ExecutionTarget | undefined {
++	if (value === undefined) return undefined;
++	if (!plainObject(value)) throw new Error(`${field} must be {kind:'local'} or {kind:'ssh',name:'<configured-name>'}.`);
++	const keys = Object.keys(value).sort();
++	if (value.kind === "local" && keys.length === 1 && keys[0] === "kind") return { kind: "local" };
++	if (value.kind === "ssh" && keys.length === 2 && keys[0] === "kind" && keys[1] === "name" && typeof value.name === "string" && SAFE_NAME.test(value.name)) {
++		return { kind: "ssh", name: value.name };
++	}
++	throw new Error(`${field} must be {kind:'local'} or {kind:'ssh',name:'<safe configured name>'}; extra fields and host options are not allowed.`);
++}
++
++export function parseLockedSshDescriptor(raw: string | Buffer, expectedName?: string): LockedSshDescriptor {
++	let value: unknown;
++	try { value = JSON.parse(raw.toString()); } catch { throw new Error("Invalid SSH target descriptor: malformed JSON."); }
++	if (!plainObject(value) || JSON.stringify(Object.keys(value).sort()) !== JSON.stringify(DESCRIPTOR_KEYS)) {
++		throw new Error("Invalid SSH target descriptor: unknown or missing fields.");
++	}
++	if (value.version !== 1) throw new Error("Invalid SSH target descriptor: unsupported version.");
++	if (typeof value.name !== "string" || !SAFE_NAME.test(value.name) || (expectedName && value.name !== expectedName)) {
++		throw new Error("Invalid SSH target descriptor: name does not match its registry entry.");
++	}
++	for (const field of ["target", "hostname"] as const) {
++		if (typeof value[field] !== "string" || !noControls(value[field] as string) || !(value[field] as string).trim()) {
++			throw new Error(`Invalid SSH target descriptor field '${field}'.`);
++		}
++	}
++	if (!SAFE_TARGET.test(value.target as string)) throw new Error("Invalid SSH target descriptor field 'target'.");
++	if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value.hostname as string)) throw new Error("Invalid SSH target descriptor field 'hostname'.");
++	const cwd = requireAbsoluteClean("cwd", value.cwd);
++	const allowedRoot = requireAbsoluteClean("allowedRoot", value.allowedRoot);
++	if (!canonicalContained(allowedRoot, cwd)) throw new Error("Invalid SSH target descriptor: cwd is outside allowedRoot.");
++	const knownHosts = requireAbsoluteClean("knownHosts", value.knownHosts);
++	if (!canonicalContained(SECRET_ROOT, knownHosts)) throw new Error(`Invalid SSH target descriptor: knownHosts must be beneath ${SECRET_ROOT}.`);
++	return { version: 1, name: value.name as string, target: value.target as string, hostname: value.hostname as string, cwd, allowedRoot, knownHosts };
++}
++
++function sha256(value: string | Buffer): string {
++	return createHash("sha256").update(value).digest("hex");
++}
++
++export function executionTargetBindingDigest(descriptorBytes: Buffer, knownHostsBytes: Buffer, lockCodeDigest: string): string {
++	return sha256(JSON.stringify({ descriptor: sha256(descriptorBytes), knownHosts: sha256(knownHostsBytes), lockCode: lockCodeDigest }));
++}
++
++function descriptorFromPath(descriptorPath: string, lockCodeDigest: string, expectedName?: string): { descriptor: LockedSshDescriptor; digest: string; canonicalPath: string } {
++	const lst = fs.lstatSync(descriptorPath);
++	if (!lst.isFile() || lst.isSymbolicLink() || (lst.mode & 0o222) !== 0) throw new Error("SSH target descriptor must be a read-only regular, non-symlink file.");
++	const raw = fs.readFileSync(descriptorPath);
++	const descriptor = parseLockedSshDescriptor(raw, expectedName);
++	const kh = fs.lstatSync(descriptor.knownHosts);
++	if (!kh.isFile() || kh.isSymbolicLink() || (kh.mode & 0o222) !== 0) throw new Error("SSH target knownHosts must be a non-writable regular file.");
++	const knownHosts = fs.readFileSync(descriptor.knownHosts);
++	return { descriptor, digest: executionTargetBindingDigest(raw, knownHosts, lockCodeDigest), canonicalPath: fs.realpathSync(descriptorPath) };
++}
++
++function registryDescriptor(name: string, env: NodeJS.ProcessEnv): string {
++	const rootValue = env[EXECUTION_TARGET_ROOT_ENV]?.trim();
++	if (!rootValue || !path.isAbsolute(rootValue)) throw new Error(`${EXECUTION_TARGET_ROOT_ENV} must be an absolute administrator-owned directory.`);
++	const root = fs.realpathSync(rootValue);
++	const candidate = path.join(root, `${name}.json`);
++	const canonical = fs.realpathSync(candidate);
++	if (!canonicalContained(root, canonical)) throw new Error(`SSH execution target '${name}' escapes the configured registry root.`);
++	return canonical;
++}
++
++function lockExtension(env: NodeJS.ProcessEnv): { path: string; codeDigest: string } {
++	const configured = env[SSH_LOCK_EXTENSION_ENV]?.trim();
++	if (!configured || !path.isAbsolute(configured)) throw new Error(`${SSH_LOCK_EXTENSION_ENV} must name the locked SSH extension.`);
++	const canonical = fs.realpathSync(configured);
++	const helper = path.join(path.dirname(canonical), "ssh-lock.mjs");
++	for (const [label, file] of [["extension", canonical], ["helper", helper]] as const) {
++		const stat = fs.lstatSync(file);
++		if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Locked SSH ${label} is not a regular file.`);
++		fs.accessSync(file, fs.constants.R_OK);
++	}
++	const codeDigest = sha256(`${sha256(fs.readFileSync(canonical))}\n${sha256(fs.readFileSync(helper))}\n`);
++	const expected = env[SSH_LOCK_CODE_DIGEST_ENV]?.trim();
++	if (!expected || !/^[a-f0-9]{64}$/.test(expected) || expected !== codeDigest) throw new Error("Locked SSH extension code does not match the startup integrity attestation.");
++	return { path: canonical, codeDigest };
++}
++
++export function resolveExecutionTarget(requestedValue: unknown, env: NodeJS.ProcessEnv = process.env): ResolvedExecutionTarget {
++	const requested = validateExecutionTarget(requestedValue);
++	const ambientPath = env[SSH_LOCK_DESCRIPTOR_ENV]?.trim();
++	if (ambientPath) {
++		if (!path.isAbsolute(ambientPath)) throw new Error(`${SSH_LOCK_DESCRIPTOR_ENV} must be absolute.`);
++		const lock = lockExtension(env);
++		const ambient = descriptorFromPath(ambientPath, lock.codeDigest);
++		// Omission is always the local default. Locked parents must explicitly name
++		// their same target; there is no implicit relocation inheritance form.
++		if (!requested || requested.kind === "local" || (requested.kind === "ssh" && requested.name !== ambient.descriptor.name)) {
++			throw new Error(`Locked SSH parent '${ambient.descriptor.name}' must explicitly reuse its same execution target; local/default or target switching is refused.`);
++		}
++		const expectedDigest = env[EXECUTION_TARGET_DIGEST_ENV]?.trim();
++		if (!expectedDigest || !/^[a-f0-9]{64}$/.test(expectedDigest) || expectedDigest !== ambient.digest) throw new Error("Locked SSH target binding changed or is missing; automatic child launch is refused.");
++		return { kind: "ssh", name: ambient.descriptor.name, public: { kind: "ssh", name: ambient.descriptor.name }, descriptorPath: ambient.canonicalPath, descriptorDigest: ambient.digest, descriptor: ambient.descriptor, lockExtensionPath: lock.path, lockCodeDigest: lock.codeDigest };
++	}
++	if (!requested || requested.kind === "local") return { kind: "local", public: { kind: "local" } };
++	const descriptorPath = registryDescriptor(requested.name, env);
++	const lock = lockExtension(env);
++	const resolved = descriptorFromPath(descriptorPath, lock.codeDigest, requested.name);
++	return { kind: "ssh", name: requested.name, public: { kind: "ssh", name: requested.name }, descriptorPath: resolved.canonicalPath, descriptorDigest: resolved.digest, descriptor: resolved.descriptor, lockExtensionPath: lock.path, lockCodeDigest: lock.codeDigest };
++}
++
++export function executionTargetChildLaunch(target: ResolvedExecutionTarget, effectsEvidencePath?: string): { extensions: string[]; env: Record<string, string | undefined> } {
++	if (target.kind === "local") {
++		return { extensions: [], env: { [SSH_LOCK_DESCRIPTOR_ENV]: undefined, [EXECUTION_TARGET_NAME_ENV]: "local", [EXECUTION_TARGET_DIGEST_ENV]: undefined, [EFFECTS_EVIDENCE_PATH_ENV]: undefined } };
++	}
++	return {
++		extensions: [target.lockExtensionPath],
++		env: {
++			[SSH_LOCK_DESCRIPTOR_ENV]: target.descriptorPath,
++			[SSH_LOCK_CODE_DIGEST_ENV]: target.lockCodeDigest,
++			[EXECUTION_TARGET_NAME_ENV]: target.name,
++			[EXECUTION_TARGET_DIGEST_ENV]: target.descriptorDigest,
++			[EFFECTS_EVIDENCE_PATH_ENV]: effectsEvidencePath,
++		},
++	};
++}
++
++export function resolveEffectsEvidenceState(target: ResolvedExecutionTarget | undefined, evidencePath: string | undefined): EffectsState {
++	if (!target || target.kind === "local") return "none";
++	if (!evidencePath) return "unknown";
++	try {
++		const records = fs.readFileSync(evidencePath, "utf-8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as { id?: unknown; phase?: unknown; effects_state?: unknown });
++		const intents = new Set(records.filter((record) => record.phase === "intent" && typeof record.id === "string").map((record) => record.id as string));
++		const settled = new Set(records.filter((record) => record.phase === "settled" && typeof record.id === "string" && record.effects_state === "confirmed").map((record) => record.id as string));
++		if (records.some((record) => record.effects_state === "unknown") || [...intents].some((id) => !settled.has(id))) return "unknown";
++		return intents.size > 0 ? "confirmed" : "none";
++	} catch {
++		// Missing, truncated, or malformed evidence cannot prove that a remote
++		// operation had no effects.
++		return "unknown";
++	}
++}
++
++export function aggregateEffectsStates(states: EffectsState[], locallyConfirmed = false): EffectsState {
++	if (states.includes("unknown")) return "unknown";
++	if (locallyConfirmed || states.includes("confirmed")) return "confirmed";
++	return "none";
++}
++
++export function assertCompositeExecutionTargetShape(executionTarget: unknown, composite: boolean): void {
++	if (composite && executionTarget !== undefined) {
++		throw new Error("Top-level executionTarget is supported only for a single-agent launch; set executionTarget on every tasks/chain/workflow child instead.");
++	}
++}
++
++export function assertExecutionTargetAsyncCompatible(targets: Array<ExecutionTarget | ResolvedExecutionTarget | undefined>, async: boolean): void {
++	if (!async && targets.some((target) => target?.kind === "ssh")) {
++		throw new Error("SSH execution targets require async:true so uncertain remote effects have a durable lifecycle ledger.");
++	}
++}
++
++export function assertExecutionTargetWorktreeCompatible(targets: Array<ExecutionTarget | ResolvedExecutionTarget | undefined>, worktree: boolean | undefined): void {
++	if (!worktree) return;
++	if (targets.some((target) => target?.kind === "ssh")) throw new Error("worktree:true is not supported for SSH execution targets; no worktree was created.");
++}
 diff --git a/src/runs/shared/parallel-utils.ts b/src/runs/shared/parallel-utils.ts
 index ba9c6ce..cc001fb 100644
 --- a/src/runs/shared/parallel-utils.ts
@@ -1894,6 +2334,141 @@ index 5294991..7ae16cb 100644
  			task: source.task,
  			model: source.model,
  			fast: source.fast,
+diff --git a/src/shared/monika-host.ts b/src/shared/monika-host.ts
+new file mode 100644
+index 0000000..5b753ef
+--- /dev/null
++++ b/src/shared/monika-host.ts
+@@ -0,0 +1,129 @@
++import * as fs from "node:fs";
++import * as path from "node:path";
++
++export type DeliveryDisposition = "awaited" | "follow_up" | "silent";
++
++export const MONIKA_LIFECYCLE_ARTIFACT_VERSION = 5 as const;
++
++export function hostOwnsResultDelivery(): boolean {
++	return process.env.PI_SUBAGENTS_HOST_ACK_RESULTS === "1";
++}
++
++export function hostIsDraining(): boolean {
++	return process.env.PI_SUBAGENTS_HOST_DRAINING === "1";
++}
++
++export function forceHostAsync(): boolean {
++	return process.env.PI_SUBAGENTS_FORCE_ASYNC === "1";
++}
++
++export function resolveDeliveryDisposition(value?: unknown): DeliveryDisposition {
++	const candidate = value ?? process.env.PI_SUBAGENTS_DEFAULT_DELIVERY_DISPOSITION ?? "follow_up";
++	if (candidate === "awaited" || candidate === "follow_up" || candidate === "silent") return candidate;
++	throw new Error(`Invalid subagent delivery disposition '${String(candidate)}'.`);
++}
++
++export function configuredSessionRoot(parentSessionFile: string | null, fallback: () => string): string {
++	const configured = process.env.PI_SUBAGENT_SESSION_ROOT?.trim();
++	if (!configured) return fallback();
++	if (!path.isAbsolute(configured)) throw new Error("PI_SUBAGENT_SESSION_ROOT must be absolute.");
++	if (!parentSessionFile) return path.join(path.resolve(configured), "unbound");
++	return path.join(path.resolve(configured), path.basename(parentSessionFile, ".jsonl"));
++}
++
++export function readRuntimeEpoch(): { runtimeInstanceId?: string; runtimeCreatedAt?: number } {
++	const file = process.env.MONIKA_RUNTIME_INSTANCE_FILE?.trim();
++	if (!file) return {};
++	try {
++		const value = JSON.parse(fs.readFileSync(file, "utf8")) as { id?: unknown; createdAt?: unknown };
++		return typeof value.id === "string" && typeof value.createdAt === "number" && Number.isFinite(value.createdAt)
++			? { runtimeInstanceId: value.id, runtimeCreatedAt: value.createdAt }
++			: {};
++	} catch {
++		return {};
++	}
++}
++
++export function linuxProcessStartTicks(pid: number | undefined): string | undefined {
++	if (!pid || process.platform !== "linux") return undefined;
++	try {
++		const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
++		const close = stat.lastIndexOf(")");
++		return stat.slice(close + 2).trim().split(/\s+/)[19];
++	} catch {
++		return undefined;
++	}
++}
++
++type LifecycleState = "queued" | "running" | "complete" | "failed" | "partial" | "paused" | "stopped" | "rejected" | string;
++
++/** Explicit adapter from upstream lifecycle v3 states to agentd's lifecycle v5 schema. */
++export function hostLifecycleFields(state: LifecycleState, disposition: DeliveryDisposition): Record<string, unknown> {
++	if (!hostOwnsResultDelivery()) return {};
++	const active = state === "queued" || state === "running" || state === "registered" || state === "launching";
++	const succeeded = state === "complete" || state === "completed";
++	const interrupted = state === "paused" || state === "stopped";
++	return {
++		lifecycleArtifactVersion: MONIKA_LIFECYCLE_ARTIFACT_VERSION,
++		deliveryDisposition: disposition,
++		execution_state: active ? "active" : interrupted ? "interrupted" : "terminal",
++		outcome_state: active ? "pending" : succeeded ? "succeeded" : interrupted ? "interrupted" : state === "failed" || state === "partial" || state === "rejected" ? "failed" : "unknown",
++		effects_state: "unknown",
++		delivery_state: "pending",
++	};
++}
++
++/** Lifecycle fields for a package-side rewrite without regressing host-owned effects/delivery evidence. */
++export function hostLifecycleTransitionFields(
++	state: LifecycleState,
++	dispositionInput: unknown,
++	asyncDir: string,
++	previous?: Record<string, unknown>,
++): Record<string, unknown> {
++	if (!hostOwnsResultDelivery()) return {};
++	const disposition = resolveDeliveryDisposition(dispositionInput);
++	const fields: Record<string, unknown> = { ...hostLifecycleFields(state, disposition), deliveryDisposition: disposition, asyncDir };
++	if (previous?.effects_state !== undefined) fields.effects_state = previous.effects_state;
++	if (previous?.delivery_state !== undefined) fields.delivery_state = previous.delivery_state;
++	return fields;
++}
++
++export function assertHostOriginRegistered(sessionFile: string | undefined, runId: string, asyncDir: string): void {
++	if (!hostOwnsResultDelivery()) return;
++	if (!sessionFile || !path.isAbsolute(sessionFile)) throw new Error("Host-owned async launch requires a persisted parent session file for origin registration.");
++	let entries: unknown[];
++	try {
++		entries = fs.readFileSync(sessionFile, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
++	} catch (error) {
++		throw new Error(`Host async origin registration could not be read from '${sessionFile}': ${error instanceof Error ? error.message : String(error)}`);
++	}
++	const expectedSession = path.resolve(sessionFile);
++	const expectedDir = path.resolve(asyncDir);
++	const registered = entries.some((entry) => {
++		if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
++		const item = entry as { type?: unknown; customType?: unknown; data?: unknown };
++		if (item.type !== "custom" || item.customType !== "monika.subagent.run" || !item.data || typeof item.data !== "object" || Array.isArray(item.data)) return false;
++		const data = item.data as { runId?: unknown; artifactSessionId?: unknown; asyncDir?: unknown; origin?: unknown };
++		if (data.runId !== runId || typeof data.artifactSessionId !== "string" || path.resolve(data.artifactSessionId) !== expectedSession
++			|| typeof data.asyncDir !== "string" || path.resolve(data.asyncDir) !== expectedDir
++			|| !data.origin || typeof data.origin !== "object" || Array.isArray(data.origin)) return false;
++		const origin = data.origin as { turnId?: unknown; topicId?: unknown; postId?: unknown };
++		return typeof origin.turnId === "string" && origin.turnId.length > 0
++			&& typeof origin.topicId === "string" && origin.topicId.length > 0
++			&& typeof origin.postId === "string" && origin.postId.length > 0;
++	});
++	if (!registered) {
++		throw new Error("Host did not durably register this async launch with a valid turn/topic/post origin; child start, result claims, and delivery are refused until a new launch can be reconciled.");
++	}
++}
++
++export function hostWakeAllowed(disposition: DeliveryDisposition, asyncDir?: string): boolean {
++	if (disposition !== "follow_up" || hostIsDraining()) return false;
++	if (!hostOwnsResultDelivery() || !asyncDir) return true;
++	try {
++		const marker = fs.lstatSync(path.join(asyncDir, "host-cancellation.json"));
++		return !marker.isFile() || marker.isSymbolicLink();
++	} catch (error) {
++		return (error as NodeJS.ErrnoException).code === "ENOENT";
++	}
++}
 diff --git a/src/shared/settings.ts b/src/shared/settings.ts
 index 77ae10b..f0bf871 100644
 --- a/src/shared/settings.ts
@@ -2237,6 +2812,169 @@ index 98dd72c..a816e11 100644
  	it("delivers async needs-attention notices immediately", () => {
  		const state = makeState();
  		const recorder = makeRecorder();
+diff --git a/test/unit/execution-target.test.ts b/test/unit/execution-target.test.ts
+new file mode 100644
+index 0000000..e7e85d0
+--- /dev/null
++++ b/test/unit/execution-target.test.ts
+@@ -0,0 +1,157 @@
++import assert from "node:assert/strict";
++import { mkdtempSync, writeFileSync } from "node:fs";
++import { tmpdir } from "node:os";
++import path from "node:path";
++import { describe, it } from "node:test";
++import { launchBindingDigest } from "../../src/shared/launch-contract.ts";
++import {
++  aggregateEffectsStates,
++  assertCompositeExecutionTargetShape,
++  assertExecutionTargetAsyncCompatible,
++  assertExecutionTargetWorktreeCompatible,
++  parseLockedSshDescriptor,
++  executionTargetBindingDigest,
++  executionTargetChildLaunch,
++  executionTargetStatusFields,
++  materializeExecutionTargetList,
++  resolveEffectsEvidenceState,
++  resolveExecutionTarget,
++  validateExecutionTarget,
++} from "../../src/runs/shared/execution-target.ts";
++
++const descriptor = {
++  version: 1,
++  name: "stanza",
++  target: "deploy@stanza",
++  hostname: "stanza",
++  cwd: "/home/monika/repos/monika",
++  allowedRoot: "/home/monika/repos",
++  knownHosts: "/runtime/secrets/ssh/known_hosts",
++};
++
++describe("execution targets", () => {
++  it("defaults locally and validates the closed public shape", () => {
++    assert.deepEqual(resolveExecutionTarget(undefined, {}).public, { kind: "local" });
++    assert.deepEqual(validateExecutionTarget({ kind: "ssh", name: "stanza" }), { kind: "ssh", name: "stanza" });
++    assert.throws(() => validateExecutionTarget({ kind: "ssh", name: "../stanza" }), /executionTarget/);
++    assert.throws(() => validateExecutionTarget({ kind: "local", name: "stanza" }), /extra fields/);
++    assert.throws(() => validateExecutionTarget({ kind: "ssh", name: "stanza", host: "evil" }), /extra fields/);
++  });
++
++  it("never infers relocation metadata when executionTarget is omitted", () => {
++    assert.deepEqual(resolveExecutionTarget(undefined, {
++      PI_SUBAGENT_EXECUTION_TARGET_NAME: "stanza",
++      PI_SUBAGENT_EXECUTION_TARGET_DIGEST: "a".repeat(64),
++    }).public, { kind: "local" });
++    assert.deepEqual(executionTargetChildLaunch({ kind: "local", public: { kind: "local" } }).env, {
++      MONIKA_SSH_LOCK_DESCRIPTOR: undefined,
++      PI_SUBAGENT_EXECUTION_TARGET_NAME: "local",
++      PI_SUBAGENT_EXECUTION_TARGET_DIGEST: undefined,
++      PI_SUBAGENT_EFFECTS_EVIDENCE_PATH: undefined,
++    });
++    assert.throws(() => resolveExecutionTarget(undefined, {
++      MONIKA_SSH_LOCK_DESCRIPTOR: "/definitely/missing/locked-target.json",
++    }), /locked SSH extension|ENOENT|no such file/i, "a locked ambient process cannot downgrade its local default or fall back");
++  });
++
++  it("maps the exact resolved lock extension and binding into the native child runtime", () => {
++    const remote = {
++      kind: "ssh" as const,
++      name: "stanza",
++      public: { kind: "ssh" as const, name: "stanza" },
++      descriptorPath: "/registry/stanza.json",
++      descriptorDigest: "d".repeat(64),
++      descriptor,
++      lockExtensionPath: "/extensions/ssh.ts",
++      lockCodeDigest: "c".repeat(64),
++    };
++    assert.deepEqual(executionTargetChildLaunch(remote, "/run/effects.jsonl"), {
++      extensions: ["/extensions/ssh.ts"],
++      env: {
++        MONIKA_SSH_LOCK_DESCRIPTOR: "/registry/stanza.json",
++        PI_SUBAGENT_SSH_LOCK_CODE_DIGEST: "c".repeat(64),
++        PI_SUBAGENT_EXECUTION_TARGET_NAME: "stanza",
++        PI_SUBAGENT_EXECUTION_TARGET_DIGEST: "d".repeat(64),
++        PI_SUBAGENT_EFFECTS_EVIDENCE_PATH: "/run/effects.jsonl",
++      },
++    });
++  });
++
++  it("binds descriptor, known_hosts, and lock code into target recovery identity", () => {
++    const raw = Buffer.from(JSON.stringify(descriptor));
++    const first = executionTargetBindingDigest(raw, Buffer.from("host-a"), "a".repeat(64));
++    assert.notEqual(first, executionTargetBindingDigest(raw, Buffer.from("host-b"), "a".repeat(64)));
++    assert.notEqual(first, executionTargetBindingDigest(raw, Buffer.from("host-a"), "b".repeat(64)));
++  });
++
++  it("binds public target identity and descriptor digest into launch recovery identity", () => {
++    const common = { definitionDigest: "d".repeat(64), task: "inspect" };
++    const local = launchBindingDigest({ ...common, executionTarget: { kind: "local" } });
++    const remoteA = launchBindingDigest({ ...common, executionTarget: { kind: "ssh", name: "stanza" }, executionTargetDigest: "a".repeat(64) });
++    const remoteB = launchBindingDigest({ ...common, executionTarget: { kind: "ssh", name: "stanza" }, executionTargetDigest: "b".repeat(64) });
++    assert.notEqual(local, remoteA);
++    assert.notEqual(remoteA, remoteB);
++  });
++
++  it("parses strict descriptors and rejects path escapes", () => {
++    assert.deepEqual(parseLockedSshDescriptor(JSON.stringify(descriptor), "stanza"), descriptor);
++    assert.throws(() => parseLockedSshDescriptor(JSON.stringify({ ...descriptor, cwd: "/etc" })), /outside allowedRoot/);
++    assert.throws(() => parseLockedSshDescriptor(JSON.stringify({ ...descriptor, target: "host;touch" })), /target/);
++    assert.throws(() => parseLockedSshDescriptor(JSON.stringify({ ...descriptor, extra: true })), /unknown or missing/);
++  });
++
++  it("treats missing, malformed, ambiguous, and unmatched remote effects evidence as unknown", () => {
++    const dir = mkdtempSync(path.join(tmpdir(), "execution-effects-"));
++    const evidence = path.join(dir, "effects.jsonl");
++    const remote = { kind: "ssh", public: { kind: "ssh", name: "stanza" } } as any;
++    assert.equal(resolveEffectsEvidenceState(remote, evidence), "unknown");
++    writeFileSync(evidence, `${JSON.stringify({ phase: "intent", id: "one" })}\n`);
++    assert.equal(resolveEffectsEvidenceState(remote, evidence), "unknown");
++    writeFileSync(evidence, `${JSON.stringify({ phase: "intent", id: "one" })}\n${JSON.stringify({ phase: "settled", id: "one", effects_state: "confirmed" })}\n`);
++    assert.equal(resolveEffectsEvidenceState(remote, evidence), "confirmed");
++    writeFileSync(evidence, `${JSON.stringify({ phase: "settled", id: "one", effects_state: "unknown" })}\n`);
++    assert.equal(resolveEffectsEvidenceState(remote, evidence), "unknown");
++  });
++
++  it("keeps dynamic child target identity aligned after runtime materialization", () => {
++    const remoteA = { kind: "ssh", name: "stanza", public: { kind: "ssh", name: "stanza" }, descriptorDigest: "a".repeat(64) } as any;
++    const remoteB = { kind: "ssh", name: "stanza", public: { kind: "ssh", name: "stanza" }, descriptorDigest: "b".repeat(64) } as any;
++    const targets: any[] = [undefined, remoteA, undefined];
++    materializeExecutionTargetList(targets, 1, [remoteA, remoteB]);
++    assert.deepEqual(targets.map(executionTargetStatusFields), [
++      {},
++      { executionTarget: { kind: "ssh", name: "stanza" }, executionTargetDigest: "a".repeat(64) },
++      { executionTarget: { kind: "ssh", name: "stanza" }, executionTargetDigest: "b".repeat(64) },
++      {},
++    ]);
++  });
++
++  it("aggregates runtime-materialized effects by final evidence index with unknown winning", () => {
++    const dir = mkdtempSync(path.join(tmpdir(), "execution-dynamic-effects-"));
++    const remote = { kind: "ssh", public: { kind: "ssh", name: "stanza" } } as any;
++    const runtimeTargets: any[] = [undefined, undefined, remote];
++    runtimeTargets.splice(1, 1, remote, undefined); // one dynamic placeholder -> two materialized children
++    writeFileSync(path.join(dir, "1.jsonl"), `${JSON.stringify({ phase: "intent", id: "dynamic" })}\n${JSON.stringify({ phase: "settled", id: "dynamic", effects_state: "confirmed" })}\n`);
++    const states = runtimeTargets.map((target, index) => resolveEffectsEvidenceState(target, path.join(dir, `${index}.jsonl`)));
++    assert.deepEqual(states, ["none", "confirmed", "none", "unknown"], "later SSH evidence must use its shifted runtime index");
++    assert.equal(aggregateEffectsStates(states), "unknown");
++    assert.equal(aggregateEffectsStates(["unknown"], true), "unknown", "an async child with unknown effects beats a confirmed host workflow step");
++  });
++
++  it("rejects a top-level target on composite launches rather than silently running locally", () => {
++    assert.throws(() => assertCompositeExecutionTargetShape({ kind: "ssh", name: "stanza" }, true), /supported only for a single-agent launch/);
++    assert.doesNotThrow(() => assertCompositeExecutionTargetShape(undefined, true));
++    assert.doesNotThrow(() => assertCompositeExecutionTargetShape({ kind: "local" }, false));
++  });
++
++  it("requires durable async lifecycle for SSH targets", () => {
++    assert.throws(() => assertExecutionTargetAsyncCompatible([{ kind: "ssh", name: "stanza" }], false), /require async:true/);
++    assert.doesNotThrow(() => assertExecutionTargetAsyncCompatible([{ kind: "ssh", name: "stanza" }], true));
++    assert.doesNotThrow(() => assertExecutionTargetAsyncCompatible([{ kind: "local" }], false));
++  });
++
++  it("rejects SSH worktrees before setup", () => {
++    assert.throws(() => assertExecutionTargetWorktreeCompatible([{ kind: "ssh", name: "stanza" }], true), /not supported/);
++    assert.doesNotThrow(() => assertExecutionTargetWorktreeCompatible([{ kind: "local" }], true));
++  });
++});
 diff --git a/test/unit/extension-bindings.test.ts b/test/unit/extension-bindings.test.ts
 index 089308e..b7d96ca 100644
 --- a/test/unit/extension-bindings.test.ts
@@ -2250,6 +2988,198 @@ index 089308e..b7d96ca 100644
  	});
  
  	it("gives an in-process foreground child only its bindings, restored after start", () => {
+diff --git a/test/unit/monika-host.test.ts b/test/unit/monika-host.test.ts
+new file mode 100644
+index 0000000..01a4ad2
+--- /dev/null
++++ b/test/unit/monika-host.test.ts
+@@ -0,0 +1,38 @@
++import assert from "node:assert/strict";
++import * as fs from "node:fs";
++import * as os from "node:os";
++import * as path from "node:path";
++import { describe, it } from "node:test";
++import { assertHostOriginRegistered } from "../../src/shared/monika-host.ts";
++
++describe("Monika host origin registration", () => {
++	it("uses the synchronously persisted canonical mapping as the event handoff acknowledgement", () => {
++		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-host-origin-"));
++		const previous = process.env.PI_SUBAGENTS_HOST_ACK_RESULTS;
++		try {
++			process.env.PI_SUBAGENTS_HOST_ACK_RESULTS = "1";
++			const sessionFile = path.join(root, "parent.jsonl");
++			const asyncDir = path.join(root, "runs", "run-1");
++			fs.writeFileSync(sessionFile, `${JSON.stringify({
++				type: "custom",
++				customType: "monika.subagent.run",
++				data: {
++					runId: "run-1",
++					artifactSessionId: sessionFile,
++					asyncDir,
++					origin: { turnId: "turn-1", topicId: "topic-1", postId: "post-1" },
++				},
++			})}\n`);
++			assert.doesNotThrow(() => assertHostOriginRegistered(sessionFile, "run-1", asyncDir));
++			fs.writeFileSync(sessionFile, `${JSON.stringify({
++				type: "custom", customType: "monika.subagent.run",
++				data: { runId: "run-1", artifactSessionId: sessionFile, asyncDir, origin: { turnId: null, topicId: null, postId: null } },
++			})}\n`);
++			assert.throws(() => assertHostOriginRegistered(sessionFile, "run-1", asyncDir), /did not durably register.*valid turn\/topic\/post origin/);
++		} finally {
++			if (previous === undefined) delete process.env.PI_SUBAGENTS_HOST_ACK_RESULTS;
++			else process.env.PI_SUBAGENTS_HOST_ACK_RESULTS = previous;
++			fs.rmSync(root, { recursive: true, force: true });
++		}
++	});
++});
+diff --git a/test/unit/monika-launch-contract.test.ts b/test/unit/monika-launch-contract.test.ts
+new file mode 100644
+index 0000000..643e25f
+--- /dev/null
++++ b/test/unit/monika-launch-contract.test.ts
+@@ -0,0 +1,77 @@
++import assert from "node:assert/strict";
++import { describe, it } from "node:test";
++import { resolveLaunchBinding } from "../../src/shared/launch-contract.ts";
++import type { AgentConfig } from "../../src/agents/agents.ts";
++
++const toolPlan = {
++	effectiveToolAllowlist: ["read"],
++	excludeTools: [],
++	extensionArgs: [],
++	effectiveMcpTools: [],
++};
++
++const common = {
++	task: "inspect the boundary",
++	model: "provider/model",
++	fast: false,
++	thinking: "low",
++	systemPrompt: "Be precise.",
++	toolPlan,
++};
++
++type TargetBinding = { executionTarget: { kind: "ssh"; name: string }; executionTargetDigest: string };
++
++function digestForPersistedStep(deliveryDisposition?: "awaited" | "follow_up" | "silent", target?: TargetBinding): string {
++	return resolveLaunchBinding({
++		definitionDigest: "a".repeat(64),
++		systemPromptMode: "replace",
++		inheritProjectContext: false,
++		inheritGlobalContext: false,
++		inheritSkills: false,
++		...common,
++		...(deliveryDisposition ? { deliveryDisposition } : {}),
++		...target,
++	}).launchContractDigest;
++}
++
++function digestForAgent(deliveryDisposition?: "awaited" | "follow_up" | "silent", target?: TargetBinding): string {
++	const agent = {
++		name: "worker",
++		description: "test worker",
++		definitionDigest: "a".repeat(64),
++		systemPromptMode: "replace",
++		inheritProjectContext: false,
++		inheritGlobalContext: false,
++		inheritSkills: false,
++	} as AgentConfig;
++	return resolveLaunchBinding({
++		agent,
++		...common,
++		...(deliveryDisposition ? { deliveryDisposition } : {}),
++		...target,
++	}).launchContractDigest;
++}
++
++describe("Monika launch binding", () => {
++	it("binds disposition for both agent and persisted chain-step identities", () => {
++		assert.notEqual(digestForAgent("awaited"), digestForAgent("follow_up"));
++		assert.notEqual(digestForPersistedStep("awaited"), digestForPersistedStep("follow_up"));
++		assert.equal(digestForAgent("awaited"), digestForAgent("awaited"));
++		assert.equal(digestForPersistedStep("silent"), digestForPersistedStep("silent"));
++	});
++
++	it("binds execution target and descriptor digest identically for agent and persisted forms", () => {
++		const targetA: TargetBinding = { executionTarget: { kind: "ssh", name: "stanza" }, executionTargetDigest: "a".repeat(64) };
++		const targetB: TargetBinding = { ...targetA, executionTargetDigest: "b".repeat(64) };
++		assert.notEqual(digestForAgent("awaited", targetA), digestForAgent("awaited", targetB));
++		assert.notEqual(digestForPersistedStep("awaited", targetA), digestForPersistedStep("awaited", targetB));
++		assert.equal(digestForAgent("awaited", targetA), digestForPersistedStep("awaited", targetA));
++	});
++
++	it("keeps the ordinary non-host projection unchanged when disposition is absent", () => {
++		assert.equal(digestForAgent(), digestForAgent());
++		assert.equal(digestForPersistedStep(), digestForPersistedStep());
++		assert.notEqual(digestForAgent(), digestForAgent("follow_up"));
++		assert.notEqual(digestForPersistedStep(), digestForPersistedStep("follow_up"));
++	});
++});
+diff --git a/test/unit/result-claim.test.ts b/test/unit/result-claim.test.ts
+new file mode 100644
+index 0000000..8732348
+--- /dev/null
++++ b/test/unit/result-claim.test.ts
+@@ -0,0 +1,59 @@
++import assert from "node:assert/strict";
++import { createHash } from "node:crypto";
++import * as fs from "node:fs";
++import * as os from "node:os";
++import * as path from "node:path";
++import { describe, it } from "node:test";
++import { AwaitedResultPendingError, claimAwaitedResult } from "../../src/runs/background/result-claim.ts";
++
++function writeJson(file: string, value: Record<string, unknown>): Buffer {
++	const bytes = Buffer.from(`${JSON.stringify(value)}\n`, "utf8");
++	fs.mkdirSync(path.dirname(file), { recursive: true });
++	fs.writeFileSync(file, bytes);
++	return bytes;
++}
++
++describe("awaited result claims", () => {
++	it("keeps paused, partial, and stopped publications unclaimable, then claims exact final resumed bytes", () => {
++		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-awaited-result-claim-"));
++		try {
++			const runId = "run-claim-final";
++			const sessionId = "session-claim-final";
++			const asyncDir = path.join(root, "async-subagent-runs", runId);
++			const resultPath = path.join(root, "async-subagent-results", `${runId}.json`);
++			const identity = {
++				lifecycleArtifactVersion: 5,
++				runId,
++				sessionId,
++				asyncDir,
++				deliveryDisposition: "awaited",
++			};
++			writeJson(path.join(asyncDir, "launch.json"), { ...identity, state: "spawned", execution_state: "active", outcome_state: "pending" });
++
++			for (const state of ["paused", "partial", "stopped"] as const) {
++				const execution_state = state === "partial" ? "terminal" : "interrupted";
++				const outcome_state = state === "partial" ? "failed" : "interrupted";
++				writeJson(path.join(asyncDir, "status.json"), { ...identity, state, execution_state, outcome_state });
++				writeJson(resultPath, { ...identity, state, execution_state, outcome_state, summary: `${state} bytes` });
++				assert.throws(
++					() => claimAwaitedResult({ asyncDir, runId, sessionId }),
++					(error) => error instanceof AwaitedResultPendingError && error.message.includes("not final"),
++				);
++				assert.equal(fs.existsSync(path.join(asyncDir, "result-claim.json")), false);
++			}
++
++			const final = { ...identity, state: "complete", execution_state: "terminal", outcome_state: "succeeded", summary: "exact resumed result" };
++			writeJson(path.join(asyncDir, "status.json"), final);
++			const finalBytes = writeJson(resultPath, final);
++			const claimed = claimAwaitedResult({ asyncDir, runId, sessionId, now: () => 1234 });
++			assert.equal(claimed.kind, "claimed");
++			if (claimed.kind !== "claimed") return;
++			assert.deepEqual(claimed.resultBytes, finalBytes);
++			assert.equal(claimed.claim.resultSha256, createHash("sha256").update(finalBytes).digest("hex"));
++			assert.equal(claimed.claim.resultSizeBytes, finalBytes.byteLength);
++			assert.equal(claimed.claim.claimedAt, 1234);
++		} finally {
++			fs.rmSync(root, { recursive: true, force: true });
++		}
++	});
++});
 diff --git a/test/unit/stale-run-reconciler.test.ts b/test/unit/stale-run-reconciler.test.ts
 index 17142c1..3efcce2 100644
 --- a/test/unit/stale-run-reconciler.test.ts
