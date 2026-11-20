@@ -46,6 +46,31 @@ including:
 Do not duplicate exact hashes or versions in overview documentation. Update the pin,
 its verification, and its tests together.
 
+## Forum dependency upgrades
+
+Forum security updates are independent of coordinated Pi upgrades. Change Forum
+manifests and its lockfile only; keep the strict release-age policy active and
+update any matching workspace override alongside a direct dependency pin.
+
+The Forum contracts use Zod 4 with a compatible `zod-to-openapi` generator. Upgrade
+those together, preserving explicit missing-field messages, nullable/optional
+fields, coercion, and strict-object validation. Library-generated validation wording
+is not a stable API; status codes and error envelopes remain the contract. Run
+`pnpm generate:openapi` from `services/forum` and review the generated reference,
+including nullable enum values, rather than hand-editing it.
+
+Glob/Minimatch security overrides are deliberately scoped: the static plugin uses
+Glob 14 natively, js-beautify uses an explicit Glob override, and only Minimatch
+9/10 consumers move to 11. Unaffected Minimatch 3 consumers retain their original
+API. Review upstream parent requirements before removing these overrides. The
+Forum unit wrapper exercises formatter CLI discovery and EditorConfig matching
+through the actual transitive consumers; run lint as well when changing pattern
+matching dependencies.
+
+Frontend unit tests retain Happy DOM's disabled external stylesheet and iframe
+loading defaults. Do not restore automatic resource loading to make tests pass;
+use the Playwright browser suite for genuine browser-loading behavior.
+
 ## Upgrading Pi
 
 Pi is installed both in the runtime image and as an agentd SDK dependency. Change

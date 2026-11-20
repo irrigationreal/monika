@@ -53,7 +53,8 @@ tests/forum/e2e.sh
 ```
 
 See `tests/forum/README.md` for the split between Vitest, mocked Playwright E2E,
-and opt-in live backend canaries. Forum unit coverage verifies that dedicated
+and opt-in live backend canaries. The unit wrapper also smoke-tests transitive
+Glob/Minimatch compatibility through js-beautify and EditorConfig. Forum unit coverage verifies that dedicated
 subagent child paths are omitted from both normal sync and direct import paths,
 and that channel-neutral canonical utterances project individually; live-first and
 sync-first races converge on identical transformed body, metadata, parent, follow-up,

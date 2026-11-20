@@ -11,6 +11,17 @@ type OpenApiOperation = {
 };
 
 describe('OpenAPI request bodies', () => {
+  it('includes null in nullable enum documentation', () => {
+    const document = buildOpenApiDocument() as {
+      paths: Record<string, { patch?: OpenApiOperation }>;
+    };
+    const theme = document.paths['/identities/{identityId}']?.patch?.requestBody?.content?.['application/json']
+      ?.schema?.['properties'] as Record<string, { enum?: unknown[]; nullable?: boolean }>;
+    expect(theme['theme']?.nullable).toBe(true);
+    expect(theme['theme']?.enum).toContain(null);
+    expect(theme['theme']?.enum).toContain('system');
+  });
+
   it('marks WebAuthn challenge-start empty JSON bodies as required', () => {
     const document = buildOpenApiDocument() as {
       paths: Record<string, { post?: OpenApiOperation }>;

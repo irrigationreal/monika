@@ -5,7 +5,7 @@ The forum source tests live beside the forum code under `services/forum/`:
 - Vitest unit/integration tests: `services/forum/packages/*/src/**/*.test.ts` and `services/forum/apps/codex-forum/src/**/*.test.ts`
 - Playwright E2E tests: `services/forum/apps/codex-forum/e2e/**/*.spec.ts`
 
-This directory contains repo-level wrappers used by local development and CI. Keep the test logic in the forum package; keep these scripts thin so CI and local runs exercise the same commands.
+This directory contains repo-level wrappers used by local development and CI, plus the dependency-graph compatibility smoke. Application tests stay beside their Forum package; wrappers keep CI and local entry points identical.
 
 ## Unit/integration
 
@@ -13,7 +13,12 @@ This directory contains repo-level wrappers used by local development and CI. Ke
 tests/forum/unit.sh
 ```
 
-Runs the forum workspace Vitest suites with isolated upload storage. Coverage includes
+Runs the dependency-graph compatibility smoke and Forum workspace Vitest suites
+with isolated upload storage. `dependency-compatibility.mjs` exercises js-beautify
+CLI glob discovery and EditorConfig matching through the real transitive graph
+to guard the scoped Glob/Minimatch major overrides. Contracts tests also cover
+Zod boundary semantics and nullable-enum OpenAPI output. Frontend tests retain
+Happy DOM's disabled external iframe/stylesheet loading defaults. Coverage includes
 minimal backend readiness, durable exact-identity retry across agentd transport outages,
 definite terminal failures, non-resurrection of superseded/abandoned dispatches, and
 fail-closed handling of an authoritatively missing canonical session link.
