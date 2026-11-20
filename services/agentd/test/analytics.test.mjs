@@ -85,6 +85,8 @@ test('normalizes tool operations without exposing arguments', () => {
   assert.equal(normalizeToolOperation('subagent', { action: 'WAIT', runId: 'secret' }), 'subagent_wait');
   assert.equal(normalizeToolOperation('subagent', { action: 'customer_api_key_123' }), 'subagent_other');
   assert.equal(normalizeToolOperation('mcp__pi-subagents__subagent_wait'), 'subagent_wait');
+  assert.equal(normalizeToolOperation('bg_wait'), 'subagent_wait');
+  assert.equal(normalizeToolOperation('mcp__pi-subagents__bg_wait'), 'subagent_wait');
   assert.equal(normalizeToolOperation('mcp__pi-subagents__subagent', { action: 'WAIT' }), 'subagent_wait');
   assert.equal(normalizeToolOperation('bash', { command: 'cd /secret && pnpm test' }), 'bash:pnpm');
   assert.equal(normalizeToolOperation('bash', { command: 'rg one .; rg two .' }), 'bash:mixed');
@@ -238,7 +240,7 @@ test('uses nearest-rank p95 and applies the minimum sample threshold', () => {
       timestamp: at(1, `01:00:${String(index).padStart(2, '0')}.000`),
       message: {
         role: 'assistant',
-        content: [{ type: 'toolCall', id: callId, name: 'subagent', arguments: { action: 'wait' } }],
+        content: [{ type: 'toolCall', id: callId, name: index % 3 === 0 ? 'bg_wait' : index % 3 === 1 ? 'mcp__pi-subagents__bg_wait' : 'subagent', arguments: { action: 'wait' } }],
         stopReason: 'stop',
         usage: { totalTokens: 1 },
       },

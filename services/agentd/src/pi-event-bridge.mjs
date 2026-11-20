@@ -25,7 +25,7 @@ export function classifyProviderError(error) {
   return "unknown";
 }
 
-const PRIVATE_SUBAGENT_TOOLS = new Set(['subagent', 'subagent_wait']);
+const PRIVATE_SUBAGENT_TOOLS = new Set(['subagent', 'subagent_wait', 'bg_wait']);
 function boundedString(value, max = 128) { return typeof value === 'string' && value.trim() ? value.trim().slice(0, max) : null; }
 function redactedSubagentResult(value) {
   const details = value && typeof value === 'object' && !Array.isArray(value) ? value.details : null;
@@ -50,7 +50,7 @@ function outwardToolResult(conv, event, callId, value) {
   const toolName = event.toolName ?? conv.current?.toolCalls?.get(callId) ?? 'tool';
   if (event.parentToolCallId) return redactedNestedResult(event);
   if (isCodemodeTool(toolName)) return codemodeTraceResult(value, Boolean(event.isError));
-  return PRIVATE_SUBAGENT_TOOLS.has(toolName) ? redactedSubagentResult(value) : value;
+  return PRIVATE_SUBAGENT_TOOLS.has(String(toolName).split('__').at(-1).toLowerCase()) ? redactedSubagentResult(value) : value;
 }
 
 function continuationWire(continuation) {

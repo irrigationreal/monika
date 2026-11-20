@@ -37,7 +37,7 @@ async function fixture(t, scripts, { block = false, active = true, dataExecute }
       agentsFilesOverride: () => ({ agentsFiles: [] }), additionalExtensionPaths: [extension], extensionFactories: [pi => {
         pi.registerTool({ name: 'fixture_data', label: 'Fixture', description: 'Return structured fixture', parameters: { type: 'object', properties: { token: { type: 'string' } } }, outputSchema: { type: 'object', properties: { count: { type: 'number' } }, required: ['count'] },
           async execute(...args) { executions++; if (dataExecute) return dataExecute(...args); return { content: [{ type: 'text', text: 'PRIVATE_INTERMEDIATE_RESULT' }], structuredContent: { count: 7 }, details: { private: 'PRIVATE_INTERMEDIATE_DETAILS' } }; } });
-        pi.registerTool({ name: 'subagent', label: 'Control', description: 'Must not execute nested', parameters: { type: 'object', properties: {} }, async execute() { throw Error('CONTROL_EXECUTED'); } });
+        for (const name of ['subagent', 'bg_wait', 'subagents_enable']) pi.registerTool({ name, label: 'Control', description: 'Must not execute nested', parameters: { type: 'object', properties: {} }, async execute() { throw Error('CONTROL_EXECUTED'); } });
         if (block) pi.on('tool_call', event => event.toolName === 'fixture_data' ? { block: true, reason: 'fixture blocked' } : undefined);
       }] } });
   assert.deepEqual(services.resourceLoader.getExtensions().errors, []);
@@ -115,6 +115,7 @@ test('script policy applies finite bounds and rejects invalid/oversized options'
   for (const code of ['// @options: {"timeout_ms":120001}\ntext(1)', '// @options: {"max_output_tokens":0}\ntext(1)', '// @options: null\ntext(1)', 'x'.repeat(131073)]) assert.throws(() => core.boundCodemodeSource(code));
   assert.equal(core.isDirectOnlyTool('mcp__pi-subagents__subagent'), true);
   assert.equal(core.isDirectOnlyTool('mcp__ssh__relocate'), true);
+  for (const name of ['bg_wait', 'subagents_enable', 'mcp__pi-subagents__bg_wait', 'mcp__pi-subagents__subagents_enable']) assert.equal(core.isDirectOnlyTool(name), true);
 });
 
 test('per-script call count and concurrency are bounded while normal tool execution remains delegated', async () => {
@@ -179,3 +180,16 @@ test('representative batch-read trial returns a compact comparison instead of fu
   assert.ok(!JSON.stringify(f.contexts.at(-1)).includes('bulk-source-data'));
   assert.ok(!JSON.stringify(f.wire).includes('bulk-source-data'));
 });
+
+for (const name of ['bg_wait', 'subagents_enable']) {
+  test(`${name} stays outside native codemode's catalog and nested execution`, async t => {
+    const f = await fixture(t, [`text(ALL_TOOLS.some(tool => tool.name === "${name}"));`, `await tools.${name}({});`]);
+    await f.session.prompt('check orchestration boundary');
+    const results = toolResults(f.manager);
+    assert.match(JSON.stringify(results[0].content), /false/);
+    assert.equal(results[1].isError, true);
+    assert.doesNotMatch(JSON.stringify(results[1].content), /CONTROL_EXECUTED/);
+    const direct = core.boundedToolContext({ tools: [], executeTool() { throw Error('CONTROL_EXECUTED'); } });
+    await assert.rejects(direct.executeTool(name, {}), /must be called directly/);
+  });
+}

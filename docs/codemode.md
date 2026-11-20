@@ -83,7 +83,8 @@ Unawaited calls are cancelled when a script ends; cancellation remains cooperati
 at the underlying tool boundary. Reconcile uncertain external effects before retry.
 Sequence dependent mutations; do not put related edits in `Promise.all()`.
 
-Delegation (`subagent`, wait and supervisor/intercom controls), execution/session
+Delegation (`subagent`, `subagents_enable`, wait tools including `subagent_wait`
+and `bg_wait`, and supervisor/intercom controls), execution/session
 control (`relocate`, `pi_run`) and durable-memory mutation tools must be called
 directly, including their Claude aliases. They are omitted from the script's tool
 catalog and guarded at the nested-call boundary. This is a tool-level ceiling,
