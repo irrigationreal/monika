@@ -249,8 +249,8 @@ index 1d9cfc6..9722318 100644
 +// Closed named references only: callers cannot supply hosts, credentials, SSH argv, or paths.
 +const ExecutionTargetSchema = Type.Unsafe<import("../runs/shared/execution-target.ts").ExecutionTarget>({
 +	oneOf: [
-+		{ type: "object", properties: { kind: { const: "local" } }, required: ["kind"], additionalProperties: false },
-+		{ type: "object", properties: { kind: { const: "ssh" }, name: { type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" } }, required: ["kind", "name"], additionalProperties: false },
++		{ type: "object", properties: { kind: { enum: ["local"] } }, required: ["kind"], additionalProperties: false },
++		{ type: "object", properties: { kind: { enum: ["ssh"] }, name: { type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" } }, required: ["kind", "name"], additionalProperties: false },
 +	],
 +	description: "Named execution target. SSH requires async:true and an administrator registry entry.",
 +});
@@ -3389,3 +3389,87 @@ index 0aa27af..64f8644 100644
  	for (const alreadyTerminal of [false, true]) {
  		for (const prefix of [false, true]) {
  			it(`collects nested results by ${prefix ? "prefix" : "exact id"} ${alreadyTerminal ? "after early completion" : "across active-to-terminal transition"}`, async (t) => {
+
+
+diff --git a/test/unit/schemas.test.ts b/test/unit/schemas.test.ts
+--- a/test/unit/schemas.test.ts
++++ b/test/unit/schemas.test.ts
+@@ -5,6 +5,7 @@
+ 
+ interface SubagentParamsSchema {
+ 	properties?: {
++		executionTarget?: JsonSchemaNode;
+ 		context?: {
+ 			type?: string;
+ 			enum?: string[];
+@@ -206,6 +207,24 @@
+ 		assert.match(description, /else fresh/);
+ 	});
+ 
++	it("uses provider-compatible closed execution target schemas", () => {
++		const executionTarget = SubagentParams?.properties?.executionTarget;
++		assert.ok(executionTarget, "executionTarget schema should exist");
++		const branches = executionTarget.oneOf;
++		assert.ok(Array.isArray(branches));
++		assert.deepEqual((branches[0] as JsonSchemaNode).properties && ((branches[0] as JsonSchemaNode).properties as JsonSchemaNode).kind, { enum: ["local"] });
++		assert.deepEqual((branches[1] as JsonSchemaNode).properties && ((branches[1] as JsonSchemaNode).properties as JsonSchemaNode).kind, { enum: ["ssh"] });
++		assert.ok(CompileSchema);
++		const validator = CompileSchema!(SubagentParams);
++		for (const target of [{ kind: "local" }, { kind: "ssh", name: "stanza" }]) {
++			assert.equal(validator.Check({ agent: "worker", task: "work", executionTarget: target }), true, JSON.stringify(target));
++		}
++		for (const target of [
++			{ kind: "other" }, { kind: "ssh" }, { kind: "local", name: "stanza" },
++			{ kind: "ssh", name: "../escape" }, { kind: "ssh", name: "stanza", host: "untrusted" },
++		]) assert.equal(validator.Check({ agent: "worker", task: "work", executionTarget: target }), false, JSON.stringify(target));
++	});
++
+ 	it("exposes one workflow field for the reply block, script paths, and named resources", () => {
+ 		const workflow = SubagentParams?.properties?.workflow;
+ 		assert.equal(hasAnyOfType(workflow, "boolean"), true);
+@@ -413,7 +432,7 @@
+ 				if (!current.value || typeof current.value !== "object") continue;
+ 
+ 				const node = current.value as JsonSchemaNode;
+-				if (Object.hasOwn(node, "description") && !Object.hasOwn(node, "type") && !Object.hasOwn(node, "anyOf")) {
++				if (Object.hasOwn(node, "description") && !Object.hasOwn(node, "type") && !Object.hasOwn(node, "anyOf") && !Object.hasOwn(node, "oneOf")) {
+ 					descriptionOnlyPaths.push(current.path);
+ 				}
+ 
+@@ -475,7 +494,9 @@
+ 		assert.match(String(properties.options?.description ?? ""), /acceptance, timeoutMs.*guide tool-reference\/parameter-reference/);
+ 		const { resolveDisabledFeatureSurface } = await import("../../src/shared/disabled-features.ts");
+ 		const structured = createProviderSchema!(resolveDisabledFeatureSurface({ disabledFeatures: ["workflow-scripts"] }));
+-		assert.ok(JSON.stringify(structured).length <= 2_450, `expected structured schema at or under 2,450 chars, got ${JSON.stringify(structured).length}`);
++		// Each executable leaf carries a closed local/SSH target union; without refs,
++		// the provider payload repeats that metadata in tasks, chain, and parallel leaves.
++		assert.ok(JSON.stringify(structured).length <= 3_395, `expected structured schema at or under 3,395 chars, got ${JSON.stringify(structured).length}`);
+ 		assert.deepEqual(Object.keys(structured.properties as JsonSchemaNode), ["agent", "task", "tasks", "chain", "async", "model", "cwd", "worktree", "output", "action", "id", "message", "options"]);
+ 
+ 		const nestedDescriptionPaths: string[] = [];
+diff --git a/test/unit/workflow-scripts-feature.test.ts b/test/unit/workflow-scripts-feature.test.ts
+--- a/test/unit/workflow-scripts-feature.test.ts
++++ b/test/unit/workflow-scripts-feature.test.ts
+@@ -60,14 +60,19 @@
+ 	it("accepts chain and tasks shapes with a small schema", () => {
+ 		const schema = createSubagentParamsSchema(surface);
+ 		const validator = Compile(schema);
+-		assert.equal(validator.Check({ task: "ship it", tasks: [{ agent: "scout", task: "a" }, { agent: "reviewer", task: "b" }] }), true);
+-		assert.equal(validator.Check({ task: "ship it", chain: [{ agent: "scout", task: "{task}", as: "scan" }, { parallel: [{ agent: "reviewer", task: "{outputs.scan}" }] }, { agent: "writer" }] }), true);
++		assert.equal(validator.Check({ task: "ship it", tasks: [{ agent: "scout", task: "a", executionTarget: { kind: "local" } }, { agent: "reviewer", task: "b", executionTarget: { kind: "ssh", name: "stanza" } }] }), true);
++		assert.equal(validator.Check({ task: "ship it", chain: [{ agent: "scout", task: "{task}", as: "scan", executionTarget: { kind: "local" } }, { parallel: [{ agent: "reviewer", task: "{outputs.scan}", executionTarget: { kind: "ssh", name: "stanza" } }] }, { agent: "writer" }] }), true);
+ 		assert.equal(validator.Check({ tasks: [{ agent: "scout", task: "a", cwd: "/repo", model: "p/m" }], chain: [{ agent: "a", task: "t", cwd: "/r", model: "p/m" }, { parallel: [{ agent: "b", task: "t", cwd: "/r", model: "p/m" }] }] }), true, "children accept cwd and model");
+ 		assert.equal(validator.Check({ tasks: [{ agent: "scout" }] }), false, "tasks items require task");
+ 		assert.equal(validator.Check({ chain: [{ agent: "scout", thinking: "x" }] }), false, "chain steps reject other fields");
+ 		assert.equal(validator.Check({ chain: [] }), false, "chain needs a step");
++		for (const target of [{ kind: "other" }, { kind: "ssh" }, { kind: "local", name: "stanza" }, { kind: "ssh", name: "../escape" }]) {
++			assert.equal(validator.Check({ tasks: [{ agent: "scout", task: "a", executionTarget: target }] }), false, JSON.stringify(target));
++		}
+ 		const serialized = JSON.stringify({ tasks: schema.properties.tasks, chain: schema.properties.chain });
+-		assert.ok(serialized.length <= 925, `chain/tasks schema is ${serialized.length} chars`);
++		// Closed target branches are repeated at each executable leaf because provider
++		// payloads cannot use $ref; this is the measured cost of preserving validation.
++		assert.ok(serialized.length <= 1_877, `chain/tasks schema is ${serialized.length} chars`);
+ 	});
+ 
+ 	it("replaces script guidance with chain/tasks guidance", () => {
