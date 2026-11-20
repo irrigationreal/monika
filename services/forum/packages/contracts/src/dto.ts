@@ -14,6 +14,8 @@ import type {
   MessageTemplateContext,
   MessageTemplateForumScope,
   MessageTemplateScope,
+  NestedToolCallSummary,
+  NestedToolCallsSummary,
   NotepadContentFormat,
   NotepadDraftOptions,
   RobotActivity,
@@ -541,10 +543,17 @@ export interface PlanDto {
   updatedAt: string;
 }
 
+export type NestedToolCallDto = NestedToolCallSummary;
+export type NestedToolCallsDto = NestedToolCallsSummary;
+
 export interface ToolRunDto {
   id: string;
   tool: string;
   parentPostId?: string | null;
+  /** Canonical agentd call identity, used only to relate nested trace rows. */
+  callId?: string | null;
+  parentCallId?: string | null;
+  nestedCalls?: NestedToolCallsDto | null;
   startedAt: string;
   finishedAt?: string | null;
   exitCode?: number | null;

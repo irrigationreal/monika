@@ -27,6 +27,7 @@ Pi sees the pool credential as an API key, so it does not activate Pi's native O
 - exposes non-core extension tools as deterministic `mcp__<namespace>__<tool>` aliases;
 - filters unknown flat tool names from the outbound payload;
 - rewrites the `Available tools:` section, `tool_choice`, and historical `tool_use` blocks consistently;
+- exposes native codemode through the stable `mcp__codemode__codemode` model-only alias, without allowing recursive script calls;
 - preserves Anthropic-native typed tools and Claude Code core tools;
 - applies the pool's Claude Code request headers.
 

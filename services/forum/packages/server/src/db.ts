@@ -265,6 +265,9 @@ export interface ToolRunRow {
   session_id: string;
   tool: string;
   parent_post_id: string | null;
+  call_id: string | null;
+  parent_call_id: string | null;
+  nested_calls_json: string | null;
   started_at: string;
   finished_at: string | null;
   exit_code: number | null;

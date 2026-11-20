@@ -1,4 +1,5 @@
 import { EchsClient } from '../echsClient';
+import { nestedToolCallsJson, nestedToolCommand, nestedToolResultSummary } from '../toolTraceMetadata';
 import { truncateText } from '../utils/automation';
 
 import type { EchsClientOptions, EchsEvent } from '../echsClient';
@@ -554,33 +555,80 @@ export class AutoRunDirector {
           if (item.type !== 'function_call' && item.type !== 'local_shell_call') break;
           const callId = item.call_id ?? item.callId ?? item.id;
           if (typeof callId !== 'string' || !callId) break;
-          if (toolRunByCallId.has(callId)) break;
           const tool = mapEchsToolName(item.name ?? item.type);
-          const command = formatEchsToolCommand(item);
-          const toolRun = this.store.createToolRun({
-            topicId: opts.topicId,
-            sessionId: session.id,
-            tool,
-            parentPostId: opts.triggerPostId,
-            command,
-            outputSummary: null,
-            visibility: 'internal',
-          });
+          const parentCallId = item.parent_call_id ?? item.parentCallId ?? null;
+          const command = parentCallId ? nestedToolCommand(item.name ?? item.type) : formatEchsToolCommand(item);
+          const existing = this.store.getToolRunByCallId(session.id, callId);
+          const toolRun = existing
+            ? this.store.updateToolRun(existing.id, {
+                tool,
+                parent_call_id: typeof parentCallId === 'string' ? parentCallId : existing.parent_call_id,
+                command: command ?? existing.command,
+              })
+            : this.store.createToolRun({
+                topicId: opts.topicId,
+                sessionId: session.id,
+                tool,
+                parentPostId: opts.triggerPostId,
+                callId,
+                parentCallId: typeof parentCallId === 'string' ? parentCallId : null,
+                command,
+                outputSummary: null,
+                visibility: 'internal',
+              });
           toolRunByCallId.set(callId, toolRun.id);
+          break;
+        }
+        case 'tool_updated': {
+          const data = event.data as any;
+          const callId = data?.call_id ?? data?.callId ?? null;
+          if (typeof callId !== 'string' || !callId) break;
+          const toolRunId =
+            toolRunByCallId.get(callId) ?? this.store.getToolRunByCallId(session.id, callId)?.id ?? null;
+          if (!toolRunId) break;
+          const existing = this.store.getToolRun(toolRunId);
+          if (!existing) break;
+          const nestedCalls = nestedToolCallsJson(data?.nested_calls ?? data?.nestedCalls);
+          const partialResult = data?.partial_result ?? data?.partialResult;
+          this.store.updateToolRun(toolRunId, {
+            parent_call_id: data?.parent_call_id ?? data?.parentCallId ?? existing.parent_call_id,
+            nested_calls_json: nestedCalls ?? existing.nested_calls_json,
+            output_summary:
+              partialResult === null || partialResult === undefined
+                ? existing.output_summary
+                : truncateText(
+                    existing.parent_call_id || data?.parent_call_id || data?.parentCallId
+                      ? nestedToolResultSummary(partialResult)
+                      : summarizeToolResult(partialResult),
+                    500
+                  ),
+          });
           break;
         }
         case 'tool_completed': {
           const data = event.data as any;
           const callId = data?.call_id ?? data?.callId ?? null;
           if (typeof callId !== 'string' || !callId) break;
-          const toolRunId = toolRunByCallId.get(callId);
+          const toolRunId =
+            toolRunByCallId.get(callId) ?? this.store.getToolRunByCallId(session.id, callId)?.id ?? null;
           if (!toolRunId) break;
-          const rawSummary = summarizeToolResult(data?.result);
-          const summary = truncateText(rawSummary, 500);
+          const existing = this.store.getToolRun(toolRunId);
+          if (!existing) break;
+          const nestedCalls = nestedToolCallsJson(data?.nested_calls ?? data?.nestedCalls);
           this.store.updateToolRun(toolRunId, {
             finished_at: nowIso(),
-            exit_code: null,
-            output_summary: summary,
+            exit_code: data?.is_error || data?.isError ? 1 : null,
+            parent_call_id: data?.parent_call_id ?? data?.parentCallId ?? existing.parent_call_id,
+            nested_calls_json: nestedCalls ?? existing.nested_calls_json,
+            output_summary:
+              data?.result === null || data?.result === undefined
+                ? existing.output_summary
+                : truncateText(
+                    existing.parent_call_id || data?.parent_call_id || data?.parentCallId
+                      ? nestedToolResultSummary(data.result)
+                      : summarizeToolResult(data.result),
+                    500
+                  ),
           });
           toolRunByCallId.delete(callId);
           break;

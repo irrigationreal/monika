@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { codemodeTraceResult, isCodemodeTool, nestedCallTrace, redactedNestedResult } from "./nested-call-trace.mjs";
 
 function extractUsage(messages) {
   if (!Array.isArray(messages)) return null;
@@ -47,6 +48,8 @@ function redactedSubagentResult(value) {
 }
 function outwardToolResult(conv, event, callId, value) {
   const toolName = event.toolName ?? conv.current?.toolCalls?.get(callId) ?? 'tool';
+  if (event.parentToolCallId) return redactedNestedResult(event);
+  if (isCodemodeTool(toolName)) return codemodeTraceResult(value, Boolean(event.isError));
   return PRIVATE_SUBAGENT_TOOLS.has(toolName) ? redactedSubagentResult(value) : value;
 }
 
@@ -104,13 +107,13 @@ export function handlePiEvent(conv, event, emit, createId = randomUUID) {
     case "tool_execution_start": {
       const callId = event.toolCallId ?? event.id ?? createId();
       if (conv.current) conv.current.toolCalls.set(callId, event.toolName ?? "tool");
-      emit(conv, "item_started", { item: { type: "function_call", id: callId, call_id: callId, name: event.toolName ?? "tool", arguments: event.args ?? event.input ?? event.arguments ?? null } });
+      emit(conv, "item_started", { item: { type: "function_call", id: callId, call_id: callId, name: event.toolName ?? "tool", arguments: event.parentToolCallId ? { redacted: true } : (event.args ?? event.input ?? event.arguments ?? null), ...(event.parentToolCallId ? { parent_call_id: event.parentToolCallId } : {}) } });
       break;
     }
     case "tool_execution_update": {
       const callId = event.toolCallId ?? event.id ?? createId();
       const toolName = event.toolName ?? conv.current?.toolCalls?.get(callId) ?? "tool";
-      emit(conv, "tool_updated", { call_id: callId, tool_name: toolName, args: event.args ?? null, partial_result: outwardToolResult(conv, event, callId, event.partialResult ?? null) });
+      emit(conv, "tool_updated", { call_id: callId, tool_name: toolName, args: event.parentToolCallId ? null : (event.args ?? null), ...(event.parentToolCallId ? { parent_call_id: event.parentToolCallId } : {}), ...(isCodemodeTool(toolName) ? { nested_calls: nestedCallTrace(event.partialResult?.details) } : {}), partial_result: outwardToolResult(conv, event, callId, event.partialResult ?? null) });
       break;
     }
     case "tool_execution_end": {
@@ -120,7 +123,9 @@ export function handlePiEvent(conv, event, emit, createId = randomUUID) {
       emit(conv, "tool_completed", {
         call_id: callId,
         tool_name: toolName,
-        args: event.args ?? null,
+        args: event.parentToolCallId ? null : (event.args ?? null),
+        ...(event.parentToolCallId ? { parent_call_id: event.parentToolCallId } : {}),
+        ...(isCodemodeTool(toolName) ? { nested_calls: nestedCallTrace(result?.details) } : {}),
         result: outwardToolResult(conv, event, callId, result),
         is_error: Boolean(event.isError),
         duration_ms: Number.isFinite(event.durationMs) && event.durationMs >= 0 ? event.durationMs : null,
@@ -128,6 +133,13 @@ export function handlePiEvent(conv, event, emit, createId = randomUUID) {
       break;
     }
     case "message_end": {
+      // Pi attaches the authoritative bounded record at tool-result persistence,
+      // after tool_execution_end. Enrich the existing trace row, never add one.
+      if (event.message?.role === "toolResult" && event.message.nestedCalls) {
+        emit(conv, "tool_updated", { call_id: event.message.toolCallId, tool_name: event.message.toolName,
+          partial_result: null, nested_calls: nestedCallTrace(event.message.nestedCalls) });
+        break;
+      }
       if (!conv.current || event.message?.role !== "assistant") break;
       if (["error", "aborted", "cancelled"].includes(event.message.stopReason)) {
         conv.current.terminalError = String(event.message.errorMessage ?? "Provider request failed");

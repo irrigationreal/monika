@@ -61,6 +61,7 @@ const server = http.createServer((req, res) => {
     );
     const requiredTools = ['pi_run', 'browser', 'web_search', 'generate_image', 'subagent', 'subagent_wait', 'subagent_supervisor', 'recall'];
     const missingTools = requiredTools.filter((name) => !functionToolNames.has(name));
+    if (!(body.tools ?? []).some(tool => tool.name === 'codemode')) missingTools.push('codemode');
     if (missingTools.length > 0) {
       res.writeHead(400, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: { message: `Expected package tools in model request; missing: ${missingTools.join(', ')}` } }));

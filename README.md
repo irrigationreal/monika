@@ -137,6 +137,8 @@ Monika/
   forum↔agentd contract
 - [Subagents](docs/subagents.md) — specialist roles, identity boundaries, durable
   execution, provenance, and recovery
+- [Codemode](docs/codemode.md) — native tool scripts, execution limits, and nested
+  trace boundaries
 - [Maintenance](docs/maintenance.md) — dependency policy, CI entry points, and Pi
   upgrades
 - [Agentd](services/agentd/README.md), [memstore](services/memstore/README.md),

@@ -5,10 +5,18 @@ import { join } from 'node:path';
 import { normalizedOriginKey } from '@irrigationreal/codex-forum-core';
 
 import { EchsClient, EchsDispatchNotAcceptedError } from './echsClient';
+import { mapToolRunRowToDomain } from './mappers/db';
+import { mapToolRunToDto } from './mappers/dto';
 import { InMemoryMessageTamperLayer } from './messageTamper';
 import { renderPersonaIndexMarkdown, safePersonaKey } from './personaPrompt';
 import { AssistantProjectionService } from './services/assistantProjectionService';
 import { AttachmentHandoffService } from './services/attachmentHandoffService';
+import {
+  nestedToolCallsJson,
+  nestedToolCommand,
+  nestedToolResultSummary,
+  parseNestedToolCallsJson,
+} from './toolTraceMetadata';
 import { buildTtsStoragePath, generateTtsMp3 } from './tts';
 import { truncateText } from './utils/automation';
 
@@ -21,7 +29,7 @@ import type {
   UtteranceOrigin,
 } from '@irrigationreal/codex-forum-core';
 
-import type { AssistantProjectionRow } from './db';
+import type { AssistantProjectionRow, ToolRunRow } from './db';
 import type {
   EchsCancellationResult,
   EchsCloneSnapshot,
@@ -2291,30 +2299,44 @@ export class EchsBridge {
         const item = data?.item;
         if (!item?.type) break;
         if (item.type === 'function_call' || item.type === 'local_shell_call') {
-          const callId = item.call_id ?? item.id;
+          const callId = nonEmptyId(item.call_id, item.callId, item.id);
+          const parentCallId = nonEmptyId(item.parent_call_id, item.parentCallId);
           const tool = mapEchsToolName(item.name ?? item.type);
-          const command = formatEchsToolCommand(item);
-          const toolRun = this.store.createToolRun({
-            topicId: ctx.topicId,
-            sessionId: ctx.sessionId,
-            tool,
-            parentPostId: ctx.lastUserPostId,
-            command,
-            outputSummary: null,
-            visibility: 'internal',
-          });
+          const command = parentCallId ? nestedToolCommand(item.name ?? item.type) : formatEchsToolCommand(item);
+          const existing = callId ? this.store.getToolRunByCallId(ctx.sessionId, callId) : null;
+          const toolRun = existing
+            ? this.store.updateToolRun(existing.id, {
+                tool,
+                parent_call_id: parentCallId ?? existing.parent_call_id,
+                command: command ?? existing.command,
+              })
+            : this.store.createToolRun({
+                topicId: ctx.topicId,
+                sessionId: ctx.sessionId,
+                tool,
+                parentPostId: ctx.lastUserPostId,
+                callId,
+                parentCallId,
+                command,
+                outputSummary: null,
+                visibility: 'internal',
+              });
           if (callId) {
             this.toolRunByCallId.set(callId, toolRun.id);
           }
-          // Notify the client that a new tool started — this arrives before
-          // the state event and lets the client record checkpoints for
-          // reasoning/tool interleaving.
-          this.bus.emit(ctx.topicId, {
-            type: 'tool_started',
-            data: { toolRunId: toolRun.id, tool, callId: callId ?? null },
-          });
-          // Record a server-side reasoning checkpoint for saved-trace interleaving
-          ctx.reasoningCheckpoints.push(ctx.reasoningSummary.length);
+          if (!existing) {
+            // Notify the client that a new tool started — this arrives before
+            // the state event and lets the client record checkpoints for
+            // reasoning/tool interleaving. Replayed starts reuse the canonical
+            // row and do not append a duplicate live segment.
+            this.bus.emit(ctx.topicId, {
+              type: 'tool_started',
+              data: { toolRunId: toolRun.id, tool, callId: callId ?? null, parentCallId },
+            });
+            // Record a server-side reasoning checkpoint for saved-trace interleaving.
+            ctx.reasoningCheckpoints.push(ctx.reasoningSummary.length);
+          }
+          this.emitToolRun(ctx.topicId, toolRun.id);
           if (ctx.currentTurnId !== null) {
             this.store.upsertRobotState({
               topicId: ctx.topicId,
@@ -2333,14 +2355,30 @@ export class EchsBridge {
         const data = event.data as any;
         const callId = data?.call_id ?? data?.callId;
         if (callId) {
-          const toolRunId = this.toolRunByCallId.get(callId);
+          const toolRunId =
+            this.toolRunByCallId.get(callId) ?? this.store.getToolRunByCallId(ctx.sessionId, callId)?.id ?? null;
           if (toolRunId) {
-            const rawSummary = summarizeToolResult(data?.partial_result ?? data?.partialResult);
-            const { text: summary, redacted } = redactSensitiveData(rawSummary);
-            this.store.updateToolRun(toolRunId, {
-              output_summary: truncateText(summary, 1000),
-              redactions_applied: redacted ? 1 : 0,
-            });
+            const existing = this.store.getToolRun(toolRunId);
+            if (!existing) break;
+            const partialResult = data?.partial_result ?? data?.partialResult;
+            const updates: Partial<Omit<ToolRunRow, 'id' | 'topic_id' | 'session_id'>> = {};
+            const parentCallId = nonEmptyId(data?.parent_call_id, data?.parentCallId);
+            if (parentCallId) updates.parent_call_id = parentCallId;
+            const nestedCalls = nestedToolCallsJson(data?.nested_calls ?? data?.nestedCalls);
+            if (nestedCalls) updates.nested_calls_json = nestedCalls;
+            // A final message_end metadata refresh intentionally carries a null
+            // partial result. Preserve the separately stored root output.
+            if (partialResult !== null && partialResult !== undefined) {
+              const rawSummary =
+                existing.parent_call_id || parentCallId
+                  ? nestedToolResultSummary(partialResult)
+                  : summarizeToolResult(partialResult);
+              const { text: summary, redacted } = redactSensitiveData(rawSummary);
+              updates.output_summary = truncateText(summary, 1000);
+              updates.redactions_applied = existing.redactions_applied || redacted ? 1 : 0;
+            }
+            this.store.updateToolRun(toolRunId, updates);
+            this.emitToolRun(ctx.topicId, toolRunId);
             this.emitState(ctx.topicId);
           }
         }
@@ -2350,16 +2388,29 @@ export class EchsBridge {
         const data = event.data as any;
         const callId = data?.call_id ?? data?.callId;
         if (callId) {
-          const toolRunId = this.toolRunByCallId.get(callId);
+          const toolRunId =
+            this.toolRunByCallId.get(callId) ?? this.store.getToolRunByCallId(ctx.sessionId, callId)?.id ?? null;
           if (toolRunId) {
-            const rawSummary = summarizeToolResult(data?.result);
-            const { text: summary, redacted } = redactSensitiveData(rawSummary);
-            this.store.updateToolRun(toolRunId, {
+            const existing = this.store.getToolRun(toolRunId);
+            if (!existing) break;
+            const result = data?.result;
+            const updates: Partial<Omit<ToolRunRow, 'id' | 'topic_id' | 'session_id'>> = {
               finished_at: new Date().toISOString(),
               exit_code: data?.is_error || data?.isError ? 1 : null,
-              output_summary: truncateText(summary, 1000),
-              redactions_applied: redacted ? 1 : 0,
-            });
+            };
+            const parentCallId = nonEmptyId(data?.parent_call_id, data?.parentCallId);
+            if (parentCallId) updates.parent_call_id = parentCallId;
+            const nestedCalls = nestedToolCallsJson(data?.nested_calls ?? data?.nestedCalls);
+            if (nestedCalls) updates.nested_calls_json = nestedCalls;
+            if (result !== null && result !== undefined) {
+              const rawSummary =
+                existing.parent_call_id || parentCallId ? nestedToolResultSummary(result) : summarizeToolResult(result);
+              const { text: summary, redacted } = redactSensitiveData(rawSummary);
+              updates.output_summary = truncateText(summary, 1000);
+              updates.redactions_applied = existing.redactions_applied || redacted ? 1 : 0;
+            }
+            this.store.updateToolRun(toolRunId, updates);
+            this.emitToolRun(ctx.topicId, toolRunId);
             // Detect spawn_agent completion by checking for agent_id in result
             const parsedResult = typeof data?.result === 'string' ? safeJsonParse(data.result) : data?.result;
             const agentId = parsedResult?.agent_id ?? null;
@@ -2372,7 +2423,7 @@ export class EchsBridge {
             }
           }
         }
-        if (ctx.currentTurnId !== null) {
+        if (ctx.currentTurnId !== null && !data?.parent_call_id && !data?.parentCallId) {
           this.store.upsertRobotState({
             topicId: ctx.topicId,
             sessionId: ctx.sessionId,
@@ -2825,6 +2876,11 @@ export class EchsBridge {
     }
   }
 
+  private emitToolRun(topicId: string, toolRunId: string): void {
+    const row = this.store.getToolRun(toolRunId);
+    if (row) this.bus.emit(topicId, { type: 'tool_run', data: mapToolRunToDto(mapToolRunRowToDomain(row)) });
+  }
+
   private emitState(topicId: string): void {
     const state = this.store.getRobotState(topicId);
     if (!state) {
@@ -2835,6 +2891,9 @@ export class EchsBridge {
       id: run.id,
       tool: run.tool,
       parentPostId: run.parent_post_id,
+      callId: run.call_id,
+      parentCallId: run.parent_call_id,
+      nestedCalls: parseNestedToolCallsJson(run.nested_calls_json),
       startedAt: run.started_at,
       finishedAt: run.finished_at,
       exitCode: run.exit_code,

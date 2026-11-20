@@ -88,7 +88,10 @@
           </div>
         </div>
 
-        <div v-else class="vb-tool-item">
+        <div v-else class="vb-tool-item" :class="{ 'vb-tool-item--nested': Boolean(card.tool.parentCallId) }">
+          <div v-if="card.tool.parentCallId" class="vb-tool-nested-parent">
+            ↳ Nested call in {{ card.parentToolName ?? 'script' }}
+          </div>
           <button
             class="vb-tool-toggle vb-tool-toggle--compact"
             type="button"
@@ -115,6 +118,25 @@
             <div v-if="toolMini(card.tool).output" class="vb-tool-block">
               <div class="vb-tool-block-title">Output</div>
               <pre class="vb-tool-pre">{{ toolMini(card.tool).output }}</pre>
+            </div>
+          </div>
+          <div v-if="card.tool.nestedCalls" class="vb-tool-nested-summary">
+            <div class="vb-tool-nested-summary-title">
+              <span>Nested calls · {{ card.tool.nestedCalls.calls.length }}</span>
+              <span v-if="!card.tool.nestedCalls.complete" class="vb-tool-pill vb-trace-tool-status--running">
+                record incomplete
+              </span>
+            </div>
+            <div
+              v-for="nested in toolExpanded(card.tool.id) ? card.tool.nestedCalls.calls : []"
+              :key="nested.id"
+              class="vb-tool-nested-call"
+            >
+              <span>{{ nested.name }}</span>
+              <span v-if="nestedDurationLabel(nested.durationMs)" class="vb-tool-duration">
+                {{ nestedDurationLabel(nested.durationMs) }}
+              </span>
+              <span class="vb-tool-pill" :class="nestedStatusClass(nested.status)">{{ nested.status }}</span>
             </div>
           </div>
         </div>
@@ -147,7 +169,7 @@ import { computed, ref, watch } from 'vue';
 import { useForumState } from '../composables/useForumState';
 import { useMarkdown } from '../composables/useMarkdown';
 import { getToolMiniModel } from '../lib/toolMiniView';
-import { buildLiveTraceItems, buildPersistedTraceItems } from '../lib/unifiedTrace';
+import { buildLiveTraceItems, buildPersistedTraceItems, restoreHydratedLiveTools } from '../lib/unifiedTrace';
 import ToolMiniView from './ToolMiniView.vue';
 
 import type { ToolRunDto, TopicTraceDto } from '../lib/apiClient';
@@ -189,7 +211,7 @@ const expandedTools = ref(new Set<string>());
 type TracePlan = TopicTraceDto['plans'][number];
 type TraceCard =
   | { type: 'reasoning'; key: string; step: ReasoningStep; running: boolean }
-  | { type: 'tool'; key: string; tool: ToolRunDto };
+  | { type: 'tool'; key: string; tool: ToolRunDto; parentToolName: string | null };
 interface TraceGroup {
   id: string;
   parentPostId: string | null;
@@ -229,11 +251,18 @@ function laterTimestamp(current: string, candidate: string | null | undefined): 
   return candidate && candidate > current ? candidate : current;
 }
 
-function cardsForItems(groupId: string, items: UnifiedTraceItem[], live: boolean): TraceCard[] {
+function cardsForItems(groupId: string, items: UnifiedTraceItem[], live: boolean, tools: ToolRunDto[]): TraceCard[] {
   const cards: TraceCard[] = [];
+  const toolByCallId = new Map(tools.flatMap((tool) => (tool.callId ? [[tool.callId, tool] as const] : [])));
   for (const item of items) {
     if (item.type === 'tool') {
-      cards.push({ type: 'tool', key: `${groupId}:tool:${item.tool.id}`, tool: item.tool });
+      const parentTool = item.tool.parentCallId ? toolByCallId.get(item.tool.parentCallId) : null;
+      cards.push({
+        type: 'tool',
+        key: `${groupId}:tool:${item.tool.id}`,
+        tool: item.tool,
+        parentToolName: parentTool ? getToolMiniModel(parentTool).name : null,
+      });
       continue;
     }
     for (let index = 0; index < item.steps.length; index += 1) {
@@ -264,6 +293,7 @@ const traceGroups = computed<TraceGroup[]>(() => {
 
   const toolById = new Map<string, ToolRunDto>();
   for (const tool of state.topicTrace.value?.toolRuns ?? []) toolById.set(tool.id, tool);
+  for (const tool of state.liveToolRuns.value) toolById.set(tool.id, tool);
   for (const tool of state.robotState.value?.recentToolRuns ?? []) toolById.set(tool.id, tool);
 
   const groups = new Map<string, MutableGroup>();
@@ -307,13 +337,14 @@ const traceGroups = computed<TraceGroup[]>(() => {
             tools: group.tools,
           })
         : [];
+      if (items.length > 0 && live) items = restoreHydratedLiveTools(items, group.tools);
       if (items.length === 0)
         items = buildPersistedTraceItems({
           reasoningText: group.plan?.summary ?? group.plan?.content ?? null,
           reasoningCheckpoints: group.plan?.reasoningCheckpoints ?? null,
           tools: group.tools,
         });
-      return { ...group, live, cards: cardsForItems(group.id, items, live) };
+      return { ...group, live, cards: cardsForItems(group.id, items, live, group.tools) };
     })
     .filter((group) => group.cards.length > 0)
     .sort((a, b) => b.latestAt.localeCompare(a.latestAt));
@@ -389,6 +420,18 @@ function toolStatusClass(tool: ToolRunDto): string {
   if (!tool.finishedAt) return 'vb-trace-tool-status--running';
   const exitCode = toolExitCodeValue(tool);
   return exitCode === null || exitCode === 0 ? 'vb-trace-tool-status--ok' : 'vb-trace-tool-status--error';
+}
+function nestedDurationLabel(durationMs: number | undefined): string | null {
+  if (durationMs === undefined || !Number.isFinite(durationMs) || durationMs < 0) return null;
+  if (durationMs < 1000) return `${durationMs}ms`;
+  const seconds = durationMs / 1000;
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
+}
+function nestedStatusClass(status: 'ok' | 'error' | 'unfinished'): string {
+  if (status === 'ok') return 'vb-trace-tool-status--ok';
+  if (status === 'error') return 'vb-trace-tool-status--error';
+  return 'vb-trace-tool-status--running';
 }
 function toolDurationLabel(tool: ToolRunDto): string | null {
   if (!tool.startedAt || !tool.finishedAt) return null;

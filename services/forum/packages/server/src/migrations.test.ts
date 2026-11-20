@@ -158,6 +158,18 @@ describe('schema migrations', () => {
     ).toEqual({ requested_model: null, model: null, reasoning_effort: null });
   });
 
+  it('adds optional nested tool trace metadata to existing databases', () => {
+    runMigrations(db, { targetVersion: 54 });
+    const before = db.prepare('pragma table_info(tool_runs)').all() as Array<{ name: string }>;
+    expect(before.map((column) => column.name)).not.toContain('parent_call_id');
+
+    runMigrations(db, { targetVersion: 55 });
+    const after = db.prepare('pragma table_info(tool_runs)').all() as Array<{ name: string }>;
+    expect(after.map((column) => column.name)).toEqual(
+      expect.arrayContaining(['call_id', 'parent_call_id', 'nested_calls_json'])
+    );
+  });
+
   it('records applied schema versions', () => {
     runMigrations(db);
     const rows = db.prepare('select version from schema_migrations order by version asc').all() as Array<{

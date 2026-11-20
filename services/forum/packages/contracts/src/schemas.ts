@@ -665,6 +665,22 @@ export const ToolRunDtoSchema: z.ZodType<ToolRunDto> = z.object({
   id: z.string(),
   tool: z.string(),
   parentPostId: optionalNullableString,
+  callId: optionalNullableString,
+  parentCallId: optionalNullableString,
+  nestedCalls: z
+    .object({
+      calls: z.array(
+        z.object({
+          id: z.string(),
+          name: z.string(),
+          status: z.enum(['ok', 'error', 'unfinished']),
+          durationMs: z.number().nonnegative().optional(),
+        })
+      ),
+      complete: z.boolean(),
+    })
+    .nullable()
+    .optional(),
   startedAt: z.string(),
   finishedAt: optionalNullableString,
   exitCode: z.number().nullable().optional(),

@@ -19,6 +19,7 @@ describe('canonical topic Trace workspace', () => {
     expect(traceSource).not.toContain('codex-forum:trace:order');
     expect(traceSource).toContain('buildLiveTraceItems');
     expect(traceSource).toContain('buildPersistedTraceItems');
+    expect(traceSource).toContain('restoreHydratedLiveTools(items, group.tools)');
   });
 
   it('renders a neutral shell until the selected projection belongs to the route topic', () => {
@@ -28,6 +29,15 @@ describe('canonical topic Trace workspace', () => {
     expect(topicSource).toContain('<div v-if="!topicReady" class="vb-section">');
     expect(topicSource).toContain('<div class="vb-empty" role="status">Loading topic…</div>');
     expect(topicSource).toContain('<section\n    v-else');
+  });
+
+  it('shows nested child relationships and bounded parent summaries without adding another trace model', () => {
+    expect(traceSource).toContain("'vb-tool-item--nested': Boolean(card.tool.parentCallId)");
+    expect(traceSource).toContain("Nested call in {{ card.parentToolName ?? 'script' }}");
+    expect(traceSource).toContain('card.tool.nestedCalls.calls');
+    expect(traceSource).toContain('record incomplete');
+    expect(traceSource).toContain('nestedDurationLabel(nested.durationMs)');
+    expect(postsCss).toContain('.vb-tool-item--nested');
   });
 
   it('hands off visible movement from startup to the active Trace preview', () => {

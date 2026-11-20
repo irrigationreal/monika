@@ -14,11 +14,26 @@ export interface PlanArtifact {
   visibility: ArtifactVisibility;
 }
 
+export interface NestedToolCallSummary {
+  id: string;
+  name: string;
+  status: 'ok' | 'error' | 'unfinished';
+  durationMs?: number;
+}
+
+export interface NestedToolCallsSummary {
+  calls: NestedToolCallSummary[];
+  complete: boolean;
+}
+
 export interface ToolRunSummary {
   id: ToolRunId;
   topicId: TopicId;
   sessionId: SessionId;
   tool: 'exec' | 'apply_patch' | 'web' | 'other';
+  callId?: string | null;
+  parentCallId?: string | null;
+  nestedCalls?: NestedToolCallsSummary | null;
   startedAt: string;
   finishedAt?: string | null;
   exitCode?: number | null;

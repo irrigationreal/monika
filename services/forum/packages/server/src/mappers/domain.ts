@@ -4,6 +4,7 @@ import type {
   Topic as CoreTopic,
   ForumLastPost,
   Identity,
+  NestedToolCallsSummary,
   RobotMode,
 } from '@irrigationreal/codex-forum-core';
 
@@ -88,6 +89,9 @@ export interface ToolRun {
   id: string;
   tool: string;
   parentPostId: string | null;
+  callId: string | null;
+  parentCallId: string | null;
+  nestedCalls: NestedToolCallsSummary | null;
   startedAt: string;
   finishedAt: string | null;
   exitCode: number | null;

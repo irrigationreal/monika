@@ -20,8 +20,10 @@ Monika currently ships Pi 1.1.0; the CLI and agentd SDK are upgraded together fr
 reviewed lockfiles so their session, extension, and transitive dependency APIs
 cannot drift between runtime layers. Node 26 does not bundle Corepack, so the
 images install pinned Corepack 0.36.0 before activating pnpm 11.21.0. Interactive Pi explicitly uses regular TUI mode for tmux scrollback.
-Built-in MCP, codemode, and tool-search extensions remain disabled pending a
-separate capability and projection review.
+Built-in MCP and tool-search remain disabled. Native codemode is available through
+a shared bounded CLI/SDK wrapper alongside ordinary tools; its duplicate CLI
+built-in remains excluded. Direct model globals and child-profile adoption are
+disabled. See [Codemode](codemode.md) for activation, limits and trace boundaries.
 
 ## Start from published images
 
@@ -492,8 +494,9 @@ this policy automatically.
 ### Native image generation
 
 The bundled `generate_image` tool uses Pi's typed image-model registry and its
-request-time provider authentication. It does not enable codemode and does not
-parse deployment secrets. The default `openai` backend uses the existing `codex`
+request-time provider authentication. It is independent of codemode and does not
+parse deployment secrets. Codemode scripts use this same tool rather than a
+separate model-registry image API. The default `openai` backend uses the existing `codex`
 provider credential and sends a non-streaming `POST /v1/responses` request with
 OpenAI's native `image_generation` tool. Its registered operation model is
 `codex/openai-image-generation`; the separate routing model defaults to

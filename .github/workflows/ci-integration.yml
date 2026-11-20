@@ -79,7 +79,10 @@ jobs:
           pnpm --dir services/forum install --frozen-lockfile
 
       - name: Run agentd/forum fork-boundary contract test
-        run: tests/integration/fork-boundary-contract.sh
+        run: |
+          tests/integration/fork-boundary-contract.sh
+          cd services/forum
+          pnpm exec tsx --test ../../tests/integration/codemode-trace-contract.test.ts
 
   # Gate job — branch protection should require this check.
   integration-checks:

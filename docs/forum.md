@@ -57,6 +57,7 @@ The forum owns secret metadata and browser ownership checks; agentd owns encrypt
 
 - [Monika-specific forum behavior](../services/forum/docs/MONIKA_BEHAVIOR.md) — homepage freshness and component provenance
 - [Live trace architecture](../services/forum/docs/LIVE_TRACE.md) — event flow, redaction, checkpoints, rendering, and debugging
+- [Codemode](codemode.md) — native tool scripts, bounded nested execution, and metadata-only trace projection
 - [Forum README](../services/forum/README.md) — product overview, configuration, features, and local development
 - [Forum deployment](../services/forum/docs/DEPLOYMENT.md) — authentication and forum-specific deployment
 - [agentd README](../services/agentd/README.md) — runtime API, ownership, compaction, analytics, and daemon lifecycle

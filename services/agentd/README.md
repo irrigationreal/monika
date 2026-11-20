@@ -105,6 +105,15 @@ the same target-only path. Archive-wide discovery remains only for explicit sess
 listing and ID-only legacy callers. Model and thinking settings use Pi model
 identifiers directly.
 
+## Codemode
+
+The bundled shared `codemode.ts` extension registers Pi’s native codemode in both
+SDK and CLI sessions; `defaultTools: ["+codemode"]` activates it alongside ordinary
+tools. Direct model globals are disabled. Nested calls retain normal Pi hooks and
+limits; agentd forwards parent identity and bounded nested metadata, never nested
+argument/result payloads. The final canonical record enriches the existing trace
+row. See [Codemode](../../docs/codemode.md) for policy and rollout/rollback details.
+
 ## Event lifecycle and provenance
 
 Agentd maps Pi SDK events into frontend-consumable turn, reasoning, text, tool,
