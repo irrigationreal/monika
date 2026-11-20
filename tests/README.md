@@ -22,6 +22,11 @@ first useful diagnostic on failure without dumping large raw payloads.
 
 ## Runtime baseline
 
+Host-side runtime smoke fixtures require Node.js 26, bash and ripgrep in addition
+to Docker. The container CI explicitly installs host ripgrep on both runner
+architectures; remote-search parity checks use its real glob engine, not just
+mocked output. The tested runtime image independently provisions its own rg/fd.
+
 Runtime images and CI use Node.js 26 LTS. Monika and Forum build/runtime stages
 use the same explicit official Node/Trixie slim image version. Memstore is built
 and tested with Go 1.27.3 on Trixie, matching Monika's runtime C-library generation
