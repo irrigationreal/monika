@@ -299,10 +299,11 @@ bounded to runner-owned paths, runtime Git configuration survives scratch `HOME`
 foreground command exit/signal status is preserved. The
 container smoke separately exercises both runner archive policies, essential-child
 failure during command mode, and PID 1's graceful memstore shutdown with isolated data.
-Command-mode signal checks wait for an explicit acknowledgement created by the
-supervisor after it captures the foreground command PID rather than inferring readiness
-from memstore startup; bounded deadlines only prevent a broken fixture from hanging the
-test.
+Unit signal checks wait for the command's own acknowledgement after inherited
+signal dispositions have been reset; a supervisor spawn acknowledgement alone
+can race SIGINT setup. Container command-mode checks use the supervisor's captured
+foreground PID rather than inferring readiness from memstore startup. Bounded
+deadlines only prevent a broken fixture from hanging the test.
 
 ## SSH transport and relocation
 
