@@ -42,7 +42,9 @@ test('installed Pi loads extension and bounds full provider replay without editi
   session.agent.streamFunction = (m, context, options) => previous(m, context, { ...options, transport: 'sse', onPayload: payload => { captured = payload; throw Error('IMAGE_PROJECTION_CAPTURE'); } });
   await session.prompt('Interrupt prior tasks. Reply briefly without tools.');
   assert.equal(session.messages.findLast(m => m.role === 'assistant').errorMessage, 'IMAGE_PROJECTION_CAPTURE');
-  assert.ok(captured.instructions.length);
+  // Pi 1.6 carries system context in Responses input for this custom model,
+  // rather than requiring the older top-level instructions representation.
+  assert.ok(captured.input.some(item => ['system', 'developer'].includes(item.role) && item.content?.length));
   assert.equal((captured.tools ?? []).length, 0);
   const outputs = captured.input.filter(item => item.type === 'function_call_output');
   assert.equal(outputs.length, 10);

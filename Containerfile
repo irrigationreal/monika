@@ -66,7 +66,7 @@ ENV AGENT_BROWSER_EXECUTABLE_PATH=/opt/agent-browser/chrome
 # shrinkwrap, so an exact top-level global pin alone would not be reproducible.
 COPY config/pi-cli/package.json config/pi-cli/package-lock.json /opt/pi-cli/
 RUN npm ci --prefix /opt/pi-cli --omit=dev --ignore-scripts --min-release-age=0 && \
-    node -e 'if (require("/opt/pi-cli/node_modules/@earendil-works/pi-coding-agent/package.json").version !== "1.1.0") process.exit(1)' && \
+    node -e 'if (require("/opt/pi-cli/node_modules/@earendil-works/pi-coding-agent/package.json").version !== "1.6.0") process.exit(1)' && \
     ln -s /opt/pi-cli/node_modules/.bin/pi /usr/local/bin/pi
 
 # Keep every pi-subagents entry point—including interactive Pi sessions—on the
@@ -75,7 +75,7 @@ RUN npm ci --prefix /opt/pi-cli --omit=dev --ignore-scripts --min-release-age=0 
 ENV PI_SUBAGENT_SESSION_ROOT=/app/.pi/agent/sessions/subagent \
     PI_SUBAGENT_RUNTIME_ROOT=/data/pi-subagents \
     PI_SUBAGENT_OPERATOR_ROOT=/data/pi-subagent-operator-state \
-    PI_SUBAGENT_SSH_LOCK_CODE_DIGEST=0587ccb12f824a44705128a17befa2fd66d1115ab28c7ad473b810249cb438fe
+    PI_SUBAGENT_SSH_LOCK_CODE_DIGEST=9270e5eaa7197a1d8173086f2a86fb0a94a07b4aaaff63f2c938f5e6e2cc15dc
 
 # pi-subagents — install the exact reviewed git object because npm's dependency
 # cooldown currently excludes the equivalent 0.37.2 artifact. The installer

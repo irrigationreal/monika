@@ -48,8 +48,8 @@ test('native codemode → agentd → forum persists the same metadata-only trace
       settingsManager: sdk.SettingsManager.inMemory({ packages: [], defaultTools: ['+codemode'], retry: { enabled: false }, compaction: { enabled: false }, cacheWarming: 'off' }),
       resourceLoaderOptions: { noExtensions: true, noSkills: true, noThemes: true, noPromptTemplates: true,
         agentsFilesOverride: () => ({ agentsFiles: [] }), additionalExtensionPaths: [new URL('config/extensions/codemode.ts', repo).pathname],
-        extensionFactories: [(pi: any) => pi.registerTool({ name: 'sample', label: 'Sample', description: 'Fixture', parameters: ai.Type.Object({ secret: ai.Type.String() }),
-          outputSchema: ai.Type.Object({ value: ai.Type.Number() }), async execute() { return { content: [{ type: 'text', text: 'PRIVATE_RESULT' }], details: {}, structuredContent: { value: 7 } }; } })] } });
+        extensionFactories: [(pi: any) => pi.registerTool({ name: 'sample', label: 'Sample', description: 'Fixture', parameters: { type: 'object', properties: { secret: { type: 'string' } }, required: ['secret'] },
+          outputSchema: { type: 'object', properties: { value: { type: 'number' } }, required: ['value'] }, async execute() { return { content: [{ type: 'text', text: 'PRIVATE_RESULT' }], details: {}, structuredContent: { value: 7 } }; } })] } });
     ({ session } = await sdk.createAgentSessionFromServices({ services, sessionManager: sdk.SessionManager.create(root, join(root, 'sessions')), model: runtime.getModel('fixture', 'fixture'), thinkingLevel: 'off' }));
     await session.bindExtensions({}); const conv = { id: 'conv', current: null, session };
     session.subscribe((event: any) => handlePiEvent(conv, event, (_conv: any, name: string, data: any) => {

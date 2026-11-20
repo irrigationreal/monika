@@ -25,7 +25,9 @@ if [ -n "$root" ]; then
   case "$resolved" in "$root"|"$root/"*) ;; *) exit 65 ;; esac
 fi
 cd -- "$search" || exit 70
-rg --files --hidden -g "$2" | head -n "$3" | head -c "$4"
+pattern="$2"
+while [[ "$pattern" == ./* ]]; do pattern="\${pattern#./}"; done
+rg --files --hidden -g "$pattern" | head -n "$3" | head -c "$4"
 codes=("\${PIPESTATUS[@]}")
 code="\${codes[0]}"
 [ "$code" -eq 0 ] || [ "$code" -eq 1 ] || [ "$code" -eq 141 ] || exit "$code"
@@ -40,12 +42,16 @@ if [ -n "$root" ]; then
   search="/proc/$$/fd/$searchfd"
   resolved=$(readlink -f -- "$search") || exit 64
   case "$resolved" in "$root"|"$root/"*) ;; *) exit 65 ;; esac
-  if [ -d "$search" ]; then cd -- "$search" || exit 70; search=.; fi
 fi
-args=(rg --json --line-number --color=never --hidden)
+if [ -d "$search" ]; then cd -- "$search" || exit 70; search=.; fi
+glob="$3"; negation=""
+if [[ "$glob" == '!'* ]]; then negation="!"; glob="\${glob#!}"; fi
+while [[ "$glob" == ./* ]]; do glob="\${glob#./}"; done
+glob="$negation$glob"
+args=(rg --no-config --json --line-number --color=never --hidden)
 [ "$1" = 1 ] && args+=(--ignore-case)
 [ "$2" = 1 ] && args+=(--fixed-strings)
-[ -n "$3" ] && args+=(--glob "$3")
+[ -n "$glob" ] && args+=(--glob "$glob")
 [ "$6" -gt 0 ] && args+=(--context "$6")
 args+=(-- "$4" "$search")
 "\${args[@]}" | {

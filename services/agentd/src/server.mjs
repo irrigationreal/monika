@@ -6,6 +6,7 @@ import { existsSync, readFileSync, promises as fs } from "node:fs";
 import path from "node:path";
 import { resolveLegacyArtifact } from './artifact-export.mjs';
 import { handlePiEvent } from "./pi-event-bridge.mjs";
+import { reportRuntimeDiagnostics } from './runtime-diagnostics.mjs';
 import {
   aggregateAnalytics,
   AnalyticsQueryError,
@@ -1231,6 +1232,7 @@ async function settleCanonicallyAppliedSubagentResults(conv) {
 async function bindConversation(conv) {
   conv.unsubscribe?.();
   const session = conv.runtime.session;
+  reportRuntimeDiagnostics(conv.runtime);
   await session.bindExtensions({});
   conv.session = session;
   conv.subagentLifecycle = conv.runtime.services.subagentLifecycle;

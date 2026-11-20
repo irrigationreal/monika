@@ -80,7 +80,7 @@ test("specialist prompt forbids shell and filesystem bypass of the memory bounda
   t.after(() => { if (previous == null) delete process.env.PI_CHILD_TOPICS_FILE; else process.env.PI_CHILD_TOPICS_FILE = previous; });
   const harness = extensionHarness(specialistExtension);
   const result = await harness.handlers.get("before_agent_start")(
-    { prompt: "mechanical task", systemPrompt: "base" },
+    { messageType: "user", prompt: "mechanical task", systemPrompt: "base" },
     { cwd: dir },
   );
   assert.match(result.systemPrompt, new RegExp(SPECIALIST_MEMORY_BOUNDARY.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
@@ -229,4 +229,36 @@ test("agent profiles explicitly isolate extensions, memory files, memory tools, 
   assert.match(monika, /benefits materially from my voice/);
   assert.match(monika, /writing, brainstorming, critique/);
   assert.match(monika, /never write to memstore/);
+});
+
+test('user and custom runs route topics while preserving child identity and boundaries', async (t) => {
+  const dir = await fixture();
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  for (const [key, value] of Object.entries({
+    PI_CHILD_TOPICS_FILE: path.join(dir, 'PERSONALITY_MATRIX.md'),
+    PI_CHILD_STATEFUL_MEMORY_DIR: dir,
+  })) {
+    const previous = process.env[key];
+    process.env[key] = value;
+    t.after(() => { if (previous == null) delete process.env[key]; else process.env[key] = previous; });
+  }
+  for (const extension of [specialistExtension, monikaExtension]) {
+    const harness = extensionHarness(extension);
+    for (const trigger of [
+      { messageType: 'user', prompt: 'poetry writing' },
+      { messageType: 'custom', message: { content: [{ type: 'text', text: 'poetry writing continuation' }] } },
+    ]) {
+      const result = await harness.handlers.get('before_agent_start')({ ...trigger, systemPrompt: 'base' }, { cwd: dir });
+      assert.match(result.systemPrompt, /TOPIC_SENTINEL/);
+      if (extension === monikaExtension) {
+        assert.match(result.systemPrompt, /SOUL_SENTINEL/);
+        assert.match(result.systemPrompt, /STYLE_SENTINEL/);
+        assert.match(result.systemPrompt, /REGISTER_SENTINEL/);
+      } else {
+        assert.match(result.systemPrompt, /Do not access memstore/);
+        assert.doesNotMatch(result.systemPrompt, /SOUL_SENTINEL/);
+      }
+      assert.doesNotMatch(result.systemPrompt, /AUTOBIOGRAPHY_SENTINEL|FACTS_MEMORY_SENTINEL/);
+    }
+  }
 });

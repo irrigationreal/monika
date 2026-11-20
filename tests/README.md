@@ -100,7 +100,11 @@ trailing newline, label-boundary remapping when forking compacted history,
 execution-time tool cwd with explicit factory fallback, and a real Pi tool loop
 that defers extension notices until after tool results and compacts before its next
 provider request. Its provider and summary are synthetic; no live model calls or
-credentials are used. The agentd test command creates explicit temporary runtime, result/session, and
+credentials are used. Upgrade coverage also exercises custom-message run-start
+context with busy setup, exactly-once canonical settlement, operator-only SDK
+diagnostics, and an explicit credentialless preflight rejection independent of
+built-in model defaults. Memory tests cover user-only enrichment query selection
+and topic/persona boundaries for user and custom child runs. The agentd test command creates explicit temporary runtime, result/session, and
 runtime-instance roots; tests must never inherit the live `/data/pi-subagents`
 root. Session-resolution coverage proves known-path dispatch reads only one target
 amid 1,800 decoys and rejects containment escapes, symlinks, malformed/mismatched

@@ -16,6 +16,16 @@ export function extractText(content) {
   return "";
 }
 
+// Pi 1.2+ also starts runs from custom messages. Route their text without
+// treating a continuation/result as a new user prompt for memory enrichment.
+export function runContext(event) {
+  const userPrompt = event.messageType === "user" ? event.prompt : "";
+  return {
+    userPrompt,
+    query: event.messageType === "custom" ? extractText(event.message?.content) : userPrompt,
+  };
+}
+
 export function normalizeText(text) {
   return String(text ?? "").replace(/\s+/g, " ").trim();
 }

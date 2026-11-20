@@ -16,7 +16,7 @@ build/runtime bases aligned when updating them; CI checks their declarations and
 builds/smokes both architectures. Distribution codenames remain explicit rather
 than following a floating `slim` or `stable` alias.
 
-Monika currently ships Pi 1.1.0; the CLI and agentd SDK are upgraded together from
+Monika currently ships Pi 1.6.0; the CLI and agentd SDK are upgraded together from
 reviewed lockfiles so their session, extension, and transitive dependency APIs
 cannot drift between runtime layers. Node 26 does not bundle Corepack, so the
 images install pinned Corepack 0.36.0 before activating pnpm 11.21.0. Interactive Pi explicitly uses regular TUI mode for tmux scrollback.
@@ -24,6 +24,15 @@ Built-in MCP and tool-search remain disabled. Native codemode is available throu
 a shared bounded CLI/SDK wrapper alongside ordinary tools; its duplicate CLI
 built-in remains excluded. Direct model globals and child-profile adoption are
 disabled. See [Codemode](codemode.md) for activation, limits and trace boundaries.
+
+Cache warming is explicitly set to `streaming`, retaining active-run warming
+rather than Pi 1.5.1's new idle-between-runs default. This avoids silently adding
+background provider traffic or charges. The upgrade retains existing custom pool
+providers, selected models, and patched pi-subagents 0.37.2; new stock model
+catalog entries do not establish pool availability. Anthropic message threads are
+not opted into for pool gateways. Pi JSONL remains version 3; no forum database
+migration is required. SDK startup diagnostics and model-fallback warnings go to
+agentd's operator logs, not public forum events.
 
 ## Start from published images
 
@@ -335,7 +344,8 @@ a model name containing `vibe-cli` alone does not establish subscription use.
 
 The two curated Vibe IDs passed isolated text and full medium-thinking
 reasoning → read-tool call → tool result → final-answer canaries with the
-live pool and Pi 1.1.0. Their generated metadata advertises 262,144 context
+live pool and Pi 1.1.0 at the time of that validation (not a new Pi 1.6.0
+canary). Their generated metadata advertises 262,144 context
 and 32,768 maximum output tokens, not independently verified size limits.
 Generated zero prices do not establish unlimited or free inference.
 

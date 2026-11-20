@@ -63,3 +63,11 @@ UI status cannot change the tool outcome. TUI mode may color the footer; RPC use
 All model-controlled paths, patterns, globs, and fixed-script arguments cross SSH in a newline-delimited base64 header on stdin. They never enter the SSH client argv or remote login-shell source; the reviewed wrapper reconstructs them as positional data for fixed scripts. This preserves empty and trailing-newline values while avoiding Linux's per-argument `E2BIG` ceiling. Bash source and complete write/edit payloads follow the header as stdin payload. Bash executes from a temporary script file. Writes decode into a temporary file held through a same-directory capability, verify the complete payload digest, and atomically rename, rejecting symlink destinations and symlinked parent paths. Remote grep/find treat ripgrep exit code 1 as a successful no-match outcome, propagate invalid-input and transport failures, enforce an operation-wide 30-second timeout, cap search inputs, and bound producer output before local parsing. The runtime image pre-provisions `rg` and `fd`; remote targets must provision `rg` before relocation succeeds.
 
 `relocate` results include privacy-safe structured details (`operation`, resulting `state`, `stateChanged`, and UI-warning count). Remote grep/find results identify the `relocated_ssh` backend and distinguish `success` from `no_match`. Raw hosts, paths, patterns, and commands remain outside analytics aggregates.
+
+Search globs follow Pi 1.6's search-directory semantics in both SSH modes:
+`src/*.ts` selects files directly under `src` in the requested directory,
+`**/src/*.ts` matches that path at any depth, and `*.ts` matches file names
+at any depth. Leading `./` is normalized. Directory grep runs from its search
+root and ignores `RIPGREP_CONFIG_PATH`, keeping explicit tool arguments
+authoritative. Remote reads still use buffered SSH operations rather than Pi's
+optional streaming-read interface.

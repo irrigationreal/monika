@@ -105,6 +105,27 @@ the same target-only path. Archive-wide discovery remains only for explicit sess
 listing and ID-only legacy callers. Model and thinking settings use Pi model
 identifiers directly.
 
+## Pi compatibility
+
+The SDK and image-owned CLI are pinned together at Pi 1.6.0. Runtime binding
+consumes `takeUnreportedDiagnostics()` and logs each startup diagnostic and
+model-fallback warning once per runtime. These bounded, single-line diagnostics
+are operator-only: they are not projected into public SSE or forum posts.
+Run-start extensions distinguish user prompts from custom-message continuations;
+both retain system context, and only user prompts trigger first-user memory
+enrichment. Pi treats asynchronous run setup as busy. Settlement still uses
+`agent_settled`, not the end of an individual low-level run.
+
+Tool arguments use Pi's JSON Schema validator. Extensions may retain their
+TypeBox imports through Pi's compatibility loader; native Node tests use plain
+JSON Schema rather than importing `Type` from pi-ai. SSH grep already overrides
+execution rather than relying on the deprecated context-file callback. Local
+reads gain upstream streaming; SSH read operations still buffer remotely read
+files. Slash-containing find patterns are relative to the search directory
+(`src/*.ts`); use `**/src/*.ts` for any depth. Custom renderers must not mutate
+cached `render()` arrays. See [deployment](../../docs/deployment.md) for cache,
+model and delegation policies retained across this upgrade.
+
 ## Codemode
 
 The bundled shared `codemode.ts` extension registers Pi’s native codemode in both
