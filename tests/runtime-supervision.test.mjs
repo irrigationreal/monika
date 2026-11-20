@@ -32,7 +32,10 @@ for (const signal of ["SIGTERM", "SIGINT"]) {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "monika-supervision-"));
     const ready = path.join(root, "ready");
     t.after(() => fs.rm(root, { recursive: true, force: true }));
-    const child = runSupervisor("exec sleep 30", { SUPERVISED_COMMAND_READY_FILE: ready });
+    // The supervisor's acknowledgement proves spawn, not exec. An async Bash
+    // child still ignores SIGINT until env --default-signal has run; wait for
+    // the command itself to acknowledge that boundary before sending it INT.
+    const child = runSupervisor(': > "$COMMAND_EXEC_READY_FILE"; exec sleep 30', { COMMAND_EXEC_READY_FILE: ready });
     for (let i = 0; i < 100; i += 1) {
       try { await fs.access(ready); break; } catch { await new Promise((r) => setTimeout(r, 10)); }
     }
