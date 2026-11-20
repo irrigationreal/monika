@@ -184,6 +184,7 @@ test('representative batch-read trial returns a compact comparison instead of fu
 for (const name of ['bg_wait', 'subagents_enable']) {
   test(`${name} stays outside native codemode's catalog and nested execution`, async t => {
     const f = await fixture(t, [`text(ALL_TOOLS.some(tool => tool.name === "${name}"));`, `await tools.${name}({});`]);
+    assert.ok(f.session.getActiveToolNames().includes(name), 'fixture control must remain callable directly');
     await f.session.prompt('check orchestration boundary');
     const results = toolResults(f.manager);
     assert.match(JSON.stringify(results[0].content), /false/);
