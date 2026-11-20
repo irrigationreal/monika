@@ -344,7 +344,7 @@ The script verifies:
 4. default and save-session one-shot runners complete before their short timeout with ambient stateful-memory and isolated data; the default writes no transcript archive, while save-session uses a real JSONL origin and waits for its exact durable save; after an event-driven foreground-command readiness handshake, PID 1 preserves exit/signal status, treats essential-child death as fatal during command mode, and gracefully stops memstore;
 5. `pi --version` reports the repository's exact lockfile-installed Pi pin; ordinary startup has `PI_OFFLINE=1`; regular TUI mode, explicit MCP/tool-search/duplicate-codemode built-in exclusions, and shared native codemode activation are present; settings/npm/git are linked to isolated `/data/pi-agent-packages`; overlapping custody roots fail before initialization; image defaults, browser seed, nutrient-skills absence, deterministic local failed-install immutability, object-form package filters, stale temp siblings, and Pi-managed listing/loading after replacement are verified;
 6. npm's 10-day dependency cooldown, Pi's reviewed transitive lockfile, pnpm 11.21.0 with fail-closed 10-day release-age enforcement, and the pinned agent-browser version are active;
-7. the reviewed pi-subagents 0.37.2 gitHead (`8063333661476ca48afbca826dc4aab8707c72d3`) is installed, the dedicated runtime/session/operator roots are global, the operator root exists with mode `0700`, unsafe relative or shared top-level operator-root overrides fail startup, a container runtime identity exists, durable pre-spawn launch/drain and artifact-finalization patches are present, forked children use per-run directories, `defaultExtensions=[]` and isolated child profiles are configured, and legacy force-tools/delegate extensions are absent;
+7. the reviewed pi-subagents 0.37.2 gitHead (`533033f0e906e85fdb0e909ce27a7c499ffb6485`) is installed, the dedicated runtime/session/operator roots are global, the operator root exists with mode `0700`, unsafe relative or shared top-level operator-root overrides fail startup, a container runtime identity exists, durable pre-spawn launch/drain and artifact-finalization patches are present, forked children use per-run directories, `defaultExtensions=[]` and isolated child profiles are configured, and legacy force-tools/delegate extensions are absent;
 8. interactive project-trust state is linked into persistent `/data`;
 9. agentd sends a complete Pi turn to a local OpenAI Responses fixture, which requires `codemode`, `pi_run`, `browser`, `web_search`, `generate_image`, `subagent`, `bg_wait`, `subagent_supervisor`, and stateful-memory's `recall` tool while rejecting the legacy `delegate` tool;
 10. every strict function schema in the serialized request satisfies OpenAI's
@@ -474,3 +474,14 @@ template. Use `compose.yaml.example` for real deployments.
 docker compose -f tests/compose.monika-runtime.yaml up -d
 docker exec -it monika-test pi
 ```
+
+## Disposable subagent workflow canary
+
+```sh
+node tests/smoke/subagents-workflow.mjs <runtime-image>
+```
+
+This uses a local strict synthetic provider, disposable runtime data and an
+isolated Docker network. It must never mount live memstore or runtime state.
+It verifies real Pi/agentd workflow execution, exact awaited claims, canonical
+origin registration, durable cancellation, passive restart, and quiescence.

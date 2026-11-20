@@ -21,6 +21,77 @@ async function temporary(fn) {
 
 async function git(cwd, ...args) { return (await exec('git', ['-C', cwd, ...args], { maxBuffer: 8 * 1024 * 1024 })).stdout; }
 
+function addedFileFromPatch(patch, name) {
+  const marker = `diff --git a/${name} b/${name}\n`;
+  const start = patch.indexOf(marker);
+  assert.notEqual(start, -1, `${name} is absent from the candidate patch`);
+  const next = patch.indexOf('\ndiff --git ', start + marker.length);
+  const section = patch.slice(start, next === -1 ? undefined : next);
+  const hunk = section.indexOf('\n@@ ');
+  assert.notEqual(hunk, -1, `${name} has no patch hunk`);
+  return section.slice(section.indexOf('\n', hunk + 1) + 1)
+    .split('\n')
+    .filter((line) => line.startsWith('+') && !line.startsWith('+++'))
+    .map((line) => line.slice(1))
+    .join('\n');
+}
+
+test('candidate SSH lock digest matches the bundled helper and rejects missing or changed relocation code', async () => temporary(async (dir) => {
+  const patch = await readFile(path.join(root, 'config', 'pi-subagents-0.89.1.patch'), 'utf8');
+  const candidateModule = path.join(dir, 'execution-target.ts');
+  const runner = path.join(dir, 'verify.mjs');
+  const fixture = path.join(dir, 'extensions');
+  await mkdir(fixture);
+  await writeFile(candidateModule, addedFileFromPatch(patch, 'src/runs/shared/execution-target.ts'));
+  await writeFile(runner, String.raw`
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+
+const [candidatePath, bundledRoot, fixture] = process.argv.slice(2);
+for (const name of ['ssh.ts', 'ssh-lock.mjs', 'ssh-relocate.mjs']) {
+  fs.copyFileSync(path.join(bundledRoot, name), path.join(fixture, name));
+}
+const { resolveExecutionTarget } = await import(pathToFileURL(candidatePath));
+const { lockCodeDigest } = await import(pathToFileURL(path.join(bundledRoot, 'ssh-lock.mjs')));
+const extension = path.join(fixture, 'ssh.ts');
+const helper = path.join(fixture, 'ssh-lock.mjs');
+const relocate = path.join(fixture, 'ssh-relocate.mjs');
+const expected = lockCodeDigest(extension, helper, relocate);
+const env = {
+  MONIKA_SSH_LOCK_DESCRIPTOR: path.join(fixture, 'absent-descriptor.json'),
+  PI_SUBAGENT_SSH_LOCK_EXTENSION: extension,
+  PI_SUBAGENT_SSH_LOCK_CODE_DIGEST: expected,
+};
+assert.throws(
+  () => resolveExecutionTarget({ kind: 'ssh', name: 'stanza' }, env),
+  (error) => error?.code === 'ENOENT' && !String(error.message).includes('startup integrity attestation'),
+  'the candidate must accept the exact digest produced by the bundled helper before resolving the descriptor',
+);
+fs.unlinkSync(relocate);
+assert.throws(
+  () => resolveExecutionTarget({ kind: 'ssh', name: 'stanza' }, env),
+  (error) => error?.code === 'ENOENT' && error.path === relocate,
+  'the relocation helper is required',
+);
+fs.copyFileSync(path.join(bundledRoot, 'ssh-relocate.mjs'), relocate);
+fs.appendFileSync(relocate, '\n// changed after startup attestation\n');
+assert.throws(
+  () => resolveExecutionTarget({ kind: 'ssh', name: 'stanza' }, env),
+  /startup integrity attestation/,
+  'changed relocation code must invalidate the startup digest',
+);
+`);
+  await exec(process.execPath, [
+    '--experimental-strip-types',
+    runner,
+    candidateModule,
+    path.join(root, 'config', 'extensions'),
+    fixture,
+  ]);
+}));
+
 test('invalid invocation is rejected', async () => {
   await assert.rejects(run([]), (error) => error.code === 2);
 });

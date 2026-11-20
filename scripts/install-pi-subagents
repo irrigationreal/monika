@@ -8,7 +8,7 @@ readonly commit='533033f0e906e85fdb0e909ce27a7c499ffb6485'
 readonly tree='d6c8cf1dbf40704d3d5f8b0530908e9f6aa6afce'
 readonly version='0.89.1'
 readonly lock_sha256='5fc39baec198a9b58887e7fabefed9dc8a4df7dcbf42839992263b9a1639776b'
-readonly patch_sha256='1dee7e700cab153d354e18a2f717481bc6b6bfbc3142ccffff44c8672d88fc40'
+readonly patch_sha256='82ac29c51b4ee536899d8aff48a7c3ac9dcdf4e84f2b2fb03ff46589aa09fd1a'
 
 if [ "$#" -ne 2 ]; then
   echo "usage: $0 <destination> <patch>" >&2
@@ -49,7 +49,7 @@ if [ "${PI_SUBAGENTS_VERIFY_TESTS:-0}" = 1 ]; then
   (cd "$destination" && npm ci --ignore-scripts && npm run typecheck && \
     node --experimental-strip-types --import ./test/support/isolated-temp-root.mjs --test \
       test/unit/execution-target.test.ts test/unit/monika-launch-contract.test.ts \
-      test/unit/monika-host.test.ts test/unit/result-claim.test.ts test/unit/async-resume.test.ts \
+      test/unit/monika-host.test.ts test/unit/workflow-cancellation-observer.test.ts test/unit/result-claim.test.ts test/unit/async-resume.test.ts \
       test/unit/extension-bindings.test.ts test/unit/schemas.test.ts test/unit/workflow-scripts-feature.test.ts \
       test/unit/subagent-wait.test.ts test/unit/notify.test.ts test/unit/preflight.test.ts \
       test/unit/fork-context.test.ts && \

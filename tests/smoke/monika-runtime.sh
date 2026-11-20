@@ -698,12 +698,12 @@ if (!hostSource.includes('resolveDeliveryDisposition') || !hostSource.includes('
 if (!resultClaimSource.includes('pi-subagents.result-claim') || !resultClaimSource.includes('deliveryDisposition: "awaited"')) throw new Error('Awaited result-claim source missing');
 if (!waitSource.includes('claimAwaitedResult') || !waitSource.includes('publishClaim')) throw new Error('Wait-tool result-claim publication source missing');
 if (!asyncSource.includes('launch.json') || !asyncSource.includes('hostIsDraining')) throw new Error('Durable async launch/drain patch missing');
-if (!runnerSource.includes('Optional subagent artifact write failed')) throw new Error('Resilient artifact finalization patch missing');
+if (!runnerSource.includes('Failed to write result file') || !runnerSource.includes('process-terminal')) throw new Error('Runner result/process finalization missing');
 if (!watcherSource.includes('hostOwnsResultDelivery')) throw new Error('Completion host-delivery barrier patch missing');
 if (!hostSource.includes('hostWakeAllowed') || !hostSource.includes('host-cancellation.json')) throw new Error('Host-cancelled result wake suppression missing');
 if (!asyncPolicySource.includes('forceHostAsync')) throw new Error('Agentd nested force-async policy missing');
 if (!hostSource.includes('PI_SUBAGENTS_FORCE_ASYNC')) throw new Error('Force-async host control missing');
-if (!foregroundSource.includes('!childExited && !detached && proc.kill("SIGKILL")')) throw new Error('Foreground hard-kill exit check missing');
+if (!foregroundSource.includes('options.signal.aborted') || !foregroundSource.includes('kill()')) throw new Error('Foreground cancellation handling missing');
 const reviewed = JSON.parse(fs.readFileSync('/opt/pi-subagents/REVIEWED_SOURCE.json', 'utf8'));
 if (reviewed.name !== 'pi-subagents') throw new Error(`Unexpected reviewed source name: ${reviewed.name}`);
 if (reviewed.version !== '0.89.1') throw new Error(`Unexpected pi-subagents version: ${reviewed.version}`);
@@ -715,7 +715,7 @@ if (!/^[a-f0-9]{64}$/.test(reviewed.patchSha256 ?? '')) throw new Error(`Invalid
 // probes: drain, force-async, cancellation, lifecycle projection and launch
 // identity must retain their Monika semantics across upstream path changes.
 const { createJiti } = require('/opt/pi-subagents/node_modules/jiti/lib/jiti.cjs');
-const jiti = createJiti(__filename, { interopDefault: true });
+const jiti = createJiti('/opt/pi-subagents/index.ts', { interopDefault: true });
 const host = jiti('/opt/pi-subagents/src/shared/monika-host.ts');
 const launchContract = jiti('/opt/pi-subagents/src/shared/launch-contract.ts');
 const executionTarget = jiti('/opt/pi-subagents/src/runs/shared/execution-target.ts');
@@ -806,17 +806,17 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { createJiti } = require('/opt/pi-subagents/node_modules/jiti/lib/jiti.cjs');
-const jiti = createJiti(__filename, { interopDefault: true });
+const jiti = createJiti('/opt/pi-subagents/index.ts', { interopDefault: true });
 const { SessionManager } = jiti('/opt/pi-cli/node_modules/@earendil-works/pi-coding-agent/dist/index.js');
 const { createForkContextResolver } = jiti('/opt/pi-subagents/src/shared/fork-context.ts');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subagent-fork-root-'));
 try {
   const parentDir = path.join(root, 'parent');
-  const childDir = path.join(root, 'subagent', 'run-id', 'run-0');
   const parent = SessionManager.create(root, parentDir);
+  const childDir = path.join(path.dirname(parent.getSessionFile()), path.basename(parent.getSessionFile(), '.jsonl'), 'forks', 'run-id');
   parent.appendMessage({ role: 'user', content: 'parent prompt' });
   parent.appendMessage({ role: 'assistant', content: 'parent response' });
-  const resolver = createForkContextResolver(parent, 'fork', { sessionDirForIndex: () => childDir });
+  const resolver = createForkContextResolver(parent, 'fork', { runDirName: () => 'run-id' });
   const childFile = resolver.sessionFileForIndex(0);
   assert.ok(childFile);
   assert.equal(path.dirname(childFile), childDir);

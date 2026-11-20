@@ -2035,10 +2035,10 @@ index 0cace95e..50f484ac 100644
  	"runner", "outputName", "structured", "inheritProjectContext", "inheritGlobalContext", "inheritSkills", "skills", "outputPath", "namespaceOutputPath", "maxSubagentDepth", "timeoutMs", "waitToolEnabled", "waitToolDefaultTimeoutMs",
 diff --git a/src/runs/shared/execution-target.ts b/src/runs/shared/execution-target.ts
 new file mode 100644
-index 00000000..ce187c5b
+index 00000000..83fa8443
 --- /dev/null
 +++ b/src/runs/shared/execution-target.ts
-@@ -0,0 +1,238 @@
+@@ -0,0 +1,239 @@
 +import { createHash } from "node:crypto";
 +import * as fs from "node:fs";
 +import * as path from "node:path";
@@ -2189,12 +2189,13 @@ index 00000000..ce187c5b
 +	if (!configured || !path.isAbsolute(configured)) throw new Error(`${SSH_LOCK_EXTENSION_ENV} must name the locked SSH extension.`);
 +	const canonical = fs.realpathSync(configured);
 +	const helper = path.join(path.dirname(canonical), "ssh-lock.mjs");
-+	for (const [label, file] of [["extension", canonical], ["helper", helper]] as const) {
++	const relocateHelper = path.join(path.dirname(canonical), "ssh-relocate.mjs");
++	for (const [label, file] of [["extension", canonical], ["helper", helper], ["relocate helper", relocateHelper]] as const) {
 +		const stat = fs.lstatSync(file);
 +		if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Locked SSH ${label} is not a regular file.`);
 +		fs.accessSync(file, fs.constants.R_OK);
 +	}
-+	const codeDigest = sha256(`${sha256(fs.readFileSync(canonical))}\n${sha256(fs.readFileSync(helper))}\n`);
++	const codeDigest = sha256(`${sha256(fs.readFileSync(canonical))}\n${sha256(fs.readFileSync(helper))}\n${sha256(fs.readFileSync(relocateHelper))}\n`);
 +	const expected = env[SSH_LOCK_CODE_DIGEST_ENV]?.trim();
 +	if (!expected || !/^[a-f0-9]{64}$/.test(expected) || expected !== codeDigest) throw new Error("Locked SSH extension code does not match the startup integrity attestation.");
 +	return { path: canonical, codeDigest };
