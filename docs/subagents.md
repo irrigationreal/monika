@@ -8,7 +8,10 @@ new lived Monika experience.
 
 This document owns the cross-cutting subagent model. Exact profile configuration
 lives in [`config/agents/`](../config/agents/), package pins and patches live in
-the installer and [`config/pi-subagents-0.37.2.patch`](../config/pi-subagents-0.37.2.patch),
+the installer and [`config/pi-subagents-0.37.2.patch`](../config/pi-subagents-0.37.2.patch).
+The experimental 0.89.1 candidate inventory and preparation harness are documented
+in [`pi-subagents-migration-0.89.1.md`](pi-subagents-migration-0.89.1.md); production
+remains pinned to 0.37.2 until that migration passes its staged validation matrix.
 SSH transport details live in [`config/extensions/SSH.md`](../config/extensions/SSH.md),
 and deployment repair procedures live in [`redeployment.md`](redeployment.md).
 
@@ -158,7 +161,9 @@ closing forum storage.
 
 Cancelled result bytes remain retained. Stop does not rewrite unknown SSH effects
 as rollback. Scheduled package runs are disabled and outside the current causal
-descendant contract.
+descendant contract. The migration candidate may test upstream workflows, but this
+production contract does not change until the candidate's lifecycle and effects
+behavior is proven.
 
 Deployment drain rejects new launches and prevents completed results from waking a
 parent while shutdown is being prepared. Pending delivery alone does not block
