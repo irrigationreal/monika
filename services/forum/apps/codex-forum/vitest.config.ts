@@ -5,6 +5,8 @@ export default defineConfig({
   plugins: [vue()],
   test: {
     globals: true,
+    // Happy DOM 21 keeps external stylesheet/iframe loading disabled. Exercise
+    // real resource loading in Playwright instead of opting out of these defaults.
     environment: 'happy-dom',
     setupFiles: ['./vitest.setup.ts'],
     coverage: {
