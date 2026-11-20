@@ -16,7 +16,8 @@ tests/forum/unit.sh
 Runs the dependency-graph compatibility smoke and Forum workspace Vitest suites
 with isolated upload storage. `dependency-compatibility.mjs` exercises js-beautify
 CLI glob discovery and EditorConfig matching through the real transitive graph
-to guard the scoped Glob/Minimatch major overrides. Contracts tests also cover
+to guard the scoped Glob/Minimatch major overrides. It also asserts patched
+versions through each affected consumer and retains the legacy Minimatch 3 path. Contracts tests also cover
 Zod boundary semantics and nullable-enum OpenAPI output. Frontend tests retain
 Happy DOM's disabled external iframe/stylesheet loading defaults. Coverage includes
 minimal backend readiness, durable exact-identity retry across agentd transport outages,
