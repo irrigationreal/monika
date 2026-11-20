@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildLiveTraceItems, buildPersistedTraceItems, liveTraceNeedsPersistedFallback } from './unifiedTrace';
+import { buildLiveTraceItems, buildPersistedTraceItems, restoreHydratedLiveTools } from './unifiedTrace';
 
 import type { ToolRunDto } from './apiClient';
 
@@ -21,18 +21,24 @@ function tool(id: string, startedAt: string): ToolRunDto {
 }
 
 describe('unified trace items', () => {
-  it('uses full persisted checkpoints after reload when live reconstruction contains only recent children', () => {
+  it('restores hydrated historical tools after sparse reload without losing new live reasoning', () => {
     const rows = Array.from({ length: 65 }, (_, i) => tool(String(i), new Date(i).toISOString()));
     const live = buildLiveTraceItems({
       tools: rows,
       segments: rows.slice(-20).map((row) => ({ kind: 'tool', toolRunId: row.id })),
+      reasoningDraft: '**Live tail**\nNew reasoning after refresh.',
     });
-    expect(live).toHaveLength(20);
-    expect(liveTraceNeedsPersistedFallback(live, rows)).toBe(true);
-    const hydrated = buildPersistedTraceItems({ tools: rows });
-    expect(hydrated).toHaveLength(65);
+    expect(live.filter((item) => item.type === 'tool')).toHaveLength(20);
+    const hydrated = restoreHydratedLiveTools(live, rows);
+    expect(hydrated.filter((item) => item.type === 'tool')).toHaveLength(65);
     expect(hydrated[0]?.type === 'tool' && hydrated[0].tool.id).toBe('0');
-    expect(liveTraceNeedsPersistedFallback(hydrated, rows)).toBe(false);
+    expect(hydrated.at(-1)).toEqual(live.at(-1));
+    expect(hydrated.filter((item) => item.type === 'reasoning')).toEqual(
+      live.filter((item) => item.type === 'reasoning')
+    );
+    expect(restoreHydratedLiveTools(hydrated, rows)).toEqual(hydrated);
+    // The source arrays and their relative card order are untouched.
+    expect(live.filter((item) => item.type === 'tool')).toHaveLength(20);
   });
   it('interleaves persisted reasoning with chronologically sorted tools at checkpoints', () => {
     const first = tool('first', '2026-01-01T00:00:01.000Z');

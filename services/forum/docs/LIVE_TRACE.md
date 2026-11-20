@@ -108,7 +108,8 @@ updates the nested record without erasing the parent tool's separately persisted
 Admin-only incremental `tool_run` DTOs retain live rows and final parent metadata after they age out of the 20-row
 `recentToolRuns` snapshot. The client cache is scoped to the current dispatch/topic and populated only by the current
 stream generation. Reconnect reconciliation preserves existing live data for the same active session/plan. Fresh-page
-hydration falls back to full persisted checkpoints when the recent-only live reconstruction omits hydrated tool rows.
+hydration restores missing persisted tool rows into the presentation when recent-only live reconstruction omits them;
+it never replaces or drops newly streamed reasoning.
 New-dispatch/topic/completion boundaries clear the cache with its committed segments; presentation fallback never
 reorders or mutates those segments or replaces persisted trace authority.
 

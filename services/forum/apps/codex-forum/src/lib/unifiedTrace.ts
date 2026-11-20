@@ -90,10 +90,24 @@ export function buildLiveTraceItems(input: LiveTraceInput): UnifiedTraceItem[] {
   return items;
 }
 
-/** On refresh the live snapshot may contain only recent tools. Prefer complete
- * persisted checkpoints until live segments cover every hydrated row. This
- * changes presentation only; committed segments remain append-only. */
-export function liveTraceNeedsPersistedFallback(items: UnifiedTraceItem[], tools: ToolRunDto[]): boolean {
+/** Restore hydrated tool rows omitted by a recent-only refresh without replacing
+ * any live reasoning or changing the relative order of committed cards. */
+export function restoreHydratedLiveTools(items: UnifiedTraceItem[], tools: ToolRunDto[]): UnifiedTraceItem[] {
   const visible = new Set(items.flatMap((item) => (item.type === 'tool' ? [item.tool.id] : [])));
-  return items.length === 0 || tools.some((tool) => !visible.has(tool.id));
+  const ordered = sortedTools(tools);
+  const rank = new Map(ordered.map((tool, index) => [tool.id, index]));
+  const restored = [...items];
+  for (let toolIndex = 0; toolIndex < ordered.length; toolIndex++) {
+    const tool = ordered[toolIndex]!;
+    if (visible.has(tool.id)) continue;
+    // Insert before the first later tool, or just after the last tool (before
+    // its trailing reasoning). Existing reasoning cards are never discarded.
+    let insertion = restored.findIndex((item) => item.type === 'tool' && (rank.get(item.tool.id) ?? -1) > toolIndex);
+    if (insertion < 0) {
+      const lastTool = restored.findLastIndex((item) => item.type === 'tool');
+      insertion = lastTool < 0 ? 0 : lastTool + 1;
+    }
+    restored.splice(insertion, 0, { type: 'tool', tool, toolIndex });
+  }
+  return restored;
 }
