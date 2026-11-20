@@ -2035,6 +2035,26 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 55,
+    name: 'nested-tool-call-trace-metadata',
+    up: (db) => {
+      if (!hasColumn(db, 'tool_runs', 'call_id')) {
+        db.prepare('alter table tool_runs add column call_id text').run();
+      }
+      if (!hasColumn(db, 'tool_runs', 'parent_call_id')) {
+        db.prepare('alter table tool_runs add column parent_call_id text').run();
+      }
+      if (!hasColumn(db, 'tool_runs', 'nested_calls_json')) {
+        db.prepare('alter table tool_runs add column nested_calls_json text').run();
+      }
+      db.exec(`
+        create index if not exists idx_tool_runs_session_call
+          on tool_runs(session_id, call_id)
+          where call_id is not null;
+      `);
+    },
+  },
 ];
 
 export const SCHEMA_VERSION: number = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;

@@ -686,6 +686,54 @@
   font-size: 11px;
 }
 
+.vb-tool-item--nested {
+  margin-left: 16px;
+  border-left: 2px solid var(--border-default);
+  padding-left: 6px;
+}
+
+.vb-tool-nested-parent {
+  margin: 2px 0;
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: bold;
+}
+
+.vb-tool-nested-summary {
+  border: 1px solid var(--border-default);
+  border-top: none;
+  padding: 5px 6px;
+  background: var(--bg-surface-hover);
+}
+
+.vb-tool-nested-summary-title,
+.vb-tool-nested-call {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.vb-tool-nested-summary-title {
+  justify-content: space-between;
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: bold;
+  text-transform: uppercase;
+}
+
+.vb-tool-nested-call {
+  margin-top: 3px;
+  padding-left: 8px;
+}
+
+.vb-tool-nested-call > :first-child {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .vb-tool-title {
   display: flex;
   justify-content: space-between;

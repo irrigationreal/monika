@@ -46,6 +46,7 @@ function runExtensionProbe(enabled) {
     };
     loaded.runtime.getAllTools = () => [
       originalTool,
+      { name: "codemode", label: "Codemode", description: "Native scripts", parameters: { type: "object", properties: { code: { type: "string" } }, required: ["code"] }, exposure: "model-only", promptGuidelines: ["bounded scripts"] },
       ...[...extension.tools.values()].map(entry => ({ ...entry.definition, sourceInfo: entry.sourceInfo })),
     ];
     loaded.runtime.getActiveTools = () => [...activeTools];
@@ -108,6 +109,24 @@ function runExtensionProbe(enabled) {
     );
     assert.equal(apiKeyResult, undefined);
     assert.deepEqual(apiKeyPayload, { system: 'Pi system', tools: [{ name: 'remember' }] });
+
+    // Codemode gets a stable alias even without file-based sourceInfo. Its
+    // alias stays model-only, so scripts cannot recurse through it.
+    activeTools = ['codemode'];
+    await handlers.get('before_agent_start')[0]({}, poolContext);
+    assert.ok(activeTools.includes('mcp__codemode__codemode'));
+    const codemodeAlias = [...extension.tools.values()].find(entry => entry.definition.name === 'mcp__codemode__codemode');
+    assert.equal(codemodeAlias.definition.exposure, 'model-only');
+    assert.deepEqual(codemodeAlias.definition.promptGuidelines, ['bounded scripts']);
+    const history = await request({ type: 'before_provider_request', payload: {
+      system: 'Available tools: codemode', tools: [{ name: 'mcp__codemode__codemode' }],
+      tool_choice: { type: 'tool', name: 'codemode' },
+      messages: [{ role: 'assistant', content: [{ type: 'tool_use', id: 'old-code', name: 'codemode', input: { code: 'text(1)' } }] }],
+    } }, context('claude', false));
+    assert.equal(history.tool_choice.name, 'mcp__codemode__codemode');
+    assert.equal(history.messages[0].content[0].name, 'mcp__codemode__codemode');
+    await handlers.get('before_agent_start')[0]({}, apiKeyContext);
+    assert.deepEqual(activeTools, ['codemode']);
 
     const oauthHeaders = { 'anthropic-beta': 'pi-owned-beta', 'user-agent': 'claude-cli/2.1.280' };
     await header({ type: 'before_provider_headers', headers: oauthHeaders }, context('anthropic', true));

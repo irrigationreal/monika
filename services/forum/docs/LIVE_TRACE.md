@@ -95,7 +95,19 @@ The bridge stores:
 
 - complete plan reasoning;
 - character-offset reasoning checkpoints at tool starts;
-- complete session tool rows with bounded/redacted summaries.
+- complete session tool rows with bounded/redacted summaries;
+- optional canonical call IDs, parent-call IDs, and metadata-only nested-call summaries.
+
+Nested child calls remain ordinary chronological tool rows. Their `parentCallId` only adds an indented “Nested call in
+script” relationship in the renderer; a parent summary never creates synthetic rows, so a later summary refresh cannot
+duplicate children. Parent `nestedCalls` records contain only call ID, tool name, status, optional duration, and a
+`complete` flag. Incomplete summaries are labeled explicitly, including locally capped or invalid records. The count and
+incomplete indicator stay compact; expand a parent tool to inspect its per-call summary. Arguments and result bodies from nested calls are neither
+stored in this metadata nor reconstructed by the browser. A metadata-only final refresh with a null partial result
+updates the nested record without erasing the parent tool's separately persisted output summary.
+Admin-only incremental `tool_run` DTOs retain live rows and final parent metadata after they age out of the 20-row
+`recentToolRuns` snapshot. The client cache is scoped to the current dispatch/topic/stream and cleared with its committed
+segments; it does not reorder those segments or replace persisted trace authority.
 
 `buildPersistedTraceItems()` splits reasoning at checkpoints and interleaves tools deterministically. Nullable
 checkpoints are expected for old or imported sessions; fallback rendering places parsed reasoning before chronologically
@@ -148,6 +160,8 @@ confirmation and never interrupts directly.
 8. Equal tool timestamps use deterministic storage ordering.
 9. One renderer and one canonical chronological ordering model serve preview and complete Trace; workspace direction is
    an immutable presentation projection only.
+10. Nested summaries enrich existing call-ID-keyed rows only; they never synthesize tools or carry nested arguments or
+    results.
 
 ## Tests
 

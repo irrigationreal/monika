@@ -1,3 +1,5 @@
+import { parseNestedToolCallsJson } from '../toolTraceMetadata';
+
 import type {
   CloneOperation,
   CompactionOperation,
@@ -278,6 +280,9 @@ export function mapToolRunRowToDomain(row: ToolRunRow): ToolRun {
     id: row.id,
     tool: row.tool,
     parentPostId: row.parent_post_id,
+    callId: row.call_id,
+    parentCallId: row.parent_call_id,
+    nestedCalls: parseNestedToolCallsJson(row.nested_calls_json),
     startedAt: row.started_at,
     finishedAt: row.finished_at,
     exitCode: row.exit_code,

@@ -65,7 +65,7 @@ export default function toolsExtension(pi: ExtensionAPI) {
 
 	// Register /tools command
 	pi.registerCommand("tools", {
-		description: "Enable/disable tools",
+		description: "Select declared tools (indirect reach depends on exposure)",
 		handler: async (_args, ctx) => {
 			if (ctx.mode !== "tui") {
 				ctx.ui.notify("tools requires interactive mode", "error");
@@ -79,7 +79,7 @@ export default function toolsExtension(pi: ExtensionAPI) {
 				// Build settings items for each tool
 				const items: SettingItem[] = allTools.map((tool) => ({
 					id: tool.name,
-					label: tool.name,
+					label: `${tool.name}${tool.exposure === "codemode" || tool.exposure === "deferred" ? " (script-callable even when undeclared)" : ""}`,
 					currentValue: enabledTools.has(tool.name) ? "enabled" : "disabled",
 					values: ["enabled", "disabled"],
 				}));
@@ -88,7 +88,7 @@ export default function toolsExtension(pi: ExtensionAPI) {
 				container.addChild(
 					new (class {
 						render(_width: number) {
-							return [theme.fg("accent", theme.bold("Tool Configuration")), ""];
+							return [theme.fg("accent", theme.bold("Tool declarations (not a capability allowlist)")), ""];
 						}
 						invalidate() {}
 					})(),

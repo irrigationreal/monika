@@ -292,6 +292,9 @@ export interface CreateToolRunInput {
   sessionId: string;
   tool: string;
   parentPostId?: string | null;
+  callId?: string | null;
+  parentCallId?: string | null;
+  nestedCallsJson?: string | null;
   outputSummary?: string | null;
   command?: string | null;
   visibility: 'public' | 'internal' | 'private';
@@ -2467,7 +2470,7 @@ export class ForumStore {
     const now = nowIso();
     this.db
       .prepare(
-        'insert into tool_runs (id, topic_id, session_id, tool, parent_post_id, started_at, finished_at, exit_code, command, files_touched_json, output_summary, redactions_applied, visibility) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        'insert into tool_runs (id, topic_id, session_id, tool, parent_post_id, call_id, parent_call_id, nested_calls_json, started_at, finished_at, exit_code, command, files_touched_json, output_summary, redactions_applied, visibility) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
       .run(
         id,
@@ -2475,6 +2478,9 @@ export class ForumStore {
         input.sessionId,
         input.tool,
         input.parentPostId ?? null,
+        input.callId ?? null,
+        input.parentCallId ?? null,
+        input.nestedCallsJson ?? null,
         now,
         null,
         null,
@@ -2495,11 +2501,14 @@ export class ForumStore {
     const merged = { ...existing, ...updates } as ToolRunRow;
     this.db
       .prepare(
-        'update tool_runs set tool = ?, parent_post_id = ?, started_at = ?, finished_at = ?, exit_code = ?, command = ?, files_touched_json = ?, output_summary = ?, redactions_applied = ?, visibility = ? where id = ?'
+        'update tool_runs set tool = ?, parent_post_id = ?, call_id = ?, parent_call_id = ?, nested_calls_json = ?, started_at = ?, finished_at = ?, exit_code = ?, command = ?, files_touched_json = ?, output_summary = ?, redactions_applied = ?, visibility = ? where id = ?'
       )
       .run(
         merged.tool,
         merged.parent_post_id,
+        merged.call_id,
+        merged.parent_call_id,
+        merged.nested_calls_json,
         merged.started_at,
         merged.finished_at,
         merged.exit_code,
@@ -2511,6 +2520,13 @@ export class ForumStore {
         toolRunId
       );
     return this.getToolRun(toolRunId) as ToolRunRow;
+  }
+
+  getToolRunByCallId(sessionId: string, callId: string): ToolRunRow | null {
+    const row = this.db
+      .prepare('select * from tool_runs where session_id = ? and call_id = ? order by rowid desc limit 1')
+      .get(sessionId, callId) as ToolRunRow | undefined;
+    return row ?? null;
   }
 
   listToolRuns(topicId: string, limit = 20): ToolRunRow[] {

@@ -28,6 +28,7 @@ import type {
   TopicDto,
   TopicOperationalEventDto,
   TopicTraceDto,
+  ToolRunDto,
 } from '../lib/apiClient';
 
 export type TraceSegment = { kind: 'reasoning'; text: string } | { kind: 'tool'; toolRunId: string };
@@ -158,8 +159,11 @@ let adminEnrichmentLoadCounter = 0;
 // No longer using client-side checkpoints for trace interleaving.
 // Instead, tool_started events flush pending drafts into committedSegments.
 
+const liveToolRuns = ref<ToolRunDto[]>([]);
+
 function resetRobotActivity(): void {
   committedSegments.value = [];
+  liveToolRuns.value = [];
 }
 
 function clearCompletedAssistantTurnTrace(): void {
@@ -986,6 +990,16 @@ export function useForumState() {
       if (durableStop) freezeCurrentInterruptedTrace();
       if (newlyStopped) void loadAdminEnrichment(topicId);
     });
+    // Incremental DTOs keep committed cards and final parent metadata available
+    // after a tool ages out of the bounded recentToolRuns snapshot.
+    nextStream.addEventListener('tool_run', (event: MessageEvent<string>) => {
+      if (!isCurrentConnection()) return;
+      liveStateRevision += 1;
+      const tool = JSON.parse(event.data) as ToolRunDto;
+      const byId = new Map(liveToolRuns.value.map(row => [row.id, row]));
+      byId.set(tool.id, tool);
+      liveToolRuns.value = [...byId.values()];
+    });
     nextStream.addEventListener('tool_started', (event: MessageEvent<string>) => {
       if (!isCurrentConnection()) return;
       liveStateRevision += 1;
@@ -1680,6 +1694,7 @@ export function useForumState() {
     autoRunError,
     reasoningDraft,
     committedSegments,
+    liveToolRuns,
     interruptedTrace,
     sessionInfo,
     topicTrace,

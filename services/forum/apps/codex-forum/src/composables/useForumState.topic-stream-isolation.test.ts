@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { buildLiveTraceItems } from '../lib/unifiedTrace';
 import { useForumState } from './useForumState';
 
 import type { RobotStateDto, TopicDto } from '@irrigationreal/codex-forum-contracts';
@@ -105,6 +106,39 @@ afterEach(() => {
 });
 
 describe('topic stream isolation', () => {
+  it('retains high-cardinality tool rows and final root metadata beyond the recent snapshot', async () => {
+    const stream = new RetainedListenerStream();
+    mocks.createStateStream.mockReturnValue(stream);
+    mocks.getRobotState.mockResolvedValue(robotState('topic-many', 'running_tools'));
+    await state.selectTopic(topic('topic-many'));
+    stream.emit('assistant_reset', { reason: 'new_turn' });
+    const rows = Array.from({ length: 65 }, (_, i) => ({
+      id: String(i),
+      callId: i === 0 ? 'root' : 'root/' + i,
+      parentCallId: i === 0 ? null : 'root',
+      tool: 'other',
+      startedAt: new Date(i).toISOString(),
+      redactionsApplied: false,
+      visibility: 'internal' as const,
+    }));
+    for (const row of rows) {
+      stream.emit('tool_started', { toolRunId: row.id });
+      stream.emit('tool_run', row);
+    }
+    stream.emit('state', { ...robotState('topic-many', 'running_tools'), recentToolRuns: rows.slice(-20) });
+    const nestedCalls = { calls: [{ id: 'root/1', name: 'read', status: 'ok' as const }], complete: true };
+    stream.emit('tool_run', { ...rows[0], nestedCalls });
+    expect(state.liveToolRuns.value).toHaveLength(65);
+    expect(state.liveToolRuns.value.find((row) => row.callId === 'root')?.nestedCalls).toEqual(nestedCalls);
+    expect(
+      buildLiveTraceItems({ segments: state.committedSegments.value, tools: state.liveToolRuns.value })
+    ).toHaveLength(65);
+    stream.emit('assistant_reset', { reason: 'new_turn' });
+    expect(state.liveToolRuns.value).toHaveLength(0);
+    state.clearTopic();
+    stream.emit('tool_run', rows[0]);
+    expect(state.liveToolRuns.value).toHaveLength(0);
+  });
   it('reopens immediately and rejects an older reconnect snapshot after a replacement-stream event', async () => {
     vi.useFakeTimers();
     try {

@@ -521,9 +521,11 @@ const fs = require('node:fs');
 const settings = JSON.parse(fs.readFileSync('/app/.pi/agent/settings.json', 'utf8'));
 if (!settings.packages.includes('npm:pi-agent-browser@0.1.0')) throw new Error('browser package choice missing');
 if (!settings.packages.includes('/opt/pi-subagents')) throw new Error('local pi-subagents package choice missing');
+if (!settings.defaultTools?.includes('+codemode')) throw new Error('native codemode activation missing');
+if (!fs.existsSync('/app/.pi/agent/extensions/codemode.ts')) throw new Error('shared codemode wrapper missing');
 if (settings.tuiMode !== 'regular') throw new Error('regular tmux-compatible TUI mode missing');
 for (const builtin of ['-builtin:mcp', '-builtin:codemode', '-builtin:tool-search']) {
-  if (!settings.extensions?.includes(builtin)) throw new Error(`deferred built-in extension is not disabled: ${builtin}`);
+  if (!settings.extensions?.includes(builtin)) throw new Error(`duplicate/unreviewed built-in extension is not disabled: ${builtin}`);
 }
 const sourceOf = (entry) => typeof entry === 'string' ? entry : entry?.source;
 if (settings.packages.some((entry) => sourceOf(entry)?.includes('nutrient-skills'))) throw new Error('nutrient-skills remains configured');

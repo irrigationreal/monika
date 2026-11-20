@@ -72,6 +72,11 @@ describe('Robot routes access controls', () => {
       sessionId: session.id,
       tool: 'bash',
       parentPostId: post.id,
+      callId: 'root-call',
+      nestedCallsJson: JSON.stringify({
+        calls: [{ id: 'child-call', name: 'read', status: 'ok', durationMs: 12, rawResult: 'must be stripped' }],
+        complete: false,
+      }),
       command: 'cat /secret/path',
       outputSummary: 'secret output',
       visibility: 'internal',
@@ -173,6 +178,15 @@ describe('Robot routes access controls', () => {
     expect(adminBody.recentToolRuns).toHaveLength(1);
     expect(adminBody.recentToolRuns[0].command).toBe('cat /secret/path');
     expect(adminBody.recentToolRuns[0].outputSummary).toBe('secret output');
+    expect(adminBody.recentToolRuns[0]).toMatchObject({
+      callId: 'root-call',
+      parentCallId: null,
+      nestedCalls: {
+        calls: [{ id: 'child-call', name: 'read', status: 'ok', durationMs: 12 }],
+        complete: false,
+      },
+    });
+    expect(JSON.stringify(adminBody.recentToolRuns[0].nestedCalls)).not.toContain('rawResult');
   });
 
   it('returns complete admin topic traces with deterministic newest-first tool ordering', async () => {
@@ -220,6 +234,13 @@ describe('Robot routes access controls', () => {
     const body = response.json() as any;
     expect(body.toolRuns).toHaveLength(52);
     expect(body.plans).toHaveLength(52);
+    expect(body.toolRuns.find((tool: { callId?: string }) => tool.callId === 'root-call')).toMatchObject({
+      parentCallId: null,
+      nestedCalls: {
+        calls: [{ id: 'child-call', name: 'read', status: 'ok', durationMs: 12 }],
+        complete: false,
+      },
+    });
     const tiedTools = body.toolRuns.filter((tool: { id: string }) =>
       [olderSameTimeToolId, newerSameTimeToolId].includes(tool.id)
     );
@@ -263,6 +284,7 @@ describe('Robot routes access controls', () => {
     expect(
       redactStreamEventForPublic({ type: 'tool_started', data: { toolRunId: 'tool-1', tool: 'Bash' } })
     ).toBeNull();
+    expect(redactStreamEventForPublic({ type: 'tool_run', data: { command: 'private script' } })).toBeNull();
     expect(redactStreamEventForPublic({ type: 'assistant_error', data: { error: 'secret stack' } })).toBeNull();
     expect(redactStreamEventForPublic({ type: 'assistant_message', data: { text: 'final text' } })).toEqual({
       type: 'assistant_message',

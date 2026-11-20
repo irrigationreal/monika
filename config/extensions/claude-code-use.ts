@@ -78,6 +78,8 @@ const KNOWN_TOOLS = new Map<string, string>([
 	["remember", "stateful-memory"],
 	["remember_session", "stateful-memory"],
 	["recall", "stateful-memory"],
+	// codemode (shared CLI/SDK native wrapper)
+	["codemode", "codemode"],
 	// pi-self
 	["pi_run", "pi-self"],
 	// web-search
@@ -290,7 +292,7 @@ function remapToolChoice(
 	}
 
 	const nameLc = lower(toolChoice.name);
-	const actualName = survivingNames.get(nameLc);
+	const actualName = survivingNames.get(FLAT_TO_MCP.get(nameLc) ?? nameLc) ?? survivingNames.get(nameLc);
 	if (actualName) {
 		return actualName === toolChoice.name ? toolChoice : { ...toolChoice, name: actualName };
 	}
@@ -320,7 +322,7 @@ function remapMessageToolNames(messages: unknown[], survivingNames: Map<string, 
 				return block;
 			}
 			const nameLc = lower(block.name);
-			const actualName = survivingNames.get(nameLc);
+			const actualName = survivingNames.get(FLAT_TO_MCP.get(nameLc) ?? nameLc) ?? survivingNames.get(nameLc);
 			if (actualName && actualName !== block.name) {
 				msgChanged = true;
 				return { ...block, name: actualName };
@@ -580,6 +582,9 @@ async function registerAliasesForAllTools(pi: ExtensionAPI): Promise<void> {
 			description: originalTool.description ?? "",
 			parameters: originalTool.parameters ?? Type.Object({}),
 			defaultActive: false,
+			// Codemode orchestration must not become recursively script-callable.
+			exposure: flatNameLc === "codemode" ? "model-only" : undefined,
+			promptGuidelines: originalTool.promptGuidelines,
 			async execute(toolCallId, params, signal, onUpdate, ctx) {
 				if (process.env.PI_CLAUDE_CODE_USE_DEBUG_LOG) {
 					appendFileSync(

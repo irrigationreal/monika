@@ -7,6 +7,7 @@ import type { ForumStore } from '../store';
 import { mapTopicPostDispatchProjectionToDto } from '../mappers/dto';
 import { PostDispatchProjectionService } from '../services/postDispatchProjectionService';
 import type { SseLifecycleRegistry } from '../services/sseLifecycle';
+import { parseNestedToolCallsJson } from '../toolTraceMetadata';
 import type { StreamBusInterface, StreamEvent } from '../streamBus';
 import type { AccessHelpers } from '../utils/access';
 
@@ -252,6 +253,9 @@ export function registerRobotRoutes({
             id: run.id,
             tool: run.tool,
             parentPostId: run.parent_post_id,
+            callId: run.call_id,
+            parentCallId: run.parent_call_id,
+            nestedCalls: parseNestedToolCallsJson(run.nested_calls_json),
             startedAt: run.started_at,
             finishedAt: run.finished_at,
             exitCode: run.exit_code,
@@ -625,6 +629,9 @@ export function registerRobotRoutes({
         id: run.id,
         tool: run.tool,
         parentPostId: run.parent_post_id,
+        callId: run.call_id,
+        parentCallId: run.parent_call_id,
+        nestedCalls: parseNestedToolCallsJson(run.nested_calls_json),
         startedAt: run.started_at,
         finishedAt: run.finished_at,
         exitCode: run.exit_code,
@@ -685,6 +692,9 @@ export function registerRobotRoutes({
         id: run.id,
         tool: run.tool,
         parentPostId: run.parent_post_id,
+        callId: run.call_id,
+        parentCallId: run.parent_call_id,
+        nestedCalls: parseNestedToolCallsJson(run.nested_calls_json),
         startedAt: run.started_at,
         finishedAt: run.finished_at,
         exitCode: run.exit_code,
