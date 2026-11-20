@@ -247,6 +247,48 @@ test('awaited claims bind forward while awaited and silent completions never bec
   assert.equal(conv.subagents.runs.get('silent-1').deliveryState, 'retained');
 });
 
+test('modern grouped notices use details.runs identity and reject nested raw-id collisions', async () => {
+  const conv = conversation(); const lifecycle = new SubagentLifecycle({ lifecycleRoot: '/tmp' }); const bus = eventBus(); lifecycle.extension().factory({ events: bus }); await lifecycle.attach(conv);
+  bus.emit('subagent:async-started', start('same', { asyncDir: '/tmp/async-subagent-runs/same' }));
+  bus.emit('subagent:async-started', start('same', { asyncDir: '/tmp/nested-subagent-runs/root/same' }));
+  // Both scopes intentionally use the same raw id; only asyncDir can safely
+  // select the nested entry in a modern notice.
+  const top = lifecycle.findRun('same', 'top:same');
+  const nested = lifecycle.findRun('same', 'nested:root:same');
+  bus.emit('subagent:async-complete', { runId: 'same', runKey: 'top:same', success: true });
+  bus.emit('subagent:async-complete', { runId: 'same', runKey: 'nested:root:same', success: true });
+  conv.current = {};
+  lifecycle.handleSessionEvent({ type: 'message_start', message: { role: 'custom', customType: 'subagent-notify', details: {
+    runs: [{ runId: 'same', asyncDir: nested.asyncDir }, { runId: 'same', asyncDir: top.asyncDir }], runIds: ['same', 'same'],
+  } } });
+  assert.deepEqual(lifecycle.continuation().runKeys, ['nested:root:same', 'top:same']);
+
+  const unrelated = start('queued-child', { deliveryDisposition: 'follow_up', runKey: 'top:queued-child' });
+  bus.emit('subagent:async-started', unrelated); bus.emit('subagent:async-complete', { runId: 'queued-child', runKey: 'top:queued-child', success: true });
+  lifecycle.handleSessionEvent({ type: 'message_start', message: { role: 'custom', customType: 'subagent-notify', details: { runs: [{ runId: 'same', asyncDir: top.asyncDir }] } } });
+  assert.deepEqual(lifecycle.continuation().runKeys, ['top:same'], 'unrelated queued completion is not consumed');
+});
+
+test('awaitedByWorkflow completion never enters outward follow-up queue', async () => {
+  const conv = conversation(); const lifecycle = new SubagentLifecycle(); const bus = eventBus(); lifecycle.extension().factory({ events: bus }); await lifecycle.attach(conv);
+  bus.emit('subagent:async-started', start('workflow-child', { deliveryDisposition: 'follow_up', runKey: 'top:workflow-child' }));
+  bus.emit('subagent:async-complete', { runId: 'workflow-child', runKey: 'top:workflow-child', awaitedByWorkflow: true, success: true });
+  conv.current = {};
+  lifecycle.handleSessionEvent({ type: 'message_start', message: { role: 'custom', customType: 'subagent-notify', details: { runs: [{ runId: 'workflow-child', runKey: 'top:workflow-child' }] } } });
+  assert.equal(lifecycle.continuation(), null);
+});
+
+test('an explicit empty modern run list does not consume legacy completion FIFO', async () => {
+  const conv = conversation(); const lifecycle = new SubagentLifecycle(); const bus = eventBus(); lifecycle.extension().factory({ events: bus }); await lifecycle.attach(conv);
+  bus.emit('subagent:async-started', start('queued-empty-modern'));
+  bus.emit('subagent:async-complete', { runId: 'queued-empty-modern', success: true });
+  conv.current = {};
+  lifecycle.handleSessionEvent({ type: 'message_start', message: { role: 'custom', customType: 'subagent-notify', details: { runs: [] } } });
+  assert.equal(lifecycle.continuation(), null);
+  lifecycle.handleSessionEvent({ type: 'message_start', message: { role: 'custom', customType: 'subagent-notify', content: 'Background tasks completed (1): **queued-empty-modern**', details: {} } });
+  assert.deepEqual(lifecycle.continuation().runIds, ['queued-empty-modern']);
+});
+
 test('grouped package notifications retain every run origin on one canonical continuation', async () => {
   const conv = conversation(); const lifecycle = new SubagentLifecycle(); const bus = eventBus(); lifecycle.extension().factory({ events: bus }); await lifecycle.attach(conv);
   for (const [id, postId] of [['run-1', 'post-1'], ['run-2', 'post-2']]) {
@@ -457,6 +499,99 @@ test('effects attestation refuses active and legacy runs', async (t) => {
   }), /version 4/);
 });
 
+test('scanner ignores package relaunch records but retains legacy and canonical ledger runs', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agentd-subagent-launch-layout-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const legacy = path.join(root, 'legacy-run'); const modern = path.join(root, 'async-subagent-runs', 'modern-run');
+  const relaunch = path.join(root, 'async-subagent-launches', 'fake-run'); const nestedLaunch = path.join(root, 'nested-subagent-runs', 'root-run', '.launches', 'fake-child');
+  for (const dir of [legacy, modern, relaunch, nestedLaunch]) await mkdir(dir, { recursive: true });
+  for (const [dir, id] of [[legacy, 'legacy-run'], [modern, 'modern-run'], [relaunch, 'fake-run'], [nestedLaunch, 'fake-child']]) {
+    await writeLaunch(dir, id, 'parent-session');
+    await writeFile(path.join(dir, 'status.json'), JSON.stringify({ lifecycleArtifactVersion: 3, runId: id, sessionId: 'parent-session', asyncDir: dir, state: 'running', lastUpdate: 1 }));
+  }
+  const snapshot = await scanLifecycleSnapshot({ lifecycleRoot: root, runtimeInstanceFile: path.join(root, 'none') });
+  assert.deepEqual(snapshot.runs.map((run) => run.run_id).sort(), ['legacy-run', 'modern-run']);
+  await symlink(path.join(root, 'outside'), path.join(root, 'async-subagent-runs', 'linked-run'));
+  await assert.rejects(() => scanLifecycleSnapshot({ lifecycleRoot: root, runtimeInstanceFile: path.join(root, 'none') }), /unsafe lifecycle symlink/);
+});
+
+test('workflow closure uses persisted inventory, graph hosts, and child ledger—not a phantom proof sidecar', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agentd-workflow-proof-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const workflowDir = path.join(root, 'async-subagent-runs', 'workflow'); const childDir = path.join(root, 'async-subagent-runs', 'child');
+  await mkdir(workflowDir, { recursive: true }); await mkdir(childDir, { recursive: true });
+  const childProof = observedProof('child');
+  await writeLaunch(workflowDir, 'workflow', 'parent-session', { mode: 'workflow', processProofKind: 'workflow', pid: process.pid,
+    workflowHostOwner: { version: 1, pid: process.pid, processStartTicks: 'test', runtimeInstanceId: 'runtime', runtimeCreatedAt: 1 } });
+  await writeLaunch(childDir, 'child', 'parent-session');
+  await writeFile(path.join(childDir, 'process-terminal.json'), JSON.stringify(childProof));
+  await writeFile(path.join(childDir, 'status.json'), JSON.stringify({ lifecycleArtifactVersion: 5, runId: 'child', sessionId: 'parent-session', asyncDir: childDir,
+    state: 'complete', execution_state: 'terminal', outcome_state: 'succeeded', effects_state: 'none', delivery_state: 'settled', deliveryDisposition: 'follow_up',
+    processTerminal: childProof, lastUpdate: 2 }));
+  const persisted = { workflowRunId: 'workflow', inventoryComplete: true, workflowState: 'completed' };
+  const graph = { runId: 'workflow', mode: 'workflow', phases: [], nodes: [] };
+  const status = { lifecycleArtifactVersion: 5, runId: 'workflow', sessionId: 'parent-session', asyncDir: workflowDir,
+    state: 'complete', mode: 'workflow', processProofKind: 'workflow', execution_state: 'terminal', outcome_state: 'succeeded', effects_state: 'none', delivery_state: 'settled', deliveryDisposition: 'follow_up',
+    processTerminal: observedProof('workflow'), workflowChildren: persisted, workflowGraph: graph,
+    steps: [{ async: true, runId: 'child', workflowKey: 'child', status: 'completed' }], endedAt: 2, lastUpdate: 2 };
+  await writeFile(path.join(workflowDir, 'status.json'), JSON.stringify(status));
+  let snapshot = await scanLifecycleSnapshot({ lifecycleRoot: root, runtimeInstanceFile: path.join(root, 'none'), processInspector: async () => true });
+  assert.equal(snapshot.byKey.get('top:workflow').execution_state, 'terminal');
+  assert.equal(snapshot.byKey.get('top:workflow').blocking, false);
+  await writeFile(path.join(workflowDir, 'status.json'), JSON.stringify({ ...status, effects_state: 'unknown' }));
+  snapshot = await scanLifecycleSnapshot({ lifecycleRoot: root, runtimeInstanceFile: path.join(root, 'none'), processInspector: async () => true });
+  assert.equal(snapshot.byKey.get('top:workflow').blocking, true, 'unknown workflow effects remain a closure blocker');
+  assert.match(snapshot.byKey.get('top:workflow').reason, /workflow-effects-unknown/);
+  await writeFile(path.join(workflowDir, 'status.json'), JSON.stringify({ ...status, workflowChildren: { ...persisted, inventoryComplete: false } }));
+  snapshot = await scanLifecycleSnapshot({ lifecycleRoot: root, runtimeInstanceFile: path.join(root, 'none'), processInspector: async () => true });
+  assert.equal(snapshot.byKey.get('top:workflow').execution_state, 'uncertain');
+  assert.equal(snapshot.byKey.get('top:workflow').blocking, true);
+  await writeFile(path.join(workflowDir, 'status.json'), JSON.stringify({ ...status, workflowChildren: persisted }));
+  await writeFile(path.join(childDir, 'status.json'), JSON.stringify({ lifecycleArtifactVersion: 5, runId: 'child', sessionId: 'parent-session', asyncDir: childDir,
+    state: 'complete', execution_state: 'terminal', outcome_state: 'succeeded', effects_state: 'unknown', delivery_state: 'settled', deliveryDisposition: 'follow_up',
+    processTerminal: childProof, lastUpdate: 3 }));
+  snapshot = await scanLifecycleSnapshot({ lifecycleRoot: root, runtimeInstanceFile: path.join(root, 'none'), processInspector: async () => true });
+  assert.equal(snapshot.byKey.get('top:workflow').blocking, true, 'child effects uncertainty remains a workflow blocker');
+  assert.match(snapshot.byKey.get('top:workflow').reason, /effects-unknown/);
+});
+
+test('workflow closure blocks every persisted nonterminal local or host step', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agentd-workflow-step-state-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const workflowDir = path.join(root, 'async-subagent-runs', 'workflow'); await mkdir(workflowDir, { recursive: true });
+  await writeLaunch(workflowDir, 'workflow', 'parent-session', { mode: 'workflow', processProofKind: 'workflow', pid: process.pid,
+    workflowHostOwner: { version: 1, pid: process.pid, processStartTicks: 'test', runtimeInstanceId: 'runtime', runtimeCreatedAt: 1 } });
+  await writeFile(path.join(workflowDir, 'status.json'), JSON.stringify({ lifecycleArtifactVersion: 5, runId: 'workflow', sessionId: 'parent-session', asyncDir: workflowDir,
+    state: 'complete', mode: 'workflow', processProofKind: 'workflow', execution_state: 'terminal', outcome_state: 'succeeded', effects_state: 'none', delivery_state: 'settled', deliveryDisposition: 'follow_up',
+    processTerminal: observedProof('workflow'), workflowChildren: { workflowRunId: 'workflow', inventoryComplete: true, workflowState: 'completed' },
+    workflowGraph: { runId: 'workflow', mode: 'workflow', phases: [], nodes: [] },
+    steps: [{ async: false, workflowKey: 'local-step', status: 'pending' }, { async: false, workflowKey: 'host-step', status: 'running' }], endedAt: 2, lastUpdate: 2 }));
+  const snapshot = await scanLifecycleSnapshot({ lifecycleRoot: root, runtimeInstanceFile: path.join(root, 'none'), processInspector: async () => true });
+  assert.equal(snapshot.byKey.get('top:workflow').blocking, true);
+  assert.equal(snapshot.byKey.get('top:workflow').execution_state, 'uncertain');
+  assert.match(snapshot.byKey.get('top:workflow').reason, /workflow-step-nonterminal/);
+});
+
+test('workflow dependency closure is order-independent, recursive, and cycle-safe', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agentd-workflow-dependencies-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const make = async (id, child) => {
+    const dir = path.join(root, 'async-subagent-runs', id); await mkdir(dir, { recursive: true });
+    await writeLaunch(dir, id, 'parent-session', { mode: 'workflow', processProofKind: 'workflow',
+      workflowHostOwner: { version: 1, pid: process.pid, processStartTicks: 'test', runtimeInstanceId: 'runtime', runtimeCreatedAt: 1 } });
+    await writeFile(path.join(dir, 'status.json'), JSON.stringify({ lifecycleArtifactVersion: 5, runId: id, sessionId: 'parent-session', asyncDir: dir,
+      state: 'complete', mode: 'workflow', deliveryDisposition: 'follow_up', execution_state: 'terminal', outcome_state: 'succeeded', effects_state: 'none', delivery_state: 'settled', endedAt: 2,
+      workflowGraph: { runId: id, mode: 'workflow', phases: [], nodes: [] }, workflowChildren: { workflowRunId: id, inventoryComplete: true, workflowState: 'completed' },
+      steps: child ? [{ async: true, workflowKey: 'child', runId: child, status: 'completed' }] : [] }));
+  };
+  // Deliberately create the four-node chain in shuffled order.
+  for (const [id, child] of [['w2', 'w3'], ['w0', 'w1'], ['w3', null], ['w1', 'w2']]) await make(id, child);
+  let snapshot = await scanLifecycleSnapshot({ lifecycleRoot: root, runtimeInstanceFile: path.join(root, 'none'), processInspector: async () => true });
+  assert.equal(snapshot.byKey.get('top:w0').blocking, false);
+  assert.equal(snapshot.byKey.get('top:w0').execution_state, 'terminal');
+  await make('cycle-a', 'cycle-b'); await make('cycle-b', 'cycle-a');
+  snapshot = await scanLifecycleSnapshot({ lifecycleRoot: root, runtimeInstanceFile: path.join(root, 'none'), processInspector: async () => true });
+  assert.equal(snapshot.byKey.get('top:cycle-a').blocking, true);
+  assert.match(snapshot.byKey.get('top:cycle-a').reason, /cycle/);
+  assert.equal(snapshot.byKey.get('top:cycle-b').blocking, true);
+});
+
 test('global lifecycle scan keeps unloaded and unproven runs deployment-active', async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'agentd-subagent-global-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -659,6 +794,16 @@ test('stale terminal proofs cannot override a live current launch instance', asy
     processInspector: async () => true });
   assert.equal(snapshot.active_count, 2);
   assert.ok(snapshot.runs.every((run) => run.blocking && run.execution_state === 'uncertain'));
+});
+
+test('recorded failed-before-runner steps count as not-started without hiding real child records', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agentd-failed-before-runner-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const dir = path.join(root, 'failed-before-runner'); await mkdir(dir);
+  await writeFile(path.join(dir, 'status.json'), JSON.stringify({ lifecycleArtifactVersion: 3, runId: 'failed-before-runner', sessionId: 'parent', asyncDir: dir,
+    state: 'failed', error: 'preflight rejected', endedAt: 2 }));
+  const snapshot = await scanLifecycleSnapshot({ lifecycleRoot: root, runtimeInstanceFile: path.join(root, 'none') });
+  assert.equal(snapshot.runs[0].execution_state, 'interrupted');
+  assert.equal(snapshot.runs[0].blocking, false);
 });
 
 test('pre-spawn launch records block and lifecycle traversal errors fail closed', async (t) => {

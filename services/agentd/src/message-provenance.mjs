@@ -456,7 +456,13 @@ async function readLifecycleProof(identity, expectedDisposition) {
   return { launch, status };
 }
 
-async function verifyProofDisposition(identity, expected) { await readLifecycleProof(identity, expected); }
+async function verifyProofDisposition(identity, expected, parentSessionId = null) {
+  const { launch, status } = await readLifecycleProof(identity, expected);
+  if (parentSessionId) {
+    const artifactSessions = [status?.sessionId, launch?.sessionId].filter((value) => value !== undefined).map(string);
+    if (!artifactSessions.length || artifactSessions.some((session) => session !== parentSessionId)) throw new Error('parent session identity mismatch');
+  }
+}
 
 function assertExactAwaitedArtifact(value, label, identity, parentSessionId) {
   if (!record(value) || value.lifecycleArtifactVersion !== 5
@@ -492,7 +498,7 @@ export async function settleCompletedSubagentResults(entries, { resultsRoot, lif
     try {
       const identity = await resolveProofIdentity(proof, lifecycleRoot);
       if (proof.kind === 'awaited-claim') await verifyAwaitedClaim(proof, identity, resultsRoot, parentSessionId);
-      else await verifyProofDisposition(identity, 'follow_up');
+      else await verifyProofDisposition(identity, 'follow_up', parentSessionId);
       const file = resultPathForIdentity(resultsRoot, identity);
       const acknowledgement = await writeSubagentDeliveryAck({
         lifecycleRoot, asyncDir: identity.asyncDir, resultsRoot, operatorRoot,
