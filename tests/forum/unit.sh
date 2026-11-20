@@ -12,5 +12,6 @@ pnpm() {
   corepack pnpm@11.21.0 "$@"
 }
 pnpm install --frozen-lockfile
+pnpm exec node --test "$ROOT_DIR/tests/forum/dependency-compatibility.mjs"
 
 CODEX_FORUM_UPLOADS_DIR="$UPLOADS_DIR" pnpm -r test

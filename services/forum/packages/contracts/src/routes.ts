@@ -266,7 +266,7 @@ const createTamperConfigSchema = z.object({
   priority: z.number().optional(),
   direction: z.enum(['inbound', 'outbound', 'both']).optional(),
   onlyFirstMessage: z.boolean().optional(),
-  config: z.record(z.unknown()).nullable().optional(),
+  config: z.record(z.string(), z.unknown()).nullable().optional(),
 });
 
 const updateTamperConfigSchema = z.object({
@@ -275,7 +275,7 @@ const updateTamperConfigSchema = z.object({
   priority: z.number().optional(),
   direction: z.enum(['inbound', 'outbound', 'both']).optional(),
   onlyFirstMessage: z.boolean().optional(),
-  config: z.record(z.unknown()).nullable().optional(),
+  config: z.record(z.string(), z.unknown()).nullable().optional(),
 });
 
 const tamperTestSchema = z.object({
@@ -284,7 +284,7 @@ const tamperTestSchema = z.object({
   stage: z.string().optional(),
   direction: z.string().optional(),
   pluginKey: z.string().optional().nullable(),
-  pluginConfig: z.record(z.unknown()).optional().nullable(),
+  pluginConfig: z.record(z.string(), z.unknown()).optional().nullable(),
   onlyPlugin: z.boolean().optional(),
   isFirstMessage: z.boolean().optional(),
 });
@@ -372,7 +372,7 @@ const tenantSchema = z.object({
   id: z.string(),
   name: z.string(),
   slug: z.string(),
-  settings: z.record(z.unknown()),
+  settings: z.record(z.string(), z.unknown()),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -382,12 +382,12 @@ const tenantListSchema = z.array(tenantSchema);
 const tenantCreateSchema = z.object({
   name: z.string(),
   slug: z.string(),
-  settings: z.record(z.unknown()).optional(),
+  settings: z.record(z.string(), z.unknown()).optional(),
 });
 
 const tenantUpdateSchema = z.object({
   name: z.string().optional(),
-  settings: z.record(z.unknown()).optional(),
+  settings: z.record(z.string(), z.unknown()).optional(),
 });
 
 const roleSchema = z.object({
@@ -537,7 +537,7 @@ export const apiRoutes: ApiRoute[] = [
     path: '/openapi.json',
     summary: 'Download OpenAPI spec',
     tags: ['system'],
-    response: { schema: z.record(z.unknown()) },
+    response: { schema: z.record(z.string(), z.unknown()) },
   },
   {
     method: 'get',

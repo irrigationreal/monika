@@ -7,7 +7,7 @@
   "description": "codex-forum monorepo",
   "packageManager": "pnpm@11.21.0",
   "dependencies": {
-    "zod": "^3.25.76"
+    "zod": "4.6.7"
   },
   "scripts": {
     "build": "pnpm -r --filter='./packages/*' build && pnpm -r --filter='./apps/*' build",

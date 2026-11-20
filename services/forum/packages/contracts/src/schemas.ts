@@ -189,6 +189,12 @@ import type {
 } from './http';
 import type { PageRequest, PageResponse } from './pagination';
 
+// Zod 4 unifies error customization. Preserve our missing-field messages without
+// applying them to present values of the wrong type.
+function requiredError(message: string): z.core.$ZodErrorMap {
+  return (issue) => issue.input === undefined ? message : undefined;
+}
+
 const nullableString = z.string().nullable();
 const optionalNullableString = z.string().nullable().optional();
 const optionalNullableStringNoUndefined = z
@@ -547,7 +553,7 @@ export const NotificationDtoSchema: z.ZodType<NotificationDto> = z.object({
   actorId: optionalNullableString,
   topicId: optionalNullableString,
   postId: optionalNullableString,
-  payload: z.record(z.unknown()).nullable().optional(),
+  payload: z.record(z.string(), z.unknown()).nullable().optional(),
   createdAt: z.string(),
   readAt: optionalNullableString,
 });
@@ -1032,7 +1038,7 @@ export const AdminAnalyticsDtoSchema: z.ZodType<AdminAnalyticsDto> = z.object({
       .object({
         generatedAt: z.string().nullable(),
         build: z.object({ commit: z.string().nullable(), createdAt: z.string().nullable() }),
-        coverage: z.record(z.number()),
+        coverage: z.record(z.string(), z.number()),
         usage: z.object({
           successfulResponses: z.number(),
           medianTokens: z.number().nullable(),
@@ -1099,7 +1105,7 @@ export const TamperPluginDtoSchema: z.ZodType<TamperPluginDto> = z.object({
   stages: z.array(z.string()),
   defaultDirection: z.enum(['inbound', 'outbound', 'both']).optional(),
   defaultOnlyFirstMessage: z.boolean().optional(),
-  defaultConfig: z.record(z.unknown()).nullable().optional(),
+  defaultConfig: z.record(z.string(), z.unknown()).nullable().optional(),
 });
 
 export const TamperConfigDtoSchema: z.ZodType<TamperConfigDto> = z.object({
@@ -1110,7 +1116,7 @@ export const TamperConfigDtoSchema: z.ZodType<TamperConfigDto> = z.object({
   priority: z.number(),
   direction: z.enum(['inbound', 'outbound', 'both']).nullable().optional(),
   onlyFirstMessage: z.boolean().nullable().optional(),
-  config: z.record(z.unknown()).nullable(),
+  config: z.record(z.string(), z.unknown()).nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -1125,7 +1131,7 @@ export const TamperTrailEntryDtoSchema: z.ZodType<TamperTrailEntryDto> = z.objec
   outputText: z.string(),
   changed: z.boolean(),
   error: optionalNullableString,
-  notes: z.record(z.unknown()).optional(),
+  notes: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const TamperTestResultDtoSchema: z.ZodType<TamperTestResultDto> = z.object({
@@ -1365,7 +1371,7 @@ export const VerifyResponseDtoSchema: z.ZodType<VerifyResponseDto> = z.object({
 export const EmptyJsonRequestSchema = z.object({}).strict();
 export const WebAuthnOptionsResponseDtoSchema = z.object({
   challengeId: z.string(),
-  options: z.record(z.unknown()),
+  options: z.record(z.string(), z.unknown()),
 });
 export const WebAuthnCredentialDtoSchema = z.object({
   id: z.string(),
@@ -1380,7 +1386,7 @@ export const WebAuthnCredentialListResponseDtoSchema = z.object({ items: z.array
 export const WebAuthnLoginResponseDtoSchema = z.object({ identity: AuthIdentityDtoSchema });
 export const WebAuthnVerifyRequestSchema = z.object({
   challengeId: z.string().uuid(),
-  response: z.record(z.unknown()),
+  response: z.record(z.string(), z.unknown()),
 });
 export const WebAuthnRegistrationVerifyRequestSchema = WebAuthnVerifyRequestSchema.extend({
   name: z.string().min(1).max(100),
@@ -1549,17 +1555,17 @@ export const CreatePostRequestSchema: z.ZodType<CreatePostRequest> = z.object({
 
 export const LoginRequestSchema: z.ZodType<LoginRequest> = z.object({
   username: z
-    .string({ required_error: 'username and password are required' })
+    .string({ error: requiredError('username and password are required') })
     .min(1, 'username and password are required')
     .max(100),
   password: z
-    .string({ required_error: 'username and password are required' })
+    .string({ error: requiredError('username and password are required') })
     .min(1, 'username and password are required')
     .max(1024),
 });
 
 export const RegisterRequestSchema: z.ZodType<RegisterRequest> = z.object({
-  displayName: z.string({ required_error: 'displayName is required' }).min(1, 'displayName is required').max(100),
+  displayName: z.string({ error: requiredError('displayName is required') }).min(1, 'displayName is required').max(100),
   username: z.string().min(1).max(100).optional(),
   password: z.string().min(1).max(1024).optional(),
   email: z.string().min(1).max(320).optional(),
@@ -1728,7 +1734,7 @@ export const MessageTemplateRevisionQuerySchema = z.object({
 });
 
 export const UpdatePrivateEmailRequestSchema: z.ZodType<UpdatePrivateEmailRequest> = z.object({
-  emailAddress: z.string({ required_error: 'emailAddress is required (string or null)' }).nullable(),
+  emailAddress: z.string({ error: requiredError('emailAddress is required (string or null)') }).nullable(),
 });
 
 export const UpdateQuickReplyPreferenceRequestSchema: z.ZodType<UpdateQuickReplyPreferenceRequest> = z.object({
@@ -1737,13 +1743,13 @@ export const UpdateQuickReplyPreferenceRequestSchema: z.ZodType<UpdateQuickReply
 });
 
 export const CreateApiKeyRequestSchema: z.ZodType<CreateApiKeyRequest> = z.object({
-  label: z.string({ required_error: 'label is required' }).trim().min(1, 'label is required'),
+  label: z.string({ error: requiredError('label is required') }).trim().min(1, 'label is required'),
   scopes: z.array(z.string()).optional(),
   expiresAt: optionalNullableString,
 });
 
 export const CreateImpersonationTokenRequestSchema: z.ZodType<CreateImpersonationTokenRequest> = z.object({
-  label: z.string({ required_error: 'label is required' }).trim().min(1, 'label is required'),
+  label: z.string({ error: requiredError('label is required') }).trim().min(1, 'label is required'),
   displayName: z.string().trim().min(1).optional(),
   avatarUrl: optionalNullableString,
   scopes: z.array(z.string()).optional(),
@@ -1800,28 +1806,28 @@ export const CreateInviteRequestSchema: z.ZodType<CreateInviteRequest> = z.objec
 
 export const AttachmentChunkedStartRequestSchema: z.ZodType<AttachmentChunkedStartRequest> = z.object({
   filename: z
-    .string({ required_error: 'filename and sizeBytes are required' })
+    .string({ error: requiredError('filename and sizeBytes are required') })
     .min(1, 'filename and sizeBytes are required'),
   mimeType: z.string().optional(),
   sizeBytes: z.coerce
-    .number({ required_error: 'filename and sizeBytes are required' })
+    .number({ error: requiredError('filename and sizeBytes are required') })
     .positive('sizeBytes must be a positive number'),
 });
 
 export const CreateChatCategoryRequestSchema: z.ZodType<CreateChatCategoryRequest> = z.object({
-  name: z.string({ required_error: 'name is required' }).min(1, 'name is required'),
+  name: z.string({ error: requiredError('name is required') }).min(1, 'name is required'),
   description: optionalNullableString,
   visibility: ForumVisibilitySchema.optional(),
 });
 
 export const CreateChatRoomRequestSchema: z.ZodType<CreateChatRoomRequest> = z.object({
-  categoryId: z.string({ required_error: 'categoryId is required' }).min(1, 'categoryId is required'),
-  name: z.string({ required_error: 'name is required' }).min(1, 'name is required'),
+  categoryId: z.string({ error: requiredError('categoryId is required') }).min(1, 'categoryId is required'),
+  name: z.string({ error: requiredError('name is required') }).min(1, 'name is required'),
   topic: optionalNullableString,
 });
 
 export const CreateChatMessageRequestSchema: z.ZodType<CreateChatMessageRequest> = z.object({
-  body: z.string({ required_error: 'body is required' }).min(1, 'body is required'),
+  body: z.string({ error: requiredError('body is required') }).min(1, 'body is required'),
   expiresInSeconds: z.coerce.number().int().positive().optional(),
 });
 
@@ -1830,38 +1836,38 @@ export const ChatTypingRequestSchema: z.ZodType<ChatTypingRequest> = z.object({
 });
 
 export const DiscordMapChannelRequestSchema: z.ZodType<DiscordMapChannelRequest> = z.object({
-  channelId: z.string({ required_error: 'channelId is required' }).min(1, 'channelId is required'),
+  channelId: z.string({ error: requiredError('channelId is required') }).min(1, 'channelId is required'),
   forumId: z.string().optional(),
 });
 
 export const DiscordSendRequestSchema: z.ZodType<DiscordSendRequest> = z.object({
   threadId: z
-    .string({ required_error: 'threadId and content are required' })
+    .string({ error: requiredError('threadId and content are required') })
     .min(1, 'threadId and content are required'),
   content: z
-    .string({ required_error: 'threadId and content are required' })
+    .string({ error: requiredError('threadId and content are required') })
     .min(1, 'threadId and content are required'),
   authorName: z.string().optional(),
 });
 
 export const MatrixMapRoomRequestSchema: z.ZodType<MatrixMapRoomRequest> = z.object({
-  roomId: z.string({ required_error: 'roomId is required' }).min(1, 'roomId is required'),
+  roomId: z.string({ error: requiredError('roomId is required') }).min(1, 'roomId is required'),
   forumId: z.string().optional(),
 });
 
 export const MatrixSendRequestSchema: z.ZodType<MatrixSendRequest> = z.object({
-  roomId: z.string({ required_error: 'roomId and content are required' }).min(1, 'roomId and content are required'),
+  roomId: z.string({ error: requiredError('roomId and content are required') }).min(1, 'roomId and content are required'),
   threadId: z.string().optional(),
-  content: z.string({ required_error: 'roomId and content are required' }).min(1, 'roomId and content are required'),
+  content: z.string({ error: requiredError('roomId and content are required') }).min(1, 'roomId and content are required'),
   authorName: z.string().optional(),
 });
 
 export const AdminCreateUserRequestSchema: z.ZodType<AdminCreateUserRequest> = z.object({
   displayName: z
-    .string({ required_error: 'displayName, username, and password are required' })
+    .string({ error: requiredError('displayName, username, and password are required') })
     .min(1, 'displayName, username, and password are required'),
   username: z
-    .string({ required_error: 'displayName, username, and password are required' })
+    .string({ error: requiredError('displayName, username, and password are required') })
     .min(1, 'displayName, username, and password are required'),
   password: PasswordCredentialSchema,
   kind: z.string().optional(),
@@ -1874,7 +1880,7 @@ export const AdminUpdateUserRequestSchema: z.ZodType<AdminUpdateUserRequest> = z
 });
 
 export const AdminCreateForumRequestSchema: z.ZodType<AdminCreateForumRequest> = z.object({
-  name: z.string({ required_error: 'name is required' }).trim().min(1, 'name is required'),
+  name: z.string({ error: requiredError('name is required') }).trim().min(1, 'name is required'),
   description: optionalNullableString,
   cwd: optionalNullableString,
   prePrompt: optionalNullableString,
@@ -1904,17 +1910,17 @@ export const AdminAccessRuleRequestSchema: z.ZodType<AdminAccessRuleRequest> = z
 });
 
 export const AdminMoveTopicRequestSchema: z.ZodType<AdminMoveTopicRequest> = z.object({
-  forumId: z.string({ required_error: 'forumId is required' }).min(1, 'forumId is required'),
+  forumId: z.string({ error: requiredError('forumId is required') }).min(1, 'forumId is required'),
   silent: z.boolean().optional(),
 });
 
 export const AdminCreatePersonaRequestSchema: z.ZodType<AdminCreatePersonaRequest> = z.object({
   key: z
-    .string({ required_error: 'key and displayName are required' })
+    .string({ error: requiredError('key and displayName are required') })
     .trim()
     .min(1, 'key and displayName are required'),
   displayName: z
-    .string({ required_error: 'key and displayName are required' })
+    .string({ error: requiredError('key and displayName are required') })
     .trim()
     .min(1, 'key and displayName are required'),
   description: optionalNullableString,
@@ -1935,12 +1941,12 @@ export const AdminUpdatePersonaRequestSchema: z.ZodType<AdminUpdatePersonaReques
 
 export const AdminCreateTamperRequestSchema: z.ZodType<AdminCreateTamperRequest> = z.object({
   forumId: optionalNullableString,
-  pluginKey: z.string({ required_error: 'pluginKey is required' }).min(1, 'pluginKey is required'),
+  pluginKey: z.string({ error: requiredError('pluginKey is required') }).min(1, 'pluginKey is required'),
   enabled: z.boolean().optional(),
   priority: z.coerce.number().optional(),
   direction: optionalNullableString,
   onlyFirstMessage: z.boolean().nullable().optional(),
-  config: z.record(z.unknown()).nullable().optional(),
+  config: z.record(z.string(), z.unknown()).nullable().optional(),
 });
 
 export const AdminUpdateTamperRequestSchema: z.ZodType<AdminUpdateTamperRequest> = z.object({
@@ -1949,26 +1955,26 @@ export const AdminUpdateTamperRequestSchema: z.ZodType<AdminUpdateTamperRequest>
   priority: z.coerce.number().optional(),
   direction: optionalNullableString,
   onlyFirstMessage: z.boolean().nullable().optional(),
-  config: z.record(z.unknown()).nullable().optional(),
+  config: z.record(z.string(), z.unknown()).nullable().optional(),
 });
 
 export const AdminTestTamperRequestSchema: z.ZodType<AdminTestTamperRequest> = z.object({
-  text: z.string({ required_error: 'text is required' }).trim().min(1, 'text is required'),
+  text: z.string({ error: requiredError('text is required') }).trim().min(1, 'text is required'),
   forumId: optionalNullableString,
   stage: z.string().optional(),
   direction: z.string().optional(),
   pluginKey: optionalNullableString,
-  pluginConfig: z.record(z.unknown()).nullable().optional(),
+  pluginConfig: z.record(z.string(), z.unknown()).nullable().optional(),
   onlyPlugin: z.boolean().optional(),
   isFirstMessage: z.boolean().optional(),
 });
 
 export const AdminCreateRobotAutomationRequestSchema: z.ZodType<AdminCreateRobotAutomationRequest> = z.object({
-  name: z.string({ required_error: 'name is required' }).trim().min(1, 'name is required'),
+  name: z.string({ error: requiredError('name is required') }).trim().min(1, 'name is required'),
   forumId: optionalNullableString,
-  prompt: z.string({ required_error: 'prompt is required' }).trim().min(1, 'prompt is required'),
+  prompt: z.string({ error: requiredError('prompt is required') }).trim().min(1, 'prompt is required'),
   enabled: z.boolean().optional(),
-  worker: z.enum(['echs'], { required_error: 'worker must be echs' }),
+  worker: z.enum(['echs'], { error: requiredError('worker must be echs') }),
   model: optionalNullableString,
   reasoningEffort: optionalNullableString,
   runMode: z.enum(['manual', 'interval']).optional(),
