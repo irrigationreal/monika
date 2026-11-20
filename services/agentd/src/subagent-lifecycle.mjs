@@ -324,10 +324,18 @@ export class SubagentLifecycle {
     this.eventBus = null; this.earlyEvents = []; this.pendingContinuation = null; this.pendingResultClaims = [];
     this.recoveredFollowUps = new Set();
   }
-  findRun(id, key = null) {
+  findRun(id, key = null, asyncDir = null) {
     const matches = [...(this.conv?.subagents?.runs?.values?.() ?? [])]
-      .filter((run) => run.runId === id && (!key || run.runKey === key));
+      .filter((run) => run.runId === id && (!key || run.runKey === key)
+        && (!asyncDir || (path.isAbsolute(asyncDir) && path.resolve(run.asyncDir ?? '') === path.resolve(asyncDir))));
     return matches.length === 1 ? matches[0] : null;
+  }
+  findRunIdentity(value) {
+    const data = record(value); const id = runId(data); const dir = string(data?.asyncDir);
+    if (!id || !dir || !path.isAbsolute(dir)) return null;
+    const identity = this.lifecycleRoot ? lifecycleRunIdentity(this.lifecycleRoot, dir, id) : null;
+    if (this.lifecycleRoot && (!identity || (data.runKey !== undefined && data.runKey !== identity.runKey))) return null;
+    return this.findRun(id, identity?.runKey ?? string(data?.runKey), dir);
   }
   async attach(conv) {
     this.conv = conv; conv.subagents ??= { runs: new Map() }; this.restoreMappings(); await this.reconcileArtifacts();
@@ -443,13 +451,17 @@ export class SubagentLifecycle {
   onComplete(value) {
     if (!this.conv) { this.earlyEvents.push({ type: 'complete', value }); return true; }
     const data = record(value); const id = runId(data); if (!id) return false;
-    const run = this.findRun(id, string(data.runKey)); if (!run) return false;
+    const run = data.asyncDir ? this.findRunIdentity(data) : this.findRun(id, string(data.runKey)); if (!run) return false;
     if (data.deliveryDisposition && data.deliveryDisposition !== run.deliveryDisposition) return false;
     run.state = data.success === false ? 'failed' : safeState(data.state) === 'unknown' ? 'completed' : safeState(data.state);
     run.completedAt = this.now();
-    run.deliveryState = run.deliveryDisposition === 'follow_up' ? 'pending-notification'
+    const awaitedByWorkflow = data.awaitedByWorkflow === true;
+    run.deliveryState = awaitedByWorkflow ? 'retained' : run.deliveryDisposition === 'follow_up' ? 'pending-notification'
       : run.deliveryDisposition === 'awaited' ? 'awaiting-claim' : 'retained';
-    if (run.deliveryDisposition === 'follow_up' && run.claimState !== 'claimed') {
+    // Workflow-owned awaited children are represented by the workflow notice;
+    // they must never enter the parent continuation FIFO.
+    if (awaitedByWorkflow) this.completions = this.completions.filter((completion) => completion.runKey !== run.runKey);
+    else if (run.deliveryDisposition === 'follow_up' && run.claimState !== 'claimed') {
       this.completions.push({ runId: id, runKey: run.runKey, origin: run.origin });
       if (this.completions.length > 100) this.completions.shift();
     }
@@ -477,23 +489,32 @@ export class SubagentLifecycle {
   }
   onTerminal(value) {
     if (!this.conv) { this.earlyEvents.push({ type: 'terminal', value }); return true; }
-    const id = runId(value); const run = this.findRun(id, string(value?.runKey));
+    const id = runId(value); const run = value?.asyncDir ? this.findRunIdentity(value) : this.findRun(id, string(value?.runKey));
     if (!run || !validObservedProcessTerminal(value, id)) return false;
     run.processTerminal = record(value); run.executionState = 'terminal'; run.active = false; run.completedAt = this.now(); return true;
   }
   handleSessionEvent(event) {
     const message = event?.message;
     if (event?.type === 'message_start' && message?.role === 'custom' && message.customType === 'subagent-notify') {
+      const suppliedRows = message.details?.runs;
+      const detailRows = suppliedRows === undefined ? [] : Array.isArray(suppliedRows) ? suppliedRows.slice(0, 100) : null;
       const detailIds = Array.isArray(message.details?.runIds) ? message.details.runIds.map(string).filter(Boolean).slice(0, 100) : [];
       let completions;
-      if (detailIds.length > 0) {
-        completions = detailIds.flatMap((id) => {
-          const run = this.findRun(id);
-          return run && run.deliveryDisposition === 'follow_up' && run.claimState !== 'claimed'
-            ? [{ runId: id, runKey: run.runKey, origin: run.origin ?? {} }] : [];
+      if (detailRows === null || (detailRows.length > 0 && detailRows.some((row) => !record(row) || !string(row.runId)
+        || !string(row.asyncDir) || !path.isAbsolute(row.asyncDir)))) return;
+      if (suppliedRows !== undefined || detailIds.length > 0) {
+        // Modern rows carry the raw runId and asyncDir. Derive the scoped key
+        // from the canonical directory; never trust a projected runKey.
+        const references = detailRows.length > 0 ? detailRows.map((row) => ({ row }))
+          : detailIds.map((id) => ({ id }));
+        completions = references.flatMap(({ row, id }) => {
+          const run = row ? this.findRunIdentity(row) : this.findRun(id);
+          return run && run.deliveryDisposition === 'follow_up' && run.deliveryState === 'pending-notification' && run.claimState !== 'claimed'
+            ? [{ runId: run.runId, runKey: run.runKey, origin: run.origin ?? {} }] : [];
         });
-        if (completions.length !== detailIds.length) return;
-        const claimed = new Set(detailIds); this.completions = this.completions.filter((completion) => !claimed.has(completion.runId));
+        if (completions.length !== references.length) return;
+        const claimed = new Set(completions.map((completion) => completion.runKey ?? completion.runId));
+        this.completions = this.completions.filter((completion) => !claimed.has(completion.runKey ?? completion.runId));
       } else {
         const grouped = typeof message.content === 'string' ? message.content.match(/^Background tasks completed \((\d+)\):/) : null;
         const requested = grouped ? Math.max(1, Math.min(100, Number(grouped[1]))) : 1;
@@ -520,16 +541,21 @@ export class SubagentLifecycle {
   async recoverPendingFollowUps() {
     if (!this.eventBus || !this.conv) return { recovered: 0 };
     const branch = this.conv.session?.sessionManager?.getBranch?.() ?? [];
-    const notified = new Set(branch.flatMap((entry) => {
+    const notified = branch.flatMap((entry) => {
       const message = entry?.type === 'message' ? entry.message : entry?.type === 'custom' ? entry : null;
       if (message?.customType !== 'subagent-notify') return [];
       const details = message.details ?? message.data;
-      return Array.isArray(details?.runIds) ? details.runIds.map(string).filter(Boolean) : [];
-    }));
+      const ids = Array.isArray(details?.runIds) ? details.runIds.map(string).filter(Boolean) : [];
+      const rows = Array.isArray(details?.runs) ? details.runs : [];
+      return { ids, exact: rows.flatMap((row) => record(row) && string(row.runId) && string(row.asyncDir)
+        ? [`${row.runId}\0${path.resolve(row.asyncDir)}`] : []) };
+    });
+    const notifiedLegacy = new Set(notified.flatMap((entry) => entry.ids));
+    const notifiedExact = new Set(notified.flatMap((entry) => entry.exact));
     let recovered = 0;
     for (const run of this.conv.subagents?.runs?.values?.() ?? []) {
       if (run.deliveryDisposition !== 'follow_up' || run.active || !['pending', 'unproven'].includes(run.deliveryState)
-        || notified.has(run.runId) || this.recoveredFollowUps.has(run.runKey ?? run.runId)
+        || notifiedLegacy.has(run.runId) || notifiedExact.has(`${run.runId}\0${path.resolve(run.asyncDir ?? '')}`) || this.recoveredFollowUps.has(run.runKey ?? run.runId)
         || !run.asyncDir || !path.isAbsolute(run.asyncDir)) continue;
       try {
         await fs.access(path.join(run.asyncDir, 'host-cancellation.json'));
@@ -566,14 +592,39 @@ export class SubagentLifecycle {
   dispose() { for (const unsubscribe of this.unsubscribes) { try { unsubscribe?.(); } catch {} } this.unsubscribes = []; }
 }
 
+function lifecycleLayout(root, candidate) {
+  const parts = path.relative(path.resolve(root), path.resolve(candidate)).split(path.sep).filter(Boolean);
+  if (parts.length === 1 && validSimpleId(parts[0])) return { scope: 'top', rootRunId: null };
+  if (parts.length === 2 && parts[0] === 'async-subagent-runs' && validSimpleId(parts[1])) return { scope: 'top', rootRunId: null };
+  if (parts.length === 3 && parts[0] === 'nested-subagent-runs' && validSimpleId(parts[1]) && validSimpleId(parts[2])) return { scope: 'nested', rootRunId: parts[1] };
+  return null;
+}
+
+// Relaunch metadata is ignored only in the two package-owned layouts. Every
+// other malformed or unknown record remains visible and fail-closed.
 async function lifecycleEntries(root) {
   const output = new Map();
-  async function walk(dir, depth) {
-    if (depth > 4) return;
+  async function walk(dir, depth, withinRun = false, ignored = false) {
+    if (depth > 8) return;
     let entries;
     try { entries = await fs.readdir(dir, { withFileTypes: true }); }
     catch (error) { if (error?.code === 'ENOENT' && depth === 0) return; throw error; }
-    for (const entry of entries) { const candidate = path.join(dir, entry.name); if (entry.isSymbolicLink()) throw new Error(`unsafe lifecycle symlink: ${candidate}`); if (entry.isDirectory()) await walk(candidate, depth + 1); else if (entry.isFile() && (entry.name === 'status.json' || entry.name === 'launch.json')) output.set(path.dirname(candidate), true); }
+    for (const entry of entries) {
+      const candidate = path.join(dir, entry.name);
+      const relative = path.relative(path.resolve(root), candidate).split(path.sep).filter(Boolean);
+      const skip = ignored || (relative.length === 1 && relative[0] === 'async-subagent-launches')
+        || (relative.length === 3 && relative[0] === 'nested-subagent-runs' && relative[2] === '.launches');
+      const layout = lifecycleLayout(root, candidate);
+      if (entry.isSymbolicLink()) {
+        if (!skip) throw new Error(`unsafe lifecycle symlink: ${candidate}`);
+        continue;
+      }
+      if (entry.isDirectory()) {
+        await walk(candidate, depth + 1, withinRun || Boolean(layout), skip);
+      } else if (!skip && entry.isFile() && (entry.name === 'status.json' || entry.name === 'launch.json')) {
+        output.set(path.dirname(candidate), true);
+      }
+    }
   }
   await walk(root, 0); return [...output.keys()];
 }
@@ -593,6 +644,58 @@ function validLaunchArtifact(value, { lifecycleRoot, asyncDir } = {}) {
   if (!launch || !id || !sessionId || !launchDir || !path.isAbsolute(launchDir) || path.resolve(launchDir) !== path.resolve(asyncDir)
     || !runnerProcessInstanceId || !lifecycleRunIdentity(lifecycleRoot, asyncDir, id)) return null;
   return { ...launch, runId: id, sessionId, asyncDir: path.resolve(launchDir), runnerProcessInstanceId };
+}
+
+function validWorkflowHostOwner(value) {
+  const owner = record(value);
+  if (!owner || owner.version !== 1 || !Number.isInteger(owner.pid) || owner.pid <= 0
+    || !string(owner.processStartTicks) || !string(owner.runtimeInstanceId)
+    || typeof owner.runtimeCreatedAt !== 'number' || !Number.isFinite(owner.runtimeCreatedAt)) return null;
+  return owner;
+}
+
+function workflowChildLedger(value, expectedRunId) {
+  const ledger = record(value);
+  if (!ledger || (ledger.version !== undefined && ledger.version !== 1)
+    || (ledger.workflowRunId !== undefined && ledger.workflowRunId !== expectedRunId)
+    || ledger.inventoryComplete !== true || !['completed', 'failed', 'stopped'].includes(ledger.workflowState)
+    || (ledger.children !== undefined && !Array.isArray(ledger.children))) return null;
+  const children = (ledger.children ?? []).map((child) => {
+    const row = record(child);
+    if (!row || !string(row.childId) || !['completed', 'failed', 'stopped', 'rejected', 'detached'].includes(row.state)
+      || (row.runId !== undefined && !string(row.runId))) return null;
+    return { childId: row.childId, state: row.state, runId: string(row.runId), raw: row };
+  });
+  return children.every(Boolean) ? { ...ledger, children } : null;
+}
+
+function graphHostNodes(value) {
+  const graph = record(value);
+  if (!graph || !Array.isArray(graph.nodes)) return null;
+  const hosts = [];
+  const visit = (nodes, seen = new Set()) => {
+    for (const node of nodes) {
+      const item = record(node); if (!item) return false;
+      if (item.kind === 'host-step') {
+        const host = record(item.hostStep);
+        if (!host || !string(host.id) || !['done', 'cancelled', 'error'].includes(host.state)
+          || (host.state === 'done' && !['pass', 'fail', 'inconclusive'].includes(host.verdict))
+          || (host.monitorKind === 'command' && (host.reportPath === undefined || host.exitCode === undefined))) return false;
+        hosts.push(host);
+      }
+      if (Array.isArray(item.children) && !visit(item.children, seen)) return false;
+    }
+    return true;
+  };
+  return visit(graph.nodes) ? hosts : null;
+}
+
+const WORKFLOW_TERMINAL_STEP_STATES = new Set(['complete', 'completed', 'failed', 'stopped', 'rejected']);
+function workflowStepState(step) {
+  const value = record(step);
+  if (!value || typeof value.async !== 'boolean' || !string(value.workflowKey)
+    || !['pending', 'running', 'complete', 'completed', 'failed', 'paused', 'stopped', 'rejected'].includes(value.status)) return null;
+  return { ...value, runId: string(value.runId) };
 }
 async function readRuntimeInstance(runtimeInstanceFile) {
   if (!runtimeInstanceFile) return null;
@@ -653,6 +756,15 @@ async function classifyRunDirectory(asyncDir, { lifecycleRoot = path.dirname(asy
     async_dir: asyncDir, processTerminal: null };
   let proof = await readJson(path.join(asyncDir, 'process-terminal.json')).catch(() => null);
   if (!proof) proof = status?.processTerminal ?? null;
+  const workflowMode = status?.mode === 'workflow' || launch?.mode === 'workflow';
+  // Workflow closure is derived only from persisted async status. The runner's
+  // status command may compute a terminal proof, but that projection is not a
+  // lifecycle artifact and must never be treated as one here.
+  const workflowOwner = workflowMode ? validWorkflowHostOwner(launch?.workflowHostOwner ?? statusRaw?.workflowHostOwner) : null;
+  const workflowProcessProofKind = workflowMode ? string(launch?.processProofKind ?? statusRaw?.processProofKind) : null;
+  const workflowLedger = workflowMode ? workflowChildLedger(statusRaw?.workflowChildren, id) : null;
+  const workflowSteps = workflowMode && Array.isArray(statusRaw?.steps) ? statusRaw.steps.map(workflowStepState) : null;
+  const workflowHosts = workflowMode ? graphHostNodes(statusRaw?.workflowGraph) : null;
   const operatorResolution = await readJson(path.join(asyncDir, 'operator-resolution.json')).catch(() => null);
   const effectsResolution = await readJson(path.join(asyncDir, 'effects-resolution.json')).catch(() => null);
   const expectedInstanceId = launch?.runnerProcessInstanceId ?? null;
@@ -661,13 +773,37 @@ async function classifyRunDirectory(asyncDir, { lifecycleRoot = path.dirname(asy
   const auditedEffects = auditedEffectsResolution(effectsResolution, id, operatorAudit);
   const operatorEffectsState = auditedEffects?.effectsState ?? null;
   const logicalTerminal = status ? !ACTIVE_STATES.has(status.state) && status.state !== 'unknown' : false;
+  const workflowLogicalTerminal = logicalTerminal && ['completed', 'failed', 'stopped'].includes(statusRaw?.workflowChildren?.workflowState)
+    && typeof statusRaw?.endedAt === 'number' && Number.isFinite(statusRaw.endedAt);
   const runnerPid = Number.isInteger(status?.pid) ? status.pid : Number.isInteger(launch?.pid) ? launch.pid : null;
   const launchRuntimeId = string(launch?.runtimeInstanceId);
+  const effectsState = workflowMode
+    ? (operatorEffectsState ?? (status?.lifecycleArtifactVersion >= 4 ? status.effectsState : 'unknown'))
+    : (operatorEffectsState ?? (status?.lifecycleArtifactVersion >= 4 ? status.effectsState : null));
   let executionState = 'uncertain'; let blocking = true; let reason = null;
   if (operatorQuarantined) { executionState = 'quarantined'; blocking = false; reason = `operator-quarantine:${string(operatorResolution.reason) ?? 'no-reason'}`; }
-  else if (expectedInstanceId && proof?.version === 1 && proof?.state === 'not-started' && proof?.runId === id
-    && proof?.runnerProcessInstanceId === expectedInstanceId) { executionState = 'interrupted'; blocking = false; reason = 'runner-not-started'; }
-  else if (validObservedProcessTerminal(proof, id, expectedInstanceId)) { executionState = 'terminal'; blocking = false; }
+  else if (workflowMode) {
+    // No host PID is invented from status. Missing owner, malformed ledger,
+    // nonterminal steps, and host/effects uncertainty all remain blocking.
+    if (workflowProcessProofKind !== 'workflow') reason = 'workflow-process-proof-kind-unavailable';
+    else if (!workflowOwner) reason = 'workflow-host-owner-unavailable';
+    else if ((launchRuntimeId && workflowOwner.runtimeInstanceId !== launchRuntimeId)
+      || (launch?.runtimeCreatedAt !== undefined && workflowOwner.runtimeCreatedAt !== launch.runtimeCreatedAt)) reason = 'workflow-host-owner-mismatch';
+    else if (!workflowLedger) reason = 'workflow-child-inventory-unavailable';
+    else if (!workflowSteps || workflowSteps.some((step) => !step)) reason = 'workflow-step-classification-unknown';
+    else if (workflowSteps.some((step) => !WORKFLOW_TERMINAL_STEP_STATES.has(step.status))) reason = 'workflow-step-nonterminal';
+    else if (effectsState !== 'none' && effectsState !== 'confirmed') reason = 'workflow-effects-unknown';
+    else if (!workflowHosts) reason = 'workflow-host-graph-unavailable';
+    else if (!workflowLogicalTerminal && !(await processInspector(workflowOwner.pid, workflowOwner))) {
+      executionState = 'interrupted'; blocking = false; reason = 'workflow-host-owner-not-present';
+    } else if (!workflowLogicalTerminal) reason = 'workflow-not-logically-terminal';
+    else { executionState = 'terminal'; blocking = false; }
+  } else if (logicalTerminal && statusRaw?.state === 'failed' && string(statusRaw?.error)
+    && !launchArtifact.present && !proof && !Number.isInteger(statusRaw?.pid)) {
+    executionState = 'interrupted'; blocking = false; reason = 'runner-not-started';
+  } else if (expectedInstanceId && proof?.version === 1 && proof?.state === 'not-started' && proof?.runId === id
+    && proof?.runnerProcessInstanceId === expectedInstanceId && logicalTerminal) { executionState = 'interrupted'; blocking = false; reason = 'runner-not-started'; }
+  else if (logicalTerminal && validObservedProcessTerminal(proof, id, expectedInstanceId)) { executionState = 'terminal'; blocking = false; }
   else {
     const updated = timestampMs(status?.updatedAt ?? launch?.updatedAt ?? launch?.registeredAt);
     if (runtime && launchRuntimeId && launchRuntimeId !== runtime.id) { executionState = 'interrupted'; blocking = false; reason = 'prior-runtime-instance'; }
@@ -698,7 +834,6 @@ async function classifyRunDirectory(asyncDir, { lifecycleRoot = path.dirname(asy
   if (validDeliveryAck && operatorRoot) trustedDeliveryAck = await trustedDeliveryAcknowledgement(operatorRoot, deliveryAck, deliveryAckRecord.bytes).catch(() => false);
   const deliveryState = resultPending ? 'pending' : trustedDeliveryAck ? 'settled' : 'unproven';
   const outcomeState = status?.outcomeState ?? (logicalTerminal ? (status?.state === 'complete' ? 'succeeded' : 'unknown') : 'pending');
-  const effectsState = operatorEffectsState ?? (status?.lifecycleArtifactVersion >= 4 ? status.effectsState : null);
   return { run_id: id, run_key: identity.runKey, scope: identity.scope, root_run_id: identity.rootRunId,
     result_path: resultFile, result_file: resultFile,
     state: status?.state ?? safeState(launch?.state), lifecycle_artifact_version: status?.lifecycleArtifactVersion ?? null,
@@ -710,7 +845,61 @@ async function classifyRunDirectory(asyncDir, { lifecycleRoot = path.dirname(asy
     runner_process_instance_id: launch?.runnerProcessInstanceId ?? null,
     async_dir: asyncDir, mode: status?.mode ?? string(launch?.mode), profile, pid: runnerPid,
     started_at: status?.startedAt ?? launch?.registeredAt ?? null, updated_at: status?.updatedAt ?? launch?.updatedAt ?? null,
-    processTerminal: proof, runtime_instance_id: launchRuntimeId, origin: null };
+    processTerminal: proof, workflow_mode: workflowMode,
+    workflow_owner: workflowOwner, workflow_ledger: workflowLedger,
+    workflow_steps: workflowSteps, workflow_hosts: workflowHosts,
+    runtime_instance_id: launchRuntimeId, origin: null };
+}
+
+function correlateWorkflowChildren(runs) {
+  const byId = new Map();
+  for (const run of runs) { const list = byId.get(run.run_id) ?? []; list.push(run); byId.set(run.run_id, list); }
+  const decisions = new Map();
+  const evaluate = (workflow, stack = new Set()) => {
+    if (decisions.has(workflow)) return decisions.get(workflow);
+    if (stack.has(workflow)) return ['workflow-dependency-cycle'];
+    const nextStack = new Set(stack).add(workflow); const blockers = [];
+    // An operator quarantine is an explicit base classification; dependency
+    // correlation must not silently turn it back into uncertain.
+    if (workflow.execution_state === 'quarantined') { decisions.set(workflow, []); return []; }
+    if (!workflow.workflow_ledger) blockers.push('workflow-child-inventory-unavailable');
+    if (!workflow.workflow_steps || workflow.workflow_steps.some((step) => !step)) blockers.push('workflow-step-classification-unknown');
+    if ((workflow.workflow_steps ?? []).some((step) => !WORKFLOW_TERMINAL_STEP_STATES.has(step?.status))) blockers.push('workflow-step-nonterminal');
+    if (workflow.effects_state !== 'none' && workflow.effects_state !== 'confirmed') blockers.push('workflow-effects-unknown');
+    const rows = new Map((workflow.workflow_ledger?.children ?? []).map((child) => [child.childId, child]));
+    const asyncSteps = (workflow.workflow_steps ?? []).filter((step) => step?.async === true);
+    for (const step of asyncSteps) {
+      // Current runner status persists the canonical child ledger identity in
+      // steps; older projections may additionally include ledger children.
+      const row = rows.get(step.workflowKey) ?? (step.runId || step.status === 'failed'
+        ? { childId: step.workflowKey, state: step.status === 'complete' ? 'completed' : step.status, runId: step.runId, raw: step } : null);
+      if (!row) { blockers.push(`workflow-child-ledger-${step.workflowKey}`); continue; }
+      if (!['completed', 'failed', 'stopped', 'rejected', 'detached'].includes(row.state)) blockers.push(`workflow-child-state-${step.workflowKey}`);
+      if (step.runId) {
+        const candidates = (byId.get(step.runId) ?? []).filter((candidate) => candidate !== workflow);
+        if (candidates.length !== 1) { blockers.push(`workflow-child-identity-${step.runId}`); continue; }
+        const child = candidates[0];
+        if (child.blocking || child.execution_state === 'active') blockers.push(`workflow-child-active-${child.run_id}`);
+        if (child.execution_state === 'uncertain') blockers.push(`workflow-child-uncertain-${child.run_id}`);
+        if (child.lifecycle_artifact_version >= 4 && child.effects_state === 'unknown') blockers.push(`workflow-child-effects-unknown-${child.run_id}`);
+        if (child.workflow_mode) blockers.push(...evaluate(child, nextStack));
+      } else if (!(step.status === 'failed' && string(step.error) && row.state === 'failed')) {
+        // A failed step may be recorded before the runner starts. Any other
+        // missing run id is an uncertain/corrupt child, never a filtered row.
+        blockers.push(`workflow-child-identity-${step.workflowKey}`);
+      }
+    }
+    for (const row of workflow.workflow_ledger?.children ?? []) {
+      if (row.runId && !asyncSteps.some((step) => step.runId === row.runId)) blockers.push(`workflow-child-ledger-mismatch-${row.childId}`);
+    }
+    if (blockers.length || workflow.blocking) {
+      workflow.blocking = true; workflow.execution_state = workflow.execution_state === 'quarantined' ? 'quarantined' : 'uncertain';
+      workflow.reason = [...new Set([workflow.reason, ...blockers].filter(Boolean))].join(';') || 'workflow-dependency-unknown';
+    } else { workflow.blocking = false; workflow.execution_state = 'terminal'; workflow.reason = null; }
+    decisions.set(workflow, blockers); return blockers;
+  };
+  for (const workflow of runs.filter((run) => run.workflow_mode)) evaluate(workflow);
+  return runs;
 }
 export async function scanLifecycleSnapshot({ lifecycleRoot, runtimeInstanceFile = '/run/monika-runtime-instance.json', processInspector, resultsRoot, operatorRoot } = {}) {
   const resolvedRoot = path.resolve(lifecycleRoot ?? '');
@@ -741,6 +930,7 @@ export async function scanLifecycleSnapshot({ lifecycleRoot, runtimeInstanceFile
         runner_process_instance_id: string(raw?.runnerProcessInstanceId), async_dir: dir });
     }
   }
+  correlateWorkflowChildren(runs);
   const byRawId = new Map(); for (const run of runs) { const list = byRawId.get(run.run_id) ?? []; list.push(run); byRawId.set(run.run_id, list); }
   // Scoped run keys are authoritative internally. Raw-ID APIs still reject
   // collisions by omitting ambiguous entries from byId below.

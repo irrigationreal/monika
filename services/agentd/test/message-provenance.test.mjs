@@ -183,6 +183,41 @@ test('foreign-session awaited claim retains exact result and cannot gain custody
   await assert.rejects(() => import('node:fs/promises').then((mod) => mod.access(path.join(asyncDir, 'delivery-ack.json'))));
 });
 
+test('follow_up result cannot be settled by an assistant from a different parent session', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'follow-up-foreign-parent-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const lifecycleRoot = path.join(root, 'runtime'); const resultsRoot = path.join(lifecycleRoot, 'async-subagent-results'); const operatorRoot = path.join(root, 'operator');
+  const asyncDir = path.join(lifecycleRoot, 'foreign-follow-up');
+  await import('node:fs/promises').then((mod) => Promise.all([mod.mkdir(asyncDir, { recursive: true }), mod.mkdir(resultsRoot, { recursive: true }), mod.mkdir(operatorRoot)]));
+  const artifact = { lifecycleArtifactVersion: 5, runId: 'foreign-follow-up', sessionId: 'foreign-parent', asyncDir, deliveryDisposition: 'follow_up' };
+  await writeFile(path.join(asyncDir, 'launch.json'), JSON.stringify(artifact)); await writeFile(path.join(asyncDir, 'status.json'), JSON.stringify(artifact));
+  const resultFile = path.join(resultsRoot, 'foreign-follow-up.json'); await writeFile(resultFile, '{}');
+  const conv = conversation(); const assistantId = conv.session.sessionManager.appendMessage(assistantMessage('Attempted foreign follow-up synthesis'));
+  conv.session.sessionManager.appendCustomEntry(MESSAGE_PROVENANCE_CUSTOM_TYPE, {
+    version: 2, piMessageId: assistantId, utteranceId: assistantId, messageKind: 'assistant_outward', utteranceKind: 'participant', executionOrigins: [],
+    continuation: { sourceKind: 'subagent-completion', subagentRunId: 'foreign-follow-up', subagentRunKey: 'top:foreign-follow-up', subagentRunIds: ['foreign-follow-up'], subagentRunKeys: ['top:foreign-follow-up'] }, resultClaims: [], attachmentRefs: [],
+  });
+  const outcomes = await settleCompletedSubagentResults(conv.session.sessionManager.getBranch(), { resultsRoot, lifecycleRoot, operatorRoot, parentSessionId: 'canonical-parent' });
+  assert.equal(outcomes[0].settled, false); assert.match(outcomes[0].error, /parent session identity mismatch/);
+  assert.equal(await readFile(resultFile, 'utf8'), '{}'); await assert.rejects(() => import('node:fs/promises').then((mod) => mod.access(path.join(asyncDir, 'delivery-ack.json'))));
+});
+
+test('legacy follow_up artifacts missing parent session identity remain refused', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'follow-up-missing-parent-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const lifecycleRoot = path.join(root, 'runtime'); const resultsRoot = path.join(lifecycleRoot, 'async-subagent-results'); const operatorRoot = path.join(root, 'operator');
+  const asyncDir = path.join(lifecycleRoot, 'legacy-missing-session');
+  await import('node:fs/promises').then((mod) => Promise.all([mod.mkdir(asyncDir, { recursive: true }), mod.mkdir(resultsRoot, { recursive: true }), mod.mkdir(operatorRoot)]));
+  await writeFile(path.join(asyncDir, 'status.json'), JSON.stringify({ lifecycleArtifactVersion: 3, runId: 'legacy-missing-session', asyncDir, state: 'complete' }));
+  const resultFile = path.join(resultsRoot, 'legacy-missing-session.json'); await writeFile(resultFile, '{}');
+  const conv = conversation(); const assistantId = conv.session.sessionManager.appendMessage(assistantMessage('Attempted legacy follow-up synthesis'));
+  conv.session.sessionManager.appendCustomEntry(MESSAGE_PROVENANCE_CUSTOM_TYPE, {
+    version: 2, piMessageId: assistantId, utteranceId: assistantId, messageKind: 'assistant_outward', utteranceKind: 'participant', executionOrigins: [],
+    continuation: { sourceKind: 'subagent-completion', subagentRunId: 'legacy-missing-session', subagentRunKey: 'top:legacy-missing-session', subagentRunIds: ['legacy-missing-session'], subagentRunKeys: ['top:legacy-missing-session'] }, resultClaims: [], attachmentRefs: [],
+  });
+  const outcomes = await settleCompletedSubagentResults(conv.session.sessionManager.getBranch(), { resultsRoot, lifecycleRoot, operatorRoot, parentSessionId: 'canonical-parent' });
+  assert.equal(outcomes[0].settled, false); assert.match(outcomes[0].error, /parent session identity mismatch/);
+  assert.equal(await readFile(resultFile, 'utf8'), '{}');
+});
+
 test('silent result cannot be settled by fabricated follow-up provenance', async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'silent-result-retain-')); t.after(() => rm(root, { recursive: true, force: true }));
   const lifecycleRoot = path.join(root, 'runtime'); const resultsRoot = path.join(lifecycleRoot, 'async-subagent-results'); const operatorRoot = path.join(root, 'operator');

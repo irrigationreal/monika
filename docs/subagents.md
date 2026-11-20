@@ -137,6 +137,29 @@ source generation if a path is swapped concurrently. Unproven legacy results sta
 pending; compatibility artifacts never gain authority because their text looks
 plausible.
 
+## Additive pi-subagents compatibility slice
+
+Agentd includes a bounded compatibility adapter for reviewed `pi-subagents`
+0.89.1 artifact shapes while production remains pinned to patched 0.37.2. The
+adapter recognizes persisted workflow status (`workflowChildren.inventoryComplete`,
+terminal `workflowState`, `endedAt`, classified `steps`, and `workflowGraph` host
+nodes) plus canonical child lifecycle records; it does not consume the
+`run-status.ts`-only terminal-proof projection or a workflow-proof sidecar.
+Modern notice `details.runs` rows are resolved by raw `runId` and `asyncDir`, with
+the scoped key derived from the canonical lifecycle path. Relaunch metadata is
+skipped only in package-owned launch folders; malformed records and ledger
+symlinks fail closed. It does not activate the newer package, change the
+production pin, or treat a workflow coordinator PID as proof that its children
+exited. Every active, uncertain, or effects-unknown child remains independently
+blocking; a failed-before-runner step is nonblocking only with its recorded
+error and no startup artifact.
+
+Workflow launch records carry a distinct `workflowHostOwner` PID/start-ticks and
+runtime identity. Agentd validates that record to detect owner death and never
+invents an owner PID; a missing owner remains unknown. Runtime RPC controller
+`Stop` integration is still outside this slice; cancellation continues through
+agentd's existing durable markers and public V1 stop request.
+
 ## Stop, drain, and restart
 
 Forum **Stop Robot** first fences the topic's durable dispatch generation, then
