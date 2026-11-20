@@ -106,8 +106,11 @@ incomplete indicator stay compact; expand a parent tool to inspect its per-call 
 stored in this metadata nor reconstructed by the browser. A metadata-only final refresh with a null partial result
 updates the nested record without erasing the parent tool's separately persisted output summary.
 Admin-only incremental `tool_run` DTOs retain live rows and final parent metadata after they age out of the 20-row
-`recentToolRuns` snapshot. The client cache is scoped to the current dispatch/topic/stream and cleared with its committed
-segments; it does not reorder those segments or replace persisted trace authority.
+`recentToolRuns` snapshot. The client cache is scoped to the current dispatch/topic and populated only by the current
+stream generation. Reconnect reconciliation preserves existing live data for the same active session/plan. Fresh-page
+hydration falls back to full persisted checkpoints when the recent-only live reconstruction omits hydrated tool rows.
+New-dispatch/topic/completion boundaries clear the cache with its committed segments; presentation fallback never
+reorders or mutates those segments or replaces persisted trace authority.
 
 `buildPersistedTraceItems()` splits reasoning at checkpoints and interleaves tools deterministically. Nullable
 checkpoints are expected for old or imported sessions; fallback rendering places parsed reasoning before chronologically

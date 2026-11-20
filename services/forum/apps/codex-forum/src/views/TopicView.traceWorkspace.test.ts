@@ -19,6 +19,7 @@ describe('canonical topic Trace workspace', () => {
     expect(traceSource).not.toContain('codex-forum:trace:order');
     expect(traceSource).toContain('buildLiveTraceItems');
     expect(traceSource).toContain('buildPersistedTraceItems');
+    expect(traceSource).toContain('liveTraceNeedsPersistedFallback(items, group.tools)');
   });
 
   it('renders a neutral shell until the selected projection belongs to the route topic', () => {

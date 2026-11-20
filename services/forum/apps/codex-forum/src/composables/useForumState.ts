@@ -24,11 +24,11 @@ import type {
   RobotStopResultDto,
   SessionContextDto,
   SessionDto,
+  ToolRunDto,
   TopicAutoRunDto,
   TopicDto,
   TopicOperationalEventDto,
   TopicTraceDto,
-  ToolRunDto,
 } from '../lib/apiClient';
 
 export type TraceSegment = { kind: 'reasoning'; text: string } | { kind: 'tool'; toolRunId: string };
@@ -771,17 +771,29 @@ export function useForumState() {
     // state with no live plan. Freeze local buffered text before any state reset
     // so that sparse durable projection cannot erase the interrupted trace.
     if (preserveInterruptedTrace) freezeCurrentInterruptedTrace();
+    const preserveLiveTrace =
+      reconstructTrace &&
+      hasCurrentTrace() &&
+      !durableStop &&
+      nextState?.activity !== 'idle' &&
+      robotState.value?.sessionId === nextState?.sessionId &&
+      activePlanId === (nextState?.currentPlan?.id ?? null);
     robotState.value = nextState;
     sessionContext.value = retainSessionContext(sessionContext.value, nextState?.context);
     activePlanId = nextState?.currentPlan?.id ?? null;
-    if (!preserveInterruptedTrace) resetRobotActivity();
+    if (!preserveInterruptedTrace && !preserveLiveTrace) resetRobotActivity();
     // Reconstruct committed segments from server-provided plan/checkpoints
     // so a page refresh shows the trace built so far. Completion reloads opt
     // out because assistant_message is authoritative and stale idle state may
     // still carry the just-finished plan/tool data.
-    if (!preserveInterruptedTrace && reconstructTrace && shouldReconstructTraceFromState(nextState)) {
+    if (
+      !preserveInterruptedTrace &&
+      !preserveLiveTrace &&
+      reconstructTrace &&
+      shouldReconstructTraceFromState(nextState)
+    ) {
       reconstructSegmentsFromState(nextState);
-    } else if (!preserveInterruptedTrace) {
+    } else if (!preserveInterruptedTrace && !preserveLiveTrace) {
       reasoningDraft.value = '';
     }
     if (durableStop) freezeCurrentInterruptedTrace();
@@ -996,7 +1008,7 @@ export function useForumState() {
       if (!isCurrentConnection()) return;
       liveStateRevision += 1;
       const tool = JSON.parse(event.data) as ToolRunDto;
-      const byId = new Map(liveToolRuns.value.map(row => [row.id, row]));
+      const byId = new Map(liveToolRuns.value.map((row) => [row.id, row]));
       byId.set(tool.id, tool);
       liveToolRuns.value = [...byId.values()];
     });

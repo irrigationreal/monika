@@ -169,7 +169,7 @@ import { computed, ref, watch } from 'vue';
 import { useForumState } from '../composables/useForumState';
 import { useMarkdown } from '../composables/useMarkdown';
 import { getToolMiniModel } from '../lib/toolMiniView';
-import { buildLiveTraceItems, buildPersistedTraceItems } from '../lib/unifiedTrace';
+import { buildLiveTraceItems, buildPersistedTraceItems, liveTraceNeedsPersistedFallback } from '../lib/unifiedTrace';
 import ToolMiniView from './ToolMiniView.vue';
 
 import type { ToolRunDto, TopicTraceDto } from '../lib/apiClient';
@@ -337,7 +337,7 @@ const traceGroups = computed<TraceGroup[]>(() => {
             tools: group.tools,
           })
         : [];
-      if (items.length === 0)
+      if (liveTraceNeedsPersistedFallback(items, group.tools))
         items = buildPersistedTraceItems({
           reasoningText: group.plan?.summary ?? group.plan?.content ?? null,
           reasoningCheckpoints: group.plan?.reasoningCheckpoints ?? null,

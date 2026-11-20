@@ -89,3 +89,11 @@ export function buildLiveTraceItems(input: LiveTraceInput): UnifiedTraceItem[] {
   if (input.reasoningDraft) pushReasoning(items, input.reasoningDraft, reasoningIndex);
   return items;
 }
+
+/** On refresh the live snapshot may contain only recent tools. Prefer complete
+ * persisted checkpoints until live segments cover every hydrated row. This
+ * changes presentation only; committed segments remain append-only. */
+export function liveTraceNeedsPersistedFallback(items: UnifiedTraceItem[], tools: ToolRunDto[]): boolean {
+  const visible = new Set(items.flatMap((item) => (item.type === 'tool' ? [item.tool.id] : [])));
+  return items.length === 0 || tools.some((tool) => !visible.has(tool.id));
+}

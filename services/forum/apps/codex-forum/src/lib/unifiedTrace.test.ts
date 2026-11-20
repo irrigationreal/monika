@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildLiveTraceItems, buildPersistedTraceItems } from './unifiedTrace';
+import { buildLiveTraceItems, buildPersistedTraceItems, liveTraceNeedsPersistedFallback } from './unifiedTrace';
 
 import type { ToolRunDto } from './apiClient';
 
@@ -21,6 +21,19 @@ function tool(id: string, startedAt: string): ToolRunDto {
 }
 
 describe('unified trace items', () => {
+  it('uses full persisted checkpoints after reload when live reconstruction contains only recent children', () => {
+    const rows = Array.from({ length: 65 }, (_, i) => tool(String(i), new Date(i).toISOString()));
+    const live = buildLiveTraceItems({
+      tools: rows,
+      segments: rows.slice(-20).map((row) => ({ kind: 'tool', toolRunId: row.id })),
+    });
+    expect(live).toHaveLength(20);
+    expect(liveTraceNeedsPersistedFallback(live, rows)).toBe(true);
+    const hydrated = buildPersistedTraceItems({ tools: rows });
+    expect(hydrated).toHaveLength(65);
+    expect(hydrated[0]?.type === 'tool' && hydrated[0].tool.id).toBe('0');
+    expect(liveTraceNeedsPersistedFallback(hydrated, rows)).toBe(false);
+  });
   it('interleaves persisted reasoning with chronologically sorted tools at checkpoints', () => {
     const first = tool('first', '2026-01-01T00:00:01.000Z');
     const second = tool('second', '2026-01-01T00:00:02.000Z');

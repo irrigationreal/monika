@@ -133,7 +133,28 @@ describe('topic stream isolation', () => {
     expect(
       buildLiveTraceItems({ segments: state.committedSegments.value, tools: state.liveToolRuns.value })
     ).toHaveLength(65);
-    stream.emit('assistant_reset', { reason: 'new_turn' });
+    // Reconnect reconciliation must not replace already committed data with
+    // the sparse recent-20 HTTP snapshot.
+    mocks.getRobotState.mockResolvedValue({
+      ...robotState('topic-many', 'running_tools'),
+      recentToolRuns: rows.slice(-20),
+    });
+    vi.useFakeTimers();
+    try {
+      const replacementStream = new RetainedListenerStream();
+      mocks.createStateStream.mockReturnValueOnce(replacementStream);
+      stream.emit('error');
+      await vi.advanceTimersByTimeAsync(2000);
+      replacementStream.emit('open');
+      await Promise.resolve();
+      await Promise.resolve();
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(state.liveToolRuns.value).toHaveLength(65);
+    expect(state.liveToolRuns.value.find((row) => row.callId === 'root')?.nestedCalls).toEqual(nestedCalls);
+    expect(state.committedSegments.value.filter((row) => row.kind === 'tool')).toHaveLength(65);
+    await state.loadState('topic-many', { reconstructTrace: false });
     expect(state.liveToolRuns.value).toHaveLength(0);
     state.clearTopic();
     stream.emit('tool_run', rows[0]);
