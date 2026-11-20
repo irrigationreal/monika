@@ -28,7 +28,7 @@ disabled. See [Codemode](codemode.md) for activation, limits and trace boundarie
 Cache warming is explicitly set to `streaming`, retaining active-run warming
 rather than Pi 1.5.1's new idle-between-runs default. This avoids silently adding
 background provider traffic or charges. The upgrade retains existing custom pool
-providers, selected models, and patched pi-subagents 0.37.2; new stock model
+providers, selected models, and patched pi-subagents 0.89.1; new stock model
 catalog entries do not establish pool availability. Anthropic message threads are
 not opted into for pool gateways. Pi JSONL remains version 3; no forum database
 migration is required. SDK startup diagnostics and model-fallback warnings go to

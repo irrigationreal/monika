@@ -1,5 +1,5 @@
 diff --git a/src/api/preflight.ts b/src/api/preflight.ts
-index 1a7e374..8905659 100644
+index 1a7e3745..8905659c 100644
 --- a/src/api/preflight.ts
 +++ b/src/api/preflight.ts
 @@ -28,6 +28,8 @@ import { resultFilePath } from "../runs/background/result-files.ts";
@@ -63,7 +63,7 @@ index 1a7e374..8905659 100644
  		...(effectiveThinking ? { thinking: effectiveThinking } : {}),
  		...(thinkingCeiling ? { thinkingCeiling } : {}),
 diff --git a/src/extension/control-notices.ts b/src/extension/control-notices.ts
-index 94e6ac8..85a2431 100644
+index 94e6ac86..85a24317 100644
 --- a/src/extension/control-notices.ts
 +++ b/src/extension/control-notices.ts
 @@ -1,6 +1,8 @@
@@ -88,7 +88,7 @@ index 94e6ac8..85a2431 100644
  	deliverControlNotice(input);
  }
 diff --git a/src/extension/fanout-child.ts b/src/extension/fanout-child.ts
-index 150e8cf..8909396 100644
+index 150e8cf6..89093964 100644
 --- a/src/extension/fanout-child.ts
 +++ b/src/extension/fanout-child.ts
 @@ -21,14 +21,17 @@ import { loadConfig, resolveAsyncByDefault } from "./config.ts";
@@ -116,7 +116,7 @@ index 150e8cf..8909396 100644
  
  function expandTilde(p: string): string {
 diff --git a/src/extension/index.ts b/src/extension/index.ts
-index ffe0cda..8235dbb 100644
+index ffe0cda0..8235dbba 100644
 --- a/src/extension/index.ts
 +++ b/src/extension/index.ts
 @@ -57,6 +57,7 @@ import { recordedPromptSection, registerPinnedTool, setDeclarationPinning } from
@@ -239,7 +239,7 @@ index ffe0cda..8235dbb 100644
  	});
  
 diff --git a/src/extension/schemas.ts b/src/extension/schemas.ts
-index 1d9cfc6..9722318 100644
+index 1d9cfc67..8ae77d0b 100644
 --- a/src/extension/schemas.ts
 +++ b/src/extension/schemas.ts
 @@ -150,6 +150,15 @@ const ControlOverrides = Type.Object({
@@ -286,7 +286,7 @@ index 1d9cfc6..9722318 100644
  	})),
  };
 diff --git a/src/extension/steering-notices.ts b/src/extension/steering-notices.ts
-index 4960c19..9ac9dd7 100644
+index 4960c195..9ac9dd7d 100644
 --- a/src/extension/steering-notices.ts
 +++ b/src/extension/steering-notices.ts
 @@ -1,5 +1,7 @@
@@ -311,7 +311,7 @@ index 4960c19..9ac9dd7 100644
  	input.pi.sendMessage({
  		customType: SUBAGENT_STEERING_MESSAGE_TYPE,
 diff --git a/src/intercom/native-supervisor-channel.ts b/src/intercom/native-supervisor-channel.ts
-index cace862..0fada7c 100644
+index cace8622..0fada7c0 100644
 --- a/src/intercom/native-supervisor-channel.ts
 +++ b/src/intercom/native-supervisor-channel.ts
 @@ -58,6 +58,8 @@ interface SupervisorRequest {
@@ -393,7 +393,7 @@ index cace862..0fada7c 100644
  			registerParentTools();
  			poll();
 diff --git a/src/runs/background/async-execution.ts b/src/runs/background/async-execution.ts
-index b6ca691..e93c272 100644
+index b6ca6912..e93c2723 100644
 --- a/src/runs/background/async-execution.ts
 +++ b/src/runs/background/async-execution.ts
 @@ -18,7 +18,7 @@ import { assertClaudeCodeModelScope, isClaudeCodeAdapterId, resolveClaudeCodeOve
@@ -732,7 +732,7 @@ index b6ca691..e93c272 100644
  	};
  	return spawnResultOrPromise instanceof Promise ? spawnResultOrPromise.then(finishSpawnResult) : finishSpawnResult(spawnResultOrPromise);
 diff --git a/src/runs/background/async-resume.ts b/src/runs/background/async-resume.ts
-index d3fad21..859675c 100644
+index d3fad214..859675c9 100644
 --- a/src/runs/background/async-resume.ts
 +++ b/src/runs/background/async-resume.ts
 @@ -22,6 +22,7 @@ import { validateModelResponseAliases } from "../../shared/model-response-aliase
@@ -863,7 +863,7 @@ index d3fad21..859675c 100644
  		...(!recoveryDescriptor && statusSteps[index]?.runner ? { runner: statusSteps[index]!.runner } : {}),
  		...(!recoveryDescriptor && statusSteps[index]?.externalJob ? { externalJob: statusSteps[index]!.externalJob } : {}),
 diff --git a/src/runs/background/async-status.ts b/src/runs/background/async-status.ts
-index b82d7cc..cc76cee 100644
+index b82d7cc2..cc76ceef 100644
 --- a/src/runs/background/async-status.ts
 +++ b/src/runs/background/async-status.ts
 @@ -101,6 +101,7 @@ export interface AsyncRunSummary {
@@ -883,7 +883,7 @@ index b82d7cc..cc76cee 100644
  		...(status.error ? { error: status.error } : {}),
  		activityState,
 diff --git a/src/runs/background/notify.ts b/src/runs/background/notify.ts
-index c060f90..ee2a296 100644
+index c060f906..ee2a296c 100644
 --- a/src/runs/background/notify.ts
 +++ b/src/runs/background/notify.ts
 @@ -25,6 +25,7 @@ import { formatParallelHandoffLines, parseKeptBranchLines, readKeptBranches, typ
@@ -914,7 +914,7 @@ index c060f90..ee2a296 100644
  			return Promise.resolve(false);
 diff --git a/src/runs/background/result-claim.ts b/src/runs/background/result-claim.ts
 new file mode 100644
-index 0000000..227e6ca
+index 00000000..227e6caf
 --- /dev/null
 +++ b/src/runs/background/result-claim.ts
 @@ -0,0 +1,183 @@
@@ -1102,7 +1102,7 @@ index 0000000..227e6ca
 +	return { kind: "claimed", claim: published.claim, claimPath, resultPath: identity.resultPath, resultBytes, result, idempotent: published.idempotent };
 +}
 diff --git a/src/runs/background/result-watcher.ts b/src/runs/background/result-watcher.ts
-index e143afb..8301b33 100644
+index e143afb4..8301b335 100644
 --- a/src/runs/background/result-watcher.ts
 +++ b/src/runs/background/result-watcher.ts
 @@ -28,6 +28,7 @@ import { acknowledgeMissionObserverSnapshot, missionObserverIndexPath, missionOb
@@ -1143,7 +1143,7 @@ index e143afb..8301b33 100644
  			let read: ResultSnapshot = { runId, sessionId, toolCallId, snapshot: raw, ...(publicAtRead !== undefined && publicAtRead !== raw ? { stalePublic: publicAtRead } : {}) };
  			const markReplacedPayload = (): boolean => {
 diff --git a/src/runs/background/runner-child-launch.ts b/src/runs/background/runner-child-launch.ts
-index 3ff856a..ba2ee9d 100644
+index 3ff856a2..ba2ee9d2 100644
 --- a/src/runs/background/runner-child-launch.ts
 +++ b/src/runs/background/runner-child-launch.ts
 @@ -12,6 +12,7 @@ export interface RunnerChildLaunchContext {
@@ -1164,7 +1164,7 @@ index 3ff856a..ba2ee9d 100644
  		remoteSkillNames: step.skills,
  		remoteReads: step.remoteReads,
 diff --git a/src/runs/background/stale-run-reconciler.ts b/src/runs/background/stale-run-reconciler.ts
-index 2e78a70..0612857 100644
+index 2e78a709..06128577 100644
 --- a/src/runs/background/stale-run-reconciler.ts
 +++ b/src/runs/background/stale-run-reconciler.ts
 @@ -16,6 +16,7 @@ import { currentPidNamespaceScope } from "./pid-namespace.ts";
@@ -1196,7 +1196,7 @@ index 2e78a70..0612857 100644
  	const lastUpdate = effectiveStatus.lastUpdate ?? effectiveStatus.startedAt;
  	const observedScope = options.pidNamespaceScope ? options.pidNamespaceScope() : currentPidNamespaceScope();
 diff --git a/src/runs/background/subagent-runner.ts b/src/runs/background/subagent-runner.ts
-index 0c17c78..e54511c 100644
+index 0c17c783..e54511c0 100644
 --- a/src/runs/background/subagent-runner.ts
 +++ b/src/runs/background/subagent-runner.ts
 @@ -160,6 +160,8 @@ import { runExternalJob } from "../shared/external-job-runner.ts";
@@ -1407,7 +1407,7 @@ index 0c17c78..e54511c 100644
  			launchResolvedExtensions: config.launchResolvedExtensions,
  			runtimeAcknowledgedExtensions: singleRuntimeAcknowledgedExtensions,
 diff --git a/src/runs/background/subagent-wait.ts b/src/runs/background/subagent-wait.ts
-index 99f8513..23f600b 100644
+index 99f8513b..23f600bd 100644
 --- a/src/runs/background/subagent-wait.ts
 +++ b/src/runs/background/subagent-wait.ts
 @@ -69,6 +69,7 @@ import { collectWaitCompletions } from "./wait-completions.ts";
@@ -1572,7 +1572,7 @@ index 99f8513..23f600b 100644
  	);
  }
 diff --git a/src/runs/background/top-level-async.ts b/src/runs/background/top-level-async.ts
-index 08a7e77..d1ca8e0 100644
+index 08a7e77a..d1ca8e06 100644
 --- a/src/runs/background/top-level-async.ts
 +++ b/src/runs/background/top-level-async.ts
 @@ -1,7 +1,10 @@
@@ -1605,7 +1605,7 @@ index 08a7e77..d1ca8e0 100644
  	return { ...params, async: true, clarify: false };
  }
 diff --git a/src/runs/background/wait-tool.ts b/src/runs/background/wait-tool.ts
-index 874e76a..4269a11 100644
+index 874e76ab..4269a113 100644
 --- a/src/runs/background/wait-tool.ts
 +++ b/src/runs/background/wait-tool.ts
 @@ -6,6 +6,17 @@ import type { WaitSubscriptionManager } from "./wait-subscriptions.ts";
@@ -1644,7 +1644,7 @@ index 874e76a..4269a11 100644
  				onUpdate,
  				...(subscriptions && ctx?.hasUI ? { subscribe: (input) => subscriptions.arm(input) } : {}),
 diff --git a/src/runs/foreground/async-steering-action.ts b/src/runs/foreground/async-steering-action.ts
-index 5e1e840..62bb38e 100644
+index 5e1e840d..62bb38e9 100644
 --- a/src/runs/foreground/async-steering-action.ts
 +++ b/src/runs/foreground/async-steering-action.ts
 @@ -10,6 +10,7 @@ import { resolveAsyncResumeTarget } from "../background/async-resume.ts";
@@ -1697,7 +1697,7 @@ index 5e1e840..62bb38e 100644
  			const failed = projected(failedStatus);
  			appendSteeringNotice("failed", `Steering failed for run ${status.runId}: ${reason}`);
 diff --git a/src/runs/foreground/async-stop-action.ts b/src/runs/foreground/async-stop-action.ts
-index 45f45df..0b1d803 100644
+index 45f45df1..0b1d803b 100644
 --- a/src/runs/foreground/async-stop-action.ts
 +++ b/src/runs/foreground/async-stop-action.ts
 @@ -11,6 +11,7 @@ import { reconcileAsyncRun } from "../background/stale-run-reconciler.ts";
@@ -1728,7 +1728,7 @@ index 45f45df..0b1d803 100644
  		stopped: true,
  		error: SUBAGENT_STOPPED_MESSAGE,
 diff --git a/src/runs/foreground/execution.ts b/src/runs/foreground/execution.ts
-index 5f6b97b..44f946d 100644
+index 5f6b97b1..44f946df 100644
 --- a/src/runs/foreground/execution.ts
 +++ b/src/runs/foreground/execution.ts
 @@ -93,6 +93,7 @@ import { attachContractProjections, isAgentContract } from "../shared/agent-cont
@@ -1748,7 +1748,7 @@ index 5f6b97b..44f946d 100644
  		model: modelArg,
  		...(fast !== undefined ? { fast } : {}),
 diff --git a/src/runs/foreground/subagent-executor.ts b/src/runs/foreground/subagent-executor.ts
-index 7e1ced2..b3bb6b5 100644
+index 7e1ced23..b3bb6b55 100644
 --- a/src/runs/foreground/subagent-executor.ts
 +++ b/src/runs/foreground/subagent-executor.ts
 @@ -5,7 +5,7 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
@@ -1967,7 +1967,7 @@ index 7e1ced2..b3bb6b5 100644
  			return buildRequestedModeError(effectiveParams, `Agent '${externalAgent.name}' uses runner.type='${externalAgent.runner?.type}', which currently supports async/background execution only. Omit async or pass async:true; clarify and foregroundOnly are unsupported.`);
  		}
 diff --git a/src/runs/shared/child-launch.ts b/src/runs/shared/child-launch.ts
-index 9c9569a..b391a3b 100644
+index 9c9569af..b391a3bb 100644
 --- a/src/runs/shared/child-launch.ts
 +++ b/src/runs/shared/child-launch.ts
 @@ -37,6 +37,7 @@ import type { ChildTranscriptWriter } from "../../shared/child-transcript.ts";
@@ -2021,7 +2021,7 @@ index 9c9569a..b391a3b 100644
  		runtime: config,
  		noSkills: !input.inheritSkills,
 diff --git a/src/runs/shared/dynamic-fanout.ts b/src/runs/shared/dynamic-fanout.ts
-index 0cace95..50f484a 100644
+index 0cace95e..50f484ac 100644
 --- a/src/runs/shared/dynamic-fanout.ts
 +++ b/src/runs/shared/dynamic-fanout.ts
 @@ -46,7 +46,7 @@ const DYNAMIC_STEP_KEYS = new Set(["expand", "parallel", "collect", "concurrency
@@ -2035,7 +2035,7 @@ index 0cace95..50f484a 100644
  	"runner", "outputName", "structured", "inheritProjectContext", "inheritGlobalContext", "inheritSkills", "skills", "outputPath", "namespaceOutputPath", "maxSubagentDepth", "timeoutMs", "waitToolEnabled", "waitToolDefaultTimeoutMs",
 diff --git a/src/runs/shared/execution-target.ts b/src/runs/shared/execution-target.ts
 new file mode 100644
-index 0000000..ce187c5
+index 00000000..ce187c5b
 --- /dev/null
 +++ b/src/runs/shared/execution-target.ts
 @@ -0,0 +1,238 @@
@@ -2278,7 +2278,7 @@ index 0000000..ce187c5
 +	if (targets.some((target) => target?.kind === "ssh")) throw new Error("worktree:true is not supported for SSH execution targets; no worktree was created.");
 +}
 diff --git a/src/runs/shared/parallel-utils.ts b/src/runs/shared/parallel-utils.ts
-index ba9c6ce..cc001fb 100644
+index ba9c6ceb..cc001fb5 100644
 --- a/src/runs/shared/parallel-utils.ts
 +++ b/src/runs/shared/parallel-utils.ts
 @@ -1,6 +1,8 @@
@@ -2291,7 +2291,7 @@ index ba9c6ce..cc001fb 100644
  	parentSessionId?: string;
  	/** Parent session file, recorded as the new child session's `parentSession` header. */
 diff --git a/src/shared/launch-contract.ts b/src/shared/launch-contract.ts
-index 5294991..7ae16cb 100644
+index 52949916..7ae16cbf 100644
 --- a/src/shared/launch-contract.ts
 +++ b/src/shared/launch-contract.ts
 @@ -85,6 +85,10 @@ export function agentDefinitionDigest(agent: AgentConfig): string {
@@ -2336,7 +2336,7 @@ index 5294991..7ae16cb 100644
  			fast: source.fast,
 diff --git a/src/shared/monika-host.ts b/src/shared/monika-host.ts
 new file mode 100644
-index 0000000..5b753ef
+index 00000000..5b753ef6
 --- /dev/null
 +++ b/src/shared/monika-host.ts
 @@ -0,0 +1,129 @@
@@ -2470,7 +2470,7 @@ index 0000000..5b753ef
 +	}
 +}
 diff --git a/src/shared/settings.ts b/src/shared/settings.ts
-index 77ae10b..f0bf871 100644
+index 77ae10b6..f0bf8715 100644
 --- a/src/shared/settings.ts
 +++ b/src/shared/settings.ts
 @@ -5,6 +5,7 @@ import { discoverAgents, formatUnknownAgentError, unknownAgentDiagnosticContext,
@@ -2498,7 +2498,7 @@ index 77ae10b..f0bf871 100644
  	phase?: string;
  	label?: string;
 diff --git a/src/shared/types.ts b/src/shared/types.ts
-index d02a2dd..e9273ee 100644
+index d02a2dde..e9273eea 100644
 --- a/src/shared/types.ts
 +++ b/src/shared/types.ts
 @@ -635,7 +635,20 @@ export interface TimeoutRecoverySummary {
@@ -2599,7 +2599,7 @@ index d02a2dd..e9273ee 100644
  	? path.resolve(configuredTempRoot)
  	: path.join(os.tmpdir(), `pi-subagents-${resolveTempScopeId()}`);
 diff --git a/test/integration/single-execution.part-1.test.ts b/test/integration/single-execution.part-1.test.ts
-index 39fc331..c8cbc0c 100644
+index 39fc331e..c8cbc0c1 100644
 --- a/test/integration/single-execution.part-1.test.ts
 +++ b/test/integration/single-execution.part-1.test.ts
 @@ -607,7 +607,10 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
@@ -2631,7 +2631,7 @@ index 39fc331..c8cbc0c 100644
  			acceptance: false,
  			structuredOutput: structured,
 diff --git a/test/integration/top-level-async.test.ts b/test/integration/top-level-async.test.ts
-index fdadb1b..8cb3892 100644
+index fdadb1b3..8cb38927 100644
 --- a/test/integration/top-level-async.test.ts
 +++ b/test/integration/top-level-async.test.ts
 @@ -3,7 +3,7 @@ import { describe, it } from "node:test";
@@ -2679,7 +2679,7 @@ index fdadb1b..8cb3892 100644
 +	});
  });
 diff --git a/test/unit/async-interrupt-action.test.ts b/test/unit/async-interrupt-action.test.ts
-index 9e07a0f..ff9fa05 100644
+index 9e07a0fa..ff9fa05b 100644
 --- a/test/unit/async-interrupt-action.test.ts
 +++ b/test/unit/async-interrupt-action.test.ts
 @@ -922,6 +922,38 @@ describe("async interrupt action", () => {
@@ -2722,7 +2722,7 @@ index 9e07a0f..ff9fa05 100644
  		const state = createState();
  		state.currentSessionId = "session";
 diff --git a/test/unit/async-resume.test.ts b/test/unit/async-resume.test.ts
-index 272aa5f..b182b42 100644
+index 272aa5fc..b182b42b 100644
 --- a/test/unit/async-resume.test.ts
 +++ b/test/unit/async-resume.test.ts
 @@ -49,6 +49,29 @@ describe("async resume lookup", () => {
@@ -2774,7 +2774,7 @@ index 272aa5f..b182b42 100644
  			assert.deepEqual(valid.recoveryDescriptor?.allowedAgents, ["scout", "worker"]);
  			assert.deepEqual(valid.recoveryDescriptor?.intercomBridge, { mode: "off" });
 diff --git a/test/unit/control-notices.test.ts b/test/unit/control-notices.test.ts
-index 98dd72c..a816e11 100644
+index 98dd72c9..a816e11c 100644
 --- a/test/unit/control-notices.test.ts
 +++ b/test/unit/control-notices.test.ts
 @@ -1,4 +1,7 @@
@@ -2814,7 +2814,7 @@ index 98dd72c..a816e11 100644
  		const recorder = makeRecorder();
 diff --git a/test/unit/execution-target.test.ts b/test/unit/execution-target.test.ts
 new file mode 100644
-index 0000000..e7e85d0
+index 00000000..e7e85d0f
 --- /dev/null
 +++ b/test/unit/execution-target.test.ts
 @@ -0,0 +1,157 @@
@@ -2976,7 +2976,7 @@ index 0000000..e7e85d0
 +  });
 +});
 diff --git a/test/unit/extension-bindings.test.ts b/test/unit/extension-bindings.test.ts
-index 089308e..b7d96ca 100644
+index 089308eb..b7d96ca1 100644
 --- a/test/unit/extension-bindings.test.ts
 +++ b/test/unit/extension-bindings.test.ts
 @@ -59,7 +59,7 @@ describe("extension bindings", () => {
@@ -2990,7 +2990,7 @@ index 089308e..b7d96ca 100644
  	it("gives an in-process foreground child only its bindings, restored after start", () => {
 diff --git a/test/unit/monika-host.test.ts b/test/unit/monika-host.test.ts
 new file mode 100644
-index 0000000..01a4ad2
+index 00000000..01a4ad2f
 --- /dev/null
 +++ b/test/unit/monika-host.test.ts
 @@ -0,0 +1,38 @@
@@ -3034,7 +3034,7 @@ index 0000000..01a4ad2
 +});
 diff --git a/test/unit/monika-launch-contract.test.ts b/test/unit/monika-launch-contract.test.ts
 new file mode 100644
-index 0000000..643e25f
+index 00000000..643e25f8
 --- /dev/null
 +++ b/test/unit/monika-launch-contract.test.ts
 @@ -0,0 +1,77 @@
@@ -3117,7 +3117,7 @@ index 0000000..643e25f
 +});
 diff --git a/test/unit/result-claim.test.ts b/test/unit/result-claim.test.ts
 new file mode 100644
-index 0000000..8732348
+index 00000000..8732348a
 --- /dev/null
 +++ b/test/unit/result-claim.test.ts
 @@ -0,0 +1,59 @@
@@ -3180,8 +3180,65 @@ index 0000000..8732348
 +		}
 +	});
 +});
+diff --git a/test/unit/schemas.test.ts b/test/unit/schemas.test.ts
+index 6e5444d0..c9f4c35b 100644
+--- a/test/unit/schemas.test.ts
++++ b/test/unit/schemas.test.ts
+@@ -5,6 +5,7 @@ type JsonSchemaNode = Record<string, unknown>;
+ 
+ interface SubagentParamsSchema {
+ 	properties?: {
++		executionTarget?: JsonSchemaNode;
+ 		context?: {
+ 			type?: string;
+ 			enum?: string[];
+@@ -206,6 +207,24 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
+ 		assert.match(description, /else fresh/);
+ 	});
+ 
++	it("uses provider-compatible closed execution target schemas", () => {
++		const executionTarget = SubagentParams?.properties?.executionTarget;
++		assert.ok(executionTarget, "executionTarget schema should exist");
++		const branches = executionTarget.oneOf;
++		assert.ok(Array.isArray(branches));
++		assert.deepEqual((branches[0] as JsonSchemaNode).properties && ((branches[0] as JsonSchemaNode).properties as JsonSchemaNode).kind, { enum: ["local"] });
++		assert.deepEqual((branches[1] as JsonSchemaNode).properties && ((branches[1] as JsonSchemaNode).properties as JsonSchemaNode).kind, { enum: ["ssh"] });
++		assert.ok(CompileSchema);
++		const validator = CompileSchema!(SubagentParams);
++		for (const target of [{ kind: "local" }, { kind: "ssh", name: "stanza" }]) {
++			assert.equal(validator.Check({ agent: "worker", task: "work", executionTarget: target }), true, JSON.stringify(target));
++		}
++		for (const target of [
++			{ kind: "other" }, { kind: "ssh" }, { kind: "local", name: "stanza" },
++			{ kind: "ssh", name: "../escape" }, { kind: "ssh", name: "stanza", host: "untrusted" },
++		]) assert.equal(validator.Check({ agent: "worker", task: "work", executionTarget: target }), false, JSON.stringify(target));
++	});
++
+ 	it("exposes one workflow field for the reply block, script paths, and named resources", () => {
+ 		const workflow = SubagentParams?.properties?.workflow;
+ 		assert.equal(hasAnyOfType(workflow, "boolean"), true);
+@@ -413,7 +432,7 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
+ 				if (!current.value || typeof current.value !== "object") continue;
+ 
+ 				const node = current.value as JsonSchemaNode;
+-				if (Object.hasOwn(node, "description") && !Object.hasOwn(node, "type") && !Object.hasOwn(node, "anyOf")) {
++				if (Object.hasOwn(node, "description") && !Object.hasOwn(node, "type") && !Object.hasOwn(node, "anyOf") && !Object.hasOwn(node, "oneOf")) {
+ 					descriptionOnlyPaths.push(current.path);
+ 				}
+ 
+@@ -475,7 +494,9 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
+ 		assert.match(String(properties.options?.description ?? ""), /acceptance, timeoutMs.*guide tool-reference\/parameter-reference/);
+ 		const { resolveDisabledFeatureSurface } = await import("../../src/shared/disabled-features.ts");
+ 		const structured = createProviderSchema!(resolveDisabledFeatureSurface({ disabledFeatures: ["workflow-scripts"] }));
+-		assert.ok(JSON.stringify(structured).length <= 2_450, `expected structured schema at or under 2,450 chars, got ${JSON.stringify(structured).length}`);
++		// Each executable leaf carries a closed local/SSH target union; without refs,
++		// the provider payload repeats that metadata in tasks, chain, and parallel leaves.
++		assert.ok(JSON.stringify(structured).length <= 3_395, `expected structured schema at or under 3,395 chars, got ${JSON.stringify(structured).length}`);
+ 		assert.deepEqual(Object.keys(structured.properties as JsonSchemaNode), ["agent", "task", "tasks", "chain", "async", "model", "cwd", "worktree", "output", "action", "id", "message", "options"]);
+ 
+ 		const nestedDescriptionPaths: string[] = [];
 diff --git a/test/unit/stale-run-reconciler.test.ts b/test/unit/stale-run-reconciler.test.ts
-index 17142c1..3efcce2 100644
+index 17142c10..3efcce2b 100644
 --- a/test/unit/stale-run-reconciler.test.ts
 +++ b/test/unit/stale-run-reconciler.test.ts
 @@ -26,6 +26,38 @@ function errno(code: string): NodeJS.ErrnoException {
@@ -3224,7 +3281,7 @@ index 17142c1..3efcce2 100644
  		assert.equal(checkPidLiveness(process.pid), "alive");
  		assert.equal(checkPidLiveness(2_147_483_647, () => true), "alive");
 diff --git a/test/unit/steering-action.test.ts b/test/unit/steering-action.test.ts
-index ba28918..0dd16f9 100644
+index ba28918e..0dd16f92 100644
 --- a/test/unit/steering-action.test.ts
 +++ b/test/unit/steering-action.test.ts
 @@ -171,6 +171,35 @@ function successResult(asyncId: string): { content: [{ type: "text"; text: strin
@@ -3264,7 +3321,7 @@ index ba28918..0dd16f9 100644
  		const runId = `steer-delivered-${Date.now().toString(36)}`;
  		const asyncDir = path.join(ASYNC_DIR, runId);
 diff --git a/test/unit/steering-notices.test.ts b/test/unit/steering-notices.test.ts
-index dc7ebb6..89baed3 100644
+index dc7ebb6f..89baed3f 100644
 --- a/test/unit/steering-notices.test.ts
 +++ b/test/unit/steering-notices.test.ts
 @@ -1,4 +1,7 @@
@@ -3303,7 +3360,7 @@ index dc7ebb6..89baed3 100644
  		const messages: unknown[] = [];
  		handleSubagentSteeringNotice({
 diff --git a/test/unit/subagent-options.test.ts b/test/unit/subagent-options.test.ts
-index 58e8a0e..9f3178c 100644
+index 58e8a0e1..9f3178cb 100644
 --- a/test/unit/subagent-options.test.ts
 +++ b/test/unit/subagent-options.test.ts
 @@ -24,7 +24,7 @@ const OPTION_SAMPLES: Record<string, unknown> = {
@@ -3325,7 +3382,7 @@ index 58e8a0e..9f3178c 100644
  
  	it("keeps top-level management fields and aliases, and rejects a field given in both places with different values", () => {
 diff --git a/test/unit/subagent-wait.test.ts b/test/unit/subagent-wait.test.ts
-index 0aa27af..64f8644 100644
+index 0aa27af4..64f86448 100644
 --- a/test/unit/subagent-wait.test.ts
 +++ b/test/unit/subagent-wait.test.ts
 @@ -101,6 +101,60 @@ function baseDeps(root: string, state: SubagentState, overrides: Partial<Subagen
@@ -3389,68 +3446,11 @@ index 0aa27af..64f8644 100644
  	for (const alreadyTerminal of [false, true]) {
  		for (const prefix of [false, true]) {
  			it(`collects nested results by ${prefix ? "prefix" : "exact id"} ${alreadyTerminal ? "after early completion" : "across active-to-terminal transition"}`, async (t) => {
-
-
-diff --git a/test/unit/schemas.test.ts b/test/unit/schemas.test.ts
---- a/test/unit/schemas.test.ts
-+++ b/test/unit/schemas.test.ts
-@@ -5,6 +5,7 @@
- 
- interface SubagentParamsSchema {
- 	properties?: {
-+		executionTarget?: JsonSchemaNode;
- 		context?: {
- 			type?: string;
- 			enum?: string[];
-@@ -206,6 +207,24 @@
- 		assert.match(description, /else fresh/);
- 	});
- 
-+	it("uses provider-compatible closed execution target schemas", () => {
-+		const executionTarget = SubagentParams?.properties?.executionTarget;
-+		assert.ok(executionTarget, "executionTarget schema should exist");
-+		const branches = executionTarget.oneOf;
-+		assert.ok(Array.isArray(branches));
-+		assert.deepEqual((branches[0] as JsonSchemaNode).properties && ((branches[0] as JsonSchemaNode).properties as JsonSchemaNode).kind, { enum: ["local"] });
-+		assert.deepEqual((branches[1] as JsonSchemaNode).properties && ((branches[1] as JsonSchemaNode).properties as JsonSchemaNode).kind, { enum: ["ssh"] });
-+		assert.ok(CompileSchema);
-+		const validator = CompileSchema!(SubagentParams);
-+		for (const target of [{ kind: "local" }, { kind: "ssh", name: "stanza" }]) {
-+			assert.equal(validator.Check({ agent: "worker", task: "work", executionTarget: target }), true, JSON.stringify(target));
-+		}
-+		for (const target of [
-+			{ kind: "other" }, { kind: "ssh" }, { kind: "local", name: "stanza" },
-+			{ kind: "ssh", name: "../escape" }, { kind: "ssh", name: "stanza", host: "untrusted" },
-+		]) assert.equal(validator.Check({ agent: "worker", task: "work", executionTarget: target }), false, JSON.stringify(target));
-+	});
-+
- 	it("exposes one workflow field for the reply block, script paths, and named resources", () => {
- 		const workflow = SubagentParams?.properties?.workflow;
- 		assert.equal(hasAnyOfType(workflow, "boolean"), true);
-@@ -413,7 +432,7 @@
- 				if (!current.value || typeof current.value !== "object") continue;
- 
- 				const node = current.value as JsonSchemaNode;
--				if (Object.hasOwn(node, "description") && !Object.hasOwn(node, "type") && !Object.hasOwn(node, "anyOf")) {
-+				if (Object.hasOwn(node, "description") && !Object.hasOwn(node, "type") && !Object.hasOwn(node, "anyOf") && !Object.hasOwn(node, "oneOf")) {
- 					descriptionOnlyPaths.push(current.path);
- 				}
- 
-@@ -475,7 +494,9 @@
- 		assert.match(String(properties.options?.description ?? ""), /acceptance, timeoutMs.*guide tool-reference\/parameter-reference/);
- 		const { resolveDisabledFeatureSurface } = await import("../../src/shared/disabled-features.ts");
- 		const structured = createProviderSchema!(resolveDisabledFeatureSurface({ disabledFeatures: ["workflow-scripts"] }));
--		assert.ok(JSON.stringify(structured).length <= 2_450, `expected structured schema at or under 2,450 chars, got ${JSON.stringify(structured).length}`);
-+		// Each executable leaf carries a closed local/SSH target union; without refs,
-+		// the provider payload repeats that metadata in tasks, chain, and parallel leaves.
-+		assert.ok(JSON.stringify(structured).length <= 3_395, `expected structured schema at or under 3,395 chars, got ${JSON.stringify(structured).length}`);
- 		assert.deepEqual(Object.keys(structured.properties as JsonSchemaNode), ["agent", "task", "tasks", "chain", "async", "model", "cwd", "worktree", "output", "action", "id", "message", "options"]);
- 
- 		const nestedDescriptionPaths: string[] = [];
 diff --git a/test/unit/workflow-scripts-feature.test.ts b/test/unit/workflow-scripts-feature.test.ts
+index c18e86bb..4927fac4 100644
 --- a/test/unit/workflow-scripts-feature.test.ts
 +++ b/test/unit/workflow-scripts-feature.test.ts
-@@ -60,14 +60,19 @@
+@@ -60,14 +60,19 @@ describe("workflow-scripts tool surface", () => {
  	it("accepts chain and tasks shapes with a small schema", () => {
  		const schema = createSubagentParamsSchema(surface);
  		const validator = Compile(schema);
@@ -3473,3 +3473,488 @@ diff --git a/test/unit/workflow-scripts-feature.test.ts b/test/unit/workflow-scr
  	});
  
  	it("replaces script guidance with chain/tasks guidance", () => {
+diff --git a/src/extension/index.ts b/src/extension/index.ts
+index 8235dbba..ea6411f6 100644
+--- a/src/extension/index.ts
++++ b/src/extension/index.ts
+@@ -57,7 +57,7 @@ import { recordedPromptSection, registerPinnedTool, setDeclarationPinning } from
+ import { buildActiveRunsSection } from "./active-runs-prompt.ts";
+ import { createWaitSubscriptionManager } from "../runs/background/wait-subscriptions.ts";
+ import { drainOutstandingWork } from "../runs/background/auto-drain.ts";
+-import { configuredSessionRoot, hostOwnsResultDelivery } from "../shared/monika-host.ts";
++import { configuredSessionRoot, hostOwnsArtifactRetention, hostOwnsResultDelivery } from "../shared/monika-host.ts";
+ import registerSubagentNotify from "../runs/background/notify.ts";
+ import { createParentWake } from "../shared/parent-wake.ts";
+ import { handleSubagentSteeringNotice, type SubagentSteeringMessageDetails } from "./steering-notices.ts";
+@@ -287,7 +287,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
+ 	DIRS.async = ensureAccessibleDir(DIRS.async);
+ 	// Host acknowledgement owns the full evidence lifetime, including legacy
+ 	// chain directories that an unacknowledged result may still reference.
+-	if (!hostOwnsResultDelivery()) cleanupOldChainDirs();
++	if (!hostOwnsArtifactRetention()) cleanupOldChainDirs();
+ 
+ 	const config = loadConfig();
+ 	setDeclarationPinning(pi, config.pinToolDeclarations !== false);
+@@ -307,7 +307,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
+ 	const artifactCleanupDays = config.artifactConfig?.cleanupDays ?? DEFAULT_ARTIFACT_CONFIG.cleanupDays;
+ 	// Do not age out output/session artifacts while agentd may still need them to
+ 	// prove or synthesize an unacknowledged host-owned result.
+-	if (!hostOwnsResultDelivery()) cleanupAllArtifactDirs(artifactCleanupDays);
++	if (!hostOwnsArtifactRetention()) cleanupAllArtifactDirs(artifactCleanupDays);
+ 	let resultIndexCleanupTimer: ReturnType<typeof setTimeout> | undefined;
+ 
+ 	const state: SubagentState = {
+@@ -528,7 +528,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
+ 	const startSessionMaintenance = () => {
+ 		// Agentd retains exact result bytes until canonical host acknowledgement.
+ 		// Package retention/index cleanup has no authority over those artifacts.
+-		if (hostOwnsResultDelivery()) {
++		if (hostOwnsArtifactRetention()) {
+ 			waitSubscriptionManager.start();
+ 			return;
+ 		}
+@@ -943,7 +943,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
+ 	});
+ 
+ 	const cleanupSessionArtifacts = (ctx: ExtensionContext) => {
+-		if (hostOwnsResultDelivery()) return;
++		if (hostOwnsArtifactRetention()) return;
+ 		try {
+ 			const sessionFile = ctx.sessionManager.getSessionFile();
+ 			if (sessionFile) {
+diff --git a/src/runs/background/subagent-runner.ts b/src/runs/background/subagent-runner.ts
+index e54511c0..64096599 100644
+--- a/src/runs/background/subagent-runner.ts
++++ b/src/runs/background/subagent-runner.ts
+@@ -1174,7 +1174,7 @@ export async function runSingleStepInner(
+ 			actualLaunchContractDigest = resolveLaunchBinding({
+ 				definitionDigest: step.definitionDigest,
+ 				...(hostOwnsResultDelivery() ? { deliveryDisposition: ctx.deliveryDisposition } : {}),
+-				executionTarget: step.executionTarget?.public,
++				executionTarget: step.executionTarget?.public ?? { kind: "local" },
+ 				executionTargetDigest: step.executionTarget?.kind === "ssh" ? step.executionTarget.descriptorDigest : undefined,
+ 				systemPromptMode: step.systemPromptMode,
+ 				inheritProjectContext: step.inheritProjectContext,
+diff --git a/src/runs/foreground/execution.ts b/src/runs/foreground/execution.ts
+index 44f946df..634a3e42 100644
+--- a/src/runs/foreground/execution.ts
++++ b/src/runs/foreground/execution.ts
+@@ -466,6 +466,8 @@ async function runSingleAttempt(
+ 	const { launchContractDigest } = resolveLaunchBinding({
+ 		agent,
+ 		...(hostOwnsResultDelivery() ? { deliveryDisposition: resolveDeliveryDisposition(options.deliveryDisposition) } : {}),
++		executionTarget: options.executionTarget ?? { kind: "local" },
++		executionTargetDigest: options.executionTargetDigest,
+ 		task: shared.originalTask ?? task,
+ 		model: modelArg,
+ 		...(fast !== undefined ? { fast } : {}),
+diff --git a/src/runs/foreground/subagent-executor.ts b/src/runs/foreground/subagent-executor.ts
+index b3bb6b55..68087d40 100644
+--- a/src/runs/foreground/subagent-executor.ts
++++ b/src/runs/foreground/subagent-executor.ts
+@@ -99,6 +99,7 @@ import {
+ 	steerWorkflowRun,
+ } from "./workflow-foreground-steering.ts";
+ import { stopAsyncRun } from "./async-stop-action.ts";
++import { stopStoppableAsyncStatusChildren } from "../shared/child-identity.ts";
+ import { dismissRecoveredWorkflow } from "./async-dismiss-action.ts";
+ import { inheritedSessionIds } from "../../shared/session-succession.ts";
+ import { promotePausedWorkflowIfSettled, reconcileDetachedWorkflowChildCompletion } from "./workflow-detach-reconcile.ts";
+@@ -137,6 +138,7 @@ import { manualWorkflowResumeRefusalText, prepareWorkflowResume, workflowResumeR
+ import { executeWorkflowHostCommand, resolveWorkflowHostOutputClaimPath, type WorkflowHostCommandParams, type WorkflowHostCommandResult } from "../../workflows/host-command.ts";
+ import { buildWorkflowReceipt, readWorkflowReceipt, workflowReceiptPath, resolveWorkflowReceiptResumeEntry, writeWorkflowReceipt, type WorkflowReceipt, type WorkflowReceiptState } from "../../workflows/workflow-receipt.ts";
+ import { formatWorkflowKeyRevival, recordWorkflowRevival, withWorkflowRevivals } from "../../workflows/workflow-revival.ts";
++import { watchWorkflowCancellation } from "../../workflows/workflow-cancellation-observer.ts";
+ import { upsertHostStep, validHostStepNodes } from "../shared/host-step-status.ts";
+ import { assertWorkflowLaneKey, normalizeWorkflowLaneMetadata } from "../shared/lane-metadata.ts";
+ import { parseWorkflowChildSummary, workflowChildProgress, workflowChildSummary } from "../../workflows/workflow-child-summary.ts";
+@@ -6269,6 +6271,29 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+ 					// can fail next; teardown must not publish the subsequently computed terminal status.
+ 					persist();
+ 				};
++				let durableCancellationRequested = false;
++				let disposeWorkflowCancellation: (() => void) | undefined;
++				if (hostOwnsResultDelivery() && currentSessionId) {
++					try {
++						disposeWorkflowCancellation = watchWorkflowCancellation({
++							asyncDir,
++							runId: workflowRunId,
++							sessionId: currentSessionId,
++							onCancel: (marker) => {
++								if (durableCancellationRequested || controller.signal.aborted) return;
++								durableCancellationRequested = true;
++								const reason = `Workflow stopped by host cancellation (${marker.reason}).`;
++								appendWorkflowEvent({ type: "subagent.workflow.cancellation_requested", operationId: marker.operationId, reason });
++								const current = readStatus(asyncDir);
++								if (current) stopStoppableAsyncStatusChildren(current, deps.state.workflowChildStops?.get(workflowRunId), reason);
++								controller.abort(new Error(reason));
++							},
++							onError: (error) => appendWorkflowEvent({ type: "subagent.workflow.cancellation_unavailable", error: error instanceof Error ? error.message : String(error) }),
++						});
++					} catch (error) {
++						appendWorkflowEvent({ type: "subagent.workflow.cancellation_unavailable", error: error instanceof Error ? error.message : String(error) });
++					}
++				}
+ 				void Promise.resolve().then(async () => {
+ 					const workflowDeadlineAt = timeout === undefined ? undefined : Date.now() + timeout;
+ 					const workflowResults: SingleResult[] = [];
+@@ -6457,6 +6482,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+ 							globalConcurrencyLimit: requestParams.globalConcurrencyLimit ?? deps.config.globalConcurrencyLimit,
+ 							timeoutMs: timeout,
+ 							signal: controller.signal,
++							workflowCancellationRequested: () => durableCancellationRequested,
+ 							continueAfterAbortWhenChildrenSettled: (abortError) => {
+ 								if (!workflowStopCause(abortError)) return false;
+ 								const activeAsyncChild = [...(deps.state.asyncJobs?.values() ?? [])].some((job) => job.parentWorkflowRunId === workflowRunId && (job.status === "queued" || job.status === "running"));
+@@ -6793,6 +6819,8 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+ 						} catch (error) {
+ 							console.error(`Failed to close async workflow steer inbox '${asyncDir}':`, error);
+ 						}
++						disposeWorkflowCancellation?.();
++						disposeWorkflowCancellation = undefined;
+ 						persistClosed = true;
+ 						deps.state.workflowControllers?.delete(workflowRunId);
+ 						deps.state.workflowChildStops?.delete(workflowRunId);
+diff --git a/src/shared/monika-host.ts b/src/shared/monika-host.ts
+index 5b753ef6..fe22ee2f 100644
+--- a/src/shared/monika-host.ts
++++ b/src/shared/monika-host.ts
+@@ -9,6 +9,14 @@ export function hostOwnsResultDelivery(): boolean {
+ 	return process.env.PI_SUBAGENTS_HOST_ACK_RESULTS === "1";
+ }
+ 
++/** A configured dedicated runtime root is shared evidence, even for direct TUI sessions. */
++export function hostOwnsArtifactRetention(): boolean {
++	if (hostOwnsResultDelivery()) return true;
++	const runtimeRoot = process.env.PI_SUBAGENT_RUNTIME_ROOT?.trim();
++	const sessionRoot = process.env.PI_SUBAGENT_SESSION_ROOT?.trim();
++	return Boolean((runtimeRoot && path.isAbsolute(runtimeRoot)) || (sessionRoot && path.isAbsolute(sessionRoot)));
++}
++
+ export function hostIsDraining(): boolean {
+ 	return process.env.PI_SUBAGENTS_HOST_DRAINING === "1";
+ }
+diff --git a/src/shared/types.ts b/src/shared/types.ts
+index e9273eea..3bf3b199 100644
+--- a/src/shared/types.ts
++++ b/src/shared/types.ts
+@@ -2584,6 +2584,9 @@ export interface ForegroundChildSessionControls {
+ export interface RunSyncOptions {
+ 	/** Host-owned result delivery policy bound into the launch digest. */
+ 	deliveryDisposition?: import("./monika-host.ts").DeliveryDisposition;
++	/** Resolved public execution target bound into the launch digest. */
++	executionTarget?: import("../runs/shared/execution-target.ts").PublicExecutionTarget;
++	executionTargetDigest?: string;
+ 	/** Exact discovery provenance for an unknown-agent error; omission uses defensive fallback discovery. */
+ 	unknownAgentDiagnosticContext?: import("../agents/agents.ts").UnknownAgentDiagnosticContext;
+ 	/** Session factory for the in-process child; defaults to the process-wide factory. */
+diff --git a/src/workflows/scripted-workflow.ts b/src/workflows/scripted-workflow.ts
+index f08aeb09..7645365d 100644
+--- a/src/workflows/scripted-workflow.ts
++++ b/src/workflows/scripted-workflow.ts
+@@ -212,6 +212,8 @@ export interface RunWorkflowScriptOptions {
+ 	registerStopChild?: (stop: ((key: string, message?: string) => boolean) | undefined) => void;
+ 	/** Drain: stop children that have not started, refuse new launches, and call `onDrained` once every started child has a result. Returns the started-child count. */
+ 	registerDrain?: (drain: ((onDrained: () => void) => number) | undefined) => void;
++	/** Durable host cancellation fence, checked before admission and dispatch. */
++	workflowCancellationRequested?: () => boolean;
+ 	onTrace?: (trace: WorkflowScriptTraceEntry[]) => void;
+ 	onLanePlan?: (lanes: WorkflowLanePlan[]) => void;
+ 	onEmit?: (emits: unknown[]) => void;
+@@ -1858,7 +1860,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
+ 					return true;
+ 				});
+ 				admission = Promise.resolve().then(() => {
+-					if (settled || finishing || draining) return;
++					if (settled || finishing || draining || options.workflowCancellationRequested?.()) return;
+ 					for (const call of calls) assertRecoveryBarrierAllowsRun(call.key, call.params);
+ 					return options.admit?.(calls, childController.signal);
+ 				});
+@@ -1866,8 +1868,8 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
+ 			}
+ 			let resolvedResumeLineage: string[] | undefined;
+ 			const promise = admission.then(async () => {
+-				if (draining) stopChild(key, WORKFLOW_DRAIN_CHILD_MESSAGE);
+-				if (settled || finishing || stoppedLaunches.has(key)) {
++				if (draining || options.workflowCancellationRequested?.()) stopChild(key, WORKFLOW_DRAIN_CHILD_MESSAGE);
++				if (settled || finishing || stoppedLaunches.has(key) || options.workflowCancellationRequested?.()) {
+ 					const reason = childController.signal.reason;
+ 					const text = children.get(key)?.error ?? (reason instanceof Error ? reason.message : typeof reason === "string" ? reason : "Workflow script aborted.");
+ 					return stoppedChildResult(key, text);
+@@ -1903,7 +1905,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
+ 				const launchParams = resolvedResumeId ? { ...params, resume: resolvedResumeId } : params;
+ 				await launchSemaphore.acquire();
+ 				try {
+-					if (settled || finishing || stoppedLaunches.has(key) || childSignal.aborted) {
++					if (settled || finishing || stoppedLaunches.has(key) || childSignal.aborted || options.workflowCancellationRequested?.()) {
+ 						const reason = childSignal.reason;
+ 						const text = children.get(key)?.error ?? (reason instanceof Error ? reason.message : typeof reason === "string" ? reason : "Workflow script aborted.");
+ 						return stoppedChildResult(key, text);
+diff --git a/src/workflows/workflow-cancellation-observer.ts b/src/workflows/workflow-cancellation-observer.ts
+new file mode 100644
+index 00000000..eac41f6f
+--- /dev/null
++++ b/src/workflows/workflow-cancellation-observer.ts
+@@ -0,0 +1,152 @@
++import * as fs from "node:fs";
++import * as path from "node:path";
++
++const MARKER_NAME = "host-cancellation.json";
++const STOP_NAME = path.join("control", "stop.json");
++const OPERATION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
++const SAFE_MARKER_KEYS = new Set(["version", "kind", "operationId", "generation", "runId", "runKey", "runSessionId", "parentSessionId", "parentSessionPath", "requestedAt", "reason"]);
++const SAFE_STOP_KEYS = new Set(["type", "source", "operationId", "cancellationGeneration", "runId", "runKey", "runSessionId", "parentSessionId", "parentSessionPath", "reason", "ts"]);
++
++export interface WorkflowCancellationMarker {
++	version: 1;
++	kind: "host-cancellation";
++	operationId: string;
++	generation: number;
++	runId: string;
++	runKey: string;
++	runSessionId: string | null;
++	parentSessionId: string;
++	parentSessionPath: string | null;
++	requestedAt: number;
++	reason: string;
++}
++
++export interface WorkflowCancellationObserverOptions {
++	asyncDir: string;
++	runId: string;
++	sessionId?: string;
++	onCancel: (marker: WorkflowCancellationMarker) => void;
++	onError?: (error: unknown) => void;
++	pollIntervalMs?: number;
++}
++
++function regularFile(file: string): boolean {
++	try {
++		const stat = fs.lstatSync(file);
++		return stat.isFile() && !stat.isSymbolicLink();
++	} catch {
++		return false;
++	}
++}
++
++function object(value: unknown): value is Record<string, unknown> {
++	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
++}
++
++function readJson(file: string): Record<string, unknown> | undefined {
++	if (!regularFile(file)) return undefined;
++	try {
++		const value: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
++		return object(value) ? value : undefined;
++	} catch {
++		return undefined;
++	}
++}
++
++function safeOwnedDirectory(asyncDir: string, runId: string): boolean {
++	const rootValue = process.env.PI_SUBAGENT_RUNTIME_ROOT?.trim();
++	if (!rootValue || !path.isAbsolute(rootValue) || !path.isAbsolute(asyncDir)) return false;
++	try {
++		const root = fs.realpathSync(rootValue);
++		const asyncRoot = path.join(root, "async-subagent-runs");
++		const expected = path.join(asyncRoot, runId);
++		if (path.resolve(asyncDir) !== path.resolve(expected)) return false;
++		for (const file of [root, asyncRoot, asyncDir]) {
++			const stat = fs.lstatSync(file);
++			if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
++		}
++		return fs.realpathSync(asyncDir) === path.resolve(expected);
++	} catch {
++		return false;
++	}
++}
++
++function validMarker(value: Record<string, unknown>, runId: string, sessionId?: string): boolean {
++	if ([...Object.keys(value)].some((key) => !SAFE_MARKER_KEYS.has(key))) return false;
++	return value.version === 1 && value.kind === "host-cancellation"
++		&& typeof value.operationId === "string" && OPERATION_ID.test(value.operationId)
++		&& Number.isSafeInteger(value.generation) && (value.generation as number) >= 0
++		&& value.runId === runId && value.runKey === `top:${runId}`
++		&& (value.runSessionId === null || (typeof value.runSessionId === "string" && (!sessionId || value.runSessionId === sessionId)))
++		&& typeof value.parentSessionId === "string" && value.parentSessionId.trim().length > 0
++		&& (!sessionId || value.parentSessionId === sessionId)
++		&& (value.parentSessionPath === null || typeof value.parentSessionPath === "string")
++		&& Number.isFinite(value.requestedAt) && typeof value.reason === "string" && value.reason.trim().length > 0;
++}
++
++function validStop(value: Record<string, unknown>, marker: WorkflowCancellationMarker): boolean {
++	if ([...Object.keys(value)].some((key) => !SAFE_STOP_KEYS.has(key))) return false;
++	return value.type === "stop" && value.source === "agentd-cancellation"
++		&& value.operationId === marker.operationId && value.cancellationGeneration === marker.generation
++		&& value.runId === marker.runId && value.runKey === marker.runKey
++		&& value.runSessionId === marker.runSessionId && value.parentSessionId === marker.parentSessionId
++		&& value.parentSessionPath === marker.parentSessionPath && value.reason === marker.reason
++		&& Number.isFinite(value.ts);
++}
++
++/** Observe agentd's durable cancellation record without trusting paths or host PIDs. */
++export function watchWorkflowCancellation(options: WorkflowCancellationObserverOptions): () => void {
++	let disposed = false;
++	let requested = false;
++	const report = (error: unknown): void => {
++		try { options.onError?.(error); } catch (reportError) { console.error("Workflow cancellation error reporter failed:", reportError); }
++	};
++	const check = (): void => {
++		if (disposed || requested) return;
++		if (!safeOwnedDirectory(options.asyncDir, options.runId)) return;
++		const markerValue = readJson(path.join(options.asyncDir, MARKER_NAME));
++		if (!markerValue) return;
++		if (!validMarker(markerValue, options.runId, options.sessionId)) {
++			report(new Error(`Ignoring workflow cancellation with mismatched identity for '${options.runId}'.`));
++			return;
++		}
++		const stopFile = path.join(options.asyncDir, STOP_NAME);
++		try {
++			const controlStat = fs.lstatSync(path.dirname(stopFile));
++			if (!controlStat.isDirectory() || controlStat.isSymbolicLink()) return;
++		} catch { return; }
++		let stopExists = false;
++		try { fs.lstatSync(stopFile); stopExists = true; } catch { /* no stop control is valid for terminal custody */ }
++		if (stopExists) {
++			const stopValue = readJson(stopFile);
++			if (!stopValue || !validStop(stopValue, markerValue as unknown as WorkflowCancellationMarker)) {
++				report(new Error(`Ignoring workflow stop control with mismatched identity for '${options.runId}'.`));
++				return;
++			}
++		}
++		requested = true;
++		try { options.onCancel(markerValue as unknown as WorkflowCancellationMarker); } catch (error) { report(error); }
++	};
++	check();
++	const watchers: fs.FSWatcher[] = [];
++	for (const target of [options.asyncDir, path.join(options.asyncDir, "control")]) {
++		try {
++			const watcher = fs.watch(target, () => check());
++			watcher.on("error", (error) => report(error));
++			watchers.push(watcher);
++		} catch (error) {
++			// The polling safety net remains authoritative when a directory watcher is unavailable.
++			if ((error as NodeJS.ErrnoException).code !== "ENOENT") report(error);
++		}
++	}
++	const timer = setInterval(check, options.pollIntervalMs ?? 1000);
++	timer.unref?.();
++	return () => {
++		if (disposed) return;
++		disposed = true;
++		for (const watcher of watchers) {
++			try { watcher.close(); } catch { /* already closed */ }
++		}
++		clearInterval(timer);
++	};
++}
+diff --git a/test/unit/monika-host.test.ts b/test/unit/monika-host.test.ts
+index 01a4ad2f..3e53f26d 100644
+--- a/test/unit/monika-host.test.ts
++++ b/test/unit/monika-host.test.ts
+@@ -3,7 +3,7 @@ import * as fs from "node:fs";
+ import * as os from "node:os";
+ import * as path from "node:path";
+ import { describe, it } from "node:test";
+-import { assertHostOriginRegistered } from "../../src/shared/monika-host.ts";
++import { assertHostOriginRegistered, hostOwnsArtifactRetention } from "../../src/shared/monika-host.ts";
+ 
+ describe("Monika host origin registration", () => {
+ 	it("uses the synchronously persisted canonical mapping as the event handoff acknowledgement", () => {
+@@ -36,3 +36,25 @@ describe("Monika host origin registration", () => {
+ 		}
+ 	});
+ });
++
++describe("Monika host artifact retention", () => {
++	it("protects a configured shared runtime root without changing delivery ownership", () => {
++		const previousAck = process.env.PI_SUBAGENTS_HOST_ACK_RESULTS;
++		const previousRoot = process.env.PI_SUBAGENT_RUNTIME_ROOT;
++		const previousSessionRoot = process.env.PI_SUBAGENT_SESSION_ROOT;
++		try {
++			delete process.env.PI_SUBAGENTS_HOST_ACK_RESULTS;
++			process.env.PI_SUBAGENT_RUNTIME_ROOT = "/runtime/data";
++			delete process.env.PI_SUBAGENT_SESSION_ROOT;
++			assert.equal(hostOwnsArtifactRetention(), true);
++			process.env.PI_SUBAGENT_RUNTIME_ROOT = "relative";
++			assert.equal(hostOwnsArtifactRetention(), false);
++			process.env.PI_SUBAGENT_SESSION_ROOT = "/runtime/sessions";
++			assert.equal(hostOwnsArtifactRetention(), true);
++		} finally {
++			if (previousAck === undefined) delete process.env.PI_SUBAGENTS_HOST_ACK_RESULTS; else process.env.PI_SUBAGENTS_HOST_ACK_RESULTS = previousAck;
++			if (previousRoot === undefined) delete process.env.PI_SUBAGENT_RUNTIME_ROOT; else process.env.PI_SUBAGENT_RUNTIME_ROOT = previousRoot;
++			if (previousSessionRoot === undefined) delete process.env.PI_SUBAGENT_SESSION_ROOT; else process.env.PI_SUBAGENT_SESSION_ROOT = previousSessionRoot;
++		}
++	});
++});
+diff --git a/test/unit/workflow-cancellation-observer.test.ts b/test/unit/workflow-cancellation-observer.test.ts
+new file mode 100644
+index 00000000..dbacc1d0
+--- /dev/null
++++ b/test/unit/workflow-cancellation-observer.test.ts
+@@ -0,0 +1,65 @@
++import assert from "node:assert/strict";
++import fs from "node:fs";
++import os from "node:os";
++import path from "node:path";
++import test from "node:test";
++import { watchWorkflowCancellation } from "../../src/workflows/workflow-cancellation-observer.ts";
++
++function fixture() {
++	const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-workflow-cancel-"));
++	const runId = "workflow-run";
++	const asyncDir = path.join(root, "async-subagent-runs", runId);
++	fs.mkdirSync(path.join(asyncDir, "control"), { recursive: true });
++	return { root, runId, asyncDir };
++}
++
++function marker(runId: string, operationId = "operation-1") {
++	return { version: 1, kind: "host-cancellation", operationId, generation: 4, runId, runKey: `top:${runId}`, runSessionId: "session-1", parentSessionId: "session-1", parentSessionPath: "/sessions/parent.jsonl", requestedAt: Date.now(), reason: "forum-stop" };
++}
++
++function stop(value: ReturnType<typeof marker>) {
++	return { type: "stop", source: "agentd-cancellation", operationId: value.operationId, cancellationGeneration: value.generation, runId: value.runId, runKey: value.runKey, runSessionId: value.runSessionId, parentSessionId: value.parentSessionId, parentSessionPath: value.parentSessionPath, reason: value.reason, ts: Date.now() };
++}
++
++test("durable cancellation validates identity and reaches the live controller once", async () => {
++	const f = fixture();
++	const prior = process.env.PI_SUBAGENT_RUNTIME_ROOT;
++	process.env.PI_SUBAGENT_RUNTIME_ROOT = f.root;
++	const controller = new AbortController();
++	let calls = 0;
++	const dispose = watchWorkflowCancellation({ asyncDir: f.asyncDir, runId: f.runId, sessionId: "session-1", onCancel: (value) => { calls++; controller.abort(new Error(value.reason)); } });
++	try {
++		const value = marker(f.runId);
++		fs.writeFileSync(path.join(f.asyncDir, "host-cancellation.json"), JSON.stringify(value));
++		fs.writeFileSync(path.join(f.asyncDir, "control", "stop.json"), JSON.stringify(stop(value)));
++		for (let i = 0; i < 30 && !controller.signal.aborted; i++) await new Promise((resolve) => setTimeout(resolve, 10));
++		assert.equal(controller.signal.aborted, true);
++		assert.equal(calls, 1);
++		assert.equal((controller.signal.reason as Error).message, "forum-stop");
++	} finally {
++		dispose();
++		if (prior === undefined) delete process.env.PI_SUBAGENT_RUNTIME_ROOT; else process.env.PI_SUBAGENT_RUNTIME_ROOT = prior;
++		fs.rmSync(f.root, { recursive: true, force: true });
++	}
++});
++
++test("mismatched durable controls do not stop a controller and disposal stops polling", async () => {
++	const f = fixture();
++	const prior = process.env.PI_SUBAGENT_RUNTIME_ROOT;
++	process.env.PI_SUBAGENT_RUNTIME_ROOT = f.root;
++	let calls = 0;
++	const dispose = watchWorkflowCancellation({ asyncDir: f.asyncDir, runId: f.runId, sessionId: "session-1", pollIntervalMs: 5, onCancel: () => { calls++; } });
++	try {
++		fs.writeFileSync(path.join(f.asyncDir, "host-cancellation.json"), JSON.stringify({ ...marker(f.runId), runKey: "top:other" }));
++		await new Promise((resolve) => setTimeout(resolve, 30));
++		assert.equal(calls, 0);
++		dispose();
++		fs.writeFileSync(path.join(f.asyncDir, "host-cancellation.json"), JSON.stringify(marker(f.runId, "after-dispose")));
++		await new Promise((resolve) => setTimeout(resolve, 30));
++		assert.equal(calls, 0);
++	} finally {
++		dispose();
++		if (prior === undefined) delete process.env.PI_SUBAGENT_RUNTIME_ROOT; else process.env.PI_SUBAGENT_RUNTIME_ROOT = prior;
++		fs.rmSync(f.root, { recursive: true, force: true });
++	}
++});

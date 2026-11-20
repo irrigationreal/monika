@@ -8,10 +8,10 @@ new lived Monika experience.
 
 This document owns the cross-cutting subagent model. Exact profile configuration
 lives in [`config/agents/`](../config/agents/), package pins and patches live in
-the installer and [`config/pi-subagents-0.37.2.patch`](../config/pi-subagents-0.37.2.patch).
-The experimental 0.89.1 candidate inventory and preparation harness are documented
-in [`pi-subagents-migration-0.89.1.md`](pi-subagents-migration-0.89.1.md); production
-remains pinned to 0.37.2 until that migration passes its staged validation matrix.
+the installer and [`config/pi-subagents-0.89.1.patch`](../config/pi-subagents-0.89.1.patch).
+The 0.89.1 migration inventory and validation matrix are documented in
+[`pi-subagents-migration-0.89.1.md`](pi-subagents-migration-0.89.1.md). The prior
+0.37.2 patch remains in the repository as rollback history.
 SSH transport details live in [`config/extensions/SSH.md`](../config/extensions/SSH.md),
 and deployment repair procedures live in [`redeployment.md`](redeployment.md).
 
@@ -51,6 +51,13 @@ The parent may run:
 
 Parallel writers must not mutate the same worktree. Use one writer in the active
 worktree or deliberate isolated worktrees.
+
+Workflow scripts are the default orchestration surface: use `runs.run` for a
+child, `Promise.all` for independent work, and ordinary conditionals for branching.
+`bg_wait` claims awaited background results. Historical `subagent_wait` transcript
+records remain readable; it is not the preferred current declaration. Image-owned
+`extensions/subagent/config.json` disables automatic resume and scheduling without
+disabling workflow scripts.
 
 ## Context and memory lifecycle
 

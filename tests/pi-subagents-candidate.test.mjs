@@ -43,10 +43,11 @@ test('wrong Git object and invalid destination leave no output', async () => tem
   assert.deepEqual((await readdir(dir)).sort(), ['candidate', 'source']);
 }));
 
-test('production installer remains pinned while candidate tooling is experimental', async () => {
+test('production installer is pinned to the reviewed 0.89.1 source', async () => {
   const installer = await readFile(path.join(root, 'scripts', 'install-pi-subagents'), 'utf8');
-  assert.match(installer, /readonly version='0\.37\.2'/);
-  assert.match(installer, /readonly commit='8063333661476ca48afbca826dc4aab8707c72d3'/);
+  assert.match(installer, /readonly version='0\.89\.1'/);
+  assert.match(installer, /readonly commit='533033f0e906e85fdb0e909ce27a7c499ffb6485'/);
+  assert.match(installer, /readonly tree='d6c8cf1dbf40704d3d5f8b0530908e9f6aa6afce'/);
 });
 
 // No network in tests. Supply a separately obtained pinned source checkout to
