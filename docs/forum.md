@@ -89,7 +89,7 @@ dependency, transport, cancellation, timeout, or generic execution). Older tool
 results without structured provenance remain `unknown` rather than being guessed.
 Errors use fixed categories and count distinct affected turns without returning
 raw errors. Parent-blocked p95 is the nearest-rank p95 of matched
-`subagent_wait` result-message elapsed time from 0 through 24 hours; it is an
+`subagent_wait`/`bg_wait` result-message elapsed time from 0 through 24 hours; it is an
 observed timestamp proxy, not exact execution duration. Delegation rates exclude
 active, uncertain, malformed, or unproven-success lifecycle records. Historical
 delegation coverage is bounded by lifecycle-artifact retention.

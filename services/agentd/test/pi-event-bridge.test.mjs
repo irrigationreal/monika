@@ -111,10 +111,11 @@ test('continuation metadata is emitted item-adjacent and cannot precede an ordin
   assert.equal(items[1].subagent_run_id, 'run-b');
 });
 
-test('subagent tool completion redacts exact child bytes while retaining bounded claim status', () => {
+for (const toolName of ['subagent', 'subagent_wait', 'bg_wait', 'mcp__pi-subagents__subagent', 'mcp__pi-subagents__subagent_wait', 'mcp__pi-subagents__bg_wait']) {
+test(`${toolName} updates and completion redact exact child bytes while retaining bounded claim status`, () => {
   const { events, dispatch } = harness(); const secret = 'CHILD-SECRET-DO-NOT-STREAM';
   dispatch({ type: 'agent_start' });
-  dispatch({ type: 'tool_execution_start', toolCallId: 'call-1', toolName: 'subagent_wait', args: { id: 'run-1' } });
+  dispatch({ type: 'tool_execution_start', toolCallId: 'call-1', toolName, args: { id: 'run-1' } });
   const internalResult = {
     content: [{ type: 'text', text: `Awaited exact output: ${secret}` }],
     details: { mode: 'management', results: [{ output: secret }], resultClaims: [{
@@ -122,13 +123,17 @@ test('subagent tool completion redacts exact child bytes while retaining bounded
       claimEntryId: 'claim-entry-1', claimPath: `/private/${secret}`, resultPath: `/private/${secret}.json`, idempotent: false,
     }] },
   };
+  dispatch({ type: 'tool_execution_update', toolCallId: 'call-1', partialResult: internalResult });
   dispatch({ type: 'tool_execution_end', toolCallId: 'call-1', result: internalResult });
+  assert.equal(JSON.stringify(events.find(({ event }) => event === 'tool_updated')).includes(secret), false);
   assert.equal(internalResult.content[0].text.includes(secret), true, 'internal parent tool result remains exact');
   const packet = events.find(({ event }) => event === 'tool_completed');
   assert.equal(JSON.stringify(packet).includes(secret), false);
   assert.deepEqual(packet.data.result.claims, [{ run_id: 'run-1', run_key: 'top:run-1', delivery_disposition: 'awaited', result_sha256: 'a'.repeat(64), result_size_bytes: 123, claim_entry_id: 'claim-entry-1', idempotent: false }]);
   assert.deepEqual(packet.data.result.status, { mode: 'management', state: null, run_id: null, delivery_disposition: null, result_count: 1, claim_count: 1 });
 });
+
+}
 
 test('tool completion forwards Pi recorded duration without deriving it from wall-clock receipt', () => {
   const { events, dispatch } = harness();

@@ -103,7 +103,7 @@ function commandFamily(command) {
 /** Return a bounded, non-sensitive operation label. Raw arguments are never returned. */
 export function normalizeToolOperation(name, args = null) {
   const normalizedName = normalizeToken(name) ?? 'other';
-  const tool = normalizedName === 'mcp__pi-subagents__subagent_wait' ? 'subagent_wait'
+  const tool = ['bg_wait', 'mcp__pi-subagents__bg_wait', 'mcp__pi-subagents__subagent_wait'].includes(normalizedName) ? 'subagent_wait'
     : normalizedName === 'mcp__pi-subagents__subagent' ? 'subagent'
       : normalizedName;
   const values = record(args);

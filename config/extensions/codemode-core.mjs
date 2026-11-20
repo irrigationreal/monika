@@ -10,7 +10,7 @@ export function flatToolName(name) {
 }
 
 const DIRECT_ONLY = new Set([
-  'codemode', 'subagent', 'subagent_wait', 'subagent_supervisor', 'intercom',
+  'codemode', 'subagent', 'subagent_wait', 'bg_wait', 'subagents_enable', 'subagent_supervisor', 'intercom',
   'relocate', 'pi_run', 'remember', 'remember_session', 'correct_observation', 'retract_observation',
 ]);
 export function isDirectOnlyTool(name) { return DIRECT_ONLY.has(flatToolName(name)); }
