@@ -89,6 +89,29 @@ It uses only temporary sessions, an in-memory forum database, and ephemeral
 attachment/ledger roots. The `integration-checks` branch gate runs this test when
 agentd, forum, or integration-contract files change.
 
+## pi-subagents candidate preparation
+
+The production image remains pinned to the reviewed 0.37.2 package. The
+experimental 0.89.1 migration milestone has an offline candidate harness:
+
+```bash
+node --test tests/pi-subagents-candidate.test.mjs
+# Optional offline fixture: verifies every exported Git blob and executable mode.
+MONIKA_SUBAGENTS_CANDIDATE_SOURCE=/path/to/pinned/upstream \
+  node --test tests/pi-subagents-candidate.test.mjs
+scripts/prepare-pi-subagents-candidate <clean-reviewed-source> <temporary-destination>
+```
+
+CI obtains the exact pinned Git object as setup and requires the full offline
+fixture test; developer runs can omit the fixture. No upstream code or package
+installation is executed by this check.
+
+The preparation command verifies the exact upstream commit, tree, package
+manifest, and lockfile, then exports the Git object without npm installation or runtime
+writes. It does not fetch mutable refs and must not be pointed at live runtime
+paths. The migration inventory and staged validation matrix are in
+[`docs/pi-subagents-migration-0.89.1.md`](../docs/pi-subagents-migration-0.89.1.md).
+
 ## Agentd tests
 
 Provider-independent Pi lifecycle and workspace-loading tests live under
@@ -276,10 +299,11 @@ bounded to runner-owned paths, runtime Git configuration survives scratch `HOME`
 foreground command exit/signal status is preserved. The
 container smoke separately exercises both runner archive policies, essential-child
 failure during command mode, and PID 1's graceful memstore shutdown with isolated data.
-Command-mode signal checks wait for an explicit acknowledgement created by the
-supervisor after it captures the foreground command PID rather than inferring readiness
-from memstore startup; bounded deadlines only prevent a broken fixture from hanging the
-test.
+Unit signal checks wait for the command's own acknowledgement after inherited
+signal dispositions have been reset; a supervisor spawn acknowledgement alone
+can race SIGINT setup. Container command-mode checks use the supervisor's captured
+foreground PID rather than inferring readiness from memstore startup. Bounded
+deadlines only prevent a broken fixture from hanging the test.
 
 ## SSH transport and relocation
 
