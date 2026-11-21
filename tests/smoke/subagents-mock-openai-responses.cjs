@@ -144,7 +144,12 @@ const server = http.createServer((req, res) => {
     if (isChild) {
       const stopping = strings.some(value => value.includes(`${CHILD_TAG} STOP`));
       const text = stopping ? 'STOP_CANARY' : strings.some(value => value.includes('CONDITIONAL')) ? 'CONDITIONAL_CANARY_OK' : 'CANARY_ALLOW';
-      setTimeout(() => textResponse(res, text), stopping ? 20_000 : 0);
+      // Keep stop-canary children pending until cancellation, not a short
+      // race against image/SDK startup on a slower architecture. The host
+      // harness has its own bounded timeout; closing the model transport
+      // cancels this safety timer without generating another child turn.
+      const timer = setTimeout(() => textResponse(res, text), stopping ? 180_000 : 0);
+      res.once('close', () => clearTimeout(timer));
       return;
     }
     if (parentPhase === 0 && !isParentTag) {
