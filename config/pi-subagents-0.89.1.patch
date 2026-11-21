@@ -2137,7 +2137,7 @@ index 0cace95..50f484a 100644
  	"runner", "outputName", "structured", "inheritProjectContext", "inheritGlobalContext", "inheritSkills", "skills", "outputPath", "namespaceOutputPath", "maxSubagentDepth", "timeoutMs", "waitToolEnabled", "waitToolDefaultTimeoutMs",
 diff --git a/src/runs/shared/execution-target.ts b/src/runs/shared/execution-target.ts
 new file mode 100644
-index 0000000..b444ba8
+index 0000000..ea0a17c
 --- /dev/null
 +++ b/src/runs/shared/execution-target.ts
 @@ -0,0 +1,280 @@
@@ -2328,7 +2328,7 @@ index 0000000..b444ba8
 +
 +export function executionTargetChildLaunch(target: ResolvedExecutionTarget, effectsEvidencePath?: string): { extensions: string[]; env: Record<string, string | undefined> } {
 +	if (target.kind === "local") {
-+		return { extensions: [], env: { [SSH_LOCK_DESCRIPTOR_ENV]: undefined, [EXECUTION_TARGET_NAME_ENV]: "local", [EXECUTION_TARGET_DIGEST_ENV]: undefined, [EFFECTS_EVIDENCE_PATH_ENV]: undefined } };
++		return { extensions: [], env: { [SSH_LOCK_DESCRIPTOR_ENV]: undefined, [EXECUTION_TARGET_NAME_ENV]: undefined, [EXECUTION_TARGET_DIGEST_ENV]: undefined, [EFFECTS_EVIDENCE_PATH_ENV]: undefined } };
 +	}
 +	return {
 +		extensions: [target.lockExtensionPath],
@@ -3276,7 +3276,7 @@ index 98dd72c..a816e11 100644
  		const recorder = makeRecorder();
 diff --git a/test/unit/execution-target.test.ts b/test/unit/execution-target.test.ts
 new file mode 100644
-index 0000000..444643c
+index 0000000..ed1b612
 --- /dev/null
 +++ b/test/unit/execution-target.test.ts
 @@ -0,0 +1,189 @@
@@ -3328,7 +3328,7 @@ index 0000000..444643c
 +    }).public, { kind: "local" });
 +    assert.deepEqual(executionTargetChildLaunch({ kind: "local", public: { kind: "local" } }).env, {
 +      MONIKA_SSH_LOCK_DESCRIPTOR: undefined,
-+      PI_SUBAGENT_EXECUTION_TARGET_NAME: "local",
++      PI_SUBAGENT_EXECUTION_TARGET_NAME: undefined,
 +      PI_SUBAGENT_EXECUTION_TARGET_DIGEST: undefined,
 +      PI_SUBAGENT_EFFECTS_EVIDENCE_PATH: undefined,
 +    });
