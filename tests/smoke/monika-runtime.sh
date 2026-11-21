@@ -50,6 +50,11 @@ node "${NODE_TEST_ARGS[@]}" --test \
   "$SCRIPT_DIR/../ssh-relocate.test.mjs" \
   "$SCRIPT_DIR/../ssh-search-transport.test.mjs"
 
+# Exercise remote operations against the SDK actually shipped in the image.
+docker run --rm --entrypoint node \
+  -v "$(realpath "$SCRIPT_DIR/../.."):/test-source:ro" \
+  "$IMAGE" --test /test-source/tests/ssh-tool-operations.test.mjs
+
 # The operator authority must never be interpreted as an install option or
 # allowed to collapse onto a shared top-level mount.
 if docker run --rm -e PI_SUBAGENT_OPERATOR_ROOT=--help "$IMAGE" true >/dev/null 2>&1; then
@@ -682,29 +687,86 @@ const resultClaimSource = fs.readFileSync('/opt/pi-subagents/src/runs/background
 const waitSource = fs.readFileSync('/opt/pi-subagents/src/runs/background/subagent-wait.ts', 'utf8');
 const foregroundSource = fs.readFileSync('/opt/pi-subagents/src/runs/foreground/execution.ts', 'utf8');
 const typesSource = fs.readFileSync('/opt/pi-subagents/src/shared/types.ts', 'utf8');
+const hostSource = fs.readFileSync('/opt/pi-subagents/src/shared/monika-host.ts', 'utf8');
+const launchContractSource = fs.readFileSync('/opt/pi-subagents/src/shared/launch-contract.ts', 'utf8');
+const targetSource = fs.readFileSync('/opt/pi-subagents/src/runs/shared/execution-target.ts', 'utf8');
 const preflightSource = fs.readFileSync('/opt/pi-subagents/src/api/preflight.ts', 'utf8');
 if (!fs.existsSync('/opt/pi-subagents/src/runs/shared/execution-target.ts')) throw new Error('Execution-target runtime missing');
 if (!fs.existsSync('/app/.pi/agent/extensions/ssh-lock.mjs')) throw new Error('Locked SSH helper missing');
 if (!fs.existsSync('/app/.pi/agent/extensions/ssh-relocate.mjs')) throw new Error('Relocate state-machine helper missing');
-if (!typesSource.includes('SUBAGENT_LIFECYCLE_ARTIFACT_VERSION = 5')) throw new Error('Lifecycle v5 missing');
+if (!hostSource.includes('MONIKA_LIFECYCLE_ARTIFACT_VERSION = 5')) throw new Error('Host lifecycle v5 adapter missing');
+if (!typesSource.includes('ResultClaimV1')) throw new Error('Result-claim type missing');
 if (!preflightSource.includes('SUBAGENT_LAUNCH_CONTRACT_VERSION = 3')) throw new Error('Launch contract v3 missing');
-if (!asyncPolicySource.includes('PI_SUBAGENTS_DEFAULT_DELIVERY_DISPOSITION') || !asyncPolicySource.includes('"awaited"')) throw new Error('Delivery-disposition source missing');
+if (!launchContractSource.includes('deliveryDisposition') || !launchContractSource.includes('executionTarget')) throw new Error('Host launch identity fields missing');
+if (!targetSource.includes('validateExecutionTarget') || !targetSource.includes('resolveExecutionTarget')) throw new Error('Execution-target validation helpers missing');
+if (!hostSource.includes('resolveDeliveryDisposition') || !hostSource.includes('"awaited"')) throw new Error('Delivery-disposition source missing');
 if (!resultClaimSource.includes('pi-subagents.result-claim') || !resultClaimSource.includes('deliveryDisposition: "awaited"')) throw new Error('Awaited result-claim source missing');
 if (!waitSource.includes('claimAwaitedResult') || !waitSource.includes('publishClaim')) throw new Error('Wait-tool result-claim publication source missing');
-if (!asyncSource.includes('launch.json') || !asyncSource.includes('PI_SUBAGENTS_HOST_DRAINING')) throw new Error('Durable async launch/drain patch missing');
-if (!runnerSource.includes('Optional subagent artifact write failed')) throw new Error('Resilient artifact finalization patch missing');
-if (!watcherSource.includes('PI_SUBAGENTS_HOST_DRAINING')) throw new Error('Completion drain barrier patch missing');
-if (!watcherSource.includes('host-cancellation.json')) throw new Error('Host-cancelled result wake suppression missing');
-if (!asyncPolicySource.includes('PI_SUBAGENTS_FORCE_ASYNC')) throw new Error('Agentd nested force-async policy missing');
-if (!foregroundSource.includes('!childExited && !detached && proc.kill("SIGKILL")')) throw new Error('Foreground hard-kill exit check missing');
+if (!asyncSource.includes('launch.json') || !asyncSource.includes('hostIsDraining')) throw new Error('Durable async launch/drain patch missing');
+if (!runnerSource.includes('Failed to write result file') || !runnerSource.includes('process-terminal')) throw new Error('Runner result/process finalization missing');
+if (!watcherSource.includes('hostOwnsResultDelivery')) throw new Error('Completion host-delivery barrier patch missing');
+if (!hostSource.includes('hostWakeAllowed') || !hostSource.includes('host-cancellation.json')) throw new Error('Host-cancelled result wake suppression missing');
+if (!asyncPolicySource.includes('forceHostAsync')) throw new Error('Agentd nested force-async policy missing');
+if (!hostSource.includes('PI_SUBAGENTS_FORCE_ASYNC')) throw new Error('Force-async host control missing');
+if (!foregroundSource.includes('options.signal.aborted') || !foregroundSource.includes('kill()')) throw new Error('Foreground cancellation handling missing');
 const reviewed = JSON.parse(fs.readFileSync('/opt/pi-subagents/REVIEWED_SOURCE.json', 'utf8'));
-if (reviewed.version !== '0.37.2') throw new Error(`Unexpected pi-subagents version: ${reviewed.version}`);
-if (reviewed.gitHead !== '8063333661476ca48afbca826dc4aab8707c72d3') throw new Error(`Unexpected pi-subagents gitHead: ${reviewed.gitHead}`);
-if (reviewed.npmArtifactIntegrity !== 'sha512-pf7DxLBY9pFY3grOFgRfMqoS9QbElWP2ULOCOnmJNrCEvjlA81fiyp0wk1vSaJPJ/rjsP0lA1sAk7S/QD+Olpg==') {
-  throw new Error(`Unexpected reviewed npm integrity: ${reviewed.npmArtifactIntegrity}`);
+if (reviewed.name !== 'pi-subagents') throw new Error(`Unexpected reviewed source name: ${reviewed.name}`);
+if (reviewed.version !== '0.89.1') throw new Error(`Unexpected pi-subagents version: ${reviewed.version}`);
+if (reviewed.gitHead !== '533033f0e906e85fdb0e909ce27a7c499ffb6485') throw new Error(`Unexpected pi-subagents gitHead: ${reviewed.gitHead}`);
+if (reviewed.gitTree !== 'd6c8cf1dbf40704d3d5f8b0530908e9f6aa6afce') throw new Error(`Unexpected pi-subagents gitTree: ${reviewed.gitTree}`);
+if (!/^[a-f0-9]{64}$/.test(reviewed.patchSha256 ?? '')) throw new Error(`Invalid reviewed patch digest: ${reviewed.patchSha256}`);
+
+// Exercise the shared host adapter rather than relying only on source-text
+// probes: drain, force-async, cancellation, lifecycle projection and launch
+// identity must retain their Monika semantics across upstream path changes.
+const { createJiti } = require('/opt/pi-subagents/node_modules/jiti/lib/jiti.cjs');
+const jiti = createJiti('/opt/pi-subagents/index.ts', { interopDefault: true });
+const host = jiti('/opt/pi-subagents/src/shared/monika-host.ts');
+const launchContract = jiti('/opt/pi-subagents/src/shared/launch-contract.ts');
+const executionTarget = jiti('/opt/pi-subagents/src/runs/shared/execution-target.ts');
+const previousEnv = {
+  ack: process.env.PI_SUBAGENTS_HOST_ACK_RESULTS,
+  draining: process.env.PI_SUBAGENTS_HOST_DRAINING,
+  forceAsync: process.env.PI_SUBAGENTS_FORCE_ASYNC,
+  disposition: process.env.PI_SUBAGENTS_DEFAULT_DELIVERY_DISPOSITION,
+};
+const restoreEnv = (name, value) => { if (value === undefined) delete process.env[name]; else process.env[name] = value; };
+try {
+  process.env.PI_SUBAGENTS_HOST_ACK_RESULTS = '1';
+  delete process.env.PI_SUBAGENTS_HOST_DRAINING;
+  process.env.PI_SUBAGENTS_DEFAULT_DELIVERY_DISPOSITION = 'awaited';
+  if (!host.hostOwnsResultDelivery() || host.hostIsDraining()) throw new Error('Host ownership/drain adapter semantics changed');
+  if (host.resolveDeliveryDisposition() !== 'awaited') throw new Error('Default awaited delivery semantics changed');
+  process.env.PI_SUBAGENTS_FORCE_ASYNC = '1';
+  if (!host.forceHostAsync()) throw new Error('Force-async adapter semantics changed');
+  const lifecycle = host.hostLifecycleFields('complete', 'awaited');
+  if (lifecycle.lifecycleArtifactVersion !== 5 || lifecycle.outcome_state !== 'succeeded' || lifecycle.delivery_state !== 'pending') throw new Error('Host lifecycle projection semantics changed');
+  if (executionTarget.validateExecutionTarget({ kind: 'local' })?.kind !== 'local') throw new Error('Local execution target validation changed');
+  if (!(() => { try { executionTarget.validateExecutionTarget({ kind: 'local', name: 'unexpected' }); return false; } catch { return true; } })()) throw new Error('Execution target validation accepts extra fields');
+  const launch = launchContract.projectLaunchBinding({ definitionDigest: 'smoke-definition', deliveryDisposition: 'awaited', executionTarget: { kind: 'local' }, executionTargetDigest: 'smoke-target' });
+  if (launch.deliveryDisposition !== 'awaited' || launch.executionTarget?.kind !== 'local' || launch.executionTargetDigest !== 'smoke-target') throw new Error('Launch contract host identity projection changed');
+  const cancelDir = fs.mkdtempSync('/tmp/pi-subagent-cancel-');
+  try {
+    if (!host.hostWakeAllowed('follow_up', cancelDir)) throw new Error('Follow-up wake unexpectedly blocked before cancellation');
+    fs.writeFileSync(`${cancelDir}/host-cancellation.json`, '{}');
+    if (host.hostWakeAllowed('follow_up', cancelDir)) throw new Error('Host cancellation marker did not suppress wake');
+    process.env.PI_SUBAGENTS_HOST_DRAINING = '1';
+    if (!host.hostIsDraining() || host.hostWakeAllowed('follow_up', cancelDir)) throw new Error('Drain barrier did not suppress follow-up wake');
+  } finally {
+    fs.rmSync(cancelDir, { recursive: true, force: true });
+  }
+} finally {
+  restoreEnv('PI_SUBAGENTS_HOST_ACK_RESULTS', previousEnv.ack);
+  restoreEnv('PI_SUBAGENTS_HOST_DRAINING', previousEnv.draining);
+  restoreEnv('PI_SUBAGENTS_FORCE_ASYNC', previousEnv.forceAsync);
+  restoreEnv('PI_SUBAGENTS_DEFAULT_DELIVERY_DISPOSITION', previousEnv.disposition);
 }
 const settings = JSON.parse(fs.readFileSync('/app/.pi/agent/settings.json', 'utf8'));
 if (!settings.packages?.includes('/opt/pi-subagents')) throw new Error('Local reviewed pi-subagents package is not configured');
+const subagentConfig = JSON.parse(fs.readFileSync('/app/.pi/agent/extensions/subagent/config.json', 'utf8'));
+if (subagentConfig.waitTool?.enabled !== true || subagentConfig.waitTool?.name !== 'bg_wait') throw new Error('Preferred bg_wait policy is missing');
+if (subagentConfig.autoResume !== false || subagentConfig.scheduledRuns?.enabled !== false) throw new Error('Passive recovery/scheduling policy is missing');
+if (subagentConfig.disabledFeatures?.includes('workflow-scripts')) throw new Error('Workflow scripts must remain enabled');
 if (process.env.MONIKA_SSH_LOCK_DESCRIPTOR) throw new Error('Default smoke runtime must remain local');
 if (!process.env.PI_SUBAGENT_EXECUTION_TARGET_ROOT) throw new Error('Execution target registry root is not configured');
 if (!/^[a-f0-9]{64}$/.test(process.env.PI_SUBAGENT_SSH_LOCK_CODE_DIGEST ?? '')) throw new Error('SSH lock code startup attestation missing');
@@ -753,22 +815,25 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { createJiti } = require('/opt/pi-subagents/node_modules/jiti/lib/jiti.cjs');
-const jiti = createJiti(__filename, { interopDefault: true });
+const jiti = createJiti('/opt/pi-subagents/index.ts', { interopDefault: true });
 const { SessionManager } = jiti('/opt/pi-cli/node_modules/@earendil-works/pi-coding-agent/dist/index.js');
 const { createForkContextResolver } = jiti('/opt/pi-subagents/src/shared/fork-context.ts');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subagent-fork-root-'));
+const previousChildRoot = process.env.PI_SUBAGENT_SESSION_ROOT;
+process.env.PI_SUBAGENT_SESSION_ROOT = path.join(root, 'subagent');
 try {
   const parentDir = path.join(root, 'parent');
-  const childDir = path.join(root, 'subagent', 'run-id', 'run-0');
   const parent = SessionManager.create(root, parentDir);
+  const childDir = path.join(root, 'subagent', 'run-id', 'forks');
   parent.appendMessage({ role: 'user', content: 'parent prompt' });
   parent.appendMessage({ role: 'assistant', content: 'parent response' });
-  const resolver = createForkContextResolver(parent, 'fork', { sessionDirForIndex: () => childDir });
+  const resolver = createForkContextResolver(parent, 'fork', { runDirName: () => 'run-id' });
   const childFile = resolver.sessionFileForIndex(0);
   assert.ok(childFile);
   assert.equal(path.dirname(childFile), childDir);
   assert.equal(childFile.startsWith(`${parentDir}${path.sep}`), false);
 } finally {
+  if (previousChildRoot === undefined) delete process.env.PI_SUBAGENT_SESSION_ROOT; else process.env.PI_SUBAGENT_SESSION_ROOT = previousChildRoot;
   fs.rmSync(root, { recursive: true, force: true });
 }
 NODE_SUBAGENT_FORK_ROOT
@@ -1299,6 +1364,10 @@ if [ "$(docker inspect -f '{{.State.Running}}' "$SUPERVISION_CONTAINER")" != "fa
   exit 1
 fi
 pass "memstore death stopped the runtime with nonzero exit"
+endsection
+
+section "Durable subagent workflows"
+node "$SCRIPT_DIR/subagents-workflow.mjs" "$IMAGE"
 endsection
 
 echo "Monika runtime smoke test passed."

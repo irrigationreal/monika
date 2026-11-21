@@ -753,10 +753,10 @@ function registerLockedSsh(pi: ExtensionAPI, descriptorPath: string): void {
 			};
 		}
 	};
-	pi.registerTool({ ...localRead, execute: (id, params, signal, onUpdate) => state === "locked-verified" ? withLockedBackend(createReadTool(fallbackCwd, readOps).execute(id, params, signal, onUpdate)) : Promise.resolve(blockedResult()) });
-	pi.registerTool({ ...localWrite, execute: (id, params, signal, onUpdate) => state === "locked-verified" ? withLockedBackend(createWriteTool(fallbackCwd, writeOps).execute(id, params, signal, onUpdate)) : Promise.resolve(blockedResult()) });
-	pi.registerTool({ ...localEdit, execute: (id, params, signal, onUpdate) => state === "locked-verified" ? withLockedBackend(createEditTool(fallbackCwd, editOps).execute(id, params, signal, onUpdate)) : Promise.resolve(blockedResult()) });
-	pi.registerTool({ ...localBash, execute: (id, params, signal, onUpdate) => state === "locked-verified" ? withLockedBackend(createBashTool(fallbackCwd, bashOps).execute(id, params, signal, onUpdate)) : Promise.resolve(blockedResult()) });
+	pi.registerTool({ ...localRead, execute: (id, params, signal, onUpdate) => state === "locked-verified" ? withLockedBackend(createReadTool(fallbackCwd, { operations: readOps }).execute(id, params, signal, onUpdate)) : Promise.resolve(blockedResult()) });
+	pi.registerTool({ ...localWrite, execute: (id, params, signal, onUpdate) => state === "locked-verified" ? withLockedBackend(createWriteTool(fallbackCwd, { operations: writeOps }).execute(id, params, signal, onUpdate)) : Promise.resolve(blockedResult()) });
+	pi.registerTool({ ...localEdit, execute: (id, params, signal, onUpdate) => state === "locked-verified" ? withLockedBackend(createEditTool(fallbackCwd, { operations: editOps }).execute(id, params, signal, onUpdate)) : Promise.resolve(blockedResult()) });
+	pi.registerTool({ ...localBash, execute: (id, params, signal, onUpdate) => state === "locked-verified" ? withLockedBackend(createBashTool(fallbackCwd, { operations: bashOps }).execute(id, params, signal, onUpdate)) : Promise.resolve(blockedResult()) });
 	pi.registerTool({ ...localLs, async execute(_id, params, signal) {
 		if (state !== "locked-verified") return blockedResult();
 		const typed = params as { path?: string; limit?: number };

@@ -116,14 +116,14 @@ index 150e8cf..8909396 100644
  
  function expandTilde(p: string): string {
 diff --git a/src/extension/index.ts b/src/extension/index.ts
-index ffe0cda..8235dbb 100644
+index ffe0cda..ea6411f 100644
 --- a/src/extension/index.ts
 +++ b/src/extension/index.ts
 @@ -57,6 +57,7 @@ import { recordedPromptSection, registerPinnedTool, setDeclarationPinning } from
  import { buildActiveRunsSection } from "./active-runs-prompt.ts";
  import { createWaitSubscriptionManager } from "../runs/background/wait-subscriptions.ts";
  import { drainOutstandingWork } from "../runs/background/auto-drain.ts";
-+import { configuredSessionRoot, hostOwnsResultDelivery } from "../shared/monika-host.ts";
++import { configuredSessionRoot, hostOwnsArtifactRetention, hostOwnsResultDelivery } from "../shared/monika-host.ts";
  import registerSubagentNotify from "../runs/background/notify.ts";
  import { createParentWake } from "../shared/parent-wake.ts";
  import { handleSubagentSteeringNotice, type SubagentSteeringMessageDetails } from "./steering-notices.ts";
@@ -155,7 +155,7 @@ index ffe0cda..8235dbb 100644
 -	cleanupOldChainDirs();
 +	// Host acknowledgement owns the full evidence lifetime, including legacy
 +	// chain directories that an unacknowledged result may still reference.
-+	if (!hostOwnsResultDelivery()) cleanupOldChainDirs();
++	if (!hostOwnsArtifactRetention()) cleanupOldChainDirs();
  
  	const config = loadConfig();
  	setDeclarationPinning(pi, config.pinToolDeclarations !== false);
@@ -166,7 +166,7 @@ index ffe0cda..8235dbb 100644
 -	cleanupAllArtifactDirs(artifactCleanupDays);
 +	// Do not age out output/session artifacts while agentd may still need them to
 +	// prove or synthesize an unacknowledged host-owned result.
-+	if (!hostOwnsResultDelivery()) cleanupAllArtifactDirs(artifactCleanupDays);
++	if (!hostOwnsArtifactRetention()) cleanupAllArtifactDirs(artifactCleanupDays);
  	let resultIndexCleanupTimer: ReturnType<typeof setTimeout> | undefined;
  
  	const state: SubagentState = {
@@ -176,7 +176,7 @@ index ffe0cda..8235dbb 100644
  	const startSessionMaintenance = () => {
 +		// Agentd retains exact result bytes until canonical host acknowledgement.
 +		// Package retention/index cleanup has no authority over those artifacts.
-+		if (hostOwnsResultDelivery()) {
++		if (hostOwnsArtifactRetention()) {
 +			waitSubscriptionManager.start();
 +			return;
 +		}
@@ -196,7 +196,7 @@ index ffe0cda..8235dbb 100644
  	});
  
  	const cleanupSessionArtifacts = (ctx: ExtensionContext) => {
-+		if (hostOwnsResultDelivery()) return;
++		if (hostOwnsArtifactRetention()) return;
  		try {
  			const sessionFile = ctx.sessionManager.getSessionFile();
  			if (sessionFile) {
@@ -239,7 +239,7 @@ index ffe0cda..8235dbb 100644
  	});
  
 diff --git a/src/extension/schemas.ts b/src/extension/schemas.ts
-index 1d9cfc6..9722318 100644
+index 1d9cfc6..8ae77d0 100644
 --- a/src/extension/schemas.ts
 +++ b/src/extension/schemas.ts
 @@ -150,6 +150,15 @@ const ControlOverrides = Type.Object({
@@ -1196,7 +1196,7 @@ index 2e78a70..0612857 100644
  	const lastUpdate = effectiveStatus.lastUpdate ?? effectiveStatus.startedAt;
  	const observedScope = options.pidNamespaceScope ? options.pidNamespaceScope() : currentPidNamespaceScope();
 diff --git a/src/runs/background/subagent-runner.ts b/src/runs/background/subagent-runner.ts
-index 0c17c78..e54511c 100644
+index 0c17c78..6409659 100644
 --- a/src/runs/background/subagent-runner.ts
 +++ b/src/runs/background/subagent-runner.ts
 @@ -160,6 +160,8 @@ import { runExternalJob } from "../shared/external-job-runner.ts";
@@ -1229,7 +1229,7 @@ index 0c17c78..e54511c 100644
  			actualLaunchContractDigest = resolveLaunchBinding({
  				definitionDigest: step.definitionDigest,
 +				...(hostOwnsResultDelivery() ? { deliveryDisposition: ctx.deliveryDisposition } : {}),
-+				executionTarget: step.executionTarget?.public,
++				executionTarget: step.executionTarget?.public ?? { kind: "local" },
 +				executionTargetDigest: step.executionTarget?.kind === "ssh" ? step.executionTarget.descriptorDigest : undefined,
  				systemPromptMode: step.systemPromptMode,
  				inheritProjectContext: step.inheritProjectContext,
@@ -1728,7 +1728,7 @@ index 45f45df..0b1d803 100644
  		stopped: true,
  		error: SUBAGENT_STOPPED_MESSAGE,
 diff --git a/src/runs/foreground/execution.ts b/src/runs/foreground/execution.ts
-index 5f6b97b..44f946d 100644
+index 5f6b97b..634a3e4 100644
 --- a/src/runs/foreground/execution.ts
 +++ b/src/runs/foreground/execution.ts
 @@ -93,6 +93,7 @@ import { attachContractProjections, isAgentContract } from "../shared/agent-cont
@@ -1739,16 +1739,18 @@ index 5f6b97b..44f946d 100644
  import { consumeWorkflowChildPermit } from "../../shared/workflow-child-permit.ts";
  import { projectChildLifecycle, type ChildLifecycleAction, type ChildLifecycleState } from "../shared/child-lifecycle.ts";
  import {
-@@ -464,6 +465,7 @@ async function runSingleAttempt(
+@@ -464,6 +465,9 @@ async function runSingleAttempt(
  	const fast = options.fast ?? agent.fast;
  	const { launchContractDigest } = resolveLaunchBinding({
  		agent,
 +		...(hostOwnsResultDelivery() ? { deliveryDisposition: resolveDeliveryDisposition(options.deliveryDisposition) } : {}),
++		executionTarget: options.executionTarget ?? { kind: "local" },
++		executionTargetDigest: options.executionTargetDigest,
  		task: shared.originalTask ?? task,
  		model: modelArg,
  		...(fast !== undefined ? { fast } : {}),
 diff --git a/src/runs/foreground/subagent-executor.ts b/src/runs/foreground/subagent-executor.ts
-index 7e1ced2..b3bb6b5 100644
+index 7e1ced2..097cc73 100644
 --- a/src/runs/foreground/subagent-executor.ts
 +++ b/src/runs/foreground/subagent-executor.ts
 @@ -5,7 +5,7 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
@@ -1760,16 +1762,32 @@ index 7e1ced2..b3bb6b5 100644
  import { createCapacityResilientJsonWriter } from "../../shared/capacity-resilient-json.ts";
  import { reportSessionWarning } from "../../shared/session-warnings.ts";
  import { resolveEffectiveThinking, toModelInfo, type ModelInfo } from "../../shared/model-info.ts";
-@@ -232,6 +232,8 @@ import {
+@@ -99,6 +99,7 @@ import {
+ 	steerWorkflowRun,
+ } from "./workflow-foreground-steering.ts";
+ import { stopAsyncRun } from "./async-stop-action.ts";
++import { stopStoppableAsyncStatusChildren } from "../shared/child-identity.ts";
+ import { dismissRecoveredWorkflow } from "./async-dismiss-action.ts";
+ import { inheritedSessionIds } from "../../shared/session-succession.ts";
+ import { promotePausedWorkflowIfSettled, reconcileDetachedWorkflowChildCompletion } from "./workflow-detach-reconcile.ts";
+@@ -137,6 +138,7 @@ import { manualWorkflowResumeRefusalText, prepareWorkflowResume, workflowResumeR
+ import { executeWorkflowHostCommand, resolveWorkflowHostOutputClaimPath, type WorkflowHostCommandParams, type WorkflowHostCommandResult } from "../../workflows/host-command.ts";
+ import { buildWorkflowReceipt, readWorkflowReceipt, workflowReceiptPath, resolveWorkflowReceiptResumeEntry, writeWorkflowReceipt, type WorkflowReceipt, type WorkflowReceiptState } from "../../workflows/workflow-receipt.ts";
+ import { formatWorkflowKeyRevival, recordWorkflowRevival, withWorkflowRevivals } from "../../workflows/workflow-revival.ts";
++import { watchWorkflowCancellation } from "../../workflows/workflow-cancellation-observer.ts";
+ import { upsertHostStep, validHostStepNodes } from "../shared/host-step-status.ts";
+ import { assertWorkflowLaneKey, normalizeWorkflowLaneMetadata } from "../shared/lane-metadata.ts";
+ import { parseWorkflowChildSummary, workflowChildProgress, workflowChildSummary } from "../../workflows/workflow-child-summary.ts";
+@@ -232,6 +234,8 @@ import {
  import { deriveChildSessionName } from "../../shared/child-session-name.ts";
  import { editDistance, hasSingleAdjacentTransposition } from "../../shared/edit-distance.ts";
  import { waitToolName } from "../../shared/wait-tool-name.ts";
-+import { assertHostOriginRegistered, hostIsDraining, hostLifecycleFields, hostOwnsResultDelivery, linuxProcessStartTicks, readRuntimeEpoch, resolveDeliveryDisposition, type DeliveryDisposition } from "../../shared/monika-host.ts";
-+import { aggregateEffectsStates, assertCompositeExecutionTargetShape, assertExecutionTargetAsyncCompatible, assertExecutionTargetWorktreeCompatible, resolveExecutionTarget, validateExecutionTarget, type EffectsState, type ExecutionTarget } from "../shared/execution-target.ts";
++import { assertHostOriginRegistered, configuredSessionRoot, hostIsDraining, hostLifecycleFields, hostOwnsResultDelivery, linuxProcessStartTicks, readRuntimeEpoch, resolveDeliveryDisposition, type DeliveryDisposition } from "../../shared/monika-host.ts";
++import { aggregateEffectsStates, assertCompositeExecutionTargetShape, assertExecutionTargetAsyncCompatible, assertExecutionTargetWorktreeCompatible, resolveExecutionTarget, validateExecutionTarget, waitForWorkflowChildEffects, type EffectsState, type ExecutionTarget } from "../shared/execution-target.ts";
  
  const MUTATING_MANAGEMENT_ACTIONS = new Set(["command.yield", "command.cancel", "create", "update", "delete", "eject", "disable", "enable", "reset", "grant-spawn-budget", "watchdog.configure", "mission.create", "mission.update", "mission.resolve-decision", "mission.attach-run", "mission.close", "inspector.open", "inspector.close", "project.open", "project.close", "worktree.discard", "worktree.cleanup", "lane.recordMerge", "lane.recordSupersession", "refine", "refine.rollback", "dismiss", "schedule.create", "schedule.pause", "schedule.resume", "schedule.run", "schedule.run-due", "schedule.delete"]);
  const DESTRUCTIVE_MANAGEMENT_ACTIONS = new Set(["command.cancel", "delete", "eject", "disable", "reset", "mission.close", "worktree.discard", "refine.rollback", "inspector.close", "project.close", "stop", "interrupt", "schedule.delete"]);
-@@ -289,6 +291,7 @@ function compactOptional<T extends object>(
+@@ -289,6 +293,7 @@ function compactOptional<T extends object>(
  
  interface TaskParam {
  	agent: string;
@@ -1777,7 +1795,7 @@ index 7e1ced2..b3bb6b5 100644
  	task: string;
  	cwd?: string;
  	machine?: string;
-@@ -376,6 +379,8 @@ export interface SubagentParamsLike {
+@@ -376,6 +381,8 @@ export interface SubagentParamsLike {
  	/** Per-run intercom bridge config. It replaces the global config for this launch only. */
  	intercomBridge?: IntercomBridgeConfig;
  	async?: boolean;
@@ -1786,7 +1804,20 @@ index 7e1ced2..b3bb6b5 100644
  	foregroundOnly?: boolean;
  	timeoutMs?: number;
  	maxRuntimeMs?: number;
-@@ -2201,6 +2206,7 @@ async function resumeAsyncRun(input: {
+@@ -1577,7 +1584,11 @@ function validateNestedSessionFile(run: NestedRunSummary, trustedSessionRoots: s
+ 	const stat = fs.lstatSync(resolved);
+ 	if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Nested run '${run.id}' session file is not a regular file: ${sessionFile}`);
+ 	const realSessionFile = fs.realpathSync(resolved);
+-	const trustedRoots = trustedSessionRoots
++	const configuredRoot = process.env.PI_SUBAGENT_SESSION_ROOT?.trim();
++	const requestedRunForkRoot = configuredRoot
++		? configuredSessionRoot(null, () => "", path.join(run.id, "forks"))
++		: undefined;
++	const trustedRoots = [...trustedSessionRoots, ...(requestedRunForkRoot ? [requestedRunForkRoot] : [])]
+ 		.filter((root) => fs.existsSync(root))
+ 		.map((root) => fs.realpathSync(root));
+ 	if (!trustedRoots.some((root) => pathWithin(root, realSessionFile))) {
+@@ -2201,6 +2212,7 @@ async function resumeAsyncRun(input: {
  		const normalized = normalizeSkillInput(input.params.skill);
  		const parentModel = input.parentModel;
  		const result = await executeAsyncChain(runId, compactOptional<Parameters<typeof executeAsyncChain>[1]>({
@@ -1794,7 +1825,7 @@ index 7e1ced2..b3bb6b5 100644
  			chain,
  			task: workflowTask,
  			goal,
-@@ -2351,6 +2357,9 @@ async function resumeAsyncRun(input: {
+@@ -2351,6 +2363,9 @@ async function resumeAsyncRun(input: {
  		? (target.source === "foreground" ? target.savedOutputPath : undefined) ?? resolveSingleOutputPath(inheritedOutput, input.requestCwd, effectiveCwd, revivalOutputBaseDir)
  		: undefined;
  	const result = await executeAsyncSingle(runId, compactOptional<Parameters<typeof executeAsyncSingle>[1]>({
@@ -1804,7 +1835,7 @@ index 7e1ced2..b3bb6b5 100644
  		agent: target.agent,
  		task: buildRevivedAsyncTask(target as Parameters<typeof buildRevivedAsyncTask>[0], effectiveFollowUp),
  		goal: effectiveFollowUp,
-@@ -3703,6 +3712,8 @@ async function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
+@@ -3703,6 +3718,8 @@ async function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
  		const launchRuleError = applyWatchdogLaunchRules({ cwd: effectiveCwd, agent: a.name, model: modelOverride ?? (parentModel && `${parentModel.provider}/${parentModel.id}`), warn: (violation) => deps.watchdog?.displayRuleWarning(violation) });
  		if (launchRuleError) return toExecutionErrorResult(params, new Error(launchRuleError), data.contextPolicy.contextSummary);
  		const asyncResult = await executeAsyncSingle(id, compactOptional<Parameters<typeof executeAsyncSingle>[1]>({
@@ -1813,7 +1844,7 @@ index 7e1ced2..b3bb6b5 100644
  			toolCallId: data.toolCallId,
  			agent: params.agent!,
  			task: shouldForkAgent(contextPolicy, params.agent!) ? wrapForkTask(params.task ?? "") : (params.task ?? ""),
-@@ -4450,6 +4461,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
+@@ -4450,6 +4467,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
  			parentWorkflowRunId: params.workflowParentRunId ?? foregroundControl?.parentWorkflowRunId,
  		});
  		const launched = await runSync(ctx.cwd, agents, params.agent!, task, compactOptional<Parameters<typeof runSync>[4]>({
@@ -1821,7 +1852,7 @@ index 7e1ced2..b3bb6b5 100644
  			machine: foregroundMachine,
  			parentProviderRegistry: ctx.modelRegistry,
  			projectTrusted: sessionProjectTrust(ctx),
-@@ -5705,6 +5717,9 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+@@ -5705,6 +5723,9 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
  			const derivedObjective = previewAgent ? `Workflow: ${previewAgent}` : boundedScriptPreview;
  			const workflowDepth = checkSubagentDepth(deps.config.maxSubagentDepth, deps.childRuntime).depth;
  			const asyncWorkflow = requestParams.async !== false;
@@ -1831,7 +1862,7 @@ index 7e1ced2..b3bb6b5 100644
  			const topLevelAsyncWorkflow = asyncWorkflow
  				&& workflowDepth === 0
  				&& !inheritedNestedRoute(deps)
-@@ -5790,6 +5805,16 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+@@ -5790,6 +5811,16 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
  				const eventsPath = path.join(asyncDir, "events.jsonl");
  				const startedAt = Date.now();
  				const currentSessionId = resolveCurrentSessionId(ctx.sessionManager);
@@ -1848,7 +1879,7 @@ index 7e1ced2..b3bb6b5 100644
  				const workflowCapabilityCeiling = intersectSubagentCapabilityCeilings(requestParams.capabilityCeiling, resolveCurrentSubagentCapabilityCeiling(ctx.sessionManager.getSessionId() ?? undefined));
  				const completionOwnerId = deps.state.completionOwnerId ?? currentCompletionOwnerId();
  				deps.state.completionOwnerId = completionOwnerId;
-@@ -5820,6 +5845,11 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+@@ -5820,6 +5851,11 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
  				}
  				try {
  					fs.mkdirSync(asyncDir, { recursive: true });
@@ -1860,7 +1891,7 @@ index 7e1ced2..b3bb6b5 100644
  					writeRunFanoutBudgetDescriptor(asyncDir, workflowFanoutBudget);
  					if (topLevelAsyncWorkflow) writeWorkflowLaunchRecord(DIRS.async, workflowRunId, workflowLaunchRecord(publicWorkflowLaunch ?? { source: "internal" }, workflowCwd, workflowScriptSourceDigest, currentSessionId, workflowCapabilityCeiling));
  					fs.mkdirSync(DIRS.results, { recursive: true });
-@@ -5834,7 +5864,10 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+@@ -5834,7 +5870,10 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
  				workflowCapacity?.markWorkflowStarted();
  				if (workflowCapacity) deps.state.activeAsyncCapacity = getActiveAsyncCapacitySnapshot(currentSessionId, resolveMaxActiveAsyncRunsPerSession(deps.config.maxActiveAsyncRunsPerSession), { liveWorkflowRunIds: new Set(deps.state.workflowControllers.keys()), abandonedSlotReleaseAfterMs: resolveAbandonedSlotReleaseAfterMs(deps.config.capacity?.abandonedSlotReleaseAfterMs) });
  				let status: AsyncStatus = {
@@ -1871,7 +1902,7 @@ index 7e1ced2..b3bb6b5 100644
  					toolCallId,
  					sessionId: currentSessionId ?? undefined,
  					completionOwnerId,
-@@ -5846,7 +5879,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+@@ -5846,9 +5885,10 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
  					cwd: workflowCwd,
  					...(workflowSessionRoot ? { sessionRoot: workflowSessionRoot } : {}),
  					...(requestParams.scheduleOrigin ? { scheduleOrigin: requestParams.scheduleOrigin } : {}),
@@ -1879,13 +1910,17 @@ index 7e1ced2..b3bb6b5 100644
 +					...(hostOwnsResultDelivery() ? {} : currentRecordedPid()),
  					...(workflowCapabilityCeiling ? { admissionCapabilityCeiling: workflowCapabilityCeiling } : {}),
  					steps: [],
++					workflowGraph: buildWorkflowLaneGraph(workflowRunId, []),
  					...(workflowPreflight ? { preflight: workflowPreflight } : {}),
-@@ -5941,8 +5974,24 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+ 					workflow: { trace: [], emits: [], console: [], ...workflowRunEvidence, ...(workflowResource ? { resource: workflowResource.provenance } : {}) },
+ 					workflowChildren: workflowChildSummary({ parentToolCallId: toolCallId, workflowRunId, workflowState: "running", inventoryComplete: false }),
+@@ -5941,8 +5981,31 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
  				// terminal writes stay fail-fast on purpose: no child work is at risk by then, and
  				// silently dropping a terminal write would leave status.json and the active-run
  				// index pinned at "running" after the result already says complete.
-+				const workflowEffectsState = (): "none" | "confirmed" | "unknown" => {
-+					if (status.state === "running" || status.state === "queued") return "unknown";
++				let settledChildEffects: EffectsState[] | undefined;
++				const currentWorkflowChildEffects = (): EffectsState[] => {
++					if (settledChildEffects) return settledChildEffects;
 +					const childStates: EffectsState[] = [];
 +					for (const step of status.steps ?? []) {
 +						if (step.async !== true) continue; // Foreground workflow children execute locally in this host.
@@ -1896,7 +1931,13 @@ index 7e1ced2..b3bb6b5 100644
 +						const child = readStatus(path.join(DIRS.async, step.runId));
 +						childStates.push(child?.effects_state === "none" || child?.effects_state === "confirmed" ? child.effects_state : "unknown");
 +					}
-+					return aggregateEffectsStates(childStates, validHostStepNodes(status.workflowGraph).length > 0);
++					return childStates;
++				};
++				const workflowEffectsState = (): "none" | "confirmed" | "unknown" => {
++					if (status.state === "running" || status.state === "queued") return "unknown";
++					const hostSteps = validHostStepNodes(status.workflowGraph);
++					if (hostSteps.some((step) => step.state === "pending" || step.state === "running")) return "unknown";
++					return aggregateEffectsStates(currentWorkflowChildEffects(), hostSteps.length > 0);
 +				};
  				const persist = (options: { tolerateStatusWriteFailure?: boolean } = {}): void => {
  					if (persistClosed) return;
@@ -1905,7 +1946,7 @@ index 7e1ced2..b3bb6b5 100644
  					const liveJob = deps.state.asyncJobs.get(workflowRunId);
  					if (liveJob && (liveJob.status === "complete" || liveJob.status === "failed") && status.state !== "complete" && status.state !== "failed") return;
  					const workflowState = status.state === "complete" ? "completed" : status.state === "failed" || status.state === "rejected" ? "failed" : status.state === "paused" ? "paused" : status.state === "stopped" ? "stopped" : "running";
-@@ -5997,6 +6046,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+@@ -5997,6 +6060,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
  				};
  				const writeWorkflowResult = (payload: Record<string, unknown>): boolean => {
  					try {
@@ -1913,7 +1954,7 @@ index 7e1ced2..b3bb6b5 100644
  						let resultPublished = false;
  						settleResultPublication = (published) => { resultPublished = published; };
  						pendingResultPublication = undefined;
-@@ -6043,15 +6093,30 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+@@ -6043,15 +6107,30 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
  					indexPersistence.dispose();
  					return { content: [{ type: "text", text: `Failed to create async workflow storage: ${error instanceof Error ? error.message : String(error)}` }], isError: true, details: { mode: "workflow", results: [] } };
  				}
@@ -1946,7 +1987,68 @@ index 7e1ced2..b3bb6b5 100644
  						sessionId: currentSessionId ?? undefined,
  						completionOwnerId,
  						mode: "workflow",
-@@ -7878,6 +7943,19 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+@@ -6204,6 +6283,33 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+ 					// can fail next; teardown must not publish the subsequently computed terminal status.
+ 					persist();
+ 				};
++				let durableCancellationRequested = false;
++				let disposeWorkflowCancellation: (() => void) | undefined;
++				const canonicalSessionId = ctx.sessionManager.getSessionId();
++				const canonicalSessionPath = ctx.sessionManager.getSessionFile() ?? null;
++				if (hostOwnsResultDelivery() && currentSessionId && canonicalSessionId) {
++					try {
++						disposeWorkflowCancellation = watchWorkflowCancellation({
++							asyncDir,
++							runId: workflowRunId,
++							artifactSessionId: currentSessionId,
++							canonicalSessionId,
++							canonicalSessionPath,
++							onCancel: (marker) => {
++								if (durableCancellationRequested || controller.signal.aborted) return;
++								durableCancellationRequested = true;
++								const reason = `Workflow stopped by host cancellation (${marker.reason}).`;
++								appendWorkflowEvent({ type: "subagent.workflow.cancellation_requested", operationId: marker.operationId, reason });
++								const current = readStatus(asyncDir);
++								if (current) stopStoppableAsyncStatusChildren(current, deps.state.workflowChildStops?.get(workflowRunId), reason);
++								controller.abort(new Error(reason));
++							},
++							onError: (error) => appendWorkflowEvent({ type: "subagent.workflow.cancellation_unavailable", error: error instanceof Error ? error.message : String(error) }),
++						});
++					} catch (error) {
++						appendWorkflowEvent({ type: "subagent.workflow.cancellation_unavailable", error: error instanceof Error ? error.message : String(error) });
++					}
++				}
+ 				void Promise.resolve().then(async () => {
+ 					const workflowDeadlineAt = timeout === undefined ? undefined : Date.now() + timeout;
+ 					const workflowResults: SingleResult[] = [];
+@@ -6392,6 +6498,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+ 							globalConcurrencyLimit: requestParams.globalConcurrencyLimit ?? deps.config.globalConcurrencyLimit,
+ 							timeoutMs: timeout,
+ 							signal: controller.signal,
++							workflowCancellationRequested: () => durableCancellationRequested,
+ 							continueAfterAbortWhenChildrenSettled: (abortError) => {
+ 								if (!workflowStopCause(abortError)) return false;
+ 								const activeAsyncChild = [...(deps.state.asyncJobs?.values() ?? [])].some((job) => job.parentWorkflowRunId === workflowRunId && (job.status === "queued" || job.status === "running"));
+@@ -6690,6 +6797,9 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+ 						const finalPreflightWarnings = workflowPreflightWarnings(workflowPreflight, partial.trace, { settled: true });
+ 						const finalPreflightTrace = annotateWorkflowPreflightTrace(partial.trace, workflowPreflight);
+ 						status = compactOptional<AsyncStatus>({ ...status, state, stopped: stopped || undefined, activityState: pauseForDetached || status.activityState === "needs_attention" ? "needs_attention" : undefined, error: workflowFailureMessage(error, workflowRunId, partial.children), endedAt: Date.now(), workflow: { trace: finalPreflightTrace, emits: partial.emits, console: partial.console, ...(error instanceof WorkflowScriptError && error.errorKind ? { failureKind: error.errorKind } : {}), ...workflowRunEvidence, ...(workflowResource ? { resource: workflowResource.provenance } : {}), ...(finalPreflightWarnings.length ? { preflightWarnings: finalPreflightWarnings } : {}) }, workflowChildren });
++						if (hostOwnsResultDelivery() && status.state !== "complete" && status.state !== "paused") {
++							settledChildEffects = await waitForWorkflowChildEffects(DIRS.async, status.steps ?? []);
++						}
+ 						if (pauseForDetached) {
+ 							const promoted = promotePausedWorkflowIfSettled(status);
+ 							if (promoted) status = promoted;
+@@ -6728,6 +6838,8 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
+ 						} catch (error) {
+ 							console.error(`Failed to close async workflow steer inbox '${asyncDir}':`, error);
+ 						}
++						disposeWorkflowCancellation?.();
++						disposeWorkflowCancellation = undefined;
+ 						persistClosed = true;
+ 						deps.state.workflowControllers?.delete(workflowRunId);
+ 						deps.state.workflowChildStops?.delete(workflowRunId);
+@@ -7878,6 +7990,19 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
  		const requestedAsync = externalAsyncRequired ? true : effectiveParams.async ?? deps.asyncByDefault;
  		const backgroundRequestedWhileClarifying = (hasChain || hasTasks) && requestedAsync && effectiveParams.clarify === true;
  		const effectiveAsync = requestedAsync && effectiveParams.clarify !== true;
@@ -2035,10 +2137,10 @@ index 0cace95..50f484a 100644
  	"runner", "outputName", "structured", "inheritProjectContext", "inheritGlobalContext", "inheritSkills", "skills", "outputPath", "namespaceOutputPath", "maxSubagentDepth", "timeoutMs", "waitToolEnabled", "waitToolDefaultTimeoutMs",
 diff --git a/src/runs/shared/execution-target.ts b/src/runs/shared/execution-target.ts
 new file mode 100644
-index 0000000..ce187c5
+index 0000000..ea0a17c
 --- /dev/null
 +++ b/src/runs/shared/execution-target.ts
-@@ -0,0 +1,238 @@
+@@ -0,0 +1,280 @@
 +import { createHash } from "node:crypto";
 +import * as fs from "node:fs";
 +import * as path from "node:path";
@@ -2189,12 +2291,13 @@ index 0000000..ce187c5
 +	if (!configured || !path.isAbsolute(configured)) throw new Error(`${SSH_LOCK_EXTENSION_ENV} must name the locked SSH extension.`);
 +	const canonical = fs.realpathSync(configured);
 +	const helper = path.join(path.dirname(canonical), "ssh-lock.mjs");
-+	for (const [label, file] of [["extension", canonical], ["helper", helper]] as const) {
++	const relocateHelper = path.join(path.dirname(canonical), "ssh-relocate.mjs");
++	for (const [label, file] of [["extension", canonical], ["helper", helper], ["relocate helper", relocateHelper]] as const) {
 +		const stat = fs.lstatSync(file);
 +		if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Locked SSH ${label} is not a regular file.`);
 +		fs.accessSync(file, fs.constants.R_OK);
 +	}
-+	const codeDigest = sha256(`${sha256(fs.readFileSync(canonical))}\n${sha256(fs.readFileSync(helper))}\n`);
++	const codeDigest = sha256(`${sha256(fs.readFileSync(canonical))}\n${sha256(fs.readFileSync(helper))}\n${sha256(fs.readFileSync(relocateHelper))}\n`);
 +	const expected = env[SSH_LOCK_CODE_DIGEST_ENV]?.trim();
 +	if (!expected || !/^[a-f0-9]{64}$/.test(expected) || expected !== codeDigest) throw new Error("Locked SSH extension code does not match the startup integrity attestation.");
 +	return { path: canonical, codeDigest };
@@ -2225,7 +2328,7 @@ index 0000000..ce187c5
 +
 +export function executionTargetChildLaunch(target: ResolvedExecutionTarget, effectsEvidencePath?: string): { extensions: string[]; env: Record<string, string | undefined> } {
 +	if (target.kind === "local") {
-+		return { extensions: [], env: { [SSH_LOCK_DESCRIPTOR_ENV]: undefined, [EXECUTION_TARGET_NAME_ENV]: "local", [EXECUTION_TARGET_DIGEST_ENV]: undefined, [EFFECTS_EVIDENCE_PATH_ENV]: undefined } };
++		return { extensions: [], env: { [SSH_LOCK_DESCRIPTOR_ENV]: undefined, [EXECUTION_TARGET_NAME_ENV]: undefined, [EXECUTION_TARGET_DIGEST_ENV]: undefined, [EFFECTS_EVIDENCE_PATH_ENV]: undefined } };
 +	}
 +	return {
 +		extensions: [target.lockExtensionPath],
@@ -2261,6 +2364,47 @@ index 0000000..ce187c5
 +	return "none";
 +}
 +
++const TERMINAL_EFFECTS_STATES = new Set(["complete", "failed", "partial", "paused", "stopped", "rejected"]);
++
++/**
++ * Wait for child-owned lifecycle artifacts without inheriting the workflow's
++ * aborted signal. A terminal child may honestly retain unknown effects; only a
++ * missing, active, or malformed child artifact keeps the poll open.
++ */
++export async function waitForWorkflowChildEffects(
++	asyncRoot: string,
++	steps: ReadonlyArray<{ async?: boolean; runId?: string }>,
++	options: { timeoutMs?: number; pollMs?: number } = {},
++): Promise<EffectsState[]> {
++	const children = steps.filter((step) => step.async === true);
++	const timeoutMs = options.timeoutMs ?? 10_000;
++	const pollMs = options.pollMs ?? 100;
++	const deadline = Date.now() + timeoutMs;
++	for (;;) {
++		let settled = true;
++		const states = children.map((step): EffectsState => {
++			if (!step.runId || path.basename(step.runId) !== step.runId) {
++				settled = false;
++				return "unknown";
++			}
++			try {
++				const child = JSON.parse(fs.readFileSync(path.join(asyncRoot, step.runId, "status.json"), "utf8")) as { state?: unknown; effects_state?: unknown };
++				if (typeof child.state !== "string" || !TERMINAL_EFFECTS_STATES.has(child.state)) { settled = false; return "unknown"; }
++				if (child.effects_state !== "none" && child.effects_state !== "confirmed" && child.effects_state !== "unknown") {
++					settled = false;
++					return "unknown";
++				}
++				return child.effects_state;
++			} catch {
++				settled = false;
++				return "unknown";
++			}
++		});
++		if (settled || Date.now() >= deadline) return states;
++		await new Promise<void>((resolve) => setTimeout(resolve, Math.min(pollMs, Math.max(0, deadline - Date.now()))));
++	}
++}
++
 +export function assertCompositeExecutionTargetShape(executionTarget: unknown, composite: boolean): void {
 +	if (composite && executionTarget !== undefined) {
 +		throw new Error("Top-level executionTarget is supported only for a single-agent launch; set executionTarget on every tasks/chain/workflow child instead.");
@@ -2290,6 +2434,60 @@ index ba9c6ce..cc001fb 100644
  	/** Session id of the direct parent session for permission-system ask forwarding. */
  	parentSessionId?: string;
  	/** Parent session file, recorded as the new child session's `parentSession` header. */
+diff --git a/src/shared/fork-context.ts b/src/shared/fork-context.ts
+index 59714f7..1389e8b 100644
+--- a/src/shared/fork-context.ts
++++ b/src/shared/fork-context.ts
+@@ -12,6 +12,7 @@
+ import * as fs from "node:fs";
+ import * as path from "node:path";
+ import { SessionManager } from "@earendil-works/pi-coding-agent";
++import { configuredSessionRoot } from "./monika-host.ts";
+ 
+ type SubagentExecutionContext = "fresh" | "fork";
+ 
+@@ -173,19 +174,11 @@ export function createForkContextResolver(
+ 	const openSession = options.openSession
+ 		?? sessionManager.openSession
+ 		?? ((file: string, dir?: string) => SessionManager.open(file, dir));
+-	// Fork files must not land in the parent's top-level session directory.
+-	// Pi's recent-session discovery (`pi -c` → findMostRecentSession) is
+-	// non-recursive and picks the largest-mtime *.jsonl in that directory, so
+-	// a still-running forked subagent — which keeps appending after the parent
+-	// went idle — would hijack the next `pi -c` away from the conversation the
+-	// user actually left. Nesting fork sessions in a per-parent directory keeps
+-	// them invisible to that discovery; the `parentSession` header still
+-	// records the tree relationship. The directory mirrors
+-	// getSubagentSessionRoot() plus a "forks" level so fork files never sit
+-	// loose next to run-N/ result directories. Derived from the file path
+-	// rather than getSessionDir() so it also works when the manager cannot
+-	// report its directory.
+-	const forksDir = path.join(
++	// Without a configured child-session root, preserve upstream's per-parent
++	// nesting so Pi's non-recursive recent-session discovery cannot select a
++	// still-running fork. A configured Monika root must not derive child
++	// placement from the canonical parent path: the parent file is lineage only.
++	const upstreamForksDir = path.join(
+ 		path.dirname(parentSessionFile),
+ 		path.basename(parentSessionFile, ".jsonl"),
+ 		"forks",
+@@ -201,8 +194,14 @@ export function createForkContextResolver(
+ 			if (!fs.existsSync(parentSessionFile)) {
+ 				throw new Error(`Parent session file does not exist: ${parentSessionFile}. Pi has not persisted enough history to fork yet.`);
+ 			}
+-			// Nested resume accepts a session file only under a directory named by the run's id.
+-			const sessionDir = path.join(forksDir, options.runDirName());
++			// Nested resume accepts a stable per-run session directory. With Monika's
++			// configured root, keep forks under the same excluded child-session tree.
++			const runDirName = options.runDirName();
++			const sessionDir = configuredSessionRoot(
++				parentSessionFile,
++				() => path.join(upstreamForksDir, runDirName),
++				path.join(runDirName, "forks"),
++			);
+ 			const sourceManager = openSession(parentSessionFile, sessionDir);
+ 			const sessionFile = sourceManager.createBranchedSession(leafId);
+ 			if (!sessionFile) {
 diff --git a/src/shared/launch-contract.ts b/src/shared/launch-contract.ts
 index 5294991..7ae16cb 100644
 --- a/src/shared/launch-contract.ts
@@ -2336,10 +2534,10 @@ index 5294991..7ae16cb 100644
  			fast: source.fast,
 diff --git a/src/shared/monika-host.ts b/src/shared/monika-host.ts
 new file mode 100644
-index 0000000..5b753ef
+index 0000000..0a5cde6
 --- /dev/null
 +++ b/src/shared/monika-host.ts
-@@ -0,0 +1,129 @@
+@@ -0,0 +1,146 @@
 +import * as fs from "node:fs";
 +import * as path from "node:path";
 +
@@ -2349,6 +2547,14 @@ index 0000000..5b753ef
 +
 +export function hostOwnsResultDelivery(): boolean {
 +	return process.env.PI_SUBAGENTS_HOST_ACK_RESULTS === "1";
++}
++
++/** A configured dedicated runtime root is shared evidence, even for direct TUI sessions. */
++export function hostOwnsArtifactRetention(): boolean {
++	if (hostOwnsResultDelivery()) return true;
++	const runtimeRoot = process.env.PI_SUBAGENT_RUNTIME_ROOT?.trim();
++	const sessionRoot = process.env.PI_SUBAGENT_SESSION_ROOT?.trim();
++	return Boolean((runtimeRoot && path.isAbsolute(runtimeRoot)) || (sessionRoot && path.isAbsolute(sessionRoot)));
 +}
 +
 +export function hostIsDraining(): boolean {
@@ -2365,12 +2571,21 @@ index 0000000..5b753ef
 +	throw new Error(`Invalid subagent delivery disposition '${String(candidate)}'.`);
 +}
 +
-+export function configuredSessionRoot(parentSessionFile: string | null, fallback: () => string): string {
++export function configuredSessionRoot(parentSessionFile: string | null, fallback: () => string, configuredRelativePath?: string): string {
 +	const configured = process.env.PI_SUBAGENT_SESSION_ROOT?.trim();
 +	if (!configured) return fallback();
 +	if (!path.isAbsolute(configured)) throw new Error("PI_SUBAGENT_SESSION_ROOT must be absolute.");
-+	if (!parentSessionFile) return path.join(path.resolve(configured), "unbound");
-+	return path.join(path.resolve(configured), path.basename(parentSessionFile, ".jsonl"));
++	const root = path.resolve(configured);
++	if (configuredRelativePath !== undefined) {
++		const target = path.resolve(root, configuredRelativePath);
++		const relative = path.relative(root, target);
++		if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
++			throw new Error("Configured subagent session path must stay below PI_SUBAGENT_SESSION_ROOT.");
++		}
++		return target;
++	}
++	if (!parentSessionFile) return path.join(root, "unbound");
++	return path.join(root, path.basename(parentSessionFile, ".jsonl"));
 +}
 +
 +export function readRuntimeEpoch(): { runtimeInstanceId?: string; runtimeCreatedAt?: number } {
@@ -2498,7 +2713,7 @@ index 77ae10b..f0bf871 100644
  	phase?: string;
  	label?: string;
 diff --git a/src/shared/types.ts b/src/shared/types.ts
-index d02a2dd..e9273ee 100644
+index d02a2dd..3bf3b19 100644
 --- a/src/shared/types.ts
 +++ b/src/shared/types.ts
 @@ -635,7 +635,20 @@ export interface TimeoutRecoverySummary {
@@ -2578,16 +2793,19 @@ index d02a2dd..e9273ee 100644
  		/** Human-readable display name for the child session, when derived at launch. */
  		sessionName?: string;
  		runner?: ExternalCliRunnerStatus | ExternalJobRunnerStatus;
-@@ -2550,6 +2582,8 @@ export interface ForegroundChildSessionControls {
+@@ -2550,6 +2582,11 @@ export interface ForegroundChildSessionControls {
  }
  
  export interface RunSyncOptions {
 +	/** Host-owned result delivery policy bound into the launch digest. */
 +	deliveryDisposition?: import("./monika-host.ts").DeliveryDisposition;
++	/** Resolved public execution target bound into the launch digest. */
++	executionTarget?: import("../runs/shared/execution-target.ts").PublicExecutionTarget;
++	executionTargetDigest?: string;
  	/** Exact discovery provenance for an unknown-agent error; omission uses defensive fallback discovery. */
  	unknownAgentDiagnosticContext?: import("../agents/agents.ts").UnknownAgentDiagnosticContext;
  	/** Session factory for the in-process child; defaults to the process-wide factory. */
-@@ -2951,7 +2985,9 @@ export function resolveTempScopeId(options?: {
+@@ -2951,7 +2988,9 @@ export function resolveTempScopeId(options?: {
  
  const MAX_PARALLEL = 8;
  const MAX_CONCURRENCY = 4;
@@ -2598,8 +2816,225 @@ index d02a2dd..e9273ee 100644
  export const TEMP_ROOT_DIR = configuredTempRoot
  	? path.resolve(configuredTempRoot)
  	: path.join(os.tmpdir(), `pi-subagents-${resolveTempScopeId()}`);
+diff --git a/src/workflows/scripted-workflow.ts b/src/workflows/scripted-workflow.ts
+index f08aeb0..7645365 100644
+--- a/src/workflows/scripted-workflow.ts
++++ b/src/workflows/scripted-workflow.ts
+@@ -212,6 +212,8 @@ export interface RunWorkflowScriptOptions {
+ 	registerStopChild?: (stop: ((key: string, message?: string) => boolean) | undefined) => void;
+ 	/** Drain: stop children that have not started, refuse new launches, and call `onDrained` once every started child has a result. Returns the started-child count. */
+ 	registerDrain?: (drain: ((onDrained: () => void) => number) | undefined) => void;
++	/** Durable host cancellation fence, checked before admission and dispatch. */
++	workflowCancellationRequested?: () => boolean;
+ 	onTrace?: (trace: WorkflowScriptTraceEntry[]) => void;
+ 	onLanePlan?: (lanes: WorkflowLanePlan[]) => void;
+ 	onEmit?: (emits: unknown[]) => void;
+@@ -1858,7 +1860,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
+ 					return true;
+ 				});
+ 				admission = Promise.resolve().then(() => {
+-					if (settled || finishing || draining) return;
++					if (settled || finishing || draining || options.workflowCancellationRequested?.()) return;
+ 					for (const call of calls) assertRecoveryBarrierAllowsRun(call.key, call.params);
+ 					return options.admit?.(calls, childController.signal);
+ 				});
+@@ -1866,8 +1868,8 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
+ 			}
+ 			let resolvedResumeLineage: string[] | undefined;
+ 			const promise = admission.then(async () => {
+-				if (draining) stopChild(key, WORKFLOW_DRAIN_CHILD_MESSAGE);
+-				if (settled || finishing || stoppedLaunches.has(key)) {
++				if (draining || options.workflowCancellationRequested?.()) stopChild(key, WORKFLOW_DRAIN_CHILD_MESSAGE);
++				if (settled || finishing || stoppedLaunches.has(key) || options.workflowCancellationRequested?.()) {
+ 					const reason = childController.signal.reason;
+ 					const text = children.get(key)?.error ?? (reason instanceof Error ? reason.message : typeof reason === "string" ? reason : "Workflow script aborted.");
+ 					return stoppedChildResult(key, text);
+@@ -1903,7 +1905,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
+ 				const launchParams = resolvedResumeId ? { ...params, resume: resolvedResumeId } : params;
+ 				await launchSemaphore.acquire();
+ 				try {
+-					if (settled || finishing || stoppedLaunches.has(key) || childSignal.aborted) {
++					if (settled || finishing || stoppedLaunches.has(key) || childSignal.aborted || options.workflowCancellationRequested?.()) {
+ 						const reason = childSignal.reason;
+ 						const text = children.get(key)?.error ?? (reason instanceof Error ? reason.message : typeof reason === "string" ? reason : "Workflow script aborted.");
+ 						return stoppedChildResult(key, text);
+diff --git a/src/workflows/workflow-cancellation-observer.ts b/src/workflows/workflow-cancellation-observer.ts
+new file mode 100644
+index 0000000..e8a862e
+--- /dev/null
++++ b/src/workflows/workflow-cancellation-observer.ts
+@@ -0,0 +1,169 @@
++import * as fs from "node:fs";
++import * as path from "node:path";
++
++const MARKER_NAME = "host-cancellation.json";
++const STOP_NAME = path.join("control", "stop.json");
++const OPERATION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
++const SAFE_MARKER_KEYS = new Set(["version", "kind", "operationId", "generation", "runId", "runKey", "runSessionId", "parentSessionId", "parentSessionPath", "requestedAt", "reason"]);
++const SAFE_STOP_KEYS = new Set(["type", "source", "operationId", "cancellationGeneration", "runId", "runKey", "runSessionId", "parentSessionId", "parentSessionPath", "reason", "ts"]);
++
++export interface WorkflowCancellationMarker {
++	version: 1;
++	kind: "host-cancellation";
++	operationId: string;
++	generation: number;
++	runId: string;
++	runKey: string;
++	runSessionId: string | null;
++	parentSessionId: string;
++	parentSessionPath: string | null;
++	requestedAt: number;
++	reason: string;
++}
++
++export interface WorkflowCancellationObserverOptions {
++	asyncDir: string;
++	runId: string;
++	/** Session reference persisted in the run artifact (normally the canonical JSONL path). */
++	artifactSessionId: string;
++	/** Canonical Pi session identity, kept distinct from the artifact session reference. */
++	canonicalSessionId: string;
++	canonicalSessionPath: string | null;
++	onCancel: (marker: WorkflowCancellationMarker) => void;
++	onError?: (error: unknown) => void;
++	pollIntervalMs?: number;
++}
++
++function regularFile(file: string): boolean {
++	try {
++		const stat = fs.lstatSync(file);
++		return stat.isFile() && !stat.isSymbolicLink();
++	} catch {
++		return false;
++	}
++}
++
++function object(value: unknown): value is Record<string, unknown> {
++	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
++}
++
++function readJson(file: string): Record<string, unknown> | undefined {
++	if (!regularFile(file)) return undefined;
++	try {
++		const value: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
++		return object(value) ? value : undefined;
++	} catch {
++		return undefined;
++	}
++}
++
++function safeOwnedRunKey(asyncDir: string, runId: string): string | undefined {
++	const rootValue = process.env.PI_SUBAGENT_RUNTIME_ROOT?.trim();
++	if (!rootValue || !path.isAbsolute(rootValue) || !path.isAbsolute(asyncDir) || !OPERATION_ID.test(runId)) return undefined;
++	try {
++		const root = fs.realpathSync(rootValue);
++		const relative = path.relative(root, path.resolve(asyncDir)).split(path.sep).filter(Boolean);
++		let expectedParts: string[];
++		let runKey: string;
++		if (relative.length === 2 && relative[0] === "async-subagent-runs" && relative[1] === runId) {
++			expectedParts = relative;
++			runKey = `top:${runId}`;
++		} else if (relative.length === 3 && relative[0] === "nested-subagent-runs" && OPERATION_ID.test(relative[1]!) && relative[2] === runId) {
++			expectedParts = relative;
++			runKey = `nested:${relative[1]}:${runId}`;
++		} else {
++			return undefined;
++		}
++		const expected = path.join(root, ...expectedParts);
++		if (path.resolve(asyncDir) !== expected) return undefined;
++		let owned = root;
++		for (const part of expectedParts) {
++			owned = path.join(owned, part);
++			const stat = fs.lstatSync(owned);
++			if (!stat.isDirectory() || stat.isSymbolicLink()) return undefined;
++		}
++		return fs.realpathSync(asyncDir) === expected ? runKey : undefined;
++	} catch {
++		return undefined;
++	}
++}
++
++function validMarker(value: Record<string, unknown>, runId: string, runKey: string, options: WorkflowCancellationObserverOptions): boolean {
++	if ([...Object.keys(value)].some((key) => !SAFE_MARKER_KEYS.has(key))) return false;
++	return value.version === 1 && value.kind === "host-cancellation"
++		&& typeof value.operationId === "string" && OPERATION_ID.test(value.operationId)
++		&& Number.isSafeInteger(value.generation) && (value.generation as number) >= 0
++		&& value.runId === runId && value.runKey === runKey
++		&& value.runSessionId === options.artifactSessionId
++		&& value.parentSessionId === options.canonicalSessionId
++		&& value.parentSessionPath === options.canonicalSessionPath
++		&& Number.isFinite(value.requestedAt) && typeof value.reason === "string" && value.reason.trim().length > 0;
++}
++
++function validStop(value: Record<string, unknown>, marker: WorkflowCancellationMarker): boolean {
++	if ([...Object.keys(value)].some((key) => !SAFE_STOP_KEYS.has(key))) return false;
++	return value.type === "stop" && value.source === "agentd-cancellation"
++		&& value.operationId === marker.operationId && value.cancellationGeneration === marker.generation
++		&& value.runId === marker.runId && value.runKey === marker.runKey
++		&& value.runSessionId === marker.runSessionId && value.parentSessionId === marker.parentSessionId
++		&& value.parentSessionPath === marker.parentSessionPath && value.reason === marker.reason
++		&& Number.isFinite(value.ts);
++}
++
++/** Observe agentd's durable cancellation record without trusting paths or host PIDs. */
++export function watchWorkflowCancellation(options: WorkflowCancellationObserverOptions): () => void {
++	let disposed = false;
++	let requested = false;
++	const report = (error: unknown): void => {
++		try { options.onError?.(error); } catch (reportError) { console.error("Workflow cancellation error reporter failed:", reportError); }
++	};
++	const check = (): void => {
++		if (disposed || requested) return;
++		const runKey = safeOwnedRunKey(options.asyncDir, options.runId);
++		if (!runKey) return;
++		const markerValue = readJson(path.join(options.asyncDir, MARKER_NAME));
++		if (!markerValue) return;
++		if (!validMarker(markerValue, options.runId, runKey, options)) {
++			report(new Error(`Ignoring workflow cancellation with mismatched identity for '${options.runId}'.`));
++			return;
++		}
++		const stopFile = path.join(options.asyncDir, STOP_NAME);
++		try {
++			const controlStat = fs.lstatSync(path.dirname(stopFile));
++			if (!controlStat.isDirectory() || controlStat.isSymbolicLink()) return;
++		} catch { return; }
++		let stopExists = false;
++		try { fs.lstatSync(stopFile); stopExists = true; } catch { /* no stop control is valid for terminal custody */ }
++		if (stopExists) {
++			const stopValue = readJson(stopFile);
++			if (!stopValue || !validStop(stopValue, markerValue as unknown as WorkflowCancellationMarker)) {
++				report(new Error(`Ignoring workflow stop control with mismatched identity for '${options.runId}'.`));
++				return;
++			}
++		}
++		requested = true;
++		try { options.onCancel(markerValue as unknown as WorkflowCancellationMarker); } catch (error) { report(error); }
++	};
++	check();
++	const watchers: fs.FSWatcher[] = [];
++	for (const target of [options.asyncDir, path.join(options.asyncDir, "control")]) {
++		try {
++			const watcher = fs.watch(target, () => check());
++			watcher.on("error", (error) => report(error));
++			watchers.push(watcher);
++		} catch (error) {
++			// The polling safety net remains authoritative when a directory watcher is unavailable.
++			if ((error as NodeJS.ErrnoException).code !== "ENOENT") report(error);
++		}
++	}
++	const timer = setInterval(check, options.pollIntervalMs ?? 1000);
++	timer.unref?.();
++	return () => {
++		if (disposed) return;
++		disposed = true;
++		for (const watcher of watchers) {
++			try { watcher.close(); } catch { /* already closed */ }
++		}
++		clearInterval(timer);
++	};
++}
 diff --git a/test/integration/single-execution.part-1.test.ts b/test/integration/single-execution.part-1.test.ts
-index 39fc331..c8cbc0c 100644
+index 39fc331..346550e 100644
 --- a/test/integration/single-execution.part-1.test.ts
 +++ b/test/integration/single-execution.part-1.test.ts
 @@ -607,7 +607,10 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
@@ -2630,6 +3065,33 @@ index 39fc331..c8cbc0c 100644
  			runId: "digest-probe-foreground",
  			acceptance: false,
  			structuredOutput: structured,
+@@ -1553,6 +1558,26 @@ Answer only from the supplied synthetic text.
+ 		assert.equal(fs.readFileSync(sharedOutput, "utf-8"), "prior output\n");
+ 	});
+ 
++	it("persists an empty workflow graph when no lanes or host steps are produced", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
++		const result = await makeExecutor([makeAgent("echo")]).execute(
++			"async-empty-workflow-graph",
++			{ async: true, mission: false, workflowScript: `return "done";` },
++			new AbortController().signal,
++			undefined,
++			makeMinimalCtx(tempDir),
++		);
++		assert.ok(result.details.asyncDir);
++		const status = await waitForAsyncState(result.details.asyncId!, (candidate) => candidate.state === "complete");
++		assert.deepEqual(status.workflowGraph, {
++			runId: result.details.asyncId,
++			mode: "workflow",
++			phases: [],
++			nodes: [],
++		});
++		fs.rmSync(result.details.asyncDir!, { recursive: true, force: true });
++		fs.rmSync(path.join(DIRS.results, `${result.details.asyncId}.json`), { force: true });
++	});
++
+ 	it("persists async host command status and receipt evidence", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+ 		const scriptPath = path.join(tempDir, "async-host-command.cjs");
+ 		fs.writeFileSync(scriptPath, `process.stdout.write("async host passed\\n");`);
 diff --git a/test/integration/top-level-async.test.ts b/test/integration/top-level-async.test.ts
 index fdadb1b..8cb3892 100644
 --- a/test/integration/top-level-async.test.ts
@@ -2814,12 +3276,12 @@ index 98dd72c..a816e11 100644
  		const recorder = makeRecorder();
 diff --git a/test/unit/execution-target.test.ts b/test/unit/execution-target.test.ts
 new file mode 100644
-index 0000000..e7e85d0
+index 0000000..ed1b612
 --- /dev/null
 +++ b/test/unit/execution-target.test.ts
-@@ -0,0 +1,157 @@
+@@ -0,0 +1,189 @@
 +import assert from "node:assert/strict";
-+import { mkdtempSync, writeFileSync } from "node:fs";
++import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 +import { tmpdir } from "node:os";
 +import path from "node:path";
 +import { describe, it } from "node:test";
@@ -2837,6 +3299,7 @@ index 0000000..e7e85d0
 +  resolveEffectsEvidenceState,
 +  resolveExecutionTarget,
 +  validateExecutionTarget,
++  waitForWorkflowChildEffects,
 +} from "../../src/runs/shared/execution-target.ts";
 +
 +const descriptor = {
@@ -2865,7 +3328,7 @@ index 0000000..e7e85d0
 +    }).public, { kind: "local" });
 +    assert.deepEqual(executionTargetChildLaunch({ kind: "local", public: { kind: "local" } }).env, {
 +      MONIKA_SSH_LOCK_DESCRIPTOR: undefined,
-+      PI_SUBAGENT_EXECUTION_TARGET_NAME: "local",
++      PI_SUBAGENT_EXECUTION_TARGET_NAME: undefined,
 +      PI_SUBAGENT_EXECUTION_TARGET_DIGEST: undefined,
 +      PI_SUBAGENT_EFFECTS_EVIDENCE_PATH: undefined,
 +    });
@@ -2958,6 +3421,37 @@ index 0000000..e7e85d0
 +    assert.equal(aggregateEffectsStates(["unknown"], true), "unknown", "an async child with unknown effects beats a confirmed host workflow step");
 +  });
 +
++  it("waits for stopped child lifecycle effects to settle independently", async () => {
++    const root = mkdtempSync(path.join(tmpdir(), "workflow-child-effects-"));
++    const childDir = path.join(root, "child-local");
++    mkdirSync(childDir);
++    writeFileSync(path.join(childDir, "status.json"), JSON.stringify({ state: "running", effects_state: "unknown" }));
++    const startedAt = Date.now();
++    setTimeout(() => writeFileSync(path.join(childDir, "status.json"), JSON.stringify({ state: "stopped", effects_state: "none" })), 40);
++    assert.deepEqual(await waitForWorkflowChildEffects(root, [{ async: true, runId: "child-local" }], { timeoutMs: 500, pollMs: 10 }), ["none"]);
++    assert.ok(Date.now() - startedAt >= 30, "parent publication must wait for the child-owned terminal write");
++  });
++
++  it("preserves terminal remote and missing child effects as unknown", async () => {
++    const root = mkdtempSync(path.join(tmpdir(), "workflow-child-remote-effects-"));
++    const childDir = path.join(root, "child-remote");
++    mkdirSync(childDir);
++    writeFileSync(path.join(childDir, "status.json"), JSON.stringify({ state: "stopped", effects_state: "unknown" }));
++    assert.deepEqual(await waitForWorkflowChildEffects(root, [{ async: true, runId: "child-remote" }], { timeoutMs: 100, pollMs: 10 }), ["unknown"]);
++    assert.deepEqual(await waitForWorkflowChildEffects(root, [{ async: true, runId: "missing-child" }], { timeoutMs: 20, pollMs: 5 }), ["unknown"]);
++    assert.equal(aggregateEffectsStates(["unknown"]), "unknown");
++  });
++
++  it("does not settle nonterminal child effects when the publication wait expires", async () => {
++    const root = mkdtempSync(path.join(tmpdir(), "workflow-child-active-effects-"));
++    const childDir = path.join(root, "child-active");
++    mkdirSync(childDir);
++    for (const effects of ["none", "confirmed"]) {
++      writeFileSync(path.join(childDir, "status.json"), JSON.stringify({ state: "running", effects_state: effects }));
++      assert.deepEqual(await waitForWorkflowChildEffects(root, [{ async: true, runId: "child-active" }], { timeoutMs: 10, pollMs: 5 }), ["unknown"]);
++    }
++  });
++
 +  it("rejects a top-level target on composite launches rather than silently running locally", () => {
 +    assert.throws(() => assertCompositeExecutionTargetShape({ kind: "ssh", name: "stanza" }, true), /supported only for a single-agent launch/);
 +    assert.doesNotThrow(() => assertCompositeExecutionTargetShape(undefined, true));
@@ -2988,18 +3482,61 @@ index 089308e..b7d96ca 100644
  	});
  
  	it("gives an in-process foreground child only its bindings, restored after start", () => {
+diff --git a/test/unit/fork-context.test.ts b/test/unit/fork-context.test.ts
+index e377b58..fc4083c 100644
+--- a/test/unit/fork-context.test.ts
++++ b/test/unit/fork-context.test.ts
+@@ -211,6 +211,38 @@ describe("createForkContextResolver", () => {
+ 		}
+ 	});
+ 
++	it("places real fork sessions under the configured child root without affecting canonical parent discovery", () => {
++		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-fork-configured-root-"));
++		const previousSessionRoot = process.env.PI_SUBAGENT_SESSION_ROOT;
++		try {
++			const canonicalSessionDir = path.join(tempDir, "canonical-sessions");
++			const childSessionRoot = path.join(tempDir, "child-sessions");
++			process.env.PI_SUBAGENT_SESSION_ROOT = childSessionRoot;
++			const parent = SessionManager.create(tempDir, canonicalSessionDir);
++			parent.appendMessage({ role: "user", content: "parent prompt" });
++			parent.appendMessage({ role: "assistant", content: "parent response" });
++			const parentSessionFile = parent.getSessionFile();
++
++			assert.ok(parentSessionFile);
++			const resolver = createForkContextResolver(parent, "fork", { runDirName: () => "child-run-id" });
++			const childSessionFile = resolver.sessionFileForIndex(0);
++			assert.ok(childSessionFile);
++			assert.equal(path.dirname(childSessionFile), path.join(childSessionRoot, "child-run-id", "forks"));
++			assert.equal(childSessionFile.startsWith(`${path.resolve(childSessionRoot)}${path.sep}`), true);
++			assert.equal(childSessionFile.startsWith(`${path.resolve(canonicalSessionDir)}${path.sep}`), false);
++
++			// Canonical discovery remains non-recursive and sees only the parent.
++			const canonicalTopLevel = fs.readdirSync(canonicalSessionDir).filter((file) => file.endsWith(".jsonl"));
++			assert.deepEqual(canonicalTopLevel, [path.basename(parentSessionFile)]);
++			const header = JSON.parse(fs.readFileSync(childSessionFile, "utf-8").split("\n")[0]);
++			assert.equal(header.parentSession, parentSessionFile);
++		} finally {
++			if (previousSessionRoot === undefined) delete process.env.PI_SUBAGENT_SESSION_ROOT;
++			else process.env.PI_SUBAGENT_SESSION_ROOT = previousSessionRoot;
++			fs.rmSync(tempDir, { recursive: true, force: true });
++		}
++	});
++
+ 	it("fails clearly when the parent session file is missing", () => {
+ 		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-fork-user-only-"));
+ 		try {
 diff --git a/test/unit/monika-host.test.ts b/test/unit/monika-host.test.ts
 new file mode 100644
-index 0000000..01a4ad2
+index 0000000..3e53f26
 --- /dev/null
 +++ b/test/unit/monika-host.test.ts
-@@ -0,0 +1,38 @@
+@@ -0,0 +1,60 @@
 +import assert from "node:assert/strict";
 +import * as fs from "node:fs";
 +import * as os from "node:os";
 +import * as path from "node:path";
 +import { describe, it } from "node:test";
-+import { assertHostOriginRegistered } from "../../src/shared/monika-host.ts";
++import { assertHostOriginRegistered, hostOwnsArtifactRetention } from "../../src/shared/monika-host.ts";
 +
 +describe("Monika host origin registration", () => {
 +	it("uses the synchronously persisted canonical mapping as the event handoff acknowledgement", () => {
@@ -3029,6 +3566,28 @@ index 0000000..01a4ad2
 +			if (previous === undefined) delete process.env.PI_SUBAGENTS_HOST_ACK_RESULTS;
 +			else process.env.PI_SUBAGENTS_HOST_ACK_RESULTS = previous;
 +			fs.rmSync(root, { recursive: true, force: true });
++		}
++	});
++});
++
++describe("Monika host artifact retention", () => {
++	it("protects a configured shared runtime root without changing delivery ownership", () => {
++		const previousAck = process.env.PI_SUBAGENTS_HOST_ACK_RESULTS;
++		const previousRoot = process.env.PI_SUBAGENT_RUNTIME_ROOT;
++		const previousSessionRoot = process.env.PI_SUBAGENT_SESSION_ROOT;
++		try {
++			delete process.env.PI_SUBAGENTS_HOST_ACK_RESULTS;
++			process.env.PI_SUBAGENT_RUNTIME_ROOT = "/runtime/data";
++			delete process.env.PI_SUBAGENT_SESSION_ROOT;
++			assert.equal(hostOwnsArtifactRetention(), true);
++			process.env.PI_SUBAGENT_RUNTIME_ROOT = "relative";
++			assert.equal(hostOwnsArtifactRetention(), false);
++			process.env.PI_SUBAGENT_SESSION_ROOT = "/runtime/sessions";
++			assert.equal(hostOwnsArtifactRetention(), true);
++		} finally {
++			if (previousAck === undefined) delete process.env.PI_SUBAGENTS_HOST_ACK_RESULTS; else process.env.PI_SUBAGENTS_HOST_ACK_RESULTS = previousAck;
++			if (previousRoot === undefined) delete process.env.PI_SUBAGENT_RUNTIME_ROOT; else process.env.PI_SUBAGENT_RUNTIME_ROOT = previousRoot;
++			if (previousSessionRoot === undefined) delete process.env.PI_SUBAGENT_SESSION_ROOT; else process.env.PI_SUBAGENT_SESSION_ROOT = previousSessionRoot;
 +		}
 +	});
 +});
@@ -3115,6 +3674,55 @@ index 0000000..643e25f
 +		assert.notEqual(digestForPersistedStep(), digestForPersistedStep("follow_up"));
 +	});
 +});
+diff --git a/test/unit/nested-control.test.ts b/test/unit/nested-control.test.ts
+index fde08ee..6e409e7 100644
+--- a/test/unit/nested-control.test.ts
++++ b/test/unit/nested-control.test.ts
+@@ -522,6 +522,44 @@ describe("nested control routing", () => {
+ 		}
+ 	});
+ 
++	it("admits only the requested run's configured fork root for nested revival", async (t) => {
++		if (process.platform === "win32") t.skip("directory symlink containment differs on Windows");
++		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-nested-configured-fork-root-"));
++		const previousSessionRoot = process.env.PI_SUBAGENT_SESSION_ROOT;
++		try {
++			const configuredRoot = path.join(root, "configured");
++			const parentSessionFile = path.join(root, "canonical-parent.jsonl");
++			process.env.PI_SUBAGENT_SESSION_ROOT = configuredRoot;
++			fs.writeFileSync(parentSessionFile, "");
++			const resume = async (runId: string, sessionFile: string) => {
++				const route = createNestedRun(runId, "complete", { sessionFile });
++				return createExecutor(stateWithNestedRoute(route), [{ name: "worker", description: "Worker", prompt: "Do work" }])
++					.execute("resume", { action: "resume", id: runId, message: "continue" }, new AbortController().signal, undefined, ctx(root, parentSessionFile));
++			};
++
++			const requestedRunId = "nested-configured-resume";
++			const requestedSessionFile = path.join(configuredRoot, requestedRunId, "forks", "session.jsonl");
++			fs.mkdirSync(path.dirname(requestedSessionFile), { recursive: true });
++			fs.writeFileSync(requestedSessionFile, `${JSON.stringify({ type: "session", parentSession: parentSessionFile })}\n`);
++			assert.match(text(await resume(requestedRunId, requestedSessionFile)), /missing its required recovery identity/);
++
++			const siblingSessionFile = path.join(configuredRoot, "other-run", "forks", "session.jsonl");
++			fs.mkdirSync(path.dirname(siblingSessionFile), { recursive: true });
++			fs.writeFileSync(siblingSessionFile, `${JSON.stringify({ type: "session", parentSession: parentSessionFile })}\n`);
++			assert.match(text(await resume("nested-cross-run-resume", siblingSessionFile)), /outside trusted nested session roots/);
++
++			const escapedRunId = "nested-canonical-escape";
++			const escapedForkRoot = path.join(configuredRoot, escapedRunId, "forks");
++			fs.mkdirSync(path.dirname(escapedForkRoot), { recursive: true });
++			fs.symlinkSync(path.dirname(parentSessionFile), escapedForkRoot, "dir");
++			assert.match(text(await resume(escapedRunId, path.join(escapedForkRoot, path.basename(parentSessionFile)))), /outside trusted nested session roots|not under that nested run's session directory/);
++		} finally {
++			if (previousSessionRoot === undefined) delete process.env.PI_SUBAGENT_SESSION_ROOT;
++			else process.env.PI_SUBAGENT_SESSION_ROOT = previousSessionRoot;
++			fs.rmSync(root, { recursive: true, force: true });
++		}
++	});
++
+ 	it("shows the transcript of an async run inherited from a session this process replaced", async () => {
+ 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-inherited-transcript-"));
+ 		const runId = `inherited-transcript-${randomUUID()}`;
 diff --git a/test/unit/result-claim.test.ts b/test/unit/result-claim.test.ts
 new file mode 100644
 index 0000000..8732348
@@ -3180,6 +3788,63 @@ index 0000000..8732348
 +		}
 +	});
 +});
+diff --git a/test/unit/schemas.test.ts b/test/unit/schemas.test.ts
+index 6e5444d..c9f4c35 100644
+--- a/test/unit/schemas.test.ts
++++ b/test/unit/schemas.test.ts
+@@ -5,6 +5,7 @@ type JsonSchemaNode = Record<string, unknown>;
+ 
+ interface SubagentParamsSchema {
+ 	properties?: {
++		executionTarget?: JsonSchemaNode;
+ 		context?: {
+ 			type?: string;
+ 			enum?: string[];
+@@ -206,6 +207,24 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
+ 		assert.match(description, /else fresh/);
+ 	});
+ 
++	it("uses provider-compatible closed execution target schemas", () => {
++		const executionTarget = SubagentParams?.properties?.executionTarget;
++		assert.ok(executionTarget, "executionTarget schema should exist");
++		const branches = executionTarget.oneOf;
++		assert.ok(Array.isArray(branches));
++		assert.deepEqual((branches[0] as JsonSchemaNode).properties && ((branches[0] as JsonSchemaNode).properties as JsonSchemaNode).kind, { enum: ["local"] });
++		assert.deepEqual((branches[1] as JsonSchemaNode).properties && ((branches[1] as JsonSchemaNode).properties as JsonSchemaNode).kind, { enum: ["ssh"] });
++		assert.ok(CompileSchema);
++		const validator = CompileSchema!(SubagentParams);
++		for (const target of [{ kind: "local" }, { kind: "ssh", name: "stanza" }]) {
++			assert.equal(validator.Check({ agent: "worker", task: "work", executionTarget: target }), true, JSON.stringify(target));
++		}
++		for (const target of [
++			{ kind: "other" }, { kind: "ssh" }, { kind: "local", name: "stanza" },
++			{ kind: "ssh", name: "../escape" }, { kind: "ssh", name: "stanza", host: "untrusted" },
++		]) assert.equal(validator.Check({ agent: "worker", task: "work", executionTarget: target }), false, JSON.stringify(target));
++	});
++
+ 	it("exposes one workflow field for the reply block, script paths, and named resources", () => {
+ 		const workflow = SubagentParams?.properties?.workflow;
+ 		assert.equal(hasAnyOfType(workflow, "boolean"), true);
+@@ -413,7 +432,7 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
+ 				if (!current.value || typeof current.value !== "object") continue;
+ 
+ 				const node = current.value as JsonSchemaNode;
+-				if (Object.hasOwn(node, "description") && !Object.hasOwn(node, "type") && !Object.hasOwn(node, "anyOf")) {
++				if (Object.hasOwn(node, "description") && !Object.hasOwn(node, "type") && !Object.hasOwn(node, "anyOf") && !Object.hasOwn(node, "oneOf")) {
+ 					descriptionOnlyPaths.push(current.path);
+ 				}
+ 
+@@ -475,7 +494,9 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
+ 		assert.match(String(properties.options?.description ?? ""), /acceptance, timeoutMs.*guide tool-reference\/parameter-reference/);
+ 		const { resolveDisabledFeatureSurface } = await import("../../src/shared/disabled-features.ts");
+ 		const structured = createProviderSchema!(resolveDisabledFeatureSurface({ disabledFeatures: ["workflow-scripts"] }));
+-		assert.ok(JSON.stringify(structured).length <= 2_450, `expected structured schema at or under 2,450 chars, got ${JSON.stringify(structured).length}`);
++		// Each executable leaf carries a closed local/SSH target union; without refs,
++		// the provider payload repeats that metadata in tasks, chain, and parallel leaves.
++		assert.ok(JSON.stringify(structured).length <= 3_395, `expected structured schema at or under 3,395 chars, got ${JSON.stringify(structured).length}`);
+ 		assert.deepEqual(Object.keys(structured.properties as JsonSchemaNode), ["agent", "task", "tasks", "chain", "async", "model", "cwd", "worktree", "output", "action", "id", "message", "options"]);
+ 
+ 		const nestedDescriptionPaths: string[] = [];
 diff --git a/test/unit/stale-run-reconciler.test.ts b/test/unit/stale-run-reconciler.test.ts
 index 17142c1..3efcce2 100644
 --- a/test/unit/stale-run-reconciler.test.ts
@@ -3389,68 +4054,159 @@ index 0aa27af..64f8644 100644
  	for (const alreadyTerminal of [false, true]) {
  		for (const prefix of [false, true]) {
  			it(`collects nested results by ${prefix ? "prefix" : "exact id"} ${alreadyTerminal ? "after early completion" : "across active-to-terminal transition"}`, async (t) => {
-
-
-diff --git a/test/unit/schemas.test.ts b/test/unit/schemas.test.ts
---- a/test/unit/schemas.test.ts
-+++ b/test/unit/schemas.test.ts
-@@ -5,6 +5,7 @@
- 
- interface SubagentParamsSchema {
- 	properties?: {
-+		executionTarget?: JsonSchemaNode;
- 		context?: {
- 			type?: string;
- 			enum?: string[];
-@@ -206,6 +207,24 @@
- 		assert.match(description, /else fresh/);
- 	});
- 
-+	it("uses provider-compatible closed execution target schemas", () => {
-+		const executionTarget = SubagentParams?.properties?.executionTarget;
-+		assert.ok(executionTarget, "executionTarget schema should exist");
-+		const branches = executionTarget.oneOf;
-+		assert.ok(Array.isArray(branches));
-+		assert.deepEqual((branches[0] as JsonSchemaNode).properties && ((branches[0] as JsonSchemaNode).properties as JsonSchemaNode).kind, { enum: ["local"] });
-+		assert.deepEqual((branches[1] as JsonSchemaNode).properties && ((branches[1] as JsonSchemaNode).properties as JsonSchemaNode).kind, { enum: ["ssh"] });
-+		assert.ok(CompileSchema);
-+		const validator = CompileSchema!(SubagentParams);
-+		for (const target of [{ kind: "local" }, { kind: "ssh", name: "stanza" }]) {
-+			assert.equal(validator.Check({ agent: "worker", task: "work", executionTarget: target }), true, JSON.stringify(target));
-+		}
-+		for (const target of [
-+			{ kind: "other" }, { kind: "ssh" }, { kind: "local", name: "stanza" },
-+			{ kind: "ssh", name: "../escape" }, { kind: "ssh", name: "stanza", host: "untrusted" },
-+		]) assert.equal(validator.Check({ agent: "worker", task: "work", executionTarget: target }), false, JSON.stringify(target));
-+	});
+diff --git a/test/unit/workflow-cancellation-observer.test.ts b/test/unit/workflow-cancellation-observer.test.ts
+new file mode 100644
+index 0000000..beb61c4
+--- /dev/null
++++ b/test/unit/workflow-cancellation-observer.test.ts
+@@ -0,0 +1,142 @@
++import assert from "node:assert/strict";
++import fs from "node:fs";
++import os from "node:os";
++import path from "node:path";
++import test from "node:test";
++import { watchWorkflowCancellation } from "../../src/workflows/workflow-cancellation-observer.ts";
 +
- 	it("exposes one workflow field for the reply block, script paths, and named resources", () => {
- 		const workflow = SubagentParams?.properties?.workflow;
- 		assert.equal(hasAnyOfType(workflow, "boolean"), true);
-@@ -413,7 +432,7 @@
- 				if (!current.value || typeof current.value !== "object") continue;
- 
- 				const node = current.value as JsonSchemaNode;
--				if (Object.hasOwn(node, "description") && !Object.hasOwn(node, "type") && !Object.hasOwn(node, "anyOf")) {
-+				if (Object.hasOwn(node, "description") && !Object.hasOwn(node, "type") && !Object.hasOwn(node, "anyOf") && !Object.hasOwn(node, "oneOf")) {
- 					descriptionOnlyPaths.push(current.path);
- 				}
- 
-@@ -475,7 +494,9 @@
- 		assert.match(String(properties.options?.description ?? ""), /acceptance, timeoutMs.*guide tool-reference\/parameter-reference/);
- 		const { resolveDisabledFeatureSurface } = await import("../../src/shared/disabled-features.ts");
- 		const structured = createProviderSchema!(resolveDisabledFeatureSurface({ disabledFeatures: ["workflow-scripts"] }));
--		assert.ok(JSON.stringify(structured).length <= 2_450, `expected structured schema at or under 2,450 chars, got ${JSON.stringify(structured).length}`);
-+		// Each executable leaf carries a closed local/SSH target union; without refs,
-+		// the provider payload repeats that metadata in tasks, chain, and parallel leaves.
-+		assert.ok(JSON.stringify(structured).length <= 3_395, `expected structured schema at or under 3,395 chars, got ${JSON.stringify(structured).length}`);
- 		assert.deepEqual(Object.keys(structured.properties as JsonSchemaNode), ["agent", "task", "tasks", "chain", "async", "model", "cwd", "worktree", "output", "action", "id", "message", "options"]);
- 
- 		const nestedDescriptionPaths: string[] = [];
++const ARTIFACT_SESSION_ID = "/sessions/parent.jsonl";
++const CANONICAL_SESSION_ID = "canonical-session-uuid";
++const CANONICAL_SESSION_PATH = "/sessions/parent.jsonl";
++
++function fixture(nestedRoot?: string) {
++	const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-workflow-cancel-"));
++	const runId = "workflow-run";
++	const asyncDir = nestedRoot
++		? path.join(root, "nested-subagent-runs", nestedRoot, runId)
++		: path.join(root, "async-subagent-runs", runId);
++	fs.mkdirSync(path.join(asyncDir, "control"), { recursive: true });
++	return { root, runId, asyncDir, runKey: nestedRoot ? `nested:${nestedRoot}:${runId}` : `top:${runId}` };
++}
++
++function marker(runId: string, runKey = `top:${runId}`, operationId = "operation-1") {
++	return {
++		version: 1,
++		kind: "host-cancellation",
++		operationId,
++		generation: 4,
++		runId,
++		runKey,
++		runSessionId: ARTIFACT_SESSION_ID,
++		parentSessionId: CANONICAL_SESSION_ID,
++		parentSessionPath: CANONICAL_SESSION_PATH,
++		requestedAt: Date.now(),
++		reason: "forum-stop",
++	};
++}
++
++function stop(value: ReturnType<typeof marker>) {
++	return { type: "stop", source: "agentd-cancellation", operationId: value.operationId, cancellationGeneration: value.generation, runId: value.runId, runKey: value.runKey, runSessionId: value.runSessionId, parentSessionId: value.parentSessionId, parentSessionPath: value.parentSessionPath, reason: value.reason, ts: Date.now() };
++}
++
++function observerOptions(f: ReturnType<typeof fixture>, onCancel: Parameters<typeof watchWorkflowCancellation>[0]["onCancel"]) {
++	return {
++		asyncDir: f.asyncDir,
++		runId: f.runId,
++		artifactSessionId: ARTIFACT_SESSION_ID,
++		canonicalSessionId: CANONICAL_SESSION_ID,
++		canonicalSessionPath: CANONICAL_SESSION_PATH,
++		pollIntervalMs: 5,
++		onCancel,
++	};
++}
++
++async function waitFor(predicate: () => boolean): Promise<void> {
++	for (let i = 0; i < 30 && !predicate(); i++) await new Promise((resolve) => setTimeout(resolve, 10));
++}
++
++async function withRuntimeRoot<T>(f: ReturnType<typeof fixture>, run: () => Promise<T>): Promise<T> {
++	const prior = process.env.PI_SUBAGENT_RUNTIME_ROOT;
++	process.env.PI_SUBAGENT_RUNTIME_ROOT = f.root;
++	try {
++		return await run();
++	} finally {
++		if (prior === undefined) delete process.env.PI_SUBAGENT_RUNTIME_ROOT;
++		else process.env.PI_SUBAGENT_RUNTIME_ROOT = prior;
++		fs.rmSync(f.root, { recursive: true, force: true });
++	}
++}
++
++test("durable cancellation validates distinct artifact, canonical UUID, and canonical path identities", async () => {
++	const f = fixture();
++	await withRuntimeRoot(f, async () => {
++		const controller = new AbortController();
++		let calls = 0;
++		const dispose = watchWorkflowCancellation(observerOptions(f, (value) => { calls++; controller.abort(new Error(value.reason)); }));
++		try {
++			const value = marker(f.runId, f.runKey);
++			fs.writeFileSync(path.join(f.asyncDir, "host-cancellation.json"), JSON.stringify(value));
++			fs.writeFileSync(path.join(f.asyncDir, "control", "stop.json"), JSON.stringify(stop(value)));
++			await waitFor(() => controller.signal.aborted);
++			assert.equal(controller.signal.aborted, true);
++			assert.equal(calls, 1);
++			assert.equal((controller.signal.reason as Error).message, "forum-stop");
++		} finally {
++			dispose();
++		}
++	});
++});
++
++test("durable cancellation observes strictly contained nested workflow runs with their scoped run key", async () => {
++	const f = fixture("root-workflow");
++	await withRuntimeRoot(f, async () => {
++		let calls = 0;
++		const dispose = watchWorkflowCancellation(observerOptions(f, () => { calls++; }));
++		try {
++			const value = marker(f.runId, f.runKey);
++			fs.writeFileSync(path.join(f.asyncDir, "host-cancellation.json"), JSON.stringify(value));
++			fs.writeFileSync(path.join(f.asyncDir, "control", "stop.json"), JSON.stringify(stop(value)));
++			await waitFor(() => calls > 0);
++			assert.equal(calls, 1);
++		} finally {
++			dispose();
++		}
++	});
++});
++
++test("mismatched artifact or canonical identities never stop a controller", async () => {
++	const mismatches = [
++		{ runSessionId: "canonical-session-uuid" },
++		{ parentSessionId: "other-canonical-uuid" },
++		{ parentSessionPath: "/sessions/other.jsonl" },
++		{ runKey: "top:other" },
++	];
++	for (const mismatch of mismatches) {
++		const f = fixture();
++		await withRuntimeRoot(f, async () => {
++			let calls = 0;
++			const dispose = watchWorkflowCancellation(observerOptions(f, () => { calls++; }));
++			try {
++				const value = { ...marker(f.runId, f.runKey), ...mismatch };
++				fs.writeFileSync(path.join(f.asyncDir, "host-cancellation.json"), JSON.stringify(value));
++				await new Promise((resolve) => setTimeout(resolve, 30));
++				assert.equal(calls, 0, `accepted mismatched marker ${JSON.stringify(mismatch)}`);
++			} finally {
++				dispose();
++			}
++		});
++	}
++});
++
++test("disposal stops polling", async () => {
++	const f = fixture();
++	await withRuntimeRoot(f, async () => {
++		let calls = 0;
++		const dispose = watchWorkflowCancellation(observerOptions(f, () => { calls++; }));
++		dispose();
++		const value = marker(f.runId, f.runKey, "after-dispose");
++		fs.writeFileSync(path.join(f.asyncDir, "host-cancellation.json"), JSON.stringify(value));
++		await new Promise((resolve) => setTimeout(resolve, 30));
++		assert.equal(calls, 0);
++	});
++});
 diff --git a/test/unit/workflow-scripts-feature.test.ts b/test/unit/workflow-scripts-feature.test.ts
+index c18e86b..4927fac 100644
 --- a/test/unit/workflow-scripts-feature.test.ts
 +++ b/test/unit/workflow-scripts-feature.test.ts
-@@ -60,14 +60,19 @@
+@@ -60,14 +60,19 @@ describe("workflow-scripts tool surface", () => {
  	it("accepts chain and tasks shapes with a small schema", () => {
  		const schema = createSubagentParamsSchema(surface);
  		const validator = Compile(schema);

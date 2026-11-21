@@ -75,17 +75,17 @@ RUN npm ci --prefix /opt/pi-cli --omit=dev --ignore-scripts --min-release-age=0 
 ENV PI_SUBAGENT_SESSION_ROOT=/app/.pi/agent/sessions/subagent \
     PI_SUBAGENT_RUNTIME_ROOT=/data/pi-subagents \
     PI_SUBAGENT_OPERATOR_ROOT=/data/pi-subagent-operator-state \
-    PI_SUBAGENT_SSH_LOCK_CODE_DIGEST=9270e5eaa7197a1d8173086f2a86fb0a94a07b4aaaff63f2c938f5e6e2cc15dc
+    PI_SUBAGENT_SSH_LOCK_CODE_DIGEST=6364d657f8c5ff21a8ccf04fb79c23a4f2b77361db6cd3e8d1971450ee1f32a7
 
 # pi-subagents — install the exact reviewed git object because npm's dependency
-# cooldown currently excludes the equivalent 0.37.2 artifact. The installer
+# provenance is anchored to the exact reviewed 0.89.1 object. The installer
 # verifies the commit, tree, source/lock hashes, and patch before changing
 # anything, then installs only lockfile-pinned production dependencies.
 COPY scripts/install-pi-subagents /usr/local/bin/install-pi-subagents
-COPY config/pi-subagents-0.37.2.patch /tmp/pi-subagents-0.37.2.patch
+COPY config/pi-subagents-0.89.1.patch /tmp/pi-subagents-0.89.1.patch
 RUN chmod +x /usr/local/bin/install-pi-subagents && \
-    PI_SUBAGENTS_VERIFY_TESTS=1 install-pi-subagents /opt/pi-subagents /tmp/pi-subagents-0.37.2.patch && \
-    rm -f /tmp/pi-subagents-0.37.2.patch
+    PI_SUBAGENTS_VERIFY_TESTS=1 install-pi-subagents /opt/pi-subagents /tmp/pi-subagents-0.89.1.patch && \
+    rm -f /tmp/pi-subagents-0.89.1.patch
 
 # AgentLogs CLI — pinned version. Authentication/config is runtime-owned and
 # stored under /agentlogs-home by scripts/agentlogs-monika.
