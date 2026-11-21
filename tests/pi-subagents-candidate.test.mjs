@@ -180,3 +180,15 @@ test('pinned object export excludes ignored/tampered bytes and rejects dirty inp
   await missing(path.join(dir, 'untracked'));
   assert.equal((await readdir(dir)).some((name) => name.startsWith('.pi-subagents-candidate.')), false);
 }));
+
+test('reviewed candidate patch contains only source and test files', async () => {
+  const patch = await readFile(path.join(root, 'config', 'pi-subagents-0.89.1.patch'), 'utf8');
+  const paths = [...patch.matchAll(/^diff --git a\/(\S+) b\/(\S+)$/gm)];
+  assert.ok(paths.length > 0);
+  for (const [, before, after] of paths) {
+    assert.equal(before, after, 'unexpected file rename in candidate patch');
+    assert.match(after, /^(src|test)\//, `unexpected candidate artifact: ${after}`);
+    assert.doesNotMatch(after, /(^|\/)(node_modules|\.git|\.pi-subagents)(\/|$)/);
+  }
+  assert.doesNotMatch(patch, /^new file mode 120000$/m, 'candidate patch must not introduce symlinks');
+});

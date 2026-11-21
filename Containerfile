@@ -75,7 +75,7 @@ RUN npm ci --prefix /opt/pi-cli --omit=dev --ignore-scripts --min-release-age=0 
 ENV PI_SUBAGENT_SESSION_ROOT=/app/.pi/agent/sessions/subagent \
     PI_SUBAGENT_RUNTIME_ROOT=/data/pi-subagents \
     PI_SUBAGENT_OPERATOR_ROOT=/data/pi-subagent-operator-state \
-    PI_SUBAGENT_SSH_LOCK_CODE_DIGEST=9270e5eaa7197a1d8173086f2a86fb0a94a07b4aaaff63f2c938f5e6e2cc15dc
+    PI_SUBAGENT_SSH_LOCK_CODE_DIGEST=6364d657f8c5ff21a8ccf04fb79c23a4f2b77361db6cd3e8d1971450ee1f32a7
 
 # pi-subagents — install the exact reviewed git object because npm's dependency
 # provenance is anchored to the exact reviewed 0.89.1 object. The installer

@@ -1,13 +1,15 @@
 // Deterministic Responses fixture for subagents-workflow.mjs.
-// It is intentionally stateful: parent turns drive the workflow while child
-// turns receive a bounded text response. No external provider is contacted.
+// The parent is identified by its explicit canary prompt tag. Child requests
+// are identified by a task marker, not by their tool declarations: children
+// intentionally do not receive the parent's orchestration tools.
 const fs = require('node:fs');
 const http = require('node:http');
 
 const log = '/output/subagents-requests.jsonl';
+const PARENT_TAG = 'SUBAGENTS_CANARY_PARENT_V2';
+const CHILD_TAG = 'SUBAGENTS_CANARY_CHILD_V2';
 let parentPhase = 0;
-let firstRunId = null;
-let secondRunId = null;
+let parentSeen = false;
 let callNumber = 0;
 
 function schemaError(schema, at = '()') {
@@ -41,8 +43,6 @@ function allStrings(value, out = []) {
 
 function findRunId(value) {
   const text = allStrings(value).join('\n');
-  // IDs are UUIDs in the package, but accepting the package's readable test
-  // IDs too makes diagnostics useful if the candidate changes its generator.
   return text.match(/(?:run[_-])?[0-9a-f]{8}-[0-9a-f-]{27,}/i)?.[0]
     ?? text.match(/run[-_][A-Za-z0-9-]{8,}/)?.[0]
     ?? null;
@@ -51,7 +51,7 @@ function findRunId(value) {
 function response(res, body) {
   const id = `resp_canary_${++callNumber}`;
   const base = {
-    id, object: 'response', status: 'completed', model: 'canary', output: [],
+    id, object: 'response', status: 'completed', model: 'schema-smoke', output: [],
     usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2,
       input_tokens_details: { cached_tokens: 0 }, output_tokens_details: { reasoning_tokens: 0 } },
   };
@@ -76,13 +76,40 @@ function textResponse(res, text) {
   }] });
 }
 
-function functionResponse(res, name, args) {
+function functionResponse(res, name, args, text = '') {
   const callId = `call_canary_${callNumber + 1}`;
-  response(res, { id: 'ignored', object: 'response', status: 'completed', output: [{
+  const output = [];
+  if (text) output.push({
+    id: `msg_${callNumber}`, type: 'message', role: 'assistant', status: 'completed',
+    content: [{ type: 'output_text', text, annotations: [] }],
+  });
+  output.push({
     id: `fc_${callNumber}`, type: 'function_call', call_id: callId, name,
     arguments: JSON.stringify(args), status: 'completed',
-  }] });
+  });
+  response(res, { id: 'ignored', object: 'response', status: 'completed', output });
 }
+
+const FIRST_WORKFLOW = `const lanes = await Promise.all([
+  runs.run("first-scout", { label: "parallel-first-scout", agent: "scout", model: "mock-openai/schema-smoke", task: "${CHILD_TAG} FIRST: return CANARY_ALLOW." }),
+  runs.run("first-researcher", { label: "parallel-first-researcher", agent: "researcher", model: "mock-openai/schema-smoke", task: "${CHILD_TAG} FIRST: return CANARY_ALLOW." })
+]);
+const allowed = lanes.every((child) => child.ok === true && child.output.includes("CANARY_ALLOW"));
+if (allowed) {
+  const conditional = await runs.run("first-conditional", { label: "conditional", agent: "planner", model: "mock-openai/schema-smoke", task: "${CHILD_TAG} CONDITIONAL: return CONDITIONAL_CANARY_OK." });
+  return { parallel: lanes.map((child) => child.output), conditional: conditional.output, conditionalRan: true };
+}
+return { parallel: lanes.map((child) => child.output), conditionalRan: false };`;
+
+const STOP_WORKFLOW = `const children = await Promise.all([
+  runs.run("stop-scout", { label: "parallel-stop-scout", agent: "scout", model: "mock-openai/schema-smoke", task: "${CHILD_TAG} STOP: hold briefly and return STOP_CANARY." }),
+  runs.run("stop-researcher", { label: "parallel-stop-researcher", agent: "researcher", model: "mock-openai/schema-smoke", task: "${CHILD_TAG} STOP: hold briefly and return STOP_CANARY." })
+]);
+if (children.every((child) => child.ok === true && child.output.includes("STOP_CANARY"))) {
+  const conditional = await runs.run("stop-conditional", { label: "conditional-stop", agent: "planner", model: "mock-openai/schema-smoke", task: "${CHILD_TAG} STOP-CONDITIONAL: return STOP_CONDITIONAL." });
+  return { children: children.map((child) => child.output), conditional: conditional.output };
+}
+return { children: children.map((child) => child.output), conditionalRan: false };`;
 
 const server = http.createServer((req, res) => {
   if (req.method === 'GET' && req.url === '/healthz') {
@@ -106,69 +133,60 @@ const server = http.createServer((req, res) => {
       }
     }
     const input = request.input ?? [];
+    const strings = allStrings(input);
+    // The parent history contains the workflow source (including CHILD_TAG),
+    // so only a user-role task marker identifies a child request.
+    const isChild = input.some(item => item?.role === 'user' && allStrings(item).some(value => value.includes(CHILD_TAG)));
+    const isParentTag = input.some(item => item?.role === 'user' && allStrings(item).some(value => value.includes(PARENT_TAG)));
+
+    // Child profiles deliberately lack subagent/bg_wait. Their task marker is
+    // the authoritative identity boundary, and their response is always text.
+    if (isChild) {
+      const stopping = strings.some(value => value.includes(`${CHILD_TAG} STOP`));
+      const text = stopping ? 'STOP_CANARY' : strings.some(value => value.includes('CONDITIONAL')) ? 'CONDITIONAL_CANARY_OK' : 'CANARY_ALLOW';
+      setTimeout(() => textResponse(res, text), stopping ? 20_000 : 0);
+      return;
+    }
+    if (parentPhase === 0 && !isParentTag) {
+      res.writeHead(400); res.end(JSON.stringify({ error: { message: `parent canary tag ${PARENT_TAG} missing` } })); return;
+    }
+    parentSeen ||= isParentTag;
+    if (!parentSeen) {
+      res.writeHead(400); res.end(JSON.stringify({ error: { message: 'unclassified model request' } })); return;
+    }
+
     const functionOutputs = input.filter(item => item?.type === 'function_call_output');
     const hasSubagent = tools.some(tool => tool.name === 'subagent');
     const hasWait = tools.some(tool => tool.name === 'bg_wait');
-    if (!hasSubagent || !hasWait) { res.writeHead(400); res.end(JSON.stringify({ error: { message: 'canary requires subagent and bg_wait' } })); return; }
-
-    // Child Pi sessions have no function_call_output in their first request.
-    // Keep their model turn deterministic, and hold stop-canary children long
-    // enough for the parent to exercise durable workflow cancellation.
-    if (functionOutputs.length === 0 && parentPhase > 0) {
-      const childText = allStrings(input).some(value => value.includes('stop-canary')) ? 'CHILD_STOP_CANARY' : 'CHILD_CANARY_OK';
-      const delay = childText === 'CHILD_STOP_CANARY' ? 4000 : 0;
-      setTimeout(() => textResponse(res, childText), delay);
-      return;
-    }
-
+    if (!hasSubagent || !hasWait) { res.writeHead(400); res.end(JSON.stringify({ error: { message: 'parent canary requires subagent and bg_wait' } })); return; }
     const outputText = functionOutputs.map(item => item.output).join('\n');
     const returnedRun = findRunId(outputText);
+
     if (parentPhase === 0) {
       parentPhase = 1;
-      functionResponse(res, 'subagent', {
-        chain: [
-          { parallel: [
-            { agent: 'scout', task: 'Return CANARY_ALLOW after a bounded read-only check.' },
-            { agent: 'researcher', task: 'Return CANARY_ALLOW after a bounded read-only check.' },
-          ] },
-          { agent: 'planner', as: 'conditional', task: 'Conditional child: run only when both prior outputs contain CANARY_ALLOW; return CONDITIONAL_CANARY_OK.' },
-        ],
-        async: true, deliveryDisposition: 'awaited', timeoutMs: 20000,
-      });
+      functionResponse(res, 'subagent', { workflow: true, async: true }, `
+\`\`\`js workflow
+${FIRST_WORKFLOW}
+\`\`\``);
       return;
     }
     if (parentPhase === 1) {
-      firstRunId = returnedRun;
       parentPhase = 2;
-      functionResponse(res, 'bg_wait', { id: firstRunId, timeoutMs: 30000 });
+      if (!returnedRun) { res.writeHead(400); res.end(JSON.stringify({ error: { message: 'first workflow receipt missing run id' } })); return; }
+      functionResponse(res, 'bg_wait', { id: returnedRun, timeoutMs: 60000 });
       return;
     }
     if (parentPhase === 2) {
       parentPhase = 3;
-      functionResponse(res, 'subagent', {
-        chain: [
-          { parallel: [
-            { agent: 'scout', task: 'stop-canary: hold this child briefly and return STOP_CANARY.' },
-            { agent: 'researcher', task: 'stop-canary: hold this child briefly and return STOP_CANARY.' },
-          ] },
-          { agent: 'planner', as: 'conditional-stop', task: 'Conditional child: only run when the stop-canary gate is met; return STOP_CONDITIONAL.' },
-        ],
-        async: true, deliveryDisposition: 'awaited', timeoutMs: 20000,
-      });
+      functionResponse(res, 'subagent', { workflow: true, async: true }, `
+\`\`\`js workflow
+${STOP_WORKFLOW}
+\`\`\``);
       return;
     }
-    if (parentPhase === 3) {
-      secondRunId = returnedRun;
-      parentPhase = 4;
-      functionResponse(res, 'subagent', { action: 'stop', runId: secondRunId });
-      return;
-    }
-    if (parentPhase === 4) {
-      parentPhase = 5;
-      functionResponse(res, 'bg_wait', { id: secondRunId, timeoutMs: 30000 });
-      return;
-    }
-    textResponse(res, 'CANARY_OK');
+    // The host, not a model action, cancels the stopped workflow through the
+    // canonical conversation interrupt route after this response is published.
+    textResponse(res, 'CANARY_OK STOP_WORKFLOW_STARTED');
   });
 });
 server.listen(7777, '0.0.0.0');

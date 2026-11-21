@@ -6,9 +6,9 @@
  *
  * The image is run with an isolated /data bind mount and a local strict
  * Responses fixture. No host state, provider secret, or live database is
- * mounted. The fixture drives two real agentd/Pi workflows: one successful
- * parallel+conditional chain claimed by bg_wait, followed by a second chain
- * cancelled through the package's durable workflow controller.
+ * mounted. The fixture drives two real agentd/Pi workflow scripts: one
+ * successful Promise.all+conditional workflow claimed by bg_wait, followed by
+ * a second workflow cancelled through canonical conversation Stop Robot.
  */
 import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -31,6 +31,8 @@ const fixture = path.join(scriptDir, 'subagents-mock-openai-responses.cjs');
 const network = `monika-subagents-canary-net-${process.pid}`;
 const modelContainer = `monika-subagents-canary-model-${process.pid}`;
 const runtimeContainer = `monika-subagents-canary-runtime-${process.pid}`;
+const forumContainer = `monika-subagents-canary-forum-${process.pid}`;
+const forumImage = process.env.SUBAGENTS_CANARY_FORUM_IMAGE;
 const secrets = path.join(root, 'secrets');
 const data = path.join(root, 'data');
 const logs = path.join(root, 'logs');
@@ -43,10 +45,13 @@ async function docker(args, options = {}) {
 async function cleanup() {
   if (cleaned) return;
   cleaned = true;
+  await docker(['rm', '-fv', forumContainer]).catch(() => {});
   await docker(['rm', '-fv', runtimeContainer]).catch(() => {});
   await docker(['rm', '-fv', modelContainer]).catch(() => {});
   await docker(['network', 'rm', network]).catch(() => {});
-  await rm(root, { recursive: true, force: true });
+  await docker(['run', '--rm', '--entrypoint', 'chown', '-v', `${root}:/cleanup`, image, '-R', `${process.getuid()}:${process.getgid()}`, '/cleanup']).catch(() => {});
+  if (process.env.SUBAGENTS_CANARY_KEEP === '1') console.log(`Retained isolated canary evidence: ${root}`);
+  else await rm(root, { recursive: true, force: true });
 }
 process.on('SIGINT', async () => { await cleanup(); process.exit(130); });
 process.on('SIGTERM', async () => { await cleanup(); process.exit(143); });
@@ -88,7 +93,7 @@ try {
   await Promise.all([mkdir(secrets, { recursive: true }), mkdir(data, { recursive: true }), mkdir(logs, { recursive: true })]);
   await writeFile(path.join(secrets, 'models.json'), JSON.stringify({ providers: {
     'mock-openai': { baseUrl: 'http://mock-model:7777/v1', apiKey: 'canary-only', api: 'openai-responses', models: [{
-      id: 'canary', name: 'Subagent Workflow Canary', reasoning: false, input: ['text'], contextWindow: 32000, maxTokens: 1024,
+      id: 'schema-smoke', name: 'Subagent Workflow Schema Canary', reasoning: false, input: ['text'], contextWindow: 32000, maxTokens: 1024,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, compat: { supportsStrictMode: true },
     }] },
   } }, null, 2));
@@ -105,7 +110,7 @@ try {
     '-e', 'MONIKA_AGENTD_HOST=0.0.0.0', '-e', 'MONIKA_AGENTD_PORT=7724', '-e', 'AGENTLOGS_HOME=/tmp/agentlogs',
     '-e', 'PI_SUBAGENT_EXECUTION_TARGET_ROOT=/tmp/pi-subagent-targets',
     '-e', 'PI_SUBAGENTS_HOST_ACK_RESULTS=1', '-e', 'PI_SUBAGENTS_DEFAULT_DELIVERY_DISPOSITION=awaited',
-    '-e', 'PI_SUBAGENTS_FORCE_ASYNC=1', '-e', 'PI_SUBAGENT_WAIT_TOOL_NAME=bg_wait',
+    '-e', 'PI_SUBAGENTS_FORCE_ASYNC=1',
     '-v', `${secrets}:/runtime/secrets:ro`, '-v', `${data}:/data`, image]);
   port = Number((await docker(['port', runtimeContainer, '7724/tcp'])).stdout.trim().split(':').pop());
   assert.ok(port > 0, 'Docker did not publish agentd');
@@ -114,16 +119,16 @@ try {
   }, 60_000);
   console.log(`✓ isolated runtime ready (${image}, agentd :${port})`);
 
-  const created = await request('POST', '/v1/conversations', { cwd: '/tmp', provider: 'mock-openai', model: 'canary' });
+  const created = await request('POST', '/v1/conversations', { cwd: '/tmp', model: 'mock-openai/schema-smoke', creation_id: `canary-create-${process.pid}` });
   const conversation = created.conversation;
-  assert.ok(conversation?.id && conversation.session_id && conversation.session_path, 'conversation identity missing');
+  assert.ok(conversation?.conversation_id && conversation.session_id && conversation.session_path, `conversation identity missing: ${JSON.stringify(created)}`);
   const provenance = { origin: 'forum', version: 2, topicId: 'canary-topic', postId: 'canary-post', utteranceIds: ['canary-utterance'], executionOrigins: [] };
-  await request('POST', `/v1/conversations/${encodeURIComponent(conversation.id)}/messages`, {
+  await request('POST', `/v1/conversations/${encodeURIComponent(conversation.conversation_id)}/messages`, {
     message_id: 'canary-message-1', dispatch_id: 'canary-dispatch-1', generation: 0,
-    content: 'Run the bounded workflow canary and report CANARY_OK.', provenance,
+    content: 'SUBAGENTS_CANARY_PARENT_V2: run the bounded workflow canary and report CANARY_OK.', provenance,
   });
   const terminal = await waitFor('workflow turn completion', async () => {
-    const history = await request('GET', `/v1/conversations/${encodeURIComponent(conversation.id)}/history`);
+    const history = await request('GET', `/v1/conversations/${encodeURIComponent(conversation.conversation_id)}/history`);
     const completed = history.items?.some(item => item.event === 'turn_completed');
     return completed ? history : false;
   }, 120_000);
@@ -132,35 +137,81 @@ try {
   assert.match(assistantText, /CANARY_OK/, `unexpected final assistant text: ${assistantText}`);
   console.log('✓ real Pi/agentd turn completed two workflows and returned CANARY_OK');
 
+  const activeWorkflow = await waitFor('stoppable workflow inventory', async () => {
+    const value = await request('GET', '/v1/admin/subagents');
+    const runs = value.runs ?? [];
+    return runs.length >= 2 && runs.some(run => ['active', 'running', 'queued'].includes(run.execution_state) || run.execution_state === 'active') ? value : false;
+  }, 60_000);
+  const activeRuns = activeWorkflow.runs ?? [];
+  assert.ok(activeRuns.some(run => run.mode === 'workflow' || run.run_mode === 'workflow'), 'agentd did not expose workflow runs');
+  assert.ok(activeRuns.some(run => run.origin?.topic_id === 'canary-topic' || run.origin?.topicId === 'canary-topic'), 'workflow origin was not captured');
+  console.log(`✓ agentd custody inventory: ${activeRuns.length} runs, including the host-stoppable workflow`);
+
+  // Stop Robot is the canonical conversation cancellation boundary. Do not use
+  // a model subagent({action:"stop"}) call as a substitute for host control.
+  const stopped = await request('POST', `/v1/conversations/${encodeURIComponent(conversation.conversation_id)}/interrupt`, {
+    operation_id: `canary-stop-${process.pid}`,
+  }, 60_000);
+  const cancellation = stopped.ok ? stopped : await waitFor('Stop Robot settlement', async () => {
+    const value = await request('GET', `/v1/pi/sessions/${encodeURIComponent(conversation.session_id)}/cancellation?operation_id=${encodeURIComponent(stopped.operation_id)}`, undefined, 60_000);
+    return value.ok === true && value.state === 'stopped' ? value : false;
+  }, 45_000);
+  assert.equal(cancellation.ok, true, `canonical Stop Robot did not stop the workflow: ${JSON.stringify(cancellation)}`);
   const workload = await waitFor('terminal workflow inventory', async () => {
     const value = await request('GET', '/v1/admin/subagents');
-    return (value.runs ?? []).length >= 2 && (value.runs ?? []).every(run => run.execution_state !== 'active') ? value : false;
+    return (value.runs ?? []).length >= 2 && (value.runs ?? []).every(run => !['active', 'running', 'queued'].includes(run.execution_state) && run.execution_state !== 'active') ? value : false;
   }, 60_000);
   const runs = workload.runs ?? [];
   assert.ok(runs.some(run => run.mode === 'workflow' || run.run_mode === 'workflow'), 'agentd did not expose workflow runs');
   assert.ok(runs.some(run => run.origin?.topic_id === 'canary-topic' || run.origin?.topicId === 'canary-topic'), 'workflow origin was not captured');
-  console.log(`✓ agentd custody inventory: ${runs.length} terminal runs with forum origin`);
+  console.log(`✓ canonical Stop Robot reached terminal custody for ${runs.length} runs`);
 
   const ledger = await runtimeExec("find /data/pi-subagents/async-subagent-runs -name status.json -type f -print -exec cat {} \\\;");
   assert.match(ledger, /\"deliveryDisposition\"\s*:\s*\"awaited\"/, 'awaited lifecycle evidence missing');
-  assert.match(ledger, /\"workflowGraph\"[\s\S]*parallel|\"parallel\"[\s\S]*\"conditional/, 'parallel/conditional workflow graph evidence missing');
+  assert.match(ledger, /"workflowGraph"\s*:/, 'persisted workflow graph inventory missing');
+  assert.match(ledger, /"workflowKey"\s*:\s*"first-conditional"/, 'conditional child did not execute');
+  assert.doesNotMatch(ledger, /"workflowKey"\s*:\s*"stop-conditional"/, 'cancellation failed to fence conditional child dispatch');
   assert.match(ledger, /\"state\"\s*:\s*\"stopped\"|\"execution_state\"\s*:\s*\"terminal\"/, 'durable stop terminal evidence missing');
-  console.log('✓ durable ledger contains awaited claim scope, workflow graph, and stopped controller evidence');
+  const claimText = await runtimeExec("find /data/pi-subagents/async-subagent-runs -name result-claim.json -type f -exec cat {} \\;");
+  const claims = claimText.trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
+  assert.ok(claims.some(claim => claim.kind === 'pi-subagents.result-claim' && claim.version === 1
+    && claim.deliveryDisposition === 'awaited' && claim.runKey === `top:${claim.runId}`
+    && /^[a-f0-9]{64}$/.test(claim.resultSha256) && claim.resultSizeBytes > 0), 'exact awaited result claim missing');
+  console.log('✓ durable ledger contains an exact awaited claim, workflow graph, and stopped controller evidence');
 
-  const noticesBefore = terminal.items.filter(item => item.data?.item?.customType === 'subagent-notify').length;
+  const settledHistory = await request('GET', `/v1/conversations/${encodeURIComponent(conversation.conversation_id)}/history`);
+  const noticesBefore = settledHistory.items.filter(item => item.data?.item?.customType === 'subagent-notify').length;
   assert.ok(noticesBefore <= 1, `modern completion notification duplicated (${noticesBefore})`);
-  const historyBytes = JSON.stringify(terminal.items);
+  const readCanonical = async () => (await docker(['exec', runtimeContainer, 'node', '-e', "process.stdout.write(require('node:fs').readFileSync(process.argv[1], 'utf8'))", conversation.session_path])).stdout;
+  const historyBytes = await readCanonical();
   await docker(['restart', runtimeContainer]);
+  port = Number((await docker(['port', runtimeContainer, '7724/tcp'])).stdout.trim().split(':').pop());
   await waitFor('passive restart health', async () => {
     try { const health = await request('GET', '/healthz'); return health.ok === true ? health : false; } catch { return false; }
   }, 60_000);
-  const afterRestart = await request('GET', `/v1/conversations/${encodeURIComponent(conversation.id)}/history`);
-  assert.equal(JSON.stringify(afterRestart.items), historyBytes, 'passive restart changed canonical history or replayed a notice');
-  const noticesAfter = afterRestart.items.filter(item => item.data?.item?.customType === 'subagent-notify').length;
-  assert.equal(noticesAfter, noticesBefore, 'passive restart duplicated modern notification');
+  assert.equal(await readCanonical(), historyBytes, 'passive restart changed canonical history or replayed a notice');
   const quiescence = await request('GET', '/v1/admin/quiescence');
   assert.equal(quiescence.blockers?.some(blocker => blocker.code === 'active_subagent_runs'), false, 'scanner retained active runs after restart');
   console.log('✓ passive restart is inventory-only; notification count and scanner quiescence are stable');
+
+  if (forumImage) {
+    await docker(['run', '-d', '--name', forumContainer, '--network', network,
+      '-e', `MONIKA_AGENTD_BASE_URL=http://${runtimeContainer}:7724`,
+      '-e', 'CODEX_FORUM_ENABLE_AUTH=0', '-e', 'MONIKA_PI_SYNC_ENABLED=0', forumImage]);
+    await waitFor('forum health', async () => {
+      try { await docker(['exec', forumContainer, 'node', '-e', "fetch('http://127.0.0.1:4310/healthz').then(r=>{if(!r.ok)process.exit(1)})"]); return true; } catch { return false; }
+    }, 60_000);
+    const importArgs = ['exec', forumContainer, '/app/node_modules/.bin/tsx', '/app/src/cli/importPiSessions.ts',
+      '--agentd', `http://${runtimeContainer}:7724`, '--db', '/var/lib/codex-forum/data.db'];
+    await docker(importArgs);
+    await docker(importArgs); // Idempotent projection, not a second conversation.
+    const { stdout } = await docker(['exec', forumContainer, 'node', '-e',
+      "const db=require('better-sqlite3')('/var/lib/codex-forum/data.db'); console.log(JSON.stringify(db.prepare('select pi_session_id, topic_id from pi_session_links').all())); db.close();"]);
+    const links = JSON.parse(stdout.trim());
+    assert.equal(links.length, 1, `child sessions leaked into forum projection: ${stdout}`);
+    assert.equal(links[0].pi_session_id, conversation.session_id);
+    console.log('✓ disposable forum imports the canonical parent exactly once and excludes child sessions');
+  }
 
   const drained = await request('POST', '/v1/admin/drain', { timeout_ms: 30_000 });
   assert.equal(drained.ok, true, `drain did not complete: ${JSON.stringify(drained)}`);

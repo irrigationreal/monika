@@ -1,8 +1,9 @@
 # pi-subagents 0.89.1 migration candidate
 
-**Status: experimental preparation only.** Monika production still installs the
-reviewed and patched **0.37.2** source from `scripts/install-pi-subagents`.
-This document records the first migration milestone; it does not switch the image pin, install a runtime, or restart live services.
+**Status: activation of reviewed 0.89.1.** The image installer pins the exact
+upstream object and a self-contained Monika patch. The prior 0.37.2 patch remains
+in Git for rollback. Applying the new image to an existing deployment still
+requires a deliberate checkout fast-forward and quiescence-gated replacement.
 
 ## Candidate preparation
 
@@ -173,8 +174,9 @@ state. These existing contracts remain the integration seams:
 
 ## Migration design decisions
 
-- **Production pin:** remains 0.37.2 until all stages pass and a later PR updates
-  the image installer. This milestone changes no runtime pin.
+- **Production pin:** the activation installer selects exact 0.89.1 source.
+  Existing containers are not modified by checkout or PR changes; replacement
+  remains gated on application quiescence.
 - **Authority:** upstream owns child execution mechanics; agentd owns durable
   custody, deployment interpretation, effects uncertainty, canonical settlement,
   and forum delivery.
@@ -196,14 +198,32 @@ state. These existing contracts remain the integration seams:
   isolation for predictability and auditability; do not impose blanket OS/network
   confinement on the high-agency runtime without a concrete use case.
 
-## Next milestone
+## Activation acceptance
 
-The next PR should port the Monika patch in serial slices: package/test harness,
-launch and context contracts, lifecycle/custody integration, wait/workflow
-execution, then agentd/forum validation. Each slice gets a fresh candidate test
-and a throwaway runtime probe before the next slice. Do not update
-`Containerfile`, `config/settings.json`, or the production installer to 0.89.1
-until the candidate has passed the full matrix.
+The staged source and agentd compatibility changes merged before the activation
+PR. Image-owned configuration prefers `bg_wait`, disables automatic resume and
+scheduling, and retains workflow scripts. The activation adds a durable
+controller stop observer, independent child-effects settlement, scoped nested
+resume, and dedicated configured fork-session placement.
+
+The disposable workflow canary exercises real Pi/agentd parallel and conditional
+children, exact awaited claims, canonical origin capture, Stop Robot, unchanged
+canonical bytes after restart, and safe drain. With
+`SUBAGENTS_CANARY_FORUM_IMAGE=<forum-image>`, it also imports the canonical parent
+twice into an ephemeral forum database and proves that one topic is created and
+child sessions are excluded. It uses a strict local synthetic provider, not pool
+credentials or live state.
+
+The SSH canary uses a separate disposable sshd, generated keys and read-only
+registry descriptors. Real locked tools read and write remotely; an interrupted
+mutation retains unknown effects and no local fallback. This exposed and fixed
+both the three-file startup attestation mismatch and the locked tool-factory
+operations-wrapper regression. The image smoke additionally exercises these
+operations against the shipped Pi SDK, not a fake tool factory.
+
+Upstream environmental failures remain distinguished from compatibility claims;
+passing focused/image canaries do not imply that an unmodified upstream suite
+is universally green on every host.
 
 ## Initial compatibility findings
 

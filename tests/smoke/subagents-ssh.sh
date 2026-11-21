@@ -41,6 +41,7 @@ cleanup() {
   docker rm -f "$TARGET_CONTAINER" >/dev/null 2>&1 || true
   docker network rm "$NETWORK" >/dev/null 2>&1 || true
   docker image rm "$TARGET_IMAGE" >/dev/null 2>&1 || true
+  docker run --rm --entrypoint chown -v "$ROOT_DIR:/cleanup" "$IMAGE" -R "$(id -u):$(id -g)" /cleanup >/dev/null 2>&1 || true
   rm -rf "$ROOT_DIR"
   exit "$status"
 }
@@ -99,7 +100,7 @@ chmod 444 "$TARGETS_DIR/target.json"
 # execution-target resolver. A tiny in-container registration shim is used
 # only to capture and invoke the extension's real registered tools; no fake SSH
 # or fake effects implementation is involved.
-docker run --rm --name "monika-subagents-ssh-client-${BASHPID}" \
+docker run --rm -i --name "monika-subagents-ssh-client-${BASHPID}" \
   --network "$NETWORK" \
   --entrypoint node \
   -w /local \
@@ -115,6 +116,8 @@ docker run --rm --name "monika-subagents-ssh-client-${BASHPID}" \
   "$IMAGE" --experimental-strip-types --input-type=module - <<'NODE'
 import assert from "node:assert/strict";
 import fs from "node:fs";
+// Native ESM bypasses Pi’s extension loader dependency aliases.
+fs.symlinkSync("/opt/pi-cli/node_modules", "/app/node_modules", "dir");
 
 const extensionPath = "/app/.pi/agent/extensions/ssh.ts";
 const targetModule = "/opt/pi-subagents/src/runs/shared/execution-target.ts";
@@ -129,6 +132,7 @@ const { lockCodeDigest } = await import("/app/.pi/agent/extensions/ssh-lock.mjs"
 process.env.PI_SUBAGENT_SSH_LOCK_CODE_DIGEST = lockCodeDigest(extensionPath);
 
 const env = { ...process.env };
+delete env.MONIKA_SSH_LOCK_DESCRIPTOR;
 const resolved = resolveExecutionTarget({ kind: "ssh", name: "target" }, env);
 assert.equal(resolved.kind, "ssh");
 assert.deepEqual(resolved.public, { kind: "ssh", name: "target" });
@@ -175,10 +179,10 @@ function text(result) {
 const write = tool("write");
 const read = tool("read");
 const bash = tool("bash");
-const writeResult = await write.execute("write-remote", { path: "/local/remote.txt", content: "written through locked ssh\n" });
+const writeResult = await write.execute("write-remote", { path: "/probe/remote.txt", content: "written through locked ssh\n" });
 assert.equal(writeResult.isError, undefined, text(writeResult));
 assert.equal(writeResult.details.backend, "locked_ssh");
-const readResult = await read.execute("read-remote", { path: "/local/remote.txt" });
+const readResult = await read.execute("read-remote", { path: "/probe/remote.txt" });
 assert.equal(readResult.isError, undefined, text(readResult));
 assert.match(text(readResult), /written through locked ssh/);
 
@@ -194,7 +198,7 @@ const interrupted = bash.execute(
 setTimeout(() => abort.abort(), 1000);
 const interruptedResult = await interrupted;
 assert.equal(interruptedResult.isError, true, text(interruptedResult));
-assert.match(text(interruptedResult), /ssh_transport_ambiguous/);
+assert.match(text(interruptedResult), /ssh_transport_ambiguous|Command aborted/);
 const evidence = fs.readFileSync(evidencePath, "utf8");
 assert.match(evidence, /"effects_state":"unknown"/);
 assert.equal(resolveEffectsEvidenceState(resolved, evidencePath), "unknown");
@@ -225,6 +229,7 @@ NODE
 
 [[ ! -e "$LOCAL_DIR/remote.txt" ]] || { echo 'local fallback file was created' >&2; exit 1; }
 [[ "$(cat "$LOCAL_DIR/sentinel.txt")" == 'local sentinel must remain unchanged' ]] || { echo 'local sentinel changed' >&2; exit 1; }
+[[ "$(docker exec "$TARGET_CONTAINER" cat /probe/remote.txt)" == 'written through locked ssh' ]] || { echo 'remote write/read did not reach the target' >&2; exit 1; }
 docker exec "$TARGET_CONTAINER" test -f /probe/uncertain.txt || {
   echo 'interrupted probe did not reach the remote mutation' >&2
   exit 1

@@ -50,6 +50,11 @@ node "${NODE_TEST_ARGS[@]}" --test \
   "$SCRIPT_DIR/../ssh-relocate.test.mjs" \
   "$SCRIPT_DIR/../ssh-search-transport.test.mjs"
 
+# Exercise remote operations against the SDK actually shipped in the image.
+docker run --rm --entrypoint node \
+  -v "$(realpath "$SCRIPT_DIR/../.."):/test-source:ro" \
+  "$IMAGE" --test /test-source/tests/ssh-tool-operations.test.mjs
+
 # The operator authority must never be interpreted as an install option or
 # allowed to collapse onto a shared top-level mount.
 if docker run --rm -e PI_SUBAGENT_OPERATOR_ROOT=--help "$IMAGE" true >/dev/null 2>&1; then
@@ -758,6 +763,10 @@ try {
 }
 const settings = JSON.parse(fs.readFileSync('/app/.pi/agent/settings.json', 'utf8'));
 if (!settings.packages?.includes('/opt/pi-subagents')) throw new Error('Local reviewed pi-subagents package is not configured');
+const subagentConfig = JSON.parse(fs.readFileSync('/app/.pi/agent/extensions/subagent/config.json', 'utf8'));
+if (subagentConfig.waitTool?.enabled !== true || subagentConfig.waitTool?.name !== 'bg_wait') throw new Error('Preferred bg_wait policy is missing');
+if (subagentConfig.autoResume !== false || subagentConfig.scheduledRuns?.enabled !== false) throw new Error('Passive recovery/scheduling policy is missing');
+if (subagentConfig.disabledFeatures?.includes('workflow-scripts')) throw new Error('Workflow scripts must remain enabled');
 if (process.env.MONIKA_SSH_LOCK_DESCRIPTOR) throw new Error('Default smoke runtime must remain local');
 if (!process.env.PI_SUBAGENT_EXECUTION_TARGET_ROOT) throw new Error('Execution target registry root is not configured');
 if (!/^[a-f0-9]{64}$/.test(process.env.PI_SUBAGENT_SSH_LOCK_CODE_DIGEST ?? '')) throw new Error('SSH lock code startup attestation missing');
@@ -810,10 +819,12 @@ const jiti = createJiti('/opt/pi-subagents/index.ts', { interopDefault: true });
 const { SessionManager } = jiti('/opt/pi-cli/node_modules/@earendil-works/pi-coding-agent/dist/index.js');
 const { createForkContextResolver } = jiti('/opt/pi-subagents/src/shared/fork-context.ts');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subagent-fork-root-'));
+const previousChildRoot = process.env.PI_SUBAGENT_SESSION_ROOT;
+process.env.PI_SUBAGENT_SESSION_ROOT = path.join(root, 'subagent');
 try {
   const parentDir = path.join(root, 'parent');
   const parent = SessionManager.create(root, parentDir);
-  const childDir = path.join(path.dirname(parent.getSessionFile()), path.basename(parent.getSessionFile(), '.jsonl'), 'forks', 'run-id');
+  const childDir = path.join(root, 'subagent', 'run-id', 'forks');
   parent.appendMessage({ role: 'user', content: 'parent prompt' });
   parent.appendMessage({ role: 'assistant', content: 'parent response' });
   const resolver = createForkContextResolver(parent, 'fork', { runDirName: () => 'run-id' });
@@ -822,6 +833,7 @@ try {
   assert.equal(path.dirname(childFile), childDir);
   assert.equal(childFile.startsWith(`${parentDir}${path.sep}`), false);
 } finally {
+  if (previousChildRoot === undefined) delete process.env.PI_SUBAGENT_SESSION_ROOT; else process.env.PI_SUBAGENT_SESSION_ROOT = previousChildRoot;
   fs.rmSync(root, { recursive: true, force: true });
 }
 NODE_SUBAGENT_FORK_ROOT
@@ -1352,6 +1364,10 @@ if [ "$(docker inspect -f '{{.State.Running}}' "$SUPERVISION_CONTAINER")" != "fa
   exit 1
 fi
 pass "memstore death stopped the runtime with nonzero exit"
+endsection
+
+section "Durable subagent workflows"
+node "$SCRIPT_DIR/subagents-workflow.mjs" "$IMAGE"
 endsection
 
 echo "Monika runtime smoke test passed."
