@@ -35,7 +35,7 @@ function runExtensionProbe(enabled) {
       process.exit(0);
     }
 
-    let activeTools = ['remember'];
+    let activeTools = ['remember', 'subagent', 'bg_wait', 'subagent_supervisor'];
     const originalTool = {
       name: 'remember',
       label: 'Remember',
@@ -46,6 +46,11 @@ function runExtensionProbe(enabled) {
     };
     loaded.runtime.getAllTools = () => [
       originalTool,
+      ...['subagent', 'bg_wait', 'subagent_supervisor'].map(name => ({
+        name, label: name, description: 'Pi subagent control: ' + name,
+        parameters: { type: 'object', properties: {} }, exposure: 'direct',
+        sourceInfo: { path: '/opt/pi-subagents/index.ts', baseDir: '/opt/pi-subagents' },
+      })),
       { name: "codemode", label: "Codemode", description: "Native scripts", parameters: { type: "object", properties: { code: { type: "string" } }, required: ["code"] }, exposure: "model-only", promptGuidelines: ["bounded scripts"] },
       ...[...extension.tools.values()].map(entry => ({ ...entry.definition, sourceInfo: entry.sourceInfo })),
     ];
@@ -75,18 +80,21 @@ function runExtensionProbe(enabled) {
 
     const apiKeyContext = context('anthropic', false);
     await handlers.get('before_agent_start')[0]({}, apiKeyContext);
-    assert.deepEqual(activeTools, ['remember']);
+    assert.deepEqual(activeTools, ['remember', 'subagent', 'bg_wait', 'subagent_supervisor']);
 
     const poolContext = context('claude', false);
     await handlers.get('before_agent_start')[0]({}, poolContext);
     assert.ok(activeTools.includes('mcp__stateful-memory__remember'));
+    for (const name of ['subagent', 'bg_wait', 'subagent_supervisor']) {
+      assert.ok(activeTools.includes('mcp__pi-subagents__' + name), name + ' Claude alias missing');
+    }
 
-    activeTools = ['mcp__stateful-memory__remember'];
+    activeTools = ['mcp__stateful-memory__remember', 'mcp__pi-subagents__subagent', 'mcp__pi-subagents__bg_wait', 'mcp__pi-subagents__subagent_supervisor'];
     await handlers.get('before_agent_start')[0]({}, poolContext);
-    assert.deepEqual(activeTools, ['mcp__stateful-memory__remember']);
+    assert.deepEqual(activeTools, ['mcp__stateful-memory__remember', 'mcp__pi-subagents__subagent', 'mcp__pi-subagents__bg_wait', 'mcp__pi-subagents__subagent_supervisor']);
     await handlers.get('before_agent_start')[0]({}, apiKeyContext);
     assert.deepEqual(activeTools, []);
-    activeTools = ['remember'];
+    activeTools = ['remember', 'subagent', 'bg_wait', 'subagent_supervisor'];
 
     const poolPayload = await request(
       { type: 'before_provider_request', payload: { system: 'pi itself', tools: [{ name: 'Read' }] } },

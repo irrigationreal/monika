@@ -23,7 +23,10 @@ images install pinned Corepack 0.36.0 before activating pnpm 11.21.0. Interactiv
 Built-in MCP and tool-search remain disabled. Native codemode is available through
 a shared bounded CLI/SDK wrapper alongside ordinary tools; its duplicate CLI
 built-in remains excluded. Direct model globals and child-profile adoption are
-disabled. See [Codemode](codemode.md) for activation, limits and trace boundaries.
+disabled. Parent `pi-subagents` tools use the bundled extension's explicit eager activation so model changes
+do not silently remove delegation capability; Claude-route aliases remain a projection
+of those native tools. See [Codemode](codemode.md) for activation, limits and trace
+boundaries.
 
 Cache warming is explicitly set to `streaming`, retaining active-run warming
 rather than Pi 1.5.1's new idle-between-runs default. This avoids silently adding

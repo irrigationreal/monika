@@ -17,6 +17,13 @@ Pi's `ModelRegistry.isUsingOAuth()` is the authentication-mode authority. The ex
 
 The distinction matters because Pi already owns Claude Code identity, model capability betas, and current headers for native Anthropic OAuth. Reapplying an independent static profile there can remove required feature gates or make API-key requests falsely identify as Claude Code.
 
+## Delegation tool availability
+
+The runtime pins `extensions/subagent/config.json`'s `toolActivation` to `"eager"`. Parent sessions therefore
+keep the native `subagent`, `bg_wait`, and `subagent_supervisor` tools active across
+model changes. This adapter aliases those active tools on compatible Claude routes;
+it does not independently activate delegation or replace `pi-subagents`'s authority.
+
 ## Pool compatibility
 
 Pi sees the pool credential as an API key, so it does not activate Pi's native OAuth compatibility path. For `claude/...` pool requests the extension therefore:
