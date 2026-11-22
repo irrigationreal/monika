@@ -775,6 +775,7 @@ const extensionSha = sha(fs.readFileSync('/app/.pi/agent/extensions/ssh.ts'));
 const helperSha = sha(fs.readFileSync('/app/.pi/agent/extensions/ssh-lock.mjs'));
 const relocateHelperSha = sha(fs.readFileSync('/app/.pi/agent/extensions/ssh-relocate.mjs'));
 if (sha(`${extensionSha}\n${helperSha}\n${relocateHelperSha}\n`) !== process.env.PI_SUBAGENT_SSH_LOCK_CODE_DIGEST) throw new Error('SSH lock code attestation mismatch');
+if (subagentConfig.toolActivation !== 'eager') throw new Error('subagent toolActivation must keep delegation tools active across model switches');
 if (JSON.stringify(settings.subagents?.defaultExtensions) !== '[]') throw new Error('subagents.defaultExtensions must disable ambient extensions');
 for (const profile of ['advisor', 'delegate']) {
   if (settings.subagents?.agentOverrides?.[profile]?.disabled !== true) throw new Error(`Upstream ${profile} profile must be disabled`);

@@ -1,4 +1,5 @@
 {
+  "toolActivation": "eager",
   "waitTool": { "enabled": true, "name": "bg_wait" },
   "autoResume": false,
   "scheduledRuns": { "enabled": false }
