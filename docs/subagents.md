@@ -55,7 +55,10 @@ worktree or deliberate isolated worktrees.
 Workflow scripts are the default orchestration surface: use `runs.run` for a
 child, `Promise.all` for independent work, and ordinary conditionals for branching.
 `bg_wait` claims awaited background results. Historical `subagent_wait` transcript
-records remain readable; it is not the preferred current declaration. The image pins
+records remain readable; it is not the preferred current declaration. Workflow
+children are internal evidence owned by their workflow root and are never claimed
+independently by `bg_wait`; the root publishes the single exact awaited result.
+The image pins
 `extensions/subagent/config.json`'s `toolActivation` to `eager`, so parent sessions expose the native
 `subagent`, `bg_wait`, and supervisor tools from startup and retain them when the
 model changes. This is deliberate: Claude compatibility aliases active tools, but

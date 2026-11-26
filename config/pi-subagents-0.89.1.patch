@@ -1453,7 +1453,7 @@ index 99f8513..23f600b 100644
  	const usage = completionUsage(completions);
  	for (const completion of completions ?? []) {
  		if (completion.workflowReceiptPath) text += `\nWorkflow receipt [${completion.runId}]: ${completion.workflowReceiptPath}`;
-@@ -376,10 +389,67 @@ function result(text: string, isError = false, completions?: WaitCompletion[]):
+@@ -376,10 +389,72 @@ function result(text: string, isError = false, completions?: WaitCompletion[]):
  			mode: "management",
  			results: [],
  			...(completions && completions.length > 0 ? { completions } : {}),
@@ -1469,6 +1469,11 @@ index 99f8513..23f600b 100644
 +	const pending: AsyncRunSummary[] = [];
 +	const unclaimable: AwaitedUnclaimableRun[] = [];
 +	for (const run of runs) {
++		// Workflow children are evidence owned by their workflow root. They retain
++		// the parent session identity, but must never be independently claimed by
++		// bg_wait; doing so can leave the wait blocked on a child after the root
++		// workflow has already settled.
++		if (run.parentWorkflowRunId) continue;
 +		if (run.deliveryDisposition !== "awaited") continue;
 +		// Interrupted and partial publications are attention evidence, not a final
 +		// awaited-result claim. Return them immediately instead of polling until timeout.
@@ -3993,7 +3998,7 @@ diff --git a/test/unit/subagent-wait.test.ts b/test/unit/subagent-wait.test.ts
 index 0aa27af..64f8644 100644
 --- a/test/unit/subagent-wait.test.ts
 +++ b/test/unit/subagent-wait.test.ts
-@@ -101,6 +101,60 @@ function baseDeps(root: string, state: SubagentState, overrides: Partial<Subagen
+@@ -101,6 +101,83 @@ function baseDeps(root: string, state: SubagentState, overrides: Partial<Subagen
  }
  
  describe("bg_wait tool", () => {
@@ -4023,6 +4028,29 @@ index 0aa27af..64f8644 100644
 +				assert.equal(publishes, 0, stateName);
 +				assert.equal(fs.existsSync(path.join(asyncDir, "result-claim.json")), false, stateName);
 +			}
++		} finally {
++			fs.rmSync(root, { recursive: true, force: true });
++		}
++	});
++
++	it("does not claim a workflow child independently of its root", async () => {
++		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wait-workflow-child-"));
++		try {
++			const runId = "workflow-child";
++			const asyncRoot = path.join(root, "async-subagent-runs");
++			const asyncDir = path.join(asyncRoot, runId);
++			const identity = { lifecycleArtifactVersion: 5, runId, sessionId: "sess-1", asyncDir, deliveryDisposition: "awaited", parentWorkflowRunId: "workflow-root", execution_state: "terminal", outcome_state: "succeeded", effects_state: "none", delivery_state: "pending" };
++			writeStatus(asyncRoot, runId, "complete", identity);
++			fs.writeFileSync(path.join(asyncDir, "launch.json"), JSON.stringify({ ...identity, state: "spawned" }));
++			let sleeps = 0;
++			let publishes = 0;
++			const result = await waitForSubagents({ id: runId, timeoutMs: 60_000 }, undefined, baseDeps(root, makeState("sess-1"), {
++				asyncDirRoot: asyncRoot, sleep: async () => { sleeps += 1; }, publishClaim: () => { publishes += 1; return "claim"; },
++			}));
++			assert.equal(result.isError, undefined);
++			assert.match(textOf(result), /terminal/i);
++			assert.equal(sleeps, 0);
++			assert.equal(publishes, 0);
 +		} finally {
 +			fs.rmSync(root, { recursive: true, force: true });
 +		}
