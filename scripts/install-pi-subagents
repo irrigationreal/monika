@@ -8,7 +8,7 @@ readonly commit='533033f0e906e85fdb0e909ce27a7c499ffb6485'
 readonly tree='d6c8cf1dbf40704d3d5f8b0530908e9f6aa6afce'
 readonly version='0.89.1'
 readonly lock_sha256='5fc39baec198a9b58887e7fabefed9dc8a4df7dcbf42839992263b9a1639776b'
-readonly patch_sha256='997ee1e914e9cf28fe52fa6981241583052f43043602c0493d299e352a93d21c'
+readonly patch_sha256='aff37d6b30434b3b3e552abc779c15ed3a01ba56d84c24b37f5c32f3a6814640'
 
 if [ "$#" -ne 2 ]; then
   echo "usage: $0 <destination> <patch>" >&2
